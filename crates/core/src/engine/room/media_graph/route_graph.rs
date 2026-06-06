@@ -28,7 +28,7 @@ type RelayOwners = BTreeMap<ConsumerKey, RelayRouteActivity>;
 struct RouteReservationId(u64);
 
 #[derive(Debug)]
-pub(in crate::engine::room) struct ConsumerRouteReservation {
+pub(super) struct ConsumerRouteReservation {
     key: ConsumerKey,
     selection: ConsumerSourceSelection,
     id: RouteReservationId,
@@ -442,11 +442,11 @@ impl RouteGraph {
 }
 
 impl ConsumerRouteReservation {
-    pub(in crate::engine::room) const fn key(&self) -> &ConsumerKey {
+    pub(super) const fn key(&self) -> &ConsumerKey {
         &self.key
     }
 
-    pub(in crate::engine::room) const fn selection(&self) -> ConsumerSourceSelection {
+    pub(super) const fn selection(&self) -> ConsumerSourceSelection {
         self.selection
     }
 }

@@ -12,7 +12,7 @@ use super::{
         RoomEventRequest, outbound::OutboundSender, routing::RoutedProducerId, state::RoomState,
     },
     ConsumerKey, ConsumerRouteTransportRef, ConsumerRuntimeId, ConsumerState, ProducerRuntimeId,
-    PublishedProducer,
+    PublishedProducer, RoomMediaGraph,
     route_graph::{ConsumerRouteReservation, RelayRouteEffect, ResolvedRelayRouteEffect},
 };
 use crate::engine::{
@@ -52,7 +52,7 @@ pub struct ConsumerKeyframeRefreshTarget {
 #[derive(Debug, Default)]
 pub struct PlannedSubscriptionChange {
     updates: Vec<ConsumerRouteUpdate>,
-    setups: Vec<ConsumerSetupPlan>,
+    setups: Vec<PendingConsumerSetup>,
     relays: Vec<ResolvedRelayRouteEffect>,
 }
 
@@ -77,10 +77,10 @@ pub struct ConsumerSetupProducerSnapshot {
 }
 
 #[derive(Debug)]
-#[must_use = "consumer setup plans reserve route graph state and must be committed or released"]
-pub struct ConsumerSetupPlan {
+#[must_use = "pending consumer setups reserve route graph state and must be committed or released"]
+pub(in crate::engine::room) struct PendingConsumerSetup {
     target: ConsumerSetupTarget,
-    route_reservation: ConsumerRouteReservation,
+    reservation: ConsumerRouteReservation,
     sender: OutboundSender,
     track: RemoteTrackSetup,
     relays: Vec<ResolvedRelayRouteEffect>,
@@ -97,9 +97,16 @@ pub(in crate::engine::room) struct ConsumerSetupCommit {
     clippy::large_enum_variant,
     reason = "consumer setup outcomes are returned and matched immediately so boxing the committed setup would allocate on every successful consumer setup"
 )]
-pub(in crate::engine::room) enum ConsumerSetupCommitOutcome {
+pub(in crate::engine::room) enum ConsumerSetupOutcome {
     Committed(ConsumerSetupCommit),
     Released(Vec<ResolvedRelayRouteEffect>),
+}
+
+pub(in crate::engine::room) struct ConsumerSetupTransportInput<'a> {
+    pub target: &'a ConsumerSetupTarget,
+    pub rtp: &'a RouterRtpParameters,
+    pub active: bool,
+    pub relays: &'a [ResolvedRelayRouteEffect],
 }
 
 /// consumer track setup payload sent to the receiver after transport commit
@@ -130,6 +137,44 @@ impl ConsumerSetupOrigin {
             Self::Publish => "publish",
             Self::Subscribe => "subscribe",
         }
+    }
+}
+
+impl RoomMediaGraph {
+    fn reserve_pending_consumer_setup(
+        &mut self,
+        target: ConsumerSetupTarget,
+        sender: OutboundSender,
+        track: RemoteTrackSetup,
+        selection: ConsumerSourceSelection,
+        source_worker: MediaWorkerId,
+        target_worker: MediaWorkerId,
+    ) -> Option<(PendingConsumerSetup, Vec<RelayRouteEffect>)> {
+        let key = ConsumerKey::new(&target.user, target.source_id());
+        let active = selection.delivery_active();
+        let reservation = self.routes.reserve_consumer_setup(key, selection)?;
+        let relay_effects = if source_worker == target_worker {
+            Vec::new()
+        } else {
+            self.routes.reserve_relay(
+                &reservation,
+                &target,
+                target.producer_connection_id(),
+                target.transport_media_id(),
+                target_worker,
+                active,
+            )
+        };
+        Some((
+            PendingConsumerSetup {
+                target,
+                reservation,
+                sender,
+                track,
+                relays: Vec::new(),
+            },
+            relay_effects,
+        ))
     }
 }
 
@@ -190,7 +235,7 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Option<Vec<ConsumerSetupPlan>> {
+    ) -> Option<Vec<PendingConsumerSetup>> {
         let user = self.users.get(user_id)?;
         if user.connection_id != connection_id {
             return None;
@@ -205,7 +250,7 @@ impl RoomState {
         &mut self,
         targets: Vec<ConsumerSetupTarget>,
         worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Vec<ConsumerSetupPlan> {
+    ) -> Vec<PendingConsumerSetup> {
         let mut targets = targets;
         let active_speakers = BTreeSet::new();
         targets.sort_by_key(|target| self.setup_rank(target, &active_speakers));
@@ -368,7 +413,7 @@ impl RoomState {
         &mut self,
         target: ConsumerSetupTarget,
         worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Option<ConsumerSetupPlan> {
+    ) -> Option<PendingConsumerSetup> {
         let (sender, client_caps) = {
             let user = self.users.get(&target.user)?;
             if user.connection_id != target.connection || !user.negotiation.can_consume() {
@@ -387,30 +432,11 @@ impl RoomState {
             &producer.consumable_rtp_parameters
         };
         let descriptor = self.media.source(target.producer.source_id)?.clone();
-        let key = ConsumerKey::new(&target.user, target.source_id());
-        if self.media.has_consumer_setup_or_route(&key) {
-            return None;
-        }
         let selection = self.setup_selection(&target, target.producer.active);
-        let active = selection.delivery_active();
         let rtp = negotiate_consumer_rtp_parameters(producer_rtp, client_caps).ok()?;
-        let route_reservation = self.media.routes.reserve_consumer_setup(key, selection)?;
         let consumer = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
         let source_worker = worker_for(target.producer_connection_id());
         let target_worker = worker_for(target.consumer_connection_id());
-        let relays = if source_worker == target_worker {
-            Vec::new()
-        } else {
-            self.media.routes.reserve_relay(
-                &route_reservation,
-                &target,
-                target.producer_connection_id(),
-                target.transport_media_id(),
-                target_worker,
-                active,
-            )
-        };
-        let relays = self.resolved_relay_route_effects(relays);
         let track = RemoteTrackSetup {
             consumer,
             kind: target.producer.kind,
@@ -424,13 +450,16 @@ impl RoomState {
             active: target.producer.active,
             stream: target.producer.stream.clone(),
         };
-        Some(ConsumerSetupPlan {
+        let (mut setup, relay_effects) = self.media.reserve_pending_consumer_setup(
             target,
-            route_reservation,
             sender,
             track,
-            relays,
-        })
+            selection,
+            source_worker,
+            target_worker,
+        )?;
+        setup.relays = self.resolved_relay_route_effects(relay_effects);
+        Some(setup)
     }
 
     fn setup_selection(
@@ -503,114 +532,6 @@ impl RoomState {
             })
             .count();
         committed + pending
-    }
-
-    pub fn commit_consumer_setup(
-        &mut self,
-        setup: ConsumerSetupPlan,
-        media: TransportMediaId,
-        mid: Option<String>,
-    ) -> ConsumerSetupCommitOutcome {
-        let ConsumerSetupPlan {
-            target,
-            route_reservation,
-            sender,
-            mut track,
-            ..
-        } = setup;
-        let planned_selection = route_reservation.selection();
-        let Some(user) = self.users.get(&target.user) else {
-            return self.release_consumer_setup_route(route_reservation);
-        };
-        if user.connection_id != target.connection || !user.negotiation.can_consume() {
-            return self.release_consumer_setup_route(route_reservation);
-        }
-        let Some(producer) = self.media.producer(target.producer.id) else {
-            return self.release_consumer_setup_route(route_reservation);
-        };
-        if !target.producer.matches_identity(producer) {
-            return self.release_consumer_setup_route(route_reservation);
-        }
-        let producer_active = producer.active;
-        if self.media.contains_consumer(route_reservation.key()) {
-            return self.release_consumer_setup_route(route_reservation);
-        }
-        let selection = self.setup_selection(&target, producer_active);
-        let active = selection.delivery_active();
-        let state = if active {
-            RouterConsumerRouteState::Active
-        } else {
-            RouterConsumerRouteState::Paused
-        };
-        let routed_consumer_id = match self.routing.add_consumer_with_route_state(
-            &target.user,
-            target.producer.routed,
-            target.producer.kind,
-            ConsumerCapability::Compatible,
-            state,
-        ) {
-            Ok(id) => id,
-            Err(error) => {
-                warn!(
-                    consumer_user_id = ?target.user,
-                    producer_id = %target.producer.id,
-                    ?error,
-                    "router rejected consumer creation"
-                );
-                return self.release_consumer_setup_route(route_reservation);
-            }
-        };
-        if let Some(mid) = mid {
-            track.mid = mid;
-        }
-        track.active = producer_active;
-        let transport_activity_update =
-            (active != planned_selection.delivery_active()).then_some(active);
-        if !self.media.routes.commit(
-            &route_reservation,
-            ConsumerState {
-                routed_consumer_id,
-                consumer_connection_id: target.connection,
-                source_connection_id: target.producer.connection,
-                source_media: target.transport_media_id(),
-                consumer_media: media,
-            },
-            selection,
-        ) {
-            if let Err(error) = self.routing.remove_consumer(routed_consumer_id) {
-                warn!(
-                    consumer_user_id = ?target.user,
-                    routed_consumer_id = ?routed_consumer_id,
-                    ?error,
-                    "failed to roll back topology consumer after graph consumer commit rejection"
-                );
-            }
-            return self.release_consumer_setup_route(route_reservation);
-        }
-        ConsumerSetupCommitOutcome::Committed(ConsumerSetupCommit {
-            sender,
-            track,
-            transport_activity_update,
-        })
-    }
-
-    pub fn release_consumer_setup_plan(
-        &mut self,
-        setup: ConsumerSetupPlan,
-    ) -> Vec<ResolvedRelayRouteEffect> {
-        let relays = self
-            .media
-            .routes
-            .release_consumer_setup(setup.route_reservation);
-        self.resolved_relay_route_effects(relays)
-    }
-
-    fn release_consumer_setup_route(
-        &mut self,
-        route_reservation: ConsumerRouteReservation,
-    ) -> ConsumerSetupCommitOutcome {
-        let relays = self.media.routes.release_consumer_setup(route_reservation);
-        ConsumerSetupCommitOutcome::Released(self.resolved_relay_route_effects(relays))
     }
 
     pub fn desired_source_active(
@@ -697,10 +618,114 @@ impl PlannedSubscriptionChange {
         self,
     ) -> (
         Vec<ConsumerRouteUpdate>,
-        Vec<ConsumerSetupPlan>,
+        Vec<PendingConsumerSetup>,
         Vec<ResolvedRelayRouteEffect>,
     ) {
         (self.updates, self.setups, self.relays)
+    }
+}
+
+impl PendingConsumerSetup {
+    pub(in crate::engine::room) fn transport_input(&self) -> ConsumerSetupTransportInput<'_> {
+        ConsumerSetupTransportInput {
+            target: &self.target,
+            rtp: &self.track.rtp,
+            active: self.reservation.selection().delivery_active(),
+            relays: &self.relays,
+        }
+    }
+
+    pub(in crate::engine::room) fn commit(
+        mut self,
+        state: &mut RoomState,
+        media: TransportMediaId,
+        mid: Option<String>,
+    ) -> ConsumerSetupOutcome {
+        let planned = self.reservation.selection();
+        let Some(user) = state.users.get(&self.target.user) else {
+            return self.release_into_outcome(state);
+        };
+        if user.connection_id != self.target.connection || !user.negotiation.can_consume() {
+            return self.release_into_outcome(state);
+        }
+        let Some(producer) = state.media.producer(self.target.producer.id) else {
+            return self.release_into_outcome(state);
+        };
+        if !self.target.producer.matches_identity(producer) {
+            return self.release_into_outcome(state);
+        }
+        let producer_active = producer.active;
+        if state.media.contains_consumer(self.reservation.key()) {
+            return self.release_into_outcome(state);
+        }
+        let selection = state.setup_selection(&self.target, producer_active);
+        let active = selection.delivery_active();
+        let route_state = if active {
+            RouterConsumerRouteState::Active
+        } else {
+            RouterConsumerRouteState::Paused
+        };
+        let routed_consumer_id = match state.routing.add_consumer_with_route_state(
+            &self.target.user,
+            self.target.producer.routed,
+            self.target.producer.kind,
+            ConsumerCapability::Compatible,
+            route_state,
+        ) {
+            Ok(id) => id,
+            Err(error) => {
+                warn!(
+                    consumer_user_id = ?self.target.user,
+                    producer_id = %self.target.producer.id,
+                    ?error,
+                    "router rejected consumer creation"
+                );
+                return self.release_into_outcome(state);
+            }
+        };
+        if let Some(mid) = mid {
+            self.track.mid = mid;
+        }
+        self.track.active = producer_active;
+        let transport_activity_update = (active != planned.delivery_active()).then_some(active);
+        if !state.media.routes.commit(
+            &self.reservation,
+            ConsumerState {
+                routed_consumer_id,
+                consumer_connection_id: self.target.connection,
+                source_connection_id: self.target.producer.connection,
+                source_media: self.target.transport_media_id(),
+                consumer_media: media,
+            },
+            selection,
+        ) {
+            if let Err(error) = state.routing.remove_consumer(routed_consumer_id) {
+                warn!(
+                    consumer_user_id = ?self.target.user,
+                    routed_consumer_id = ?routed_consumer_id,
+                    ?error,
+                    "failed to roll back topology consumer after graph consumer commit rejection"
+                );
+            }
+            return self.release_into_outcome(state);
+        }
+        ConsumerSetupOutcome::Committed(ConsumerSetupCommit {
+            sender: self.sender,
+            track: self.track,
+            transport_activity_update,
+        })
+    }
+
+    pub(in crate::engine::room) fn release(
+        self,
+        state: &mut RoomState,
+    ) -> Vec<ResolvedRelayRouteEffect> {
+        let relays = state.media.routes.release_consumer_setup(self.reservation);
+        state.resolved_relay_route_effects(relays)
+    }
+
+    fn release_into_outcome(self, state: &mut RoomState) -> ConsumerSetupOutcome {
+        ConsumerSetupOutcome::Released(self.release(state))
     }
 }
 
@@ -747,24 +772,6 @@ impl ConsumerSetupTarget {
 
     pub fn stream_id(&self) -> &UserStreamId {
         &self.producer.stream
-    }
-}
-
-impl ConsumerSetupPlan {
-    pub fn consumer_active(&self) -> bool {
-        self.route_reservation.selection().delivery_active()
-    }
-
-    pub fn target(&self) -> &ConsumerSetupTarget {
-        &self.target
-    }
-
-    pub fn rtp(&self) -> &RouterRtpParameters {
-        &self.track.rtp
-    }
-
-    pub fn relay_effects(&self) -> &[ResolvedRelayRouteEffect] {
-        &self.relays
     }
 }
 

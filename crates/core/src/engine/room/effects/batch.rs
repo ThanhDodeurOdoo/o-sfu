@@ -16,7 +16,7 @@ use crate::{
             Room, RoomMediaCounts, SourcePolicyEvent, TrackBindingUpdate, UserOutbound,
             cleanup::TransportCleanupOperation,
             media_graph::{
-                ConsumerRouteUpdate, ConsumerSetupOrigin, ConsumerSetupPlan,
+                ConsumerRouteUpdate, ConsumerSetupOrigin, PendingConsumerSetup,
                 ResolvedRelayRouteEffect,
             },
             outbound::OutboundSender,
@@ -274,7 +274,7 @@ impl RoomCommit {
 
     pub fn with_consumer_setups(
         mut self,
-        setups: Vec<ConsumerSetupPlan>,
+        setups: Vec<PendingConsumerSetup>,
         origin: ConsumerSetupOrigin,
     ) -> Self {
         self.consumer_setups.extend(

@@ -25,7 +25,7 @@ use crate::{
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             media_graph::{
-                ConsumerKey, ConsumerSetupCommitOutcome, ConsumerSetupProducerSnapshot,
+                ConsumerKey, ConsumerSetupOutcome, ConsumerSetupProducerSnapshot,
                 ConsumerSetupTarget, ConsumerState, ProducerRuntimeId, PublishedProducer,
                 PublishedSourceInstall,
             },
@@ -212,13 +212,14 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     assert!(setups.is_empty());
     assert!(
         setup
-            .relay_effects()
+            .transport_input()
+            .relays
             .iter()
             .any(|effect| effect.action == TransportRelayRouteAction::Install)
     );
     assert!(matches!(
-        state.commit_consumer_setup(setup, consumer_media, None),
-        ConsumerSetupCommitOutcome::Committed(_)
+        setup.commit(state, consumer_media, None),
+        ConsumerSetupOutcome::Committed(_)
     ));
     RelayedSource {
         publisher,

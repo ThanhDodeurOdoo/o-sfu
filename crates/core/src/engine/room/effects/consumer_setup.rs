@@ -12,19 +12,19 @@ use crate::engine::{
         Room, SourcePolicyEvent, UserOutbound,
         cleanup::TransportCleanupOperation,
         media_graph::{
-            ConsumerSetupCommitOutcome, ConsumerSetupOrigin, ConsumerSetupPlan, ConsumerSetupTarget,
+            ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
         },
     },
 };
 
 #[derive(Debug)]
 pub(super) struct ConsumerSetupEffect {
-    setup: ConsumerSetupPlan,
+    setup: PendingConsumerSetup,
     origin: ConsumerSetupOrigin,
 }
 
 impl ConsumerSetupEffect {
-    pub(super) const fn new(setup: ConsumerSetupPlan, origin: ConsumerSetupOrigin) -> Self {
+    pub(super) const fn new(setup: PendingConsumerSetup, origin: ConsumerSetupOrigin) -> Self {
         Self { setup, origin }
     }
 
@@ -33,15 +33,17 @@ impl ConsumerSetupEffect {
         room: &Room,
         media_transport: &MediaTransport,
     ) -> Option<DiagnosticsEventData> {
-        if !execute_relay_route_effects(room, media_transport, self.setup.relay_effects()).await {
+        let relays = self.setup.transport_input().relays;
+        if !execute_relay_route_effects(room, media_transport, relays).await {
             release_failed_setup(room, self.setup, media_transport).await;
             return None;
         }
-        let target = self.setup.target().clone();
-        let activity = ConsumerActivity::from_active(self.setup.consumer_active());
+        let input = self.setup.transport_input();
+        let target = input.target.clone();
+        let activity = ConsumerActivity::from_active(input.active);
         let Some((route, mid)) = declare_consumer(
             &target,
-            self.setup.rtp(),
+            input.rtp,
             activity,
             self.origin,
             room,
@@ -55,8 +57,9 @@ impl ConsumerSetupEffect {
         let (before, outbound, after) = {
             let mut state = room.state.write().await;
             let before = state.media_counts();
-            let outbound =
-                state.commit_consumer_setup(self.setup, route.consumer_transport_media_id(), mid);
+            let outbound = self
+                .setup
+                .commit(&mut state, route.consumer_transport_media_id(), mid);
             let after = state.media_counts();
             drop(state);
             (before, outbound, after)
@@ -156,11 +159,11 @@ async fn finish(
     origin: ConsumerSetupOrigin,
     route: TransportConsumerRoute,
     delta: MediaCountDelta,
-    outcome: ConsumerSetupCommitOutcome,
+    outcome: ConsumerSetupOutcome,
 ) -> Option<DiagnosticsEventData> {
     let commit = match outcome {
-        ConsumerSetupCommitOutcome::Committed(commit) => commit,
-        ConsumerSetupCommitOutcome::Released(relays) => {
+        ConsumerSetupOutcome::Committed(commit) => commit,
+        ConsumerSetupOutcome::Released(relays) => {
             delta.record(room);
             execute_relay_route_effects(room, media_transport, &relays).await;
             room.handle_source_policy_event(
@@ -243,13 +246,13 @@ async fn sync_activity(
 
 async fn release_failed_setup(
     room: &Room,
-    setup: ConsumerSetupPlan,
+    setup: PendingConsumerSetup,
     media_transport: &MediaTransport,
 ) {
     let (before, after, relays) = {
         let mut state = room.state.write().await;
         let before = state.media_counts();
-        let relays = state.release_consumer_setup_plan(setup);
+        let relays = setup.release(&mut state);
         let after = state.media_counts();
         drop(state);
         (before, after, relays)

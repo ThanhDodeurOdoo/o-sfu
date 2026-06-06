@@ -32,8 +32,8 @@ pub(super) use self::{
     producer::ValidatedPublish,
     route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{
-        ConsumerRouteUpdate, ConsumerSetupCommitOutcome, ConsumerSetupOrigin, ConsumerSetupPlan,
-        ConsumerSetupTarget,
+        ConsumerRouteUpdate, ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget,
+        PendingConsumerSetup,
     },
 };
 
