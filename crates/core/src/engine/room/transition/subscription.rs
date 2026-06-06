@@ -103,10 +103,12 @@ mod tests {
     };
 
     use super::super::super::{
-        Room, RoomConfig, RoomManager, UserOutboundSender, media_graph::ConsumerRouteState,
+        Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
+        UserOutboundSender, media_graph::ConsumerRouteState,
     };
     use crate::{
-        PublishStageOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
+        MediaCodecFlags, PublishStageOutcome, RoomWorkerPolicy, RuntimeFeatureFlags,
+        SessionNegotiationOutcome, SubscriptionUpdateOutcome,
         engine::{
             ConnectionId, TestSourceKind, UserId, UserPermissions,
             media_transport::{
@@ -194,14 +196,78 @@ mod tests {
         UserId,
         ConnectionId,
     ) {
-        let manager = RoomManager::for_test();
+        setup_subscription_room_with_manager(
+            RoomManager::for_test(),
+            "issuer-transition-subscription",
+            create_subscriber_transport_session,
+        )
+        .await
+    }
+
+    async fn setup_spillover_subscription_room() -> (
+        Arc<Room>,
+        MediaTransport,
+        UserId,
+        ConnectionId,
+        UserId,
+        ConnectionId,
+    ) {
+        let setup = setup_subscription_room_with_manager(
+            RoomManager::for_test_with_config(RoomManagerConfig::new(
+                2,
+                RoomRuntimePolicy::new(
+                    RoomAdmissionPolicy::new(100),
+                    RuntimeFeatureFlags::default(),
+                    super::super::super::rtp_capabilities::router_rtp_capabilities(
+                        MediaCodecFlags::default(),
+                    ),
+                )
+                .with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(2)),
+            )),
+            "issuer-transition-subscription-spillover",
+            true,
+        )
+        .await;
+        let (
+            room,
+            media_transport,
+            publisher_id,
+            publisher_connection_id,
+            subscriber_id,
+            subscriber_connection_id,
+        ) = setup;
+        assert_ne!(
+            room.transport_user_key(&publisher_id, publisher_connection_id)
+                .await
+                .media_worker_id(),
+            room.transport_user_key(&subscriber_id, subscriber_connection_id)
+                .await
+                .media_worker_id()
+        );
+        (
+            room,
+            media_transport,
+            publisher_id,
+            publisher_connection_id,
+            subscriber_id,
+            subscriber_connection_id,
+        )
+    }
+
+    async fn setup_subscription_room_with_manager(
+        manager: RoomManager,
+        issuer: &str,
+        create_subscriber_transport_session: bool,
+    ) -> (
+        Arc<Room>,
+        MediaTransport,
+        UserId,
+        ConnectionId,
+        UserId,
+        ConnectionId,
+    ) {
         let room = manager
-            .serve_room(
-                "issuer-transition-subscription",
-                "room",
-                &RoomConfig::default(),
-                None,
-            )
+            .serve_room(issuer, "room", &RoomConfig::default(), None)
             .await;
         let media_transport = media_transport();
         let publisher_id = UserId::Integer(1);
@@ -231,6 +297,26 @@ mod tests {
         publisher_id: &UserId,
         publisher_connection_id: ConnectionId,
     ) -> TransportMediaId {
+        let transport_media_id =
+            stage_scalable_video(room, media_transport, publisher_id, publisher_connection_id)
+                .await;
+        commit_scalable_video(
+            room,
+            media_transport,
+            publisher_id,
+            publisher_connection_id,
+            transport_media_id,
+        )
+        .await;
+        transport_media_id
+    }
+
+    async fn stage_scalable_video(
+        room: &Room,
+        media_transport: &MediaTransport,
+        publisher_id: &UserId,
+        publisher_connection_id: ConnectionId,
+    ) -> TransportMediaId {
         assert_eq!(
             room.user_operation(publisher_id, publisher_connection_id, media_transport)
                 .stage_negotiated_publish(&source_publish_intent_for_source(
@@ -240,14 +326,22 @@ mod tests {
                 .expect("stage publish should not fail"),
             PublishStageOutcome::Staged
         );
-        let transport_media_id = room
-            .staged_media_id(
-                publisher_id,
-                publisher_connection_id,
-                TestSourceKind::ScalableVideo,
-            )
-            .await
-            .expect("test publish should be staged");
+        room.staged_media_id(
+            publisher_id,
+            publisher_connection_id,
+            TestSourceKind::ScalableVideo,
+        )
+        .await
+        .expect("test publish should be staged")
+    }
+
+    async fn commit_scalable_video(
+        room: &Room,
+        media_transport: &MediaTransport,
+        publisher_id: &UserId,
+        publisher_connection_id: ConnectionId,
+        transport_media_id: TransportMediaId,
+    ) {
         let committed = room
             .user_operation(publisher_id, publisher_connection_id, media_transport)
             .commit_staged_publishes(&AppliedSessionAnswer::from_negotiated_producers([(
@@ -259,7 +353,6 @@ mod tests {
             committed,
             vec![stream_id_for_source(TestSourceKind::ScalableVideo)]
         );
-        transport_media_id
     }
 
     async fn destination_active(
@@ -413,6 +506,54 @@ mod tests {
                 .await
                 .is_some_and(|entry| !entry.destinations.is_empty())
         );
+    }
+
+    #[tokio::test]
+    async fn relay_setup_failure_releases_pending_setup_for_retry() {
+        let (
+            room,
+            media_transport,
+            publisher_id,
+            publisher_connection_id,
+            subscriber_id,
+            subscriber_connection_id,
+        ) = setup_spillover_subscription_room().await;
+        let source_media_id = stage_scalable_video(
+            &room,
+            &media_transport,
+            &publisher_id,
+            publisher_connection_id,
+        )
+        .await;
+        let publisher_session_key = room
+            .transport_user_key(&publisher_id, publisher_connection_id)
+            .await;
+        media_transport
+            .close_session(&publisher_session_key)
+            .await
+            .expect("source session should close before relay install");
+
+        commit_scalable_video(
+            &room,
+            &media_transport,
+            &publisher_id,
+            publisher_connection_id,
+            source_media_id,
+        )
+        .await;
+
+        assert_eq!(room.test_api().inspect().consumer_count().await, 0);
+        let retry_relays = {
+            let mut state = room.state.write().await;
+            let worker_lookup = state.worker_lookup();
+            let mut setups = state
+                .plan_missing_consumers(&subscriber_id, subscriber_connection_id, worker_lookup)
+                .expect("subscriber session should still be current");
+            assert_eq!(setups.len(), 1);
+            let setup = setups.pop().expect("retry setup should be planned");
+            state.release_consumer_setup_plan(setup)
+        };
+        assert_eq!(retry_relays.len(), 1);
     }
 
     #[tokio::test]

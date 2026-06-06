@@ -19,7 +19,7 @@ use o_sfu_router::{
 
 use super::{
     ConsumerKey, ConsumerRouteState, ConsumerSetupPlan, ConsumerState, ProducerRuntimeId,
-    PublishedProducer, PublishedSourceInstall,
+    PublishedProducer, PublishedSourceInstall, subscription::ConsumerSetupCommitOutcome,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -619,10 +619,7 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
         SourceSelector::Open,
         "compat downloads default to an unconstrained source selector"
     );
-    assert!(
-        state.subscription_count() >= 1,
-        "planning setup must reserve the pending consumer slot immediately"
-    );
+    assert_eq!(state.subscription_count(), 1);
 }
 
 #[test]
@@ -667,9 +664,11 @@ fn consumer_setup_commit_uses_latest_room_state() {
     assert!(retry_setups.is_empty());
 
     let setup = planned_setups.pop().expect("setup should be planned");
-    let commit = state
-        .commit_consumer_setup(setup, TransportMediaId::new(20), Some(String::from("m0")))
-        .expect("current room state should still accept the setup");
+    let outcome =
+        state.commit_consumer_setup(setup, TransportMediaId::new(20), Some(String::from("m0")));
+    let ConsumerSetupCommitOutcome::Committed(commit) = outcome else {
+        panic!("current room state should still accept the setup");
+    };
     assert!(!commit.track.active());
     let transport_activity_update = commit
         .transport_activity_update
@@ -679,6 +678,65 @@ fn consumer_setup_commit_uses_latest_room_state() {
         state.consumer_route_state(&subscriber_user_id, &publisher_user_id, &stream_id),
         Some(ConsumerRouteState::Inactive)
     );
+}
+
+#[test]
+fn consumer_setup_commit_releases_stale_receiver_plan() {
+    let (
+        mut state,
+        _publisher_user_id,
+        subscriber_user_id,
+        _subscriber_connection_id,
+        _stream_id,
+        mut planned_setups,
+    ) = pending_consumer_setup();
+    assert_eq!(state.subscription_count(), 1);
+
+    state
+        .users
+        .get_mut(&subscriber_user_id)
+        .expect("subscriber should exist")
+        .connection_id = ConnectionId::from_raw(900);
+    let setup = planned_setups.pop().expect("setup should be planned");
+    let outcome =
+        state.commit_consumer_setup(setup, TransportMediaId::new(20), Some(String::from("m0")));
+    let ConsumerSetupCommitOutcome::Released(relays) = outcome else {
+        panic!("stale receiver setup should be released");
+    };
+
+    assert!(relays.is_empty());
+    assert_eq!(state.subscription_count(), 0);
+}
+
+#[test]
+fn consumer_setup_commit_releases_stale_producer_plan() {
+    let (
+        mut state,
+        publisher_user_id,
+        _subscriber_user_id,
+        _subscriber_connection_id,
+        stream_id,
+        mut planned_setups,
+    ) = pending_consumer_setup();
+    assert_eq!(state.subscription_count(), 1);
+
+    let source_id = state
+        .media
+        .source_id_for_owner_stream(&publisher_user_id, &stream_id)
+        .expect("publisher source should exist");
+    state
+        .media
+        .remove_source(source_id)
+        .expect("publisher source should be removable");
+    let setup = planned_setups.pop().expect("setup should be planned");
+    let outcome =
+        state.commit_consumer_setup(setup, TransportMediaId::new(20), Some(String::from("m0")));
+    let ConsumerSetupCommitOutcome::Released(relays) = outcome else {
+        panic!("stale producer setup should be released");
+    };
+
+    assert!(relays.is_empty());
+    assert_eq!(state.subscription_count(), 0);
 }
 
 #[test]
@@ -1028,7 +1086,12 @@ fn purge_user_media_state_removes_only_indexed_user_and_source_entries() {
     let pending_removed_key = ConsumerKey::new(&publisher_id, other_source_id);
     state
         .media
-        .reserve_consumer_setup(pending_removed_key.clone());
+        .routes
+        .reserve_consumer_setup(
+            pending_removed_key.clone(),
+            ConsumerSourceSelection::open(true),
+        )
+        .expect("pending route should be reserved");
 
     let surviving_consumer_key = install_test_consumer_state(
         &mut state,

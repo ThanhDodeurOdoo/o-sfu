@@ -15,29 +15,34 @@ use crate::engine::{
 
 #[derive(Debug, Default)]
 pub(super) struct RouteGraph {
-    entries: BTreeMap<ConsumerKey, RouteEntry>,
+    entries: BTreeMap<ConsumerKey, RouteSlot>,
     by_user: BTreeMap<UserId, BTreeSet<ConsumerKey>>,
     by_source: BTreeMap<PublishedSourceId, BTreeSet<ConsumerKey>>,
     relays: BTreeMap<RelayRouteKey, RelayOwners>,
-    pending: usize,
-    committed: usize,
+    next_reservation: RouteReservationId,
 }
 
 type RelayOwners = BTreeMap<ConsumerKey, RelayRouteActivity>;
 
-#[derive(Debug, Default)]
-struct RouteEntry {
-    selection: Option<ConsumerSourceSelection>,
-    state: RouteState,
-    relay: Option<RouteRelay>,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RouteReservationId(u64);
+
+#[derive(Debug)]
+pub(in crate::engine::room) struct ConsumerRouteReservation {
+    key: ConsumerKey,
+    selection: ConsumerSourceSelection,
+    id: RouteReservationId,
 }
 
-#[derive(Debug, Default)]
-enum RouteState {
-    #[default]
-    Stored,
-    Pending,
-    Committed(ConsumerState),
+#[derive(Debug)]
+enum RouteSlot {
+    Intent(ConsumerSourceSelection),
+    Pending(
+        ConsumerSourceSelection,
+        RouteReservationId,
+        Option<RouteRelay>,
+    ),
+    Committed(ConsumerSourceSelection, ConsumerState, Option<RouteRelay>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +50,11 @@ struct RouteRelay {
     route: RelayRouteKey,
     connection: ConnectionId,
     activity: RelayRouteActivity,
+}
+
+#[derive(Debug)]
+struct TakenPendingRoute {
+    relay: Option<RouteRelay>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,28 +80,33 @@ pub(in crate::engine::room) struct RelayRouteKey {
 
 impl RouteGraph {
     pub(super) fn subscription_count(&self) -> usize {
-        self.pending + self.committed
+        self.entries
+            .values()
+            .filter(|slot| slot.has_consumer_setup_or_route())
+            .count()
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn count(&self) -> usize {
-        self.committed
+        self.entries
+            .values()
+            .filter(|slot| slot.is_committed())
+            .count()
     }
 
     pub(super) fn set_selection(&mut self, key: &ConsumerKey, active: bool) {
         self.entry(key.clone()).selection().set_active(active);
     }
 
+    #[cfg(test)]
     pub(super) fn ensure_selection(
         &mut self,
         key: &ConsumerKey,
         selection: ConsumerSourceSelection,
     ) {
         let entry = self.entry(key.clone());
-        if entry.state.is_committed() {
-            entry.selection.get_or_insert(selection);
-        } else {
-            entry.selection = Some(selection);
+        if !entry.is_committed() {
+            entry.set_selection(selection);
         }
     }
 
@@ -102,65 +117,62 @@ impl RouteGraph {
         self.entry(key).selection()
     }
 
-    pub(super) fn reserve_consumer_setup(&mut self, key: ConsumerKey) {
-        let reserved = {
-            let entry = self.entry(key);
-            if matches!(entry.state, RouteState::Stored) {
-                entry.state = RouteState::Pending;
-                true
-            } else {
-                false
-            }
-        };
-        if reserved {
-            self.pending += 1;
+    pub(super) fn reserve_consumer_setup(
+        &mut self,
+        key: ConsumerKey,
+        selection: ConsumerSourceSelection,
+    ) -> Option<ConsumerRouteReservation> {
+        if self
+            .entries
+            .get(&key)
+            .is_some_and(RouteSlot::has_consumer_setup_or_route)
+        {
+            return None;
         }
+        let id = self.next_reservation();
+        let entry = self.entry(key.clone());
+        *entry = RouteSlot::Pending(selection, id, None);
+        Some(ConsumerRouteReservation { key, selection, id })
     }
 
-    pub(super) fn release_consumer_setup(&mut self, key: &ConsumerKey) {
-        let removed = if let Some(entry) = self.entries.get_mut(key)
-            && matches!(entry.state, RouteState::Pending)
-        {
-            entry.state = RouteState::Stored;
-            true
-        } else {
-            false
+    pub(super) fn release_consumer_setup(
+        &mut self,
+        reservation: ConsumerRouteReservation,
+    ) -> Vec<RelayRouteEffect> {
+        let key = reservation.key;
+        let Some(entry) = self.entries.get_mut(&key) else {
+            return Vec::new();
         };
-        if removed {
-            self.pending -= 1;
-        }
-        self.prune(key);
+        let Some(pending) = entry.take_pending(reservation.id) else {
+            return Vec::new();
+        };
+        pending
+            .relay
+            .map_or_else(Vec::new, |relay| self.release_relay(&key, &relay))
     }
 
     pub(super) fn commit(
         &mut self,
-        key: ConsumerKey,
+        reservation: &ConsumerRouteReservation,
         state: ConsumerState,
         selection: ConsumerSourceSelection,
     ) -> bool {
-        let was_pending = {
-            let entry = self.entry(key);
-            if entry.state.is_committed() {
-                return false;
-            }
-            let was_pending = matches!(entry.state, RouteState::Pending);
-            entry.selection = Some(selection);
-            entry.state = RouteState::Committed(state);
-            was_pending
+        let Some(entry) = self.entries.get_mut(&reservation.key) else {
+            return false;
         };
-        if was_pending {
-            self.pending -= 1;
-        }
-        self.committed += 1;
+        let Some(pending) = entry.take_pending(reservation.id) else {
+            return false;
+        };
+        *entry = RouteSlot::Committed(selection, state, pending.relay);
         true
     }
 
     pub(super) fn selection(&self, key: &ConsumerKey) -> Option<ConsumerSourceSelection> {
-        self.entries.get(key).and_then(|entry| entry.selection)
+        self.entries.get(key).map(RouteSlot::selection_value)
     }
 
     pub(super) fn consumer_state(&self, key: &ConsumerKey) -> Option<ConsumerState> {
-        self.entries.get(key)?.state.consumer()
+        self.entries.get(key)?.consumer()
     }
 
     pub(super) fn committed_consumer_transport_entries(
@@ -171,15 +183,15 @@ impl RouteGraph {
     }
 
     pub(super) fn pending_consumer_user_ids(&self) -> impl Iterator<Item = &UserId> {
-        self.entries.iter().filter_map(|(key, entry)| {
-            matches!(entry.state, RouteState::Pending).then_some(&key.consumer_user_id)
-        })
+        self.entries
+            .iter()
+            .filter_map(|(key, entry)| entry.is_pending().then_some(&key.consumer_user_id))
     }
 
     pub(super) fn committed_entries(&self) -> impl Iterator<Item = (&ConsumerKey, ConsumerState)> {
         self.entries
             .iter()
-            .filter_map(|(key, entry)| Some((key, entry.state.consumer()?)))
+            .filter_map(|(key, entry)| Some((key, entry.consumer()?)))
     }
 
     pub(super) fn pending_keys_for_user(
@@ -190,22 +202,17 @@ impl RouteGraph {
             .get(user_id)
             .into_iter()
             .flat_map(BTreeSet::iter)
-            .filter(|key| {
-                self.entries
-                    .get(*key)
-                    .is_some_and(|entry| matches!(entry.state, RouteState::Pending))
-            })
+            .filter(|key| self.entries.get(*key).is_some_and(RouteSlot::is_pending))
     }
 
     pub(super) fn remove_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
         let Some(entry) = self.entries.remove(key) else {
             return Vec::new();
         };
-        self.drop_count(&entry.state);
         remove_from_index_set(&mut self.by_user, &key.consumer_user_id, key);
         remove_from_index_set(&mut self.by_source, &key.source_id, key);
         entry
-            .relay
+            .into_relay()
             .map_or_else(Vec::new, |relay| self.release_relay(key, &relay))
     }
 
@@ -298,42 +305,49 @@ impl RouteGraph {
     pub(super) fn has_consumer_setup_or_route(&self, key: &ConsumerKey) -> bool {
         self.entries
             .get(key)
-            .is_some_and(|entry| entry.state.has_consumer_setup_or_route())
+            .is_some_and(RouteSlot::has_consumer_setup_or_route)
     }
 
     pub(super) fn contains(&self, key: &ConsumerKey) -> bool {
-        self.entries
-            .get(key)
-            .is_some_and(|entry| entry.state.is_committed())
+        self.entries.get(key).is_some_and(RouteSlot::is_committed)
     }
 
     pub(super) fn reserve_relay(
         &mut self,
+        reservation: &ConsumerRouteReservation,
         target: &ConsumerSetupTarget,
         source_connection: ConnectionId,
         source_media: TransportMediaId,
         target_worker: MediaWorkerId,
         active: bool,
     ) -> Vec<RelayRouteEffect> {
-        let key = ConsumerKey::new(target.consumer_user_id(), target.source_id());
-        let relay = RouteRelay {
-            route: RelayRouteKey {
-                source_user: target.producer_user_id().clone(),
-                source_connection,
-                source_media,
-                target_worker,
-            },
-            connection: target.consumer_connection_id(),
-            activity: RelayRouteActivity::from_active(active),
-        };
-        let previous = {
-            let entry = self.entry(key.clone());
-            if entry.relay.as_ref() == Some(&relay) {
+        let key = &reservation.key;
+        let (previous, relay) = {
+            let Some(entry) = self.entries.get_mut(key) else {
+                return Vec::new();
+            };
+            let RouteSlot::Pending(_, id, pending_relay) = entry else {
+                return Vec::new();
+            };
+            if *id != reservation.id {
                 return Vec::new();
             }
-            entry.relay.replace(relay.clone())
+            let relay = RouteRelay {
+                route: RelayRouteKey {
+                    source_user: target.producer_user_id().clone(),
+                    source_connection,
+                    source_media,
+                    target_worker,
+                },
+                connection: target.consumer_connection_id(),
+                activity: RelayRouteActivity::from_active(active),
+            };
+            if pending_relay.as_ref() == Some(&relay) {
+                return Vec::new();
+            }
+            (pending_relay.replace(relay.clone()), relay)
         };
-        self.replace_relay(&key, previous, &relay)
+        self.replace_relay(key, previous, &relay)
     }
 
     pub(super) fn set_relay_active(
@@ -353,21 +367,7 @@ impl RouteGraph {
         self.set_relay_owner(&key, &relay, false)
     }
 
-    pub(super) fn release_target(&mut self, target: &ConsumerSetupTarget) -> Vec<RelayRouteEffect> {
-        let key = ConsumerKey::new(target.consumer_user_id(), target.source_id());
-        let Some(relay) = self
-            .entries
-            .get_mut(&key)
-            .and_then(|entry| entry.take_relay(target.consumer_connection_id()))
-        else {
-            return Vec::new();
-        };
-        let effects = self.release_relay(&key, &relay);
-        self.prune(&key);
-        effects
-    }
-
-    fn entry(&mut self, key: ConsumerKey) -> &mut RouteEntry {
+    fn entry(&mut self, key: ConsumerKey) -> &mut RouteSlot {
         self.by_user
             .entry(key.consumer_user_id.clone())
             .or_default()
@@ -376,24 +376,14 @@ impl RouteGraph {
             .entry(key.source_id)
             .or_default()
             .insert(key.clone());
-        self.entries.entry(key).or_default()
+        self.entries
+            .entry(key)
+            .or_insert_with(|| RouteSlot::Intent(ConsumerSourceSelection::open(true)))
     }
 
-    fn prune(&mut self, key: &ConsumerKey) {
-        if self.entries.get(key).is_some_and(RouteEntry::is_used) {
-            return;
-        }
-        self.entries.remove(key);
-        remove_from_index_set(&mut self.by_user, &key.consumer_user_id, key);
-        remove_from_index_set(&mut self.by_source, &key.source_id, key);
-    }
-
-    fn drop_count(&mut self, state: &RouteState) {
-        match state {
-            RouteState::Stored => {}
-            RouteState::Pending => self.pending -= 1,
-            RouteState::Committed(_) => self.committed -= 1,
-        }
+    fn next_reservation(&mut self) -> RouteReservationId {
+        self.next_reservation.0 += 1;
+        self.next_reservation
     }
 
     fn replace_relay(
@@ -451,16 +441,68 @@ impl RouteGraph {
     }
 }
 
-impl RouteEntry {
-    fn selection(&mut self) -> &mut ConsumerSourceSelection {
-        self.selection
-            .get_or_insert_with(|| ConsumerSourceSelection::open(true))
+impl ConsumerRouteReservation {
+    pub(in crate::engine::room) const fn key(&self) -> &ConsumerKey {
+        &self.key
     }
 
-    fn is_used(&self) -> bool {
-        self.selection.is_some()
-            || !matches!(self.state, RouteState::Stored)
-            || self.relay.is_some()
+    pub(in crate::engine::room) const fn selection(&self) -> ConsumerSourceSelection {
+        self.selection
+    }
+}
+
+impl RouteSlot {
+    const fn selection_value(&self) -> ConsumerSourceSelection {
+        match self {
+            Self::Intent(selection)
+            | Self::Pending(selection, _, _)
+            | Self::Committed(selection, _, _) => *selection,
+        }
+    }
+
+    fn selection(&mut self) -> &mut ConsumerSourceSelection {
+        match self {
+            Self::Intent(selection)
+            | Self::Pending(selection, _, _)
+            | Self::Committed(selection, _, _) => selection,
+        }
+    }
+
+    #[cfg(test)]
+    fn set_selection(&mut self, selection: ConsumerSourceSelection) {
+        *self.selection() = selection;
+    }
+
+    fn take_pending(&mut self, expected_id: RouteReservationId) -> Option<TakenPendingRoute> {
+        let Self::Pending(selection, id, relay) = self else {
+            return None;
+        };
+        if *id != expected_id {
+            return None;
+        }
+        let selection = *selection;
+        let relay = relay.take();
+        *self = Self::Intent(selection);
+        Some(TakenPendingRoute { relay })
+    }
+
+    const fn is_committed(&self) -> bool {
+        matches!(self, Self::Committed(..))
+    }
+
+    const fn is_pending(&self) -> bool {
+        matches!(self, Self::Pending(..))
+    }
+
+    const fn has_consumer_setup_or_route(&self) -> bool {
+        matches!(self, Self::Pending(..) | Self::Committed(..))
+    }
+
+    const fn consumer(&self) -> Option<ConsumerState> {
+        match self {
+            Self::Committed(_, state, _) => Some(*state),
+            Self::Intent(_) | Self::Pending(_, _, _) => None,
+        }
     }
 
     fn set_relay_activity(
@@ -468,7 +510,10 @@ impl RouteEntry {
         connection: ConnectionId,
         activity: RelayRouteActivity,
     ) -> Option<RouteRelay> {
-        let relay = self.relay.as_mut()?;
+        let relay = match self {
+            Self::Intent(_) => return None,
+            Self::Pending(_, _, relay) | Self::Committed(_, _, relay) => relay.as_mut()?,
+        };
         if relay.connection != connection || relay.activity == activity {
             return None;
         }
@@ -476,32 +521,10 @@ impl RouteEntry {
         Some(relay.clone())
     }
 
-    fn take_relay(&mut self, connection: ConnectionId) -> Option<RouteRelay> {
-        if self
-            .relay
-            .as_ref()
-            .is_some_and(|relay| relay.connection == connection)
-        {
-            self.relay.take()
-        } else {
-            None
-        }
-    }
-}
-
-impl RouteState {
-    const fn is_committed(&self) -> bool {
-        matches!(self, Self::Committed(_))
-    }
-
-    const fn has_consumer_setup_or_route(&self) -> bool {
-        matches!(self, Self::Pending | Self::Committed(_))
-    }
-
-    const fn consumer(&self) -> Option<ConsumerState> {
+    fn into_relay(self) -> Option<RouteRelay> {
         match self {
-            Self::Committed(state) => Some(*state),
-            Self::Stored | Self::Pending => None,
+            Self::Intent(_) => None,
+            Self::Pending(_, _, relay) | Self::Committed(_, _, relay) => relay,
         }
     }
 }
