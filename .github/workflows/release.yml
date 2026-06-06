@@ -216,6 +216,12 @@ jobs:
 
           container image:
 
+          \`\`\`text
+          ${{ steps.release.outputs.image_ref }}
+          \`\`\`
+
+          container image verification:
+
           \`\`\`bash
           docker login ghcr.io
           gh attestation verify oci://${{ steps.release.outputs.image_ref }} -R ${{ steps.release.outputs.repo }}
