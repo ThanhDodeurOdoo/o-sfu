@@ -1,11 +1,11 @@
 mod cleanup;
-mod controller;
 mod definition;
 mod directory;
 mod effects;
 mod events;
 mod factory;
 mod init;
+mod instance;
 mod lifecycle;
 mod manager;
 mod media;
@@ -24,14 +24,14 @@ mod tests;
 mod transition;
 mod user_negotiation;
 
-pub use controller::{
-    IncomingBitrateSnapshot, Room, RoomJoinError, RoomManagerJoinError, RoomMediaCounts,
-    RoomUserStatsSnapshot,
-};
 pub use events::{
     BroadcastPayload, BroadcastPayloadError, MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage,
 };
 pub use init::{RoomAdmissionPolicy, RoomConfig, RoomRuntimePolicy};
+pub use instance::{
+    IncomingBitrateSnapshot, Room, RoomJoinError, RoomManagerJoinError, RoomMediaCounts,
+    RoomUserStatsSnapshot,
+};
 pub use lifecycle::{RoomUserPermissions, UserCloseReason};
 pub use manager::{
     JoinUserRequest, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomUserAdmission,
@@ -59,5 +59,5 @@ pub use tests::api::{
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub(in crate::engine::room) use self::{
-    effects::RoomEffectContext, membership::JoinSessionIntent, placement::JoinPlacementPlan,
+    effects::batch::RoomEffectContext, membership::JoinSessionIntent, placement::JoinPlacementPlan,
 };

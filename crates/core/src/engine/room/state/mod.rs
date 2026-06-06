@@ -16,9 +16,6 @@ mod shared;
 mod test_support;
 
 pub(in crate::engine::room) use self::{
-    membership::{
-        DisconnectUsersOutcome, DisconnectedUser, JoinUserOutcome, LeaveUserOutcome,
-        LifecycleEffects,
-    },
+    membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
     shared::RoomState,
 };
