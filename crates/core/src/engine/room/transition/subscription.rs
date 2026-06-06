@@ -551,7 +551,9 @@ mod tests {
                 .expect("subscriber session should still be current");
             assert_eq!(setups.len(), 1);
             let setup = setups.pop().expect("retry setup should be planned");
-            state.release_consumer_setup_plan(setup)
+            let relays = setup.release(&mut state);
+            drop(state);
+            relays
         };
         assert_eq!(retry_relays.len(), 1);
     }

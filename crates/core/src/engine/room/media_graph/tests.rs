@@ -9,7 +9,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use o_sfu_router::{
-    ConsumerCapability, MediaKind as RouterMediaKind, ProducerId, RouterId,
+    ConsumerCapability, ConsumerId, MediaKind as RouterMediaKind, ProducerId, RouterId,
     derive_consumable_rtp_parameters,
     test_support::rtp_samples::{
         sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
@@ -18,8 +18,8 @@ use o_sfu_router::{
 };
 
 use super::{
-    ConsumerKey, ConsumerRouteState, ConsumerSetupPlan, ConsumerState, ProducerRuntimeId,
-    PublishedProducer, PublishedSourceInstall, subscription::ConsumerSetupCommitOutcome,
+    ConsumerKey, ConsumerRouteState, ConsumerSetupOutcome, ConsumerState, PendingConsumerSetup,
+    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -396,7 +396,7 @@ fn pending_consumer_setup() -> (
     UserId,
     ConnectionId,
     UserStreamId,
-    Vec<ConsumerSetupPlan>,
+    PendingConsumerSetup,
 ) {
     let mut state = test_state();
     let publisher_user_id = UserId::Integer(1);
@@ -414,12 +414,13 @@ fn pending_consumer_setup() -> (
         TransportMediaId::new(10),
         22_222,
     );
-    let planned_setups = state
+    let mut planned_setups = state
         .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id, |_| {
             MediaWorkerId::from_raw(0)
         })
         .expect("subscriber session should exist");
     assert_eq!(planned_setups.len(), 1);
+    let setup = planned_setups.pop().expect("setup should be planned");
 
     (
         state,
@@ -427,8 +428,15 @@ fn pending_consumer_setup() -> (
         subscriber_user_id,
         subscriber_connection_id,
         stream_id,
-        planned_setups,
+        setup,
     )
+}
+
+fn commit_pending_setup(
+    state: &mut RoomState,
+    setup: PendingConsumerSetup,
+) -> ConsumerSetupOutcome {
+    setup.commit(state, TransportMediaId::new(20), Some(String::from("m0")))
 }
 
 #[test]
@@ -630,7 +638,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
         subscriber_user_id,
         subscriber_connection_id,
         stream_id,
-        mut planned_setups,
+        setup,
     ) = pending_consumer_setup();
 
     let publisher_connection_id = state
@@ -663,10 +671,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
         .into_parts();
     assert!(retry_setups.is_empty());
 
-    let setup = planned_setups.pop().expect("setup should be planned");
-    let outcome =
-        state.commit_consumer_setup(setup, TransportMediaId::new(20), Some(String::from("m0")));
-    let ConsumerSetupCommitOutcome::Committed(commit) = outcome else {
+    let ConsumerSetupOutcome::Committed(commit) = commit_pending_setup(&mut state, setup) else {
         panic!("current room state should still accept the setup");
     };
     assert!(!commit.track.active());
@@ -688,7 +693,7 @@ fn consumer_setup_commit_releases_stale_receiver_plan() {
         subscriber_user_id,
         _subscriber_connection_id,
         _stream_id,
-        mut planned_setups,
+        setup,
     ) = pending_consumer_setup();
     assert_eq!(state.subscription_count(), 1);
 
@@ -697,10 +702,7 @@ fn consumer_setup_commit_releases_stale_receiver_plan() {
         .get_mut(&subscriber_user_id)
         .expect("subscriber should exist")
         .connection_id = ConnectionId::from_raw(900);
-    let setup = planned_setups.pop().expect("setup should be planned");
-    let outcome =
-        state.commit_consumer_setup(setup, TransportMediaId::new(20), Some(String::from("m0")));
-    let ConsumerSetupCommitOutcome::Released(relays) = outcome else {
+    let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
         panic!("stale receiver setup should be released");
     };
 
@@ -716,7 +718,7 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
         _subscriber_user_id,
         _subscriber_connection_id,
         stream_id,
-        mut planned_setups,
+        setup,
     ) = pending_consumer_setup();
     assert_eq!(state.subscription_count(), 1);
 
@@ -728,15 +730,49 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
         .media
         .remove_source(source_id)
         .expect("publisher source should be removable");
-    let setup = planned_setups.pop().expect("setup should be planned");
-    let outcome =
-        state.commit_consumer_setup(setup, TransportMediaId::new(20), Some(String::from("m0")));
-    let ConsumerSetupCommitOutcome::Released(relays) = outcome else {
+    let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
         panic!("stale producer setup should be released");
     };
 
     assert!(relays.is_empty());
     assert_eq!(state.subscription_count(), 0);
+}
+
+#[test]
+fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
+    let (
+        mut state,
+        publisher_user_id,
+        subscriber_user_id,
+        _subscriber_connection_id,
+        stream_id,
+        setup,
+    ) = pending_consumer_setup();
+    assert_eq!(state.subscription_count(), 1);
+
+    let source_id = state
+        .media
+        .source_id_for_owner_stream(&publisher_user_id, &stream_id)
+        .expect("publisher source should exist");
+    let key = ConsumerKey::new(&subscriber_user_id, source_id);
+    assert!(state.media.has_consumer_setup_or_route(&key));
+    assert!(state.media.remove_consumer_key_state(&key).is_empty());
+    assert!(!state.media.has_consumer_setup_or_route(&key));
+
+    let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
+        panic!("setup with rejected graph commit should be released");
+    };
+
+    assert!(relays.is_empty());
+    assert_eq!(state.consumer_count(), 0);
+    assert_eq!(state.subscription_count(), 0);
+    assert!(
+        state
+            .routing
+            .remove_consumer(RoutedConsumerId::new(RouterId(1), ConsumerId(1)))
+            .is_err(),
+        "routed consumer created before graph rejection must be rolled back"
+    );
 }
 
 #[test]
