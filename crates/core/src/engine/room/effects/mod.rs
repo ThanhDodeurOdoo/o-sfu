@@ -1,6 +1,4 @@
-//! Shared post-lock commit executor for room transitions.
+//! shared post-lock effect batch executor for room transitions
 
-mod batch;
+pub(in crate::engine::room) mod batch;
 mod consumer_setup;
-
-pub(super) use batch::{RoomCommit, RoomEffectContext};

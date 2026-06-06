@@ -20,25 +20,21 @@
 //! after the state guard has been released.
 
 use o_sfu_router::{MediaCapabilities, RouterId};
-use o_sfu_telemetry::schema::event as telemetry_event;
 
 use super::{
-    BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, SourcePolicyEvent,
-    UserOutboundSender,
+    BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, UserOutboundSender,
     cleanup::TransportCleanupOperation,
-    effects::{RoomCommit, RoomEffectContext},
+    effects::{
+        self,
+        batch::{RoomEffectContext, RoomGaugeDelta},
+    },
     placement::JoinPlacementPlan,
     routing::CommittedRoutingReceipt,
-    state::{
-        DisconnectUsersOutcome, DisconnectedUser, JoinUserOutcome, LeaveUserOutcome, RoomState,
-    },
+    state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, RoomState},
 };
 use crate::{
     SessionNegotiationOutcome,
-    engine::{
-        ConnectionId, UserId, UserPermissions, diagnostics::DiagnosticsEventData,
-        media_transport::MediaTransport,
-    },
+    engine::{ConnectionId, UserId, UserPermissions, media_transport::MediaTransport},
 };
 
 /// join request prepared before acquiring the room-state write lock
@@ -102,7 +98,7 @@ enum UserTransitionOutcome {
     /// A successful join, including replacement cleanup and fan-out effects.
     Join {
         outcome: JoinUserOutcome,
-        count_delta: MembershipCountDelta,
+        count_delta: RoomGaugeDelta,
     },
     /// A close command with optional state output.
     ///
@@ -114,12 +110,12 @@ enum UserTransitionOutcome {
         user_id: UserId,
         connection_id: ConnectionId,
         transport_close: Option<TransportCleanupOperation>,
-        count_delta: MembershipCountDelta,
+        count_delta: RoomGaugeDelta,
     },
     /// A bulk disconnect outcome for every user still present in state.
     Disconnect {
         outcome: DisconnectUsersOutcome,
-        count_delta: MembershipCountDelta,
+        count_delta: RoomGaugeDelta,
     },
 }
 
@@ -145,31 +141,9 @@ impl MembershipCountSnapshot {
         }
     }
 
-    const fn delta_to(self, after: Self) -> MembershipCountDelta {
-        MembershipCountDelta {
-            users_before: self.users,
-            users_after: after.users,
-            media_before: self.media,
-            media_after: after.media,
-        }
+    const fn delta_to(self, after: Self) -> RoomGaugeDelta {
+        RoomGaugeDelta::membership(self.users, after.users, self.media, after.media)
     }
-}
-
-/// live-count delta attached to one committed membership transition
-///
-/// metrics consume this before transport cleanup, diagnostics and fan-out run
-/// this keeps live gauges tied to room-state ownership instead of later
-/// best-effort effects
-#[derive(Debug, Clone, Copy)]
-struct MembershipCountDelta {
-    /// user count before the room state mutation
-    users_before: usize,
-    /// user count after the room state mutation
-    users_after: usize,
-    /// media totals before the room state mutation
-    media_before: RoomMediaCounts,
-    /// media totals after the room state mutation
-    media_after: RoomMediaCounts,
 }
 
 impl Room {
@@ -191,7 +165,7 @@ impl Room {
             .apply_join_state_transition(intent, allocate_spillover_router)
             .await?;
         let UserTransitionResult::Joined(receipt) =
-            self.finalize_session_transition(outcome, context).await
+            self.finalize_user_transition(outcome, context).await
         else {
             return Err(RoomJoinError::RouterState);
         };
@@ -231,15 +205,17 @@ impl Room {
         connection_id: ConnectionId,
         context: RoomEffectContext<'_>,
     ) -> bool {
-        self.run_session_transition(
-            UserTransition::Close {
-                user_id,
-                connection_id,
-            },
-            context,
+        !matches!(
+            self.run_user_transition(
+                UserTransition::Close {
+                    user_id,
+                    connection_id,
+                },
+                context,
+            )
+            .await,
+            UserTransitionResult::Missing
         )
-        .await
-        .is_ok_and(|result| !matches!(result, UserTransitionResult::Missing))
     }
 
     /// Fan a user-originated room message out to the other live sessions.
@@ -301,10 +277,8 @@ impl Room {
         user_ids: &[UserId],
         context: RoomEffectContext<'_>,
     ) {
-        let _ = self
-            .run_session_transition(UserTransition::Disconnect { user_ids }, context)
-            .await
-            .ok();
+        self.run_user_transition(UserTransition::Disconnect { user_ids }, context)
+            .await;
     }
 
     /// Apply one leave-oriented membership command and finalize deferred effects.
@@ -312,15 +286,13 @@ impl Room {
     /// This is the common sequencing point for close and disconnect. It
     /// keeps the mutation phase and async effect phase adjacent in the code so
     /// future changes do not accidentally await while holding room state.
-    async fn run_session_transition(
+    async fn run_user_transition(
         &self,
         transition: UserTransition<'_>,
         context: RoomEffectContext<'_>,
-    ) -> Result<UserTransitionResult, RoomJoinError> {
-        let Some(outcome) = self.apply_state_transition(transition).await? else {
-            return Ok(UserTransitionResult::Missing);
-        };
-        Ok(self.finalize_session_transition(outcome, context).await)
+    ) -> UserTransitionResult {
+        let outcome = self.apply_state_transition(transition).await;
+        self.finalize_user_transition(outcome, context).await
     }
 
     /// Mutate `RoomState` and capture all data needed after the lock is gone.
@@ -331,8 +303,8 @@ impl Room {
     async fn apply_state_transition(
         &self,
         transition: UserTransition<'_>,
-    ) -> Result<Option<UserTransitionOutcome>, RoomJoinError> {
-        let outcome = {
+    ) -> UserTransitionOutcome {
+        {
             let mut state = self.state.write().await;
             let counts_before = MembershipCountSnapshot::from_state(&state);
             let outcome = match transition {
@@ -372,8 +344,7 @@ impl Room {
             };
             drop(state);
             outcome
-        };
-        Ok(Some(outcome))
+        }
     }
 
     async fn apply_join_state_transition(
@@ -411,7 +382,7 @@ impl Room {
     /// Finalization may update runtime metadata, clean transport resources,
     /// refresh source selection policy and emit outbound effects, but it must
     /// not reopen the membership decision.
-    async fn finalize_session_transition(
+    async fn finalize_user_transition(
         &self,
         outcome: UserTransitionOutcome,
         context: RoomEffectContext<'_>,
@@ -421,8 +392,10 @@ impl Room {
                 outcome,
                 count_delta,
             } => {
-                self.finalize_join_transition(outcome, count_delta, context)
-                    .await
+                let (batch, routing_receipt) =
+                    effects::batch::build_join(self, count_delta, outcome);
+                batch.execute(self, context).await;
+                UserTransitionResult::Joined(routing_receipt)
             }
             UserTransitionOutcome::Close {
                 state_outcome,
@@ -431,165 +404,44 @@ impl Room {
                 transport_close,
                 count_delta,
             } => {
-                self.finalize_close_transition(
+                let had_state = state_outcome.is_some();
+                let batch = effects::batch::build_connection_close(
+                    self,
+                    count_delta,
                     state_outcome,
                     user_id,
                     connection_id,
                     transport_close,
-                    count_delta,
-                    context,
-                )
-                .await
+                );
+                batch.execute(self, context).await;
+                if had_state {
+                    UserTransitionResult::Applied
+                } else {
+                    UserTransitionResult::Missing
+                }
             }
             UserTransitionOutcome::Disconnect {
                 outcome,
                 count_delta,
             } => {
-                self.finalize_disconnect_transition(outcome, count_delta, context)
-                    .await
+                let staged_cleanup = outcome
+                    .disconnected_users
+                    .iter()
+                    .flat_map(|session| {
+                        self.drain_staged_publish_cleanup_operations(
+                            &session.user_id,
+                            session.connection_id,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                effects::batch::build_disconnect(self, count_delta, outcome, staged_cleanup)
+                    .execute(self, context)
+                    .await;
+                UserTransitionResult::Applied
             }
         };
         self.reconcile_spillover_routers().await;
         result
-    }
-
-    /// Finalize a committed join after room state has allocated its connection.
-    ///
-    /// Replacement joins may carry media cleanup for the previous session. The
-    /// new session is registered with diagnostics and transport placement only
-    /// after the state transition succeeds.
-    async fn finalize_join_transition(
-        &self,
-        outcome: JoinUserOutcome,
-        count_delta: MembershipCountDelta,
-        context: RoomEffectContext<'_>,
-    ) -> UserTransitionResult {
-        let JoinUserOutcome {
-            effects,
-            user_id,
-            routing_receipt,
-            transport_cleanup,
-            relay_effects,
-        } = outcome;
-        let connection_id = routing_receipt.connection_id;
-        let media_worker_id = routing_receipt.transport_session_key.media_worker_id();
-        RoomCommit::new()
-            .with_user_count_delta(count_delta.users_before, count_delta.users_after)
-            .with_media_count_delta(count_delta.media_before, count_delta.media_after)
-            .with_relay_effects(relay_effects)
-            .with_pre_close_transport_cleanup(transport_cleanup)
-            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
-            .with_lifecycle_effects(effects)
-            .register_diagnostics_user(user_id.clone())
-            .record_diagnostics(
-                DiagnosticsEventData::for_user(self.uuid(), &user_id, telemetry_event::USER_JOINED)
-                    .with_connection_id(connection_id.as_u64())
-                    .with_media_worker_id(media_worker_id.as_usize()),
-            )
-            .execute(self, context)
-            .await;
-        UserTransitionResult::Joined(routing_receipt)
-    }
-
-    /// Finalize a close request after room state has made its stale check.
-    ///
-    /// If the state transition removed a live session, this emits lifecycle
-    /// effects and diagnostics. The transport close is attempted even for stale
-    /// state outcomes because the requested runtime identity can still own
-    /// adapter resources outside room state.
-    async fn finalize_close_transition(
-        &self,
-        state_outcome: Option<LeaveUserOutcome>,
-        user_id: UserId,
-        connection_id: ConnectionId,
-        transport_close: Option<TransportCleanupOperation>,
-        count_delta: MembershipCountDelta,
-        context: RoomEffectContext<'_>,
-    ) -> UserTransitionResult {
-        let had_state = state_outcome.is_some();
-        let mut commit = RoomCommit::new()
-            .with_user_count_delta(count_delta.users_before, count_delta.users_after)
-            .with_media_count_delta(count_delta.media_before, count_delta.media_after);
-        let media_worker_id = transport_close
-            .as_ref()
-            .map(|operation| operation.session_key().media_worker_id());
-        if let Some(transport_close) = transport_close {
-            commit = commit.with_transport_user_close_cleanup(transport_close);
-        }
-        if let Some(outcome) = state_outcome {
-            let mut event =
-                DiagnosticsEventData::for_user(self.uuid(), &user_id, telemetry_event::USER_CLOSED)
-                    .with_connection_id(connection_id.as_u64());
-            if let Some(media_worker_id) = media_worker_id {
-                event = event.with_media_worker_id(media_worker_id.as_usize());
-            }
-            commit = commit
-                .with_relay_effects(outcome.relay_effects)
-                .with_pre_close_transport_cleanup(outcome.transport_cleanup)
-                .with_lifecycle_effects(outcome.effects)
-                .record_diagnostics(event)
-                .forget_diagnostics_user(user_id.clone())
-                .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged);
-        }
-        commit.execute(self, context).await;
-        if had_state {
-            UserTransitionResult::Applied
-        } else {
-            UserTransitionResult::Missing
-        }
-    }
-
-    /// Finalize a bulk disconnect after room state has removed current users.
-    ///
-    /// Cleanup and diagnostics are driven only by the users returned from
-    /// `RoomState`, so missing ids in the request do not create transport or
-    /// telemetry side effects.
-    async fn finalize_disconnect_transition(
-        &self,
-        outcome: DisconnectUsersOutcome,
-        count_delta: MembershipCountDelta,
-        context: RoomEffectContext<'_>,
-    ) -> UserTransitionResult {
-        let staged_cleanup = outcome
-            .disconnected_users
-            .iter()
-            .flat_map(|session| {
-                self.drain_staged_publish_cleanup_operations(
-                    &session.user_id,
-                    session.connection_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut commit = RoomCommit::new()
-            .with_user_count_delta(count_delta.users_before, count_delta.users_after)
-            .with_media_count_delta(count_delta.media_before, count_delta.media_after)
-            .with_relay_effects(outcome.relay_effects)
-            .with_pre_close_transport_cleanup(staged_cleanup)
-            .with_pre_close_transport_cleanup(outcome.transport_cleanup)
-            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
-            .with_lifecycle_effects(outcome.effects);
-        for disconnected_session in outcome.disconnected_users {
-            let DisconnectedUser {
-                user_id,
-                connection_id,
-                close_operation,
-            } = disconnected_session;
-            let media_worker_id = close_operation.session_key().media_worker_id();
-            commit = commit
-                .with_transport_user_close_cleanup(close_operation)
-                .record_diagnostics(
-                    DiagnosticsEventData::for_user(
-                        self.uuid(),
-                        &user_id,
-                        telemetry_event::USER_DISCONNECTED,
-                    )
-                    .with_connection_id(connection_id.as_u64())
-                    .with_media_worker_id(media_worker_id.as_usize()),
-                )
-                .forget_diagnostics_user(user_id);
-        }
-        commit.execute(self, context).await;
-        UserTransitionResult::Applied
     }
 
     /// Commit the answer-derived negotiated capability set for one live session.

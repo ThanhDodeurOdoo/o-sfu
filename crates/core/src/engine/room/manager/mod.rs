@@ -6,7 +6,7 @@
 //! no-ops before caller work runs.
 
 #[cfg(test)]
-use std::sync::Mutex as StdMutex;
+use std::sync::Mutex;
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
 use o_sfu_telemetry::schema::event as telemetry_event;
@@ -18,7 +18,7 @@ use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
     RoomUserStatsSnapshot, UserOutboundSender,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
-    effects::RoomEffectContext,
+    effects::batch::RoomEffectContext,
     factory::RoomFactory,
     membership::JoinSessionIntent,
     placement::WorkerLoadIndex,
@@ -156,7 +156,7 @@ pub struct RoomManager {
     diagnostics: Arc<DiagnosticsStore>,
     factory: RoomFactory,
     #[cfg(test)]
-    join_placement_gate: StdMutex<Option<Arc<JoinPlacementTestGate>>>,
+    join_placement_gate: Mutex<Option<Arc<JoinPlacementTestGate>>>,
     media_worker_count: usize,
     metrics: Arc<RuntimeMetrics>,
 }
@@ -175,7 +175,7 @@ impl RoomManager {
             diagnostics: deps.diagnostics,
             factory,
             #[cfg(test)]
-            join_placement_gate: StdMutex::new(None),
+            join_placement_gate: Mutex::new(None),
             media_worker_count: config.media_worker_count.max(1),
             metrics: deps.metrics,
         }

@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     fmt,
-    sync::{Arc, Mutex as StdMutex},
+    sync::{Arc, Mutex},
 };
 
 use tokio::sync::RwLock;
@@ -80,20 +80,20 @@ pub struct RoomMediaCounts {
 pub struct Room {
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) definition: RoomDefinition,
-    pub(super) load_triggered_placement: StdMutex<LoadTriggeredPlacementState>,
+    pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
     #[allow(
         dead_code,
         reason = "recording control-plane wiring is deferred until the replacement baseline is validated"
     )]
     pub(super) recording_service: Arc<RecordingService>,
     pub(super) metrics: Arc<RuntimeMetrics>,
-    pub(super) cleanup_reconciler: StdMutex<CleanupReconciler>,
-    pub(super) staged_publish_registry: StdMutex<StagedPublishRegistry>,
-    #[cfg(test)]
-    pub(super) duplicate_staged_publish_after_reservation: StdMutex<Option<TransportMediaId>>,
-    #[cfg(test)]
-    pub(super) duplicate_staged_publish_cleanup_target: StdMutex<Option<TransportMediaId>>,
+    pub(super) cleanup_reconciler: Mutex<CleanupReconciler>,
+    pub(super) staged_publish_registry: Mutex<StagedPublishRegistry>,
     pub(super) state: RwLock<RoomState>,
+    #[cfg(test)]
+    pub(super) duplicate_staged_publish_after_reservation: Mutex<Option<TransportMediaId>>,
+    #[cfg(test)]
+    pub(super) duplicate_staged_publish_cleanup_target: Mutex<Option<TransportMediaId>>,
 }
 
 impl Room {
@@ -118,15 +118,15 @@ impl Room {
         Self {
             diagnostics: services.diagnostics,
             definition,
-            load_triggered_placement: StdMutex::new(LoadTriggeredPlacementState::default()),
+            load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
             recording_service: Arc::clone(&recording_service),
             metrics: services.metrics,
-            cleanup_reconciler: StdMutex::new(CleanupReconciler::default()),
-            staged_publish_registry: StdMutex::new(StagedPublishRegistry::default()),
+            cleanup_reconciler: Mutex::new(CleanupReconciler::default()),
+            staged_publish_registry: Mutex::new(StagedPublishRegistry::default()),
             #[cfg(test)]
-            duplicate_staged_publish_after_reservation: StdMutex::new(None),
+            duplicate_staged_publish_after_reservation: Mutex::new(None),
             #[cfg(test)]
-            duplicate_staged_publish_cleanup_target: StdMutex::new(None),
+            duplicate_staged_publish_cleanup_target: Mutex::new(None),
             state: RwLock::new(RoomState::new(
                 &runtime_context,
                 runtime_policy.admission_policy,

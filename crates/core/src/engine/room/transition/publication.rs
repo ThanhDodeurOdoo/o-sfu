@@ -4,21 +4,24 @@ use std::{
 };
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
-use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::super::{
-    Room, RoomMediaCounts, RoomUserOperation, SourcePolicyEvent,
+    Room, RoomMediaCounts, RoomUserOperation,
     cleanup::TransportCleanupOperation,
-    effects::{RoomCommit, RoomEffectContext},
-    media_graph::{ConsumerSetupOrigin, ConsumerSetupTarget, ValidatedPublish},
+    effects::{
+        self,
+        batch::{
+            PublicationActivityEffect, RoomDiagnosticsContext, RoomEffectContext, RoomGaugeDelta,
+        },
+    },
+    media_graph::{ConsumerSetupTarget, ValidatedPublish},
 };
 use crate::{
     PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
     RollbackStagedPublishOutcome, TransportEffectOutcome, UnpublishOutcome,
     engine::{
         ConnectionId, UserId,
-        diagnostics::DiagnosticsEventData,
         media_transport::{
             AppliedSessionAnswer, SessionUploadEncoding, TransportAdapterError, TransportMediaId,
             TransportSessionKey, TransportSourceKey,
@@ -189,7 +192,7 @@ impl StagedPublish {
         let connection = descriptor.owner_connection_id();
         let stream_id = descriptor.stream_id().clone();
         let media = reservation.media;
-        let media_worker_id = reservation.session_key.media_worker_id().as_usize();
+        let media_worker_id = reservation.session_key.media_worker_id();
         let committed = {
             let mut state = room.state.write().await;
             let before = state.media_counts();
@@ -197,19 +200,9 @@ impl StagedPublish {
             let consumers = state.commit_publish_reservation(input, media);
             let after = state.media_counts();
             drop(state);
-            consumers.map(|(_producer_id, consumers)| {
-                let diagnostics = DiagnosticsEventData::for_user(
-                    room.uuid(),
-                    &user,
-                    telemetry_event::PUBLISH_COMMITTED,
-                )
-                .with_connection_id(connection.as_u64())
-                .with_media_worker_id(media_worker_id)
-                .with_transport_media_id(media.as_u64());
-                (before, after, consumers, diagnostics)
-            })
+            consumers.map(|(_producer_id, consumers)| (before, after, consumers))
         };
-        let Some((before, after, consumers, diagnostics)) = committed else {
+        let Some((before, after, consumers)) = committed else {
             reservation
                 .cleanup(
                     operation,
@@ -226,7 +219,8 @@ impl StagedPublish {
             return None;
         };
         reservation.commit();
-        finish_committed_publish(operation, before, after, consumers, diagnostics).await;
+        let diagnostics = RoomDiagnosticsContext::new(&user, connection, media_worker_id);
+        finish_committed_publish(operation, before, after, consumers, diagnostics, media).await;
         Some(stream_id)
     }
 
@@ -315,24 +309,27 @@ async fn finish_committed_publish(
     before: RoomMediaCounts,
     after: RoomMediaCounts,
     consumers: Vec<ConsumerSetupTarget>,
-    diagnostics: DiagnosticsEventData,
+    diagnostics: RoomDiagnosticsContext<'_>,
+    media: TransportMediaId,
 ) {
     let room = operation.room();
-    let commit = {
+    let batch = {
         let mut state = room.state.write().await;
         let setup_before = state.media_counts();
         let worker_lookup = state.worker_lookup();
         let setups = state.plan_consumers(consumers, worker_lookup);
         let setup_after = state.media_counts();
         drop(state);
-        RoomCommit::new()
-            .with_media_count_delta(before, after)
-            .with_media_count_delta(setup_before, setup_after)
-            .with_consumer_setups(setups, ConsumerSetupOrigin::Publish)
+        effects::batch::build_publish_commit(
+            room,
+            RoomGaugeDelta::media(before, after),
+            RoomGaugeDelta::media(setup_before, setup_after),
+            setups,
+            diagnostics,
+            media,
+        )
     };
-    commit
-        .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
-        .record_diagnostics(diagnostics)
+    batch
         .execute(
             room,
             RoomEffectContext::runtime(operation.media_transport()),
@@ -492,23 +489,25 @@ impl RoomUserOperation<'_> {
         };
         let transport_media_id = producer_target.transport_media_id();
         let source = TransportSourceKey::new(transport_user_key, transport_media_id);
-        let diagnostics = DiagnosticsEventData::for_user(
-            room.uuid(),
-            self.user_id(),
-            telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
-        )
-        .with_connection_id(self.connection_id().as_u64())
-        .with_media_worker_id(media_worker_id.as_usize())
-        .with_transport_media_id(transport_media_id.as_u64())
-        .insert_field("active", active)
-        .insert_field("stream_id", stream_id.to_string());
         let (recipients, track_update) = outcome.into_track_binding_update();
-        let execution = RoomCommit::new()
-            .with_producer_activity(source, active, stream_id.clone(), diagnostics)
-            .with_track_binding_update(recipients, track_update)
-            .with_source_policy_event(SourcePolicyEvent::FanoutPressureChanged)
-            .execute(room, RoomEffectContext::runtime(self.media_transport()))
-            .await;
+        let execution = effects::batch::build_publication_activity(
+            room,
+            PublicationActivityEffect {
+                diagnostics: RoomDiagnosticsContext::new(
+                    self.user_id(),
+                    self.connection_id(),
+                    media_worker_id,
+                ),
+                source,
+                media: transport_media_id,
+                stream: stream_id,
+                active,
+                recipients,
+                track_update,
+            },
+        )
+        .execute(room, RoomEffectContext::runtime(self.media_transport()))
+        .await;
         PublicationActivityOutcome::Applied {
             transport_update: execution.producer_activity(),
         }
@@ -540,14 +539,15 @@ impl RoomUserOperation<'_> {
             return UnpublishOutcome::MissingPublication;
         };
         let (recipients, track_update, relays, cleanup) = outcome;
-        let execution = RoomCommit::new()
-            .with_media_count_delta(before, after)
-            .with_relay_effects(relays)
-            .with_pre_close_transport_cleanup(cleanup)
-            .with_track_binding_update(recipients, track_update)
-            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
-            .execute(room, RoomEffectContext::runtime(media_port))
-            .await;
+        let execution = effects::batch::build_unpublish(
+            RoomGaugeDelta::media(before, after),
+            relays,
+            cleanup,
+            recipients,
+            track_update,
+        )
+        .execute(room, RoomEffectContext::runtime(media_port))
+        .await;
         room.reconcile_spillover_routers().await;
         UnpublishOutcome::Unpublished {
             cleanup: execution.cleanup(),

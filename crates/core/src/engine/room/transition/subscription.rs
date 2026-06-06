@@ -1,9 +1,13 @@
 use std::collections::BTreeMap;
 
 use super::super::{
-    RoomUserOperation, SourcePolicyEvent,
-    effects::{RoomCommit, RoomEffectContext},
-    media_graph::ConsumerSetupOrigin,
+    RoomUserOperation,
+    effects::{
+        self,
+        batch::{
+            RoomDiagnosticsContext, RoomEffectContext, RoomGaugeDelta, SubscriptionChangeEffect,
+        },
+    },
 };
 use crate::{
     SubscriptionUpdateOutcome,
@@ -26,10 +30,7 @@ impl RoomUserOperation<'_> {
         };
         let after = state.media_counts();
         drop(state);
-        RoomCommit::new()
-            .with_media_count_delta(before, after)
-            .with_consumer_setups(setups, ConsumerSetupOrigin::LateJoin)
-            .with_source_policy_event(SourcePolicyEvent::RouteGraphChanged)
+        effects::batch::build_late_join(RoomGaugeDelta::media(before, after), setups)
             .execute(room, RoomEffectContext::runtime(self.media_transport()))
             .await;
         true
@@ -41,7 +42,7 @@ impl RoomUserOperation<'_> {
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> SubscriptionUpdateOutcome {
         let room = self.room();
-        let effects = {
+        let batch = {
             let mut state = room.state.write().await;
             if state
                 .user_for_connection(self.user_id(), self.connection_id())
@@ -59,30 +60,27 @@ impl RoomUserOperation<'_> {
                 intents,
                 worker_lookup,
             );
-            let source_policy_event = if change.touches_route_graph() {
-                SourcePolicyEvent::RouteGraphChanged
-            } else {
-                SourcePolicyEvent::ReceiverIntentChanged
-            };
             let after = state.media_counts();
             let (updates, setups, relays) = change.into_parts();
-            let commit = RoomCommit::new()
-                .with_media_count_delta(before, after)
-                .with_relay_effects(relays)
-                .with_route_updates(
-                    &state,
-                    room,
-                    self.user_id(),
-                    self.connection_id(),
-                    media_worker_id,
-                    updates,
-                )
-                .with_consumer_setups(setups, ConsumerSetupOrigin::Subscribe)
-                .with_source_policy_event(source_policy_event);
+            let batch = effects::batch::build_subscription_change(
+                &state,
+                room,
+                SubscriptionChangeEffect {
+                    counts: RoomGaugeDelta::media(before, after),
+                    diagnostics: RoomDiagnosticsContext::new(
+                        self.user_id(),
+                        self.connection_id(),
+                        media_worker_id,
+                    ),
+                    route_updates: updates,
+                    setups,
+                    relays,
+                },
+            );
             drop(state);
-            commit
+            batch
         };
-        effects
+        batch
             .execute(room, RoomEffectContext::runtime(self.media_transport()))
             .await;
         SubscriptionUpdateOutcome::Applied

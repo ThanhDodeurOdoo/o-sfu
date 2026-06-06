@@ -610,10 +610,6 @@ impl RoomState {
 }
 
 impl PlannedSubscriptionChange {
-    pub fn touches_route_graph(&self) -> bool {
-        !self.updates.is_empty() || !self.setups.is_empty() || !self.relays.is_empty()
-    }
-
     pub fn into_parts(
         self,
     ) -> (

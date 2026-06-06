@@ -5,7 +5,12 @@ use tokio::{sync::Notify, task::yield_now, time::timeout};
 
 use super::{
     super::{
-        effects::{RoomCommit, RoomEffectContext},
+        effects::{
+            self,
+            batch::{
+                RoomDiagnosticsContext, RoomEffectContext, RoomGaugeDelta, SubscriptionChangeEffect,
+            },
+        },
         manager::JoinPlacementTestGate,
         media_graph::{ConsumerRouteTransportRef, ConsumerRouteUpdate},
     },
@@ -142,6 +147,56 @@ fn assert_event_worker(
         })
         .unwrap_or_else(|| panic!("expected recent diagnostics event {event_name}"));
     assert_eq!(event.media_worker_id, Some(media_worker_id));
+}
+
+async fn apply_subscription_route_activity(
+    room: &Arc<TestRoom>,
+    media_transport: &MediaTransport,
+    publisher_id: &UserId,
+    publisher_connection_id: ConnectionId,
+    stream_id: &UserStreamId,
+    media_worker_id: usize,
+) -> TransportMediaId {
+    let consumer_media_id = TransportMediaId::new(199);
+    let route = ConsumerRouteTransportRef::from_parts(
+        publisher_id.clone(),
+        publisher_connection_id,
+        consumer_media_id,
+        UserId::Integer(1),
+        user_connection_id(room, &UserId::Integer(1)).await,
+        TransportMediaId::new(11),
+    );
+    let route_update = ConsumerRouteUpdate {
+        route,
+        stream: stream_id.clone(),
+        kind: MediaKind::Audio,
+        active: false,
+    };
+    let route_update_batch = {
+        let state = room.state.read().await;
+        let counts = RoomGaugeDelta::media(state.media_counts(), state.media_counts());
+        let batch = effects::batch::build_subscription_change(
+            &state,
+            room.as_ref(),
+            SubscriptionChangeEffect {
+                counts,
+                diagnostics: RoomDiagnosticsContext::new(
+                    publisher_id,
+                    publisher_connection_id,
+                    MediaWorkerId::from_raw(media_worker_id),
+                ),
+                route_updates: vec![route_update],
+                setups: Vec::new(),
+                relays: Vec::new(),
+            },
+        );
+        drop(state);
+        batch
+    };
+    route_update_batch
+        .execute(room.as_ref(), RoomEffectContext::runtime(media_transport))
+        .await;
+    consumer_media_id
 }
 
 #[tokio::test]
@@ -432,37 +487,15 @@ async fn spillover_media_diagnostics_use_connection_worker() {
         media_worker_id,
     );
 
-    let consumer_media_id = TransportMediaId::new(199);
-    let route = ConsumerRouteTransportRef::from_parts(
-        publisher_id.clone(),
+    let consumer_media_id = apply_subscription_route_activity(
+        &room,
+        &media_transport,
+        &publisher_id,
         publisher_connection_id,
-        consumer_media_id,
-        UserId::Integer(1),
-        user_connection_id(&room, &UserId::Integer(1)).await,
-        TransportMediaId::new(11),
-    );
-    let subscription_update = ConsumerRouteUpdate {
-        route,
-        stream: stream_id.clone(),
-        kind: MediaKind::Audio,
-        active: false,
-    };
-    let route_update_commit = {
-        let state = room.state.read().await;
-        let commit = RoomCommit::new().with_route_updates(
-            &state,
-            &room,
-            &publisher_id,
-            publisher_connection_id,
-            MediaWorkerId::from_raw(media_worker_id),
-            vec![subscription_update],
-        );
-        drop(state);
-        commit
-    };
-    route_update_commit
-        .execute(&room, RoomEffectContext::runtime(&media_transport))
-        .await;
+        &stream_id,
+        media_worker_id,
+    )
+    .await;
     assert_event_worker(
         &room,
         &publisher_id,
