@@ -1278,7 +1278,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-core"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "bitflags 2.11.1",
  "futures-util",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-core-room-tests"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
  "o-sfu-core",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-model"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-proofs"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "o-sfu-protocol",
  "o-sfu-rfc",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-protocol"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "o-sfu-model",
  "o-sfu-rfc",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-rfc"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "base64",
  "serde",
@@ -1374,7 +1374,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-router"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "o-sfu-rfc",
  "thiserror",
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-telemetry"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
  "o-sfu-model",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-telemetry-macros"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-tests"
-version = "0.3.0"
+version = "0.4.0-rc.1"
 dependencies = [
  "anyhow",
  "base64",
