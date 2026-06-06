@@ -24,6 +24,46 @@ and checksum manifest. the release notes include verification commands generated
 from `GITHUB_REPOSITORY` and `GITHUB_REF_NAME`, so the owner and version are not
 hardcoded in the published release text.
 
+## updating release lockfiles
+
+for a release-only version bump, update the root Cargo version and refresh only
+the local workspace package entries in each tracked lockfile:
+
+```bash
+cargo update --workspace
+cargo update --manifest-path tests/fuzz/Cargo.toml --workspace
+```
+
+`cargo update --workspace` keeps already locked third-party dependencies in
+place and updates only packages defined by the current workspace unless Cargo
+must add a missing package. this is the right default after changing the version
+in `Cargo.toml`. Omit it if you update dependencies.
+
+the fuzz targets are a separate Cargo workspace with their own lockfile at
+`tests/fuzz/Cargo.lock`, so the fuzz manifest must get the same workspace-only
+refresh. otherwise `--locked` CI checks can fail because Cargo would need to
+rewrite the fuzz lockfile.
+
+after the lockfiles are refreshed, check that the locked metadata commands do
+not need to rewrite either lockfile:
+
+```bash
+cargo metadata --locked --format-version 1 >/dev/null
+cargo metadata --manifest-path tests/fuzz/Cargo.toml --locked --format-version 1 >/dev/null
+```
+
+if the release intentionally includes a full dependency refresh, update both the
+root workspace and the fuzz workspace without `--workspace`:
+
+```bash
+cargo update
+cargo update --manifest-path tests/fuzz/Cargo.toml
+```
+
+review third-party dependency changes before merging a full refresh. tooling
+dependencies can also affect CI, so keep workflow-installed tool versions in
+sync with any locked tool crate updates.
+
 ## creating a release tag
 
 merge the release changes through a pull request first. after the PR is merged,
