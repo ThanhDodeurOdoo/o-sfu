@@ -1,15 +1,22 @@
 use std::time::{Duration, Instant};
 
-use str0m::media::{KeyframeRequestKind, Rid};
+use str0m::media::{KeyframeRequestKind, Mid, Rid};
 
 use super::super::{
     keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker},
     relay_registry::{RelayPacketMailbox, RelayTargetId},
     route_control::{PacketLayerGate, PacketLayerMetadata, PacketRouteDecision},
     route_table::RouteTable,
+    slots::ConsumerStreamHandle,
+    source_route::MediaRouteDestination,
+    test_support::test_transport_session_key,
 };
-use crate::engine::media_transport::{
-    ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource, TransportMediaId,
+use crate::engine::{
+    UserId,
+    media_transport::{
+        ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
+        TransportMediaId,
+    },
 };
 
 fn assert_active_speaker_ids(state: &RouteTable, now: Instant, expected: &[TransportMediaId]) {
@@ -310,6 +317,49 @@ fn route_control_refreshes_source_gate_after_local_gate_clear() {
         state.decide_packet_route(src_media, PacketLayerMetadata::new(Some("lo".into()), None)),
         PacketRouteDecision::Forward
     );
+}
+
+#[test]
+fn route_control_removing_last_consumer_route_preserves_producer_packet_state() {
+    let mut state = RouteTable::default();
+    let src_media = TransportMediaId::new(184);
+    let consumer_media = TransportMediaId::new(185);
+    let consumer_session = test_transport_session_key(184, 0, 185, UserId::Integer(186));
+    let rid = Rid::from("hi");
+    let now = Instant::now();
+    state.register_local_source(src_media);
+
+    assert!(!state.has_forwarding_sources());
+    assert!(state.observe_producer_packet(src_media, Some(rid), true, now));
+    state.add_consumer_route(
+        src_media,
+        MediaRouteDestination {
+            dest_session: consumer_session.clone(),
+            dest_transport_media_id: consumer_media,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: Mid::from("cam-down"),
+            dest_payload_type: None,
+            nackable: true,
+            active: true,
+            packet_gate: PacketLayerGate::Open,
+            pending_gate: None,
+        },
+    );
+    assert!(state.has_forwarding_sources());
+
+    assert!(
+        state
+            .remove_consumer_route(src_media, &consumer_session, consumer_media)
+            .is_some()
+    );
+    assert!(state.local_route(src_media).is_none());
+    assert!(!state.has_forwarding_sources());
+    assert!(state.producer_rid_is_ready(
+        src_media,
+        rid,
+        now + Duration::from_millis(1),
+        Duration::from_secs(1),
+    ));
 }
 
 #[test]

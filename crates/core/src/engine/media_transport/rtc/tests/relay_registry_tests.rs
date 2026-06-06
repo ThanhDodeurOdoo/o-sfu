@@ -20,6 +20,7 @@ fn worker_local_relay_targets_track_active_sources() {
     state
         .routes
         .add_relay_target(src_media, relay_target, mailbox);
+    assert!(state.routes.has_forwarding_sources());
     state
         .routes
         .set_relay_target_active(src_media, relay_target, true);
@@ -27,6 +28,7 @@ fn worker_local_relay_targets_track_active_sources() {
 
     state.routes.remove_relay_target(src_media, relay_target);
     assert!(state.routes.relay_targets_for_source(src_media).is_none());
+    assert!(!state.routes.has_forwarding_sources());
 }
 
 #[test]

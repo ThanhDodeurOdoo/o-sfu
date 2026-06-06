@@ -61,11 +61,13 @@ pub(super) fn plan_forwards(
     };
     let src_media = facts.src_media;
     let visits_origin = pkt.visits_origin_sinks();
-    let origin_sink = visits_origin
-        .then(|| packet_sinks.sink_for_room(facts.room_instance_id))
-        .flatten();
+    let origin_sink = if visits_origin {
+        packet_sinks.sink_for_room(facts.room_instance_id)
+    } else {
+        None
+    };
     let (route_entry, relay_targets, source_gate) = if let Some(origin_sink) = origin_sink {
-        if !state.routes.has_sources() {
+        if !state.routes.has_forwarding_sources() {
             forwards.push(PacketForward::from_packet_sink(
                 pkt_idx,
                 src_media,
@@ -239,6 +241,6 @@ fn has_routed_forward(
     relay_targets: Option<&[ActiveRelayTarget]>,
     route_entry: Option<&MediaRouteEntry>,
 ) -> bool {
-    relay_targets.is_some_and(|targets| !targets.is_empty())
-        || route_entry.is_some_and(|entry| entry.source_active && entry.has_active_destinations())
+    route_entry.is_some_and(|entry| entry.source_active && entry.has_active_destinations())
+        || relay_targets.is_some_and(|targets| !targets.is_empty())
 }

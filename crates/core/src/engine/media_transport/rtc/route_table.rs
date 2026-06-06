@@ -45,7 +45,7 @@ use crate::engine::media_transport::{
 #[derive(Debug, Default)]
 pub(super) struct RouteTable {
     sources: BTreeMap<TransportMediaId, RouteSource>,
-    producers: BTreeMap<TransportMediaId, ProducerPacketState>,
+    forwarding_sources: usize,
     active: Option<Box<ActiveSpeakerRank>>,
     remote_gate_queue: VecDeque<TransportMediaId>,
     keyframe_requests: KeyframeRequestTracker,
@@ -120,16 +120,20 @@ impl RouteTable {
         )
     }
 
-    pub(super) fn has_sources(&self) -> bool {
-        !self.sources.is_empty()
-    }
-
     pub(super) fn local_route(&self, source_id: TransportMediaId) -> Option<&MediaRouteEntry> {
         self.sources.get(&source_id)?.local_route.as_ref()
     }
 
+    pub(super) fn has_forwarding_sources(&self) -> bool {
+        self.forwarding_sources != 0
+    }
+
     fn route_mut(&mut self, source_id: TransportMediaId) -> Option<&mut MediaRouteEntry> {
         self.sources.get_mut(&source_id)?.local_route.as_mut()
+    }
+
+    fn source_mut(&mut self, source_id: TransportMediaId) -> &mut RouteSource {
+        self.sources.entry(source_id).or_default()
     }
 
     pub(super) fn add_consumer_route(
@@ -137,17 +141,19 @@ impl RouteTable {
         source_id: TransportMediaId,
         destination: MediaRouteDestination,
     ) -> usize {
-        let index = {
-            let route = self
-                .sources
-                .entry(source_id)
-                .or_default()
+        let (index, added_forwarding_source) = {
+            let source = self.sources.entry(source_id).or_default();
+            let added_forwarding_source = source.local_route.is_none() && source.relay.is_none();
+            let route = source
                 .local_route
                 .get_or_insert_with(|| MediaRouteEntry::new(true));
             let index = route.destinations.len();
             route.push_destination(destination);
-            index
+            (index, added_forwarding_source)
         };
+        if added_forwarding_source {
+            self.forwarding_sources += 1;
+        }
         self.refresh_src_pkt_gate(source_id);
         index
     }
@@ -177,6 +183,9 @@ impl RouteTable {
         };
         if empty && let Some(source) = self.sources.get_mut(&source_id) {
             source.local_route = None;
+            if source.relay.is_none() {
+                self.forwarding_sources -= 1;
+            }
         }
         self.refresh_src_pkt_gate(source_id);
         self.prune_unrouted_remote_src(source_id);
@@ -289,6 +298,9 @@ impl RouteTable {
     pub(super) fn take_route(&mut self, source_id: TransportMediaId) -> Option<MediaRouteEntry> {
         let source = self.sources.get_mut(&source_id)?;
         let route = source.local_route.take();
+        if route.is_some() && source.relay.is_none() {
+            self.forwarding_sources -= 1;
+        }
         self.refresh_src_pkt_gate(source_id);
         self.prune_unrouted_remote_src(source_id);
         self.prune_empty(source_id);
@@ -297,6 +309,7 @@ impl RouteTable {
 
     pub(super) fn remove_dsts_for_session(&mut self, session_key: &TransportSessionKey) {
         let mut affected = Vec::new();
+        let mut removed_forwarding_sources = 0;
         for (source_id, source) in &mut self.sources {
             let Some(route) = source.local_route.as_mut() else {
                 continue;
@@ -315,9 +328,13 @@ impl RouteTable {
                 .count();
             if route.destinations.is_empty() {
                 source.local_route = None;
+                if source.relay.is_none() {
+                    removed_forwarding_sources += 1;
+                }
             }
             affected.push(*source_id);
         }
+        self.forwarding_sources -= removed_forwarding_sources;
         for source_id in affected {
             self.refresh_src_pkt_gate(source_id);
             self.prune_unrouted_remote_src(source_id);
@@ -352,25 +369,25 @@ impl RouteTable {
     }
 
     pub(super) fn register_local_source(&mut self, source_id: TransportMediaId) {
-        self.producers.entry(source_id).or_default();
+        self.source_mut(source_id).producer.registered = true;
     }
 
     pub(super) fn unregister_local_source(&mut self, source_id: TransportMediaId) {
         self.forget_packet_state(source_id);
-        self.producers.remove(&source_id);
         self.keyframe_requests.forget_source(source_id);
         self.prune_empty(source_id);
     }
 
     pub(super) fn replace_producer_ssrcs(&mut self, source_id: TransportMediaId, ssrcs: Vec<Ssrc>) {
-        self.producers.entry(source_id).or_default().ssrcs = ssrcs;
+        self.source_mut(source_id).producer.ssrcs = ssrcs;
     }
 
     pub(super) fn remember_producer_ssrc(&mut self, source_id: TransportMediaId, ssrc: Ssrc) {
-        if let Some(producer) = self.producers.get_mut(&source_id)
-            && !producer.ssrcs.contains(&ssrc)
+        if let Some(source) = self.sources.get_mut(&source_id)
+            && !source.producer.is_empty()
+            && !source.producer.ssrcs.contains(&ssrc)
         {
-            producer.ssrcs.push(ssrc);
+            source.producer.ssrcs.push(ssrc);
         }
     }
 
@@ -378,9 +395,9 @@ impl RouteTable {
         &mut self,
         source_id: TransportMediaId,
     ) -> Option<Vec<Ssrc>> {
-        self.producers
-            .get_mut(&source_id)
-            .map(|producer| mem::take(&mut producer.ssrcs))
+        self.sources.get_mut(&source_id).and_then(|source| {
+            (!source.producer.is_empty()).then(|| mem::take(&mut source.producer.ssrcs))
+        })
     }
 
     pub(super) fn register_remote_source(
@@ -502,13 +519,7 @@ impl RouteTable {
         &mut self,
         mut keep_local: impl FnMut(&TransportMediaId) -> bool,
     ) {
-        let mut source_ids = self.sources.keys().copied().collect::<Vec<_>>();
-        source_ids.extend(
-            self.producers
-                .keys()
-                .filter(|source_id| !self.sources.contains_key(source_id))
-                .copied(),
-        );
+        let source_ids = self.sources.keys().copied().collect::<Vec<_>>();
         for source_id in source_ids {
             let keep_registered = keep_local(&source_id) || self.remote_source(source_id).is_some();
             if self.remote_source(source_id).is_some() && self.local_route(source_id).is_none() {
@@ -518,7 +529,6 @@ impl RouteTable {
             if !keep_registered {
                 self.forget_packet_state(source_id);
                 self.keyframe_requests.forget_source(source_id);
-                self.producers.remove(&source_id);
             }
             self.prune_empty(source_id);
         }
@@ -528,9 +538,9 @@ impl RouteTable {
         &self,
         source_id: TransportMediaId,
     ) -> Option<DecoderRefreshCodec> {
-        self.producers
+        self.sources
             .get(&source_id)
-            .and_then(|producer| producer.decoder)
+            .and_then(|source| source.producer.decoder)
     }
 
     pub(super) fn set_decoder_refresh_codec(
@@ -538,10 +548,10 @@ impl RouteTable {
         source_id: TransportMediaId,
         codec: Option<DecoderRefreshCodec>,
     ) {
-        if let Some(codec) = codec {
-            self.producers.entry(source_id).or_default().decoder = Some(codec);
-        } else if let Some(producer) = self.producers.get_mut(&source_id) {
-            producer.decoder = None;
+        if codec.is_some() {
+            self.source_mut(source_id).producer.decoder = codec;
+        } else if let Some(source) = self.sources.get_mut(&source_id) {
+            source.producer.decoder = None;
         }
     }
 
@@ -570,14 +580,11 @@ impl RouteTable {
         is_keyframe: bool,
         now: Instant,
     ) -> bool {
-        if let Some(producer) = self.producers.get_mut(&source_id) {
-            return producer.observe_packet(rid, is_keyframe, now);
-        }
-        let mut producer = ProducerPacketState::default();
-        let observed = producer.observe_packet(rid, is_keyframe, now);
-        if !producer.is_empty() {
-            self.producers.insert(source_id, producer);
-        }
+        let observed = self
+            .source_mut(source_id)
+            .producer
+            .observe_packet(rid, is_keyframe, now);
+        self.prune_empty(source_id);
         observed
     }
 
@@ -591,7 +598,7 @@ impl RouteTable {
             per_media: source_ids
                 .iter()
                 .filter_map(|source_id| {
-                    let producer = self.producers.get(source_id);
+                    let producer = self.sources.get(source_id).map(|source| &source.producer);
                     let source_last_packet_age = incoming_bitrate_counters
                         .get(source_id)
                         .and_then(|counter| counter.last_observed_age(now));
@@ -608,10 +615,13 @@ impl RouteTable {
         now: Instant,
         max_age: Duration,
     ) -> bool {
-        self.producers
-            .get(&source_id)
-            .and_then(|producer| producer.rids.iter().find(|liveness| liveness.rid() == rid))
-            .is_some_and(|liveness| liveness.is_ready(now, max_age))
+        self.sources.get(&source_id).is_some_and(|source| {
+            source
+                .producer
+                .rids
+                .iter()
+                .any(|liveness| liveness.rid == rid && liveness.is_ready(now, max_age))
+        })
     }
 
     pub(super) fn collect_ready_producer_rids(
@@ -622,7 +632,7 @@ impl RouteTable {
         ready_rids: &mut Vec<Rid>,
     ) {
         ready_rids.clear();
-        let Some(producer) = self.producers.get(&source_id) else {
+        let Some(producer) = self.sources.get(&source_id).map(|source| &source.producer) else {
             return;
         };
         ready_rids.extend(
@@ -630,7 +640,7 @@ impl RouteTable {
                 .rids
                 .iter()
                 .filter(|liveness| liveness.is_ready(now, max_age))
-                .map(ProducerRidLiveness::rid),
+                .map(|liveness| liveness.rid),
         );
     }
 
@@ -647,9 +657,8 @@ impl RouteTable {
             rid,
         };
         self.next_rid_refresh_id = self.next_rid_refresh_id.saturating_add(1);
-        self.producers
-            .entry(source_id)
-            .or_default()
+        self.source_mut(source_id)
+            .producer
             .pending_rid_refreshes
             .push(refresh);
         self.rid_refresh_heap.push(Reverse(refresh));
@@ -661,11 +670,11 @@ impl RouteTable {
         rid: Rid,
         now: Instant,
     ) -> usize {
-        let Some(producer) = self.producers.get_mut(&source_id) else {
+        let Some(source) = self.sources.get_mut(&source_id) else {
             return 0;
         };
         let mut due_count = 0;
-        producer.pending_rid_refreshes.retain(|refresh| {
+        source.producer.pending_rid_refreshes.retain(|refresh| {
             let due = refresh.rid == rid && refresh.request_at <= now;
             if due {
                 due_count += 1;
@@ -791,30 +800,31 @@ impl RouteTable {
         audio_level_dbov: Option<i8>,
         now: Instant,
     ) -> bool {
-        if let Entry::Vacant(entry) = self.sources.entry(source_id) {
-            if voice_activity.is_none() && audio_level_dbov.is_none() {
-                return false;
+        let packet_gate_changed = match self.sources.entry(source_id) {
+            Entry::Occupied(mut entry) => {
+                let source = entry.get_mut();
+                let previous_packet_gate = source.effective_packet_gate();
+                if !source.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+                    return false;
+                }
+                previous_packet_gate != source.effective_packet_gate()
             }
-            let mut source = RouteSource::default();
-            if !source.observe_audio_activity(voice_activity, audio_level_dbov, now) {
-                return false;
-            }
-            if !source.is_empty() {
+            Entry::Vacant(entry) => {
+                if voice_activity.is_none() && audio_level_dbov.is_none() {
+                    return false;
+                }
+                let mut source = RouteSource::default();
+                if !source.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+                    return false;
+                }
+                if source.is_empty() {
+                    return false;
+                }
                 entry.insert(source);
-                self.update_active_src(source_id, now);
-                return true;
+                true
             }
-            return false;
-        }
-        let previous_packet_gate = self.effective_packet_gate(source_id);
-        let Some(source) = self.sources.get_mut(&source_id) else {
-            return false;
         };
-        if !source.observe_audio_activity(voice_activity, audio_level_dbov, now) {
-            return false;
-        }
-        previous_packet_gate != self.effective_packet_gate(source_id)
-            || self.update_active_src(source_id, now)
+        self.update_active_src(source_id, now) || packet_gate_changed
     }
 
     pub(super) fn set_relay_pkt_gate(
@@ -901,9 +911,11 @@ impl RouteTable {
         target_id: RelayTargetId,
         target: RelayPacketMailbox,
     ) {
-        self.sources
-            .entry(source_id)
-            .or_default()
+        let source = self.sources.entry(source_id).or_default();
+        if source.local_route.is_none() && source.relay.is_none() {
+            self.forwarding_sources += 1;
+        }
+        source
             .relay
             .get_or_insert_with(RelaySourceRegistration::default)
             .add_target(target_id, target);
@@ -923,6 +935,9 @@ impl RouteTable {
         let removed = registration.contains_target(target_id);
         if registration.remove_target(target_id) {
             source.relay = None;
+            if source.local_route.is_none() {
+                self.forwarding_sources -= 1;
+            }
         }
         if removed {
             source.forget_relay_packet_gate(target_id);
@@ -979,7 +994,6 @@ impl RouteTable {
         }
         self.forget_packet_state(source_id);
         self.remote_gate_queue.retain(|queued| *queued != source_id);
-        self.producers.remove(&source_id);
         self.keyframe_requests.forget_source(source_id);
         self.prune_empty(source_id);
     }
@@ -995,23 +1009,24 @@ impl RouteTable {
     }
 
     fn has_pending_rid_refresh(&self, refresh: RidKeyframeRefresh) -> bool {
-        self.producers
+        self.sources
             .get(&refresh.source_id)
-            .is_some_and(|producer| producer.pending_rid_refreshes.contains(&refresh))
+            .is_some_and(|source| source.producer.pending_rid_refreshes.contains(&refresh))
     }
 
     fn remove_pending_rid_refresh(&mut self, refresh: RidKeyframeRefresh) -> bool {
-        let Some(producer) = self.producers.get_mut(&refresh.source_id) else {
+        let Some(source) = self.sources.get_mut(&refresh.source_id) else {
             return false;
         };
-        let Some(position) = producer
+        let Some(position) = source
+            .producer
             .pending_rid_refreshes
             .iter()
             .position(|pending| *pending == refresh)
         else {
             return false;
         };
-        producer.pending_rid_refreshes.swap_remove(position);
+        source.producer.pending_rid_refreshes.swap_remove(position);
         true
     }
 
@@ -1029,6 +1044,7 @@ impl RouteTable {
     fn forget_packet_state(&mut self, source_id: TransportMediaId) {
         if let Some(source) = self.sources.get_mut(&source_id) {
             source.forget_packet_state();
+            source.producer = ProducerSourceState::default();
         }
         self.drop_active_src(source_id);
     }
@@ -1205,6 +1221,7 @@ struct RouteSource {
     local_gate: Option<PacketLayerGate>,
     relay_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
     gate: Option<PacketLayerGate>,
+    producer: ProducerSourceState,
 }
 
 impl RouteSource {
@@ -1315,11 +1332,13 @@ impl RouteSource {
             && self.audio.is_none()
             && self.local_gate.is_none()
             && self.relay_gates.is_empty()
+            && self.producer.is_empty()
     }
 }
 
 #[derive(Debug, Default)]
-struct ProducerPacketState {
+struct ProducerSourceState {
+    registered: bool,
     ssrcs: Vec<Ssrc>,
     decoder: Option<DecoderRefreshCodec>,
     last_keyframe: Option<Instant>,
@@ -1327,7 +1346,7 @@ struct ProducerPacketState {
     pending_rid_refreshes: Vec<RidKeyframeRefresh>,
 }
 
-impl ProducerPacketState {
+impl ProducerSourceState {
     fn observe_packet(&mut self, rid: Option<Rid>, is_keyframe: bool, now: Instant) -> bool {
         let Some(rid) = rid else {
             if is_keyframe {
@@ -1335,7 +1354,7 @@ impl ProducerPacketState {
             }
             return false;
         };
-        if let Some(liveness) = self.rids.iter_mut().find(|liveness| liveness.rid() == rid) {
+        if let Some(liveness) = self.rids.iter_mut().find(|liveness| liveness.rid == rid) {
             liveness.observe(is_keyframe, now);
             return false;
         }
@@ -1348,7 +1367,8 @@ impl ProducerPacketState {
     }
 
     fn is_empty(&self) -> bool {
-        self.ssrcs.is_empty()
+        !self.registered
+            && self.ssrcs.is_empty()
             && self.decoder.is_none()
             && self.last_keyframe.is_none()
             && self.rids.is_empty()
@@ -1370,10 +1390,6 @@ impl ProducerRidLiveness {
             last_seen: observed_at,
             last_keyframe: is_keyframe.then_some(observed_at),
         }
-    }
-
-    const fn rid(&self) -> Rid {
-        self.rid
     }
 
     fn observe(&mut self, is_keyframe: bool, observed_at: Instant) {
@@ -1420,7 +1436,7 @@ impl PartialOrd for RidKeyframeRefresh {
 fn source_diagnostic(
     source_id: TransportMediaId,
     source_last_packet_age: Option<Duration>,
-    producer: Option<&ProducerPacketState>,
+    producer: Option<&ProducerSourceState>,
     now: Instant,
 ) -> Option<TransportSourceActivity> {
     let rids = producer.map_or(&[][..], |producer| producer.rids.as_slice());
