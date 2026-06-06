@@ -128,25 +128,41 @@ impl RoutedConsumerId {
     }
 }
 
-/// committed room-local routing over one or more pure router instances
 #[derive(Debug, Clone)]
 pub(super) struct RoomRoutingState {
     instance_id: RoomInstanceId,
     primary_router: RouterId,
     local_routers: Option<LocalRoomRouterPlacements>,
-    placement_by_connection: BTreeMap<ConnectionId, LocalRouterRuntimeContext>,
     router_state_factory: RoomRouterStateFactory,
     routers: BTreeMap<RouterId, RoomRouterState>,
-    session_home_router: BTreeMap<UserId, RouterId>,
-    session_seed_by_user: BTreeMap<UserId, u64>,
+    sessions: CommittedSessionPlacements,
     shadow_sessions: ShadowSessionTracker,
 }
 
-/// placement data returned by a committed join transition
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CommittedRoutingReceipt {
+    pub(super) connection_id: ConnectionId,
+    pub(super) transport_session_key: TransportSessionKey,
+}
+
+#[derive(Debug)]
+pub(super) struct DisplacedRoutingSession {
+    pub(super) connection_id: ConnectionId,
+    pub(super) transport_session_key: TransportSessionKey,
+}
+
+#[derive(Debug, Clone)]
+struct CommittedSessionPlacement {
     connection_id: ConnectionId,
+    router_session_seed: u64,
+    runtime: LocalRouterRuntimeContext,
     transport_session_key: TransportSessionKey,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CommittedSessionPlacements {
+    by_connection: BTreeMap<ConnectionId, CommittedSessionPlacement>,
+    active_connection_by_user: BTreeMap<UserId, ConnectionId>,
 }
 
 #[derive(Clone)]
@@ -181,13 +197,26 @@ impl RoomRouterStateFactory {
     }
 }
 
-impl CommittedRoutingReceipt {
-    pub(super) const fn connection_id(&self) -> ConnectionId {
-        self.connection_id
+impl CommittedSessionPlacements {
+    fn active(&self, user_id: &UserId) -> Option<&CommittedSessionPlacement> {
+        let connection_id = self.active_connection_by_user.get(user_id)?;
+        self.by_connection.get(connection_id)
     }
 
-    pub(super) const fn transport_session_key(&self) -> &TransportSessionKey {
-        &self.transport_session_key
+    fn insert(&mut self, user_id: UserId, session: CommittedSessionPlacement) {
+        let connection_id = session.connection_id;
+        if let Some(previous) = self
+            .active_connection_by_user
+            .insert(user_id, connection_id)
+        {
+            self.by_connection.remove(&previous);
+        }
+        self.by_connection.insert(connection_id, session);
+    }
+
+    fn remove(&mut self, user_id: &UserId) -> Option<CommittedSessionPlacement> {
+        let connection_id = self.active_connection_by_user.remove(user_id)?;
+        self.by_connection.remove(&connection_id)
     }
 }
 
@@ -208,11 +237,9 @@ impl RoomRoutingState {
             instance_id,
             primary_router: primary_router_id,
             local_routers,
-            placement_by_connection: BTreeMap::new(),
             router_state_factory: router_state_factory.clone(),
             routers,
-            session_home_router: BTreeMap::new(),
-            session_seed_by_user: BTreeMap::new(),
+            sessions: CommittedSessionPlacements::default(),
             shadow_sessions: ShadowSessionTracker::default(),
         }
     }
@@ -230,13 +257,8 @@ impl RoomRoutingState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<TransportSessionKey> {
-        let placement = self.placement_for_connection(connection_id)?;
-        Some(TransportSessionKey::new(
-            self.instance_id,
-            placement.media_worker,
-            connection_id,
-            user_id.clone(),
-        ))
+        let session = self.sessions.active(user_id)?;
+        (session.connection_id == connection_id).then(|| session.transport_session_key.clone())
     }
 
     #[must_use]
@@ -255,42 +277,57 @@ impl RoomRoutingState {
         session_key
     }
 
-    pub(super) fn register_committed_placement(
+    pub(super) fn commit_session_placement(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
         placement: ResolvedPlacement,
-    ) -> CommittedRoutingReceipt {
+        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
+    ) -> Result<(CommittedRoutingReceipt, Option<DisplacedRoutingSession>), RoomRoutingError> {
         let placement = placement.into_context();
-        match &mut self.local_routers {
-            Some(local_routers) => local_routers.upsert(placement),
-            None => {
-                self.local_routers = Some(LocalRoomRouterPlacements::new(placement, Vec::new()));
-            }
+        let displaced_session =
+            self.sessions
+                .active(user_id)
+                .map(|session| DisplacedRoutingSession {
+                    connection_id: session.connection_id,
+                    transport_session_key: session.transport_session_key.clone(),
+                });
+        if displaced_session.is_some() {
+            self.remove_session(user_id, affected_consumers)?;
         }
-        self.placement_by_connection
-            .insert(connection_id, placement);
+        self.attach_placement(placement);
+        let router_session_seed = connection_id.as_u64();
+        let router = self.router_mut_for_user(user_id, placement.router)?;
+        router.ensure_session(user_id, router_session_seed)?;
+        router.ensure_session_transports(user_id)?;
         let transport_session_key = TransportSessionKey::new(
             self.instance_id,
             placement.media_worker,
             connection_id,
             user_id.clone(),
         );
-        CommittedRoutingReceipt {
+        let session = CommittedSessionPlacement {
+            connection_id,
+            router_session_seed,
+            runtime: placement,
+            transport_session_key: transport_session_key.clone(),
+        };
+        let receipt = CommittedRoutingReceipt {
             connection_id,
             transport_session_key,
-        }
+        };
+        self.sessions.insert(user_id.clone(), session);
+        Ok((receipt, displaced_session))
     }
 
-    pub(super) fn unregister_committed_placement(&mut self, connection_id: ConnectionId) {
-        self.placement_by_connection.remove(&connection_id);
-    }
-
-    fn placement_for_connection(
-        &self,
+    pub(super) fn unregister_committed_placement(
+        &mut self,
+        user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Option<LocalRouterRuntimeContext> {
-        self.placement_by_connection.get(&connection_id).copied()
+    ) {
+        if self.sessions.active_connection_by_user.get(user_id) == Some(&connection_id) {
+            self.sessions.remove(user_id);
+        }
     }
 
     #[expect(
@@ -301,10 +338,10 @@ impl RoomRoutingState {
         &self,
         connection_id: ConnectionId,
     ) -> MediaWorkerId {
-        let Some(placement) = self.placement_for_connection(connection_id) else {
+        let Some(session) = self.sessions.by_connection.get(&connection_id) else {
             unreachable!("media worker lookup requires committed connection placement");
         };
-        placement.media_worker
+        session.runtime.media_worker
     }
 
     pub(super) fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
@@ -319,9 +356,10 @@ impl RoomRoutingState {
     )]
     pub(super) fn worker_lookup(&self) -> impl Fn(ConnectionId) -> MediaWorkerId + use<> {
         let media_worker_by_connection = self
-            .placement_by_connection
+            .sessions
+            .by_connection
             .iter()
-            .map(|(connection_id, placement)| (*connection_id, placement.media_worker))
+            .map(|(connection_id, session)| (*connection_id, session.runtime.media_worker))
             .collect::<BTreeMap<_, _>>();
         move |connection_id| {
             let Some(media_worker) = media_worker_by_connection.get(&connection_id).copied() else {
@@ -345,45 +383,19 @@ impl RoomRoutingState {
         )
     }
 
-    pub(super) fn ensure_session_transports(
-        &mut self,
-        user_id: &UserId,
-    ) -> Result<(), RoomRoutingError> {
-        let router_id = self.require_home_router_id(user_id)?;
-        self.router_mut_for_user(user_id, router_id)?
-            .ensure_session_transports(user_id)?;
-        Ok(())
-    }
-
-    pub(super) fn apply_client_join_on_placement(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-        placement: ResolvedPlacement,
-    ) -> Result<(), RoomRoutingError> {
-        self.ensure_session_on_placement(user_id, router_session_seed, placement)?;
-        self.ensure_session_transports(user_id)?;
-        Ok(())
-    }
-
-    pub(super) fn replace_client_session_on_placement(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-        placement: ResolvedPlacement,
-        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
-    ) -> Result<(), RoomRoutingError> {
-        self.remove_session(user_id, affected_consumers)?;
-        self.apply_client_join_on_placement(user_id, router_session_seed, placement)
-    }
-
     #[cfg(test)]
     pub(super) fn primary_router_id(&self) -> RouterId {
         self.primary_router
     }
 
-    pub(super) fn attach_placement(&mut self, placement: ResolvedPlacement) {
-        let router_id = placement.router();
+    fn attach_placement(&mut self, placement: LocalRouterRuntimeContext) {
+        match &mut self.local_routers {
+            Some(local_routers) => local_routers.upsert(placement),
+            None => {
+                self.local_routers = Some(LocalRoomRouterPlacements::new(placement, Vec::new()));
+            }
+        }
+        let router_id = placement.router;
         if self.routers.contains_key(&router_id) {
             return;
         }
@@ -400,7 +412,7 @@ impl RoomRoutingState {
         user_id: &UserId,
         media_kind: RouterMediaKind,
     ) -> Result<RoutedProducerId, RoomRoutingError> {
-        let router_id = self.require_home_router_id(user_id)?;
+        let router_id = self.require_session(user_id)?.runtime.router;
         let producer_id = self
             .router_mut_for_user(user_id, router_id)?
             .add_producer(user_id, media_kind)?;
@@ -509,7 +521,7 @@ impl RoomRoutingState {
         user_id: &UserId,
         affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> Result<(), RoomRoutingError> {
-        let home_router_id = self.require_home_router_id(user_id)?;
+        let home_router_id = self.require_session(user_id)?.runtime.router;
         if !self.routers.contains_key(&home_router_id) {
             return Err(RoomRoutingError::MissingRouterForSession {
                 user_id: user_id.clone(),
@@ -523,8 +535,7 @@ impl RoomRoutingState {
             .shadow_sessions
             .unregister_consumers(affected_consumers);
         self.prune_shadow_sessions(shadow_sessions)?;
-        self.session_home_router.remove(user_id);
-        self.session_seed_by_user.remove(user_id);
+        self.sessions.remove(user_id);
         Ok(())
     }
 
@@ -534,7 +545,10 @@ impl RoomRoutingState {
         affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> RoomRoutingRepairReport {
         let mut report = RoomRoutingRepairReport::default();
-        match self.require_home_router_id(user_id) {
+        match self
+            .require_session(user_id)
+            .map(|session| session.runtime.router)
+        {
             Ok(home_router_id) if !self.routers.contains_key(&home_router_id) => {
                 report.record(RoomRoutingError::MissingRouterForSession {
                     user_id: user_id.clone(),
@@ -556,39 +570,19 @@ impl RoomRoutingState {
             .shadow_sessions
             .unregister_consumers(affected_consumers);
         self.prune_shadow_sessions_repairing(shadow_sessions, &mut report);
-        self.session_home_router.remove(user_id);
-        self.session_seed_by_user.remove(user_id);
+        self.sessions.remove(user_id);
         report
     }
 
-    fn require_home_router_id(&self, user_id: &UserId) -> Result<RouterId, RoomRoutingError> {
-        self.session_home_router
-            .get(user_id)
-            .copied()
+    fn require_session(
+        &self,
+        user_id: &UserId,
+    ) -> Result<&CommittedSessionPlacement, RoomRoutingError> {
+        self.sessions
+            .active(user_id)
             .ok_or_else(|| RoomRoutingError::MissingSessionPlacement {
                 user_id: user_id.clone(),
             })
-    }
-
-    fn ensure_session_on_placement(
-        &mut self,
-        user_id: &UserId,
-        router_session_seed: u64,
-        placement: ResolvedPlacement,
-    ) -> Result<(), RoomRoutingError> {
-        if let Some(router_id) = self.session_home_router.get(user_id).copied() {
-            let router = self.router_mut_for_user(user_id, router_id)?;
-            router.ensure_session(user_id, router_session_seed)?;
-            return Ok(());
-        }
-        let router_id = placement.router();
-        self.attach_placement(placement);
-        let router = self.router_mut_for_user(user_id, router_id)?;
-        router.ensure_session(user_id, router_session_seed)?;
-        self.session_home_router.insert(user_id.clone(), router_id);
-        self.session_seed_by_user
-            .insert(user_id.clone(), router_session_seed);
-        Ok(())
     }
 
     /// create a receiver shadow when the source router differs from the home router
@@ -597,12 +591,9 @@ impl RoomRoutingState {
         user_id: &UserId,
         router_id: RouterId,
     ) -> Result<ReceiverRouterSession, RoomRoutingError> {
-        let Some(router_session_seed) = self.session_seed_by_user.get(user_id).copied() else {
-            return Err(RoomRoutingError::MissingSessionPlacement {
-                user_id: user_id.clone(),
-            });
-        };
-        let home_router_id = self.require_home_router_id(user_id)?;
+        let session = self.require_session(user_id)?;
+        let router_session_seed = session.router_session_seed;
+        let home_router_id = session.runtime.router;
         let shadow_key = (home_router_id != router_id)
             .then(|| ShadowSessionKey::new(router_id, user_id.clone()));
         if !self.routers.contains_key(&router_id) {
@@ -661,9 +652,10 @@ impl RoomRoutingState {
 
     pub(in crate::engine::room) fn idle_spillover_routers(&self) -> Vec<RouterId> {
         let active_home_routers = self
-            .session_home_router
+            .sessions
+            .by_connection
             .values()
-            .copied()
+            .map(|session| session.runtime.router)
             .collect::<BTreeSet<_>>();
         self.routers
             .iter()

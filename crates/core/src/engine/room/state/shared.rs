@@ -13,7 +13,7 @@ use super::super::{
         RoomMediaGraph, TransportMediaRemoval,
     },
     outbound::OutboundSender,
-    routing::{RoomRouterStateFactory, RoomRoutingState},
+    routing::{DisplacedRoutingSession, RoomRouterStateFactory, RoomRoutingState},
     user_negotiation::UserNegotiation,
 };
 use crate::{
@@ -247,6 +247,34 @@ impl RoomState {
                     .transport_user_key(&effect.route.source_user, effect.route.source_connection),
                 route: effect.route,
                 action: effect.action,
+            })
+            .collect()
+    }
+
+    pub(super) fn resolved_relay_route_effects_with_displaced(
+        &self,
+        effects: impl IntoIterator<Item = RelayRouteEffect>,
+        user_id: &UserId,
+        session: &DisplacedRoutingSession,
+    ) -> Vec<ResolvedRelayRouteEffect> {
+        effects
+            .into_iter()
+            .map(|effect| {
+                let source_session_key = if effect.route.source_user == *user_id
+                    && effect.route.source_connection == session.connection_id
+                {
+                    session.transport_session_key.clone()
+                } else {
+                    self.transport_user_key(
+                        &effect.route.source_user,
+                        effect.route.source_connection,
+                    )
+                };
+                ResolvedRelayRouteEffect {
+                    source_session_key,
+                    route: effect.route,
+                    action: effect.action,
+                }
             })
             .collect()
     }

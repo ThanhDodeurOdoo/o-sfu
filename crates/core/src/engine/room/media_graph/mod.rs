@@ -24,6 +24,8 @@ mod route_graph_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(super) use self::subscription::ConsumerSetupProducerSnapshot;
 pub use self::subscription::{ConsumerRouteState, RemoteTrackSetup};
 pub(super) use self::{
     ids::{ConsumerRuntimeId, ProducerRuntimeId},

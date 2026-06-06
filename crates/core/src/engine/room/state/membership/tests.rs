@@ -8,21 +8,25 @@
 
 use std::{slice::from_ref, sync::Arc};
 
-use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
+use o_sfu_router::{
+    ConsumerId, MediaKind, MediaStream, ProducerId, RouterId,
+    test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
+};
 
 use super::*;
 use crate::{
     MediaCodecFlags, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
-        media_transport::TransportMediaId,
+        media_transport::{TransportMediaId, TransportRelayRouteAction, TransportSessionKey},
         metrics::RuntimeMetrics,
         packet_sink_registry::RoomPacketSinkRegistry,
         recording::RecordingService,
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             media_graph::{
-                ConsumerKey, ConsumerState, ProducerRuntimeId, PublishedProducer,
+                ConsumerKey, ConsumerSetupCommitOutcome, ConsumerSetupProducerSnapshot,
+                ConsumerSetupTarget, ConsumerState, ProducerRuntimeId, PublishedProducer,
                 PublishedSourceInstall,
             },
             routing::{RoutedConsumerId, RoutedProducerId},
@@ -71,6 +75,7 @@ fn install_test_published_producer(
     stream_type: TestSourceKind,
     routed_producer_id: RoutedProducerId,
     transport_media_id: TransportMediaId,
+    consumable_rtp_parameters: MediaStream,
 ) -> (ProducerRuntimeId, PublishedSourceId) {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
@@ -109,7 +114,7 @@ fn install_test_published_producer(
             owner_connection_id: connection_id,
             stream_id: stream_id_for_source(stream_type),
             media_kind: MediaKind::Video,
-            consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
+            consumable_rtp_parameters,
             routed_producer_id,
             transport_media_id: Some(transport_media_id),
             active: true,
@@ -117,6 +122,120 @@ fn install_test_published_producer(
         transport_media_id,
     });
     (producer_id, source_id)
+}
+
+#[derive(Debug)]
+struct RelayedSource {
+    publisher: UserId,
+    publisher_connection: ConnectionId,
+    publisher_session: TransportSessionKey,
+    source_media: TransportMediaId,
+}
+
+fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
+    let publisher = UserId::Integer(1);
+    let subscriber = UserId::Integer(2);
+    assert!(
+        state
+            .apply_join(
+                &publisher,
+                None,
+                UserPermissions::default(),
+                test_sender(),
+                false,
+            )
+            .is_ok()
+    );
+    assert!(
+        state
+            .apply_join(
+                &subscriber,
+                None,
+                UserPermissions::default(),
+                test_sender(),
+                false,
+            )
+            .is_ok()
+    );
+    let publisher_connection = state
+        .user_connection_id(&publisher)
+        .expect("publisher should be joined");
+    let subscriber_connection = state
+        .user_connection_id(&subscriber)
+        .expect("subscriber should be joined");
+    assert!(
+        state
+            .set_user_negotiated(
+                &subscriber,
+                subscriber_connection,
+                sample_client_rtp_capabilities()
+            )
+            .is_some()
+    );
+    let publisher_session = state.transport_user_key(&publisher, publisher_connection);
+    let source_media = TransportMediaId::new(11);
+    let consumer_media = TransportMediaId::new(21);
+    let routed_producer_id = state
+        .routing
+        .add_producer(&publisher, MediaKind::Video)
+        .expect("relayed source producer route should be added");
+    let (producer_id, source_id) = install_test_published_producer(
+        state,
+        &publisher,
+        publisher_connection,
+        TestSourceKind::ScalableVideo,
+        routed_producer_id,
+        source_media,
+        sample_video_rtp_parameters(None, 77_777),
+    );
+    let target = {
+        let producer = state
+            .media
+            .producer_for_source(source_id)
+            .expect("relayed source producer should exist");
+        ConsumerSetupTarget::new(
+            subscriber,
+            subscriber_connection,
+            ConsumerSetupProducerSnapshot::from_producer(producer_id, producer, source_media),
+        )
+    };
+    let mut setups = state.plan_consumers(vec![target], |connection| {
+        if connection == subscriber_connection {
+            MediaWorkerId::from_raw(1)
+        } else {
+            MediaWorkerId::from_raw(0)
+        }
+    });
+    let setup = setups
+        .pop()
+        .expect("relay consumer setup should be planned");
+    assert!(setups.is_empty());
+    assert!(
+        setup
+            .relay_effects()
+            .iter()
+            .any(|effect| effect.action == TransportRelayRouteAction::Install)
+    );
+    assert!(matches!(
+        state.commit_consumer_setup(setup, consumer_media, None),
+        ConsumerSetupCommitOutcome::Committed(_)
+    ));
+    RelayedSource {
+        publisher,
+        publisher_connection,
+        publisher_session,
+        source_media,
+    }
+}
+
+fn has_source_relay_release(effects: &[ResolvedRelayRouteEffect], relay: &RelayedSource) -> bool {
+    effects.iter().any(|effect| {
+        effect.source_session_key == relay.publisher_session
+            && effect.route.source_user == relay.publisher
+            && effect.route.source_connection == relay.publisher_connection
+            && effect.route.source_media == relay.source_media
+            && effect.action == TransportRelayRouteAction::Release
+    })
 }
 
 #[test]
@@ -243,6 +362,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
         TestSourceKind::ScalableVideo,
         routed_producer_id,
         TransportMediaId::new(11),
+        MediaStream::new(vec![], vec![], vec![]),
     );
     let consumer_key = ConsumerKey::new(&UserId::Integer(2), source_id);
     assert!(state.media.commit_consumer(
@@ -352,6 +472,7 @@ fn replacement_join_clears_transport_media_owner_index() {
         TestSourceKind::ScalableVideo,
         routed_producer_id,
         transport_media_id,
+        MediaStream::new(vec![], vec![], vec![]),
     );
 
     assert_eq!(
@@ -393,4 +514,61 @@ fn replacement_join_clears_transport_media_owner_index() {
             )
             .is_none()
     );
+}
+
+#[test]
+fn replacement_join_releases_relay_with_displaced_source_session() {
+    let mut state = test_state();
+    let relay = install_relayed_source(&mut state);
+
+    let outcome = state
+        .apply_join(
+            &relay.publisher,
+            Some(String::from("replacement")),
+            UserPermissions::default(),
+            test_sender(),
+            false,
+        )
+        .expect("replacement join should succeed");
+
+    assert!(has_source_relay_release(&outcome.relay_effects, &relay));
+    assert!(outcome.transport_cleanup.iter().any(|operation| {
+        matches!(
+            operation,
+            TransportCleanupOperation::CloseUser {
+                session_key,
+                connection_id,
+            } if session_key == &relay.publisher_session
+                && *connection_id == relay.publisher_connection
+        )
+    }));
+    assert!(!outcome.transport_cleanup.iter().any(|operation| {
+        matches!(
+            operation,
+            TransportCleanupOperation::RemoveMedia { session_key, .. }
+                if session_key == &relay.publisher_session
+        )
+    }));
+}
+
+#[test]
+fn leave_releases_relay_before_forgetting_source_session() {
+    let mut state = test_state();
+    let relay = install_relayed_source(&mut state);
+
+    let outcome = state
+        .apply_leave(&relay.publisher, relay.publisher_connection)
+        .expect("publisher leave should succeed");
+
+    assert!(has_source_relay_release(&outcome.relay_effects, &relay));
+}
+
+#[test]
+fn disconnect_releases_relay_before_forgetting_source_session() {
+    let mut state = test_state();
+    let relay = install_relayed_source(&mut state);
+
+    let outcome = state.apply_disconnect_users(from_ref(&relay.publisher));
+
+    assert!(has_source_relay_release(&outcome.relay_effects, &relay));
 }

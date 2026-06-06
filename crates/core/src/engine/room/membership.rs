@@ -348,7 +348,9 @@ impl Room {
                         });
                     let state_outcome = state.apply_leave(user_id, connection_id);
                     if state_outcome.is_none() {
-                        state.routing.unregister_committed_placement(connection_id);
+                        state
+                            .routing
+                            .unregister_committed_placement(user_id, connection_id);
                     }
                     UserTransitionOutcome::Close {
                         state_outcome,
@@ -469,8 +471,8 @@ impl Room {
             transport_cleanup,
             relay_effects,
         } = outcome;
-        let connection_id = routing_receipt.connection_id();
-        let media_worker_id = routing_receipt.transport_session_key().media_worker_id();
+        let connection_id = routing_receipt.connection_id;
+        let media_worker_id = routing_receipt.transport_session_key.media_worker_id();
         RoomCommit::new()
             .with_user_count_delta(count_delta.users_before, count_delta.users_after)
             .with_media_count_delta(count_delta.media_before, count_delta.media_after)

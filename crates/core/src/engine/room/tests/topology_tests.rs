@@ -1,12 +1,15 @@
 use o_sfu_router::{ProducerId as RouterProducerId, RouterError};
 
 use super::fixtures::*;
-use crate::engine::{
-    MediaWorkerId,
-    room::{
-        LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
-        ResolvedPlacement,
-        routing::{RoomRoutingError, RoutedProducerId, router_state::RoomRouterStateError},
+use crate::{
+    ConnectionId,
+    engine::{
+        MediaWorkerId,
+        room::{
+            LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
+            ResolvedPlacement,
+            routing::{RoomRoutingError, RoutedProducerId, router_state::RoomRouterStateError},
+        },
     },
 };
 
@@ -20,30 +23,18 @@ fn placement(router: u64, media_worker: usize) -> LocalRouterRuntimeContext {
 fn join_on_router(
     topology: &mut RoomRoutingState,
     user_id: &UserId,
-    seed: u64,
+    connection_id_raw: u64,
     router: u64,
     media_worker: usize,
 ) -> Result<(), RoomRoutingError> {
-    topology.apply_client_join_on_placement(
-        user_id,
-        seed,
-        ResolvedPlacement::for_test(placement(router, media_worker)),
-    )
-}
-
-fn replace_on_router(
-    topology: &mut RoomRoutingState,
-    user_id: &UserId,
-    seed: u64,
-    router: u64,
-    media_worker: usize,
-) -> Result<(), RoomRoutingError> {
-    topology.replace_client_session_on_placement(
-        user_id,
-        seed,
-        ResolvedPlacement::for_test(placement(router, media_worker)),
-        [],
-    )
+    topology
+        .commit_session_placement(
+            user_id,
+            ConnectionId::from_raw(connection_id_raw),
+            ResolvedPlacement::for_test(placement(router, media_worker)),
+            [],
+        )
+        .map(|_| ())
 }
 
 #[test]
@@ -130,7 +121,7 @@ fn topology_replacement_rehomes_from_the_new_connection_seed() {
         Some(RouterId(9))
     );
 
-    assert!(replace_on_router(&mut topology, &user_id, 1, 10, 1).is_ok());
+    assert!(join_on_router(&mut topology, &user_id, 1, 10, 1).is_ok());
 
     assert_eq!(
         topology.home_router_id_for_user(&user_id),
@@ -406,7 +397,7 @@ fn topology_reports_missing_user_mapping_from_router_state() {
     topology.remove_transport_mapping_for_test(&user_id);
 
     assert_eq!(
-        topology.ensure_session_transports(&user_id),
+        topology.add_producer(&user_id, RouterMediaKind::Audio),
         Err(RoomRoutingError::RouterState(
             RoomRouterStateError::MissingSessionMapping { user_id }
         ))

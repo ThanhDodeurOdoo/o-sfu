@@ -26,7 +26,7 @@ pub(super) use crate::{
     engine::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
         media_transport::{
-            AppliedSessionAnswer, MediaTransport, TransportMediaId,
+            AppliedSessionAnswer, MediaTransport, TransportMediaId, TransportSessionHealth,
             test_support::{test_media_transport_builder, test_rtc_port_range},
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
