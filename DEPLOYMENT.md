@@ -54,7 +54,17 @@ TELEMETRY_LOG_FORMAT=json
 
 `RTC_MIN_PORT` and `RTC_MAX_PORT` must match the cloud firewall, host firewall and container or service binding
 
-`RTC_UDP_IO_BACKEND=tokio` is the standard Docker default. `RTC_UDP_IO_BACKEND=io_uring` is a Linux optimization mode that requires a Docker or host runtime policy that allows io-uring syscalls:
+> [!WARNING]
+> IO_URING
+>
+> io_uring is known to be a security risk:
+> see https://i.blackhat.com/BH-US-23/Presentations/US-23-Lin-bad_io_uring.pdf
+>
+> that being said, there is no indication that it leads to vulnerabilities in o-sfu use case,
+> and io_uring is "commonly" used in many high throughput systems.
+>
+> If you want to enable it, use `RTC_UDP_IO_BACKEND=io_uring`, if you're running inside docker,
+> docker must be configured in `unconfined` mode.
 
 ```
 security_opt:
