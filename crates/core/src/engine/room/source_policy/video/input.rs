@@ -1,7 +1,7 @@
 //! immutable input snapshot for pure receiver video policy
 //!
 //! this boundary normalizes room indexes and transport observations into
-//! route-shaped facts so the budget planner stays pure and deterministic
+//! route-shaped facts so the staged planner stays pure and deterministic
 
 use std::collections::{BTreeMap, BTreeSet};
 
