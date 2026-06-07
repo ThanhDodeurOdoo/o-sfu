@@ -1,3 +1,6 @@
+#[cfg(test)]
+#[path = "test_support/media_routes.rs"]
+mod media_routes;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 #[path = "test_support/packets.rs"]
 mod packets;
@@ -11,6 +14,14 @@ mod route_graph;
 #[cfg(test)]
 use std::time::Instant;
 
+#[cfg(test)]
+pub(in crate::engine::media_transport::rtc) use media_routes::{
+    add_source_rid_stream, assert_consumer_packet_gate, assert_remote_keyframe_command,
+    assert_remote_packet_gate_command, drain_ready_sessions, expect_response,
+    install_video_route_with_gate, install_video_route_with_pending_gate, prepare_source_session,
+    prepare_source_session_with_rid, register_remote_source, register_saturated_remote_source,
+    test_consumer_session_key, test_consumer_session_key_on_worker, test_source_session_key,
+};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use probe::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
 #[cfg(any(test, feature = "testing-transport"))]
