@@ -244,13 +244,11 @@ pub enum LifecycleCloseCause {
 /// the plan is the contract between proof-only model logic and live
 /// [`ProtocolCore`] mutation
 /// it records what must happen before cleanup, what state may be dropped, how
-/// the saved connect context changes and which host
-/// effects must happen after cleanup
+/// the saved connect context changes and which host effects run after cleanup
 ///
-/// ordering matters because [`super::CommandBatch`] validates lifecycle side effects at
-/// the host boundary
-/// keep websocket close before peer close and schedule recovery only after peer
-/// close
+/// ordering matters when [`apply_plan`] turns lifecycle effects into host
+/// commands
+/// keep websocket close before peer close and schedule recovery only after peer close
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LifecyclePlan {
     /// host effects that must be emitted before runtime cleanup

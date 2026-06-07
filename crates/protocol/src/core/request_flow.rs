@@ -1,6 +1,6 @@
 use super::{
-    Command, Commands, FlushMode, NegotiationKind, PendingNegotiation, PendingRequestKind,
-    ProtocolCore, REQUEST_TIMEOUT_MS, protocol_error_commands,
+    CommandBatch, Commands, FlushMode, NegotiationKind, PendingNegotiation, PendingRequestKind,
+    ProtocolCore,
 };
 use crate::{
     bundle_api::BundleConnectionState,
@@ -109,26 +109,22 @@ fn handle_negotiation_request(
         (BundleConnectionState::Authenticated, _)
         | (BundleConnectionState::Connected, NegotiationKind::Renegotiate) => {}
         (BundleConnectionState::Connected, NegotiationKind::Offer) => {
-            return protocol_error_commands();
+            return CommandBatch::close_for_protocol_error().into_vec();
         }
         _ => return Vec::new(),
     }
     if core.pending_negotiation.is_some() {
-        return protocol_error_commands();
+        return CommandBatch::close_for_protocol_error().into_vec();
     }
-    let negotiation_request_id = request_id.clone();
-    core.pending_negotiation = Some(PendingNegotiation { request_id, kind });
-    let mut commands = Vec::new();
-    if kind == NegotiationKind::Offer && core.state == BundleConnectionState::Authenticated {
-        commands.push(Command::CreatePeerConnection);
-    }
-    commands.push(Command::ApplyNegotiation {
-        request_id: negotiation_request_id,
+    core.pending_negotiation = Some(PendingNegotiation {
+        request_id: request_id.clone(),
         kind,
-        sdp: payload.sdp,
-        upload_slots: payload.upload_slots,
     });
-    commands
+    let batch = match kind {
+        NegotiationKind::Offer => CommandBatch::initial_offer(request_id, payload),
+        NegotiationKind::Renegotiate => CommandBatch::renegotiation(request_id, payload),
+    };
+    batch.into_vec()
 }
 
 fn begin_request(
@@ -139,9 +135,9 @@ fn begin_request(
     if !core.can_send_client_messages() || core.request_tracker.has_pending_kind(kind) {
         return Vec::new();
     }
-    let registered_request = core.request_tracker.register_request(kind);
+    let registration = core.request_tracker.register_request(kind);
     let Some(envelope) = ClientEnvelope::Request {
-        request_id: registered_request.request_id.clone(),
+        request_id: registration.request_id.clone(),
         request,
     }
     .into_envelope()
@@ -149,18 +145,11 @@ fn begin_request(
         return Vec::new();
     };
 
-    let mut commands = vec![
-        Command::RegisterPendingRequest {
-            request_id: registered_request.request_id,
-            kind,
-        },
-        Command::ScheduleTimer {
-            id: registered_request.timeout_timer_id,
-            ms: REQUEST_TIMEOUT_MS,
-        },
-    ];
-    commands.extend(core.enqueue_envelope(envelope, FlushMode::Batched));
-    commands
+    CommandBatch::start_pending_request(
+        registration,
+        core.enqueue_envelope(envelope, FlushMode::Batched),
+    )
+    .into_vec()
 }
 
 fn resolve_request(

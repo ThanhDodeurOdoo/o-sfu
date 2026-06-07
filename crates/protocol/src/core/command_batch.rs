@@ -1,20 +1,65 @@
 use std::{error::Error, fmt, ops::Deref, slice, vec::IntoIter};
 
-use super::{Command, NegotiationKind, RECOVERY_TIMER_ID};
-use crate::signaling::RequestId;
+use super::{
+    Command, Commands, NegotiationKind, RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS,
+    request_tracker::RequestRegistration,
+};
+use crate::signaling::{RequestId, SessionDescriptionPayload, WebSocketCloseCode};
 
-/// ordered side effects emitted by one protocol-core transition
-///
-/// `CommandBatch` is the canonical Rust contract for host-visible side
-/// effects
-/// construction validates the ordering rules that would otherwise be easy for
-/// native, WASM, fuzz or test hosts to apply differently
+/// ordered host side effects emitted by one protocol-core transition
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandBatch {
     commands: Vec<Command>,
 }
 
 impl CommandBatch {
+    pub(super) fn from_core_commands(commands: Vec<Command>) -> Self {
+        debug_assert!(
+            Self::validate_commands(&commands).is_ok(),
+            "protocol core emitted an invalid command batch"
+        );
+        Self { commands }
+    }
+
+    pub(super) fn close_for_protocol_error() -> Self {
+        Self::from_core_commands(vec![Command::CloseWebSocket {
+            code: u16::from(WebSocketCloseCode::ProtocolError),
+        }])
+    }
+
+    pub(super) fn initial_offer(request_id: RequestId, payload: SessionDescriptionPayload) -> Self {
+        Self::from_core_commands(vec![
+            Command::CreatePeerConnection,
+            apply_negotiation(request_id, NegotiationKind::Offer, payload),
+        ])
+    }
+
+    pub(super) fn renegotiation(request_id: RequestId, payload: SessionDescriptionPayload) -> Self {
+        Self::from_core_commands(vec![apply_negotiation(
+            request_id,
+            NegotiationKind::Renegotiate,
+            payload,
+        )])
+    }
+
+    pub(super) fn start_pending_request(
+        registration: RequestRegistration,
+        outbound: Commands,
+    ) -> Self {
+        let mut commands = vec![
+            Command::RegisterPendingRequest {
+                request_id: registration.request_id,
+                kind: registration.kind,
+            },
+            Command::ScheduleTimer {
+                id: registration.timeout_timer_id,
+                ms: REQUEST_TIMEOUT_MS,
+            },
+        ];
+        commands.extend(outbound);
+        Self::from_core_commands(commands)
+    }
+
     /// builds a batch from manually assembled commands
     ///
     /// this is intended for tests and host bridges that need to validate an
@@ -28,14 +73,6 @@ impl CommandBatch {
     pub fn try_from_vec(commands: Vec<Command>) -> Result<Self, CommandBatchError> {
         Self::validate_commands(&commands)?;
         Ok(Self { commands })
-    }
-
-    pub(super) fn from_core_commands(commands: Vec<Command>) -> Self {
-        debug_assert!(
-            Self::validate_commands(&commands).is_ok(),
-            "protocol core emitted an invalid command batch"
-        );
-        Self { commands }
     }
 
     /// validates this batch using the canonical Rust command-order contract
@@ -63,10 +100,60 @@ impl CommandBatch {
     }
 
     fn validate_commands(commands: &[Command]) -> Result<(), CommandBatchError> {
-        validate_negotiation_order(commands)?;
-        validate_close_order(commands)?;
-        validate_recovery_order(commands)?;
-        validate_request_resolution(commands)?;
+        let mut close_websocket_index = None;
+        let mut close_peer_index = None;
+        let mut recovery_index = None;
+        for (index, command) in commands.iter().enumerate() {
+            match command {
+                Command::ApplyNegotiation { kind, .. } => {
+                    let previous = index
+                        .checked_sub(1)
+                        .and_then(|previous| commands.get(previous));
+                    match (*kind, previous) {
+                        (NegotiationKind::Offer, Some(Command::CreatePeerConnection)) => {}
+                        (NegotiationKind::Offer, _) => {
+                            return Err(CommandBatchError::InitialNegotiationWithoutPeerCreate {
+                                index,
+                            });
+                        }
+                        (NegotiationKind::Renegotiate, Some(Command::CreatePeerConnection)) => {
+                            return Err(CommandBatchError::RenegotiationRecreatesPeer { index });
+                        }
+                        (NegotiationKind::Renegotiate, _) => {}
+                    }
+                }
+                Command::CloseWebSocket { .. } => {
+                    close_websocket_index.get_or_insert(index);
+                }
+                Command::ClosePeerConnection => {
+                    close_peer_index.get_or_insert(index);
+                }
+                Command::ScheduleTimer {
+                    id: RECOVERY_TIMER_ID,
+                    ..
+                } => {
+                    recovery_index.get_or_insert(index);
+                }
+                _ => {}
+            }
+        }
+        if let (Some(websocket_index), Some(peer_index)) = (close_websocket_index, close_peer_index)
+            && websocket_index > peer_index
+        {
+            return Err(CommandBatchError::WebSocketCloseAfterPeerClose {
+                websocket_index,
+                peer_index,
+            });
+        }
+        if let (Some(recovery_index), Some(peer_index)) = (recovery_index, close_peer_index)
+            && recovery_index < peer_index
+        {
+            return Err(CommandBatchError::RecoveryScheduledBeforePeerClose {
+                recovery_index,
+                peer_index,
+            });
+        }
+        validate_request_resolution(commands, close_peer_index.is_some())?;
         Ok(())
     }
 }
@@ -172,81 +259,28 @@ impl fmt::Display for CommandBatchError {
 
 impl Error for CommandBatchError {}
 
-fn validate_negotiation_order(commands: &[Command]) -> Result<(), CommandBatchError> {
-    for (index, command) in commands.iter().enumerate() {
-        let Command::ApplyNegotiation { kind, .. } = command else {
-            continue;
-        };
-        let previous = index
-            .checked_sub(1)
-            .and_then(|previous| commands.get(previous));
-        match kind {
-            NegotiationKind::Offer => {
-                if !matches!(previous, Some(Command::CreatePeerConnection)) {
-                    return Err(CommandBatchError::InitialNegotiationWithoutPeerCreate { index });
-                }
-            }
-            NegotiationKind::Renegotiate => {
-                if matches!(previous, Some(Command::CreatePeerConnection)) {
-                    return Err(CommandBatchError::RenegotiationRecreatesPeer { index });
-                }
-            }
-        }
+fn apply_negotiation(
+    request_id: RequestId,
+    kind: NegotiationKind,
+    payload: SessionDescriptionPayload,
+) -> Command {
+    Command::ApplyNegotiation {
+        request_id,
+        kind,
+        sdp: payload.sdp,
+        upload_slots: payload.upload_slots,
     }
-    Ok(())
 }
 
-fn validate_close_order(commands: &[Command]) -> Result<(), CommandBatchError> {
-    let close_websocket_index = commands
-        .iter()
-        .position(|command| matches!(command, Command::CloseWebSocket { .. }));
-    let close_peer_index = commands
-        .iter()
-        .position(|command| matches!(command, Command::ClosePeerConnection));
-    if let (Some(websocket_index), Some(peer_index)) = (close_websocket_index, close_peer_index)
-        && websocket_index > peer_index
-    {
-        return Err(CommandBatchError::WebSocketCloseAfterPeerClose {
-            websocket_index,
-            peer_index,
-        });
-    }
-    Ok(())
-}
-
-fn validate_recovery_order(commands: &[Command]) -> Result<(), CommandBatchError> {
-    let recovery_index = commands.iter().position(|command| {
-        matches!(
-            command,
-            Command::ScheduleTimer {
-                id: RECOVERY_TIMER_ID,
-                ..
-            }
-        )
-    });
-    let close_peer_index = commands
-        .iter()
-        .position(|command| matches!(command, Command::ClosePeerConnection));
-    if let (Some(recovery_index), Some(peer_index)) = (recovery_index, close_peer_index)
-        && recovery_index < peer_index
-    {
-        return Err(CommandBatchError::RecoveryScheduledBeforePeerClose {
-            recovery_index,
-            peer_index,
-        });
-    }
-    Ok(())
-}
-
-fn validate_request_resolution(commands: &[Command]) -> Result<(), CommandBatchError> {
-    let has_close_peer = commands
-        .iter()
-        .any(|command| matches!(command, Command::ClosePeerConnection));
+fn validate_request_resolution(
+    commands: &[Command],
+    closes_peer: bool,
+) -> Result<(), CommandBatchError> {
     for (index, command) in commands.iter().enumerate() {
         let Command::ResolvePendingRequest { request_id, .. } = command else {
             continue;
         };
-        if has_close_peer || has_resolution_cause(commands, request_id, index) {
+        if closes_peer || has_prior_resolution_evidence(commands, request_id, index) {
             continue;
         }
         return Err(CommandBatchError::UnknownResolvedRequest {
@@ -257,7 +291,7 @@ fn validate_request_resolution(commands: &[Command]) -> Result<(), CommandBatchE
     Ok(())
 }
 
-fn has_resolution_cause(
+fn has_prior_resolution_evidence(
     commands: &[Command],
     request_id: &RequestId,
     resolve_index: usize,
@@ -267,10 +301,7 @@ fn has_resolution_cause(
         .take(resolve_index)
         .any(|command| match command {
             Command::CancelTimer { .. } => true,
-            Command::RegisterPendingRequest {
-                request_id: registered_request_id,
-                ..
-            } => registered_request_id == request_id,
+            Command::RegisterPendingRequest { request_id: id, .. } => id == request_id,
             _ => false,
         })
 }
