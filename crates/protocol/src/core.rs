@@ -20,17 +20,8 @@
 //!
 //! The command system is more cumbersome than inlining I/O calls, but that
 //! cost is what keeps the protocol verifiable and portable. Browser hosts
-//! should consume the commands as [`CommandBatch`] values. Rust keeps the
-//! canonical batch-ordering contract and the TypeScript runtime contract
-//! wrapper repeats the same checks before browser side effects run:
-//!
-//! - an initial offer must create the peer connection immediately before
-//!   applying the remote description;
-//! - a renegotiation offer must not recreate the peer connection;
-//! - explicit disconnect cleanup closes the websocket before the peer
-//!   connection when both effects are emitted together;
-//! - recovery scheduling happens only after the peer connection has been
-//!   closed for that socket loss.
+//! should consume the commands as [`CommandBatch`] values. Rust exposes checked
+//! construction externally while core transitions use semantic constructors.
 
 use std::collections::BTreeMap;
 
@@ -60,7 +51,7 @@ use crate::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
         EnvelopeBatch, NegotiationUploadSlot, PeerSnapshot, RecordingOptions, RequestId,
         ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, SourceDescriptor,
-        StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
+        StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
     },
 };
 
@@ -366,14 +357,14 @@ impl ProtocolCore {
     /// applied server state cannot survive after a later decode error.
     pub fn on_ws_message(&mut self, frame: &str) -> CommandBatch {
         let Ok(batch) = serde_json::from_str::<EnvelopeBatch>(frame) else {
-            return command_batch(protocol_error_commands());
+            return CommandBatch::close_for_protocol_error();
         };
         let Ok(envelopes) = batch
             .into_iter()
             .map(ServerEnvelope::decode)
             .collect::<Result<Vec<_>, _>>()
         else {
-            return command_batch(protocol_error_commands());
+            return CommandBatch::close_for_protocol_error();
         };
         let mut commands = Vec::new();
         for envelope in envelopes {
@@ -704,12 +695,6 @@ fn empty_features() -> AvailableFeatures {
         audio_recording: false,
         video_recording: false,
     }
-}
-
-fn protocol_error_commands() -> Commands {
-    vec![Command::CloseWebSocket {
-        code: u16::from(WebSocketCloseCode::ProtocolError),
-    }]
 }
 
 fn command_batch(commands: Commands) -> CommandBatch {
