@@ -11,24 +11,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fixtures::{
-    LocalVideoRoute, PendingSelectedRidRoute, RemoteVideoRoute, assert_consumer_packet_gate,
-    assert_remote_keyframe_command, assert_remote_packet_gate_command, drain_ready_sessions,
-    expect_response, prepare_pending_selected_rid_route, prepare_source_session,
-    prepare_source_session_with_rid, register_saturated_remote_source,
-};
+use fixtures::{LocalVideoRoute, RemoteVideoRoute, prepare_pending_selected_rid_route};
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
-use str0m::{
-    media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
-    rtp::Ssrc,
-};
+use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid};
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
     AddSendMediaRequest, KeyframeRequestMode, KeyframeRequestTarget, apply_route_control_request,
-    control::remove_consumer_route, drain_due_rid_kf_refreshes, observe_src_rid_ready,
-    request_kf_for_target, respond_set_consumer_pkt_gates, worker_add_send_media,
-    worker_remove_media,
+    control::remove_consumer_route, drain_due_rid_kf_refreshes, request_kf_for_target,
+    respond_set_consumer_pkt_gates, worker_add_send_media, worker_remove_media,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -50,7 +41,14 @@ use crate::{
                 route_control::PacketLayerGate,
                 source_route::RemoteSourceRegistration,
                 state::PacketLoopState,
-                test_support::{MediaWorkerScenario, test_transport_session_key},
+                test_support::{
+                    MediaWorkerScenario, add_source_rid_stream, assert_consumer_packet_gate,
+                    assert_remote_keyframe_command, assert_remote_packet_gate_command,
+                    drain_ready_sessions, expect_response, prepare_source_session,
+                    prepare_source_session_with_rid, register_saturated_remote_source,
+                    test_consumer_session_key, test_consumer_session_key_on_worker,
+                    test_source_session_key, test_transport_session_key,
+                },
                 worker::RtcWorkerCommand,
             },
         },
@@ -60,7 +58,7 @@ use crate::{
 
 #[test]
 fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
-    let source_session = test_transport_session_key(101, 0, 102, UserId::Integer(103));
+    let source_session = test_source_session_key(101);
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
@@ -89,7 +87,7 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
 
 #[test]
 fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
-    let source_session = test_transport_session_key(111, 0, 112, UserId::Integer(113));
+    let source_session = test_source_session_key(111);
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
@@ -144,10 +142,7 @@ fn consumer_keyframe_request_marks_local_video_source_dirty() {
     let mut route = LocalVideoRoute::new(115, 88_001);
 
     route.request_kf();
-    assert_eq!(
-        drain_ready_sessions(&mut route.state),
-        vec![route.source_session.clone()]
-    );
+    route.assert_source_ready();
     assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
@@ -162,10 +157,7 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
     );
 
     route.request_kf();
-    assert_eq!(
-        drain_ready_sessions(&mut route.state),
-        vec![route.source_session.clone()]
-    );
+    route.assert_source_ready();
     assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
@@ -173,15 +165,16 @@ fn consumer_keyframe_request_uses_rid_scoped_local_video_source() {
 fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
     let source_mid = Mid::from("cam-up");
     let mut route = LocalVideoRoute::with_rid(225, 88_201, Rid::from("lo"));
-    let Some(source_session_state) = route.state.users.get_mut(&route.source_session) else {
-        panic!("source session should exist before adding the high RID stream");
-    };
-    source_session_state.rtc.direct_api().expect_stream_rx(
-        Ssrc::from(88_202),
-        None,
+    add_source_rid_stream(
+        &mut route.state,
+        &route.source_session,
         source_mid,
-        Some(Rid::from("hi")),
+        88_202,
+        Rid::from("hi"),
     );
+    let Some(source_session_state) = route.state.users.get_mut(&route.source_session) else {
+        panic!("source session should exist after adding the high RID stream");
+    };
     source_session_state
         .sdp_negotiation
         .negotiated_producer_parameters
@@ -199,10 +192,7 @@ fn open_consumer_keyframe_request_refreshes_simulcast_video_source() {
         );
 
     route.request_kf();
-    assert_eq!(
-        drain_ready_sessions(&mut route.state),
-        vec![route.source_session.clone()]
-    );
+    route.assert_source_ready();
     assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
@@ -253,8 +243,8 @@ fn consumer_keyframe_request_forwards_remote_video_refresh_with_selected_rid() {
 
 #[test]
 fn set_consumer_pkt_gate_updates_one_route_without_rewriting_the_source_gate() {
-    let source_session = test_transport_session_key(131, 0, 132, UserId::Integer(133));
-    let first_consumer_session = test_transport_session_key(131, 0, 134, UserId::Integer(135));
+    let source_session = test_source_session_key(131);
+    let first_consumer_session = test_consumer_session_key(131);
     let second_consumer_session = test_transport_session_key(131, 0, 136, UserId::Integer(137));
     let source_mid = Mid::from("cam-up");
     let first_consumer_mid = Mid::from("cam-down-a");
@@ -422,144 +412,71 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
 
 #[test]
 fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
-    let PendingSelectedRidRoute {
-        mut state,
-        metrics,
-        source_session,
-        consumer_session,
-        src_media,
-        selected_rid,
-        fallback_rid,
-    } = prepare_pending_selected_rid_route();
-    assert_consumer_packet_gate(
-        &state,
-        src_media,
-        &consumer_session,
-        &PacketLayerGate::Block,
-        Some(&PacketLayerGate::Rid(selected_rid)),
+    let mut route = prepare_pending_selected_rid_route();
+    route.assert_packet_gate(
+        PacketLayerGate::Block,
+        Some(PacketLayerGate::Rid(route.selected_rid)),
     );
     assert_eq!(
-        state.routes.effective_packet_gate(src_media),
+        route.state.routes.effective_packet_gate(route.src_media),
         Some(PacketLayerGate::Block)
     );
 
     let now = Instant::now();
     assert_eq!(
-        state
+        route
+            .state
             .routes
-            .track_kf_req(src_media, None, KeyframeRequestKind::Pli, now),
+            .track_kf_req(route.src_media, None, KeyframeRequestKind::Pli, now),
         KeyframeRequestDecision::Forward
     );
 
-    assert!(!observe_src_rid_ready(
-        &mut state,
-        &metrics,
-        &source_session,
-        src_media,
-        fallback_rid,
-        false,
-        now,
-    ));
+    assert!(!route.observe_rid_ready(route.fallback_rid, false, now));
 
-    assert_consumer_packet_gate(
-        &state,
-        src_media,
-        &consumer_session,
-        &PacketLayerGate::Block,
-        Some(&PacketLayerGate::Rid(selected_rid)),
+    route.assert_packet_gate(
+        PacketLayerGate::Block,
+        Some(PacketLayerGate::Rid(route.selected_rid)),
     );
     assert_eq!(
-        state.routes.effective_packet_gate(src_media),
+        route.state.routes.effective_packet_gate(route.src_media),
         Some(PacketLayerGate::Block)
     );
 
-    assert!(drain_ready_sessions(&mut state).is_empty());
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 0);
+    assert!(drain_ready_sessions(&mut route.state).is_empty());
+    assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 0);
 
-    assert!(observe_src_rid_ready(
-        &mut state,
-        &metrics,
-        &source_session,
-        src_media,
-        fallback_rid,
-        true,
-        now + Duration::from_millis(10),
-    ));
+    assert!(route.observe_rid_ready(route.fallback_rid, true, now + Duration::from_millis(10)));
 
-    assert_consumer_packet_gate(
-        &state,
-        src_media,
-        &consumer_session,
-        &PacketLayerGate::Rid(fallback_rid),
-        Some(&PacketLayerGate::Rid(selected_rid)),
+    route.assert_packet_gate(
+        PacketLayerGate::Rid(route.fallback_rid),
+        Some(PacketLayerGate::Rid(route.selected_rid)),
     );
     assert_eq!(
-        state.routes.effective_packet_gate(src_media),
-        Some(PacketLayerGate::Rid(fallback_rid))
+        route.state.routes.effective_packet_gate(route.src_media),
+        Some(PacketLayerGate::Rid(route.fallback_rid))
     );
     assert_eq!(
-        drain_ready_sessions(&mut state),
-        vec![source_session.clone()]
+        drain_ready_sessions(&mut route.state),
+        vec![route.source_session.clone()]
     );
-    assert_eq!(metrics.snapshot().rtc_route_control_forwarded(), 1);
+    assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
 }
 
 #[test]
 fn selected_rid_packet_gate_switches_from_bootstrap_fallback_on_selected_keyframe() {
-    let PendingSelectedRidRoute {
-        mut state,
-        metrics,
-        source_session,
-        consumer_session,
-        src_media,
-        selected_rid,
-        fallback_rid,
-    } = prepare_pending_selected_rid_route();
+    let mut route = prepare_pending_selected_rid_route();
     let now = Instant::now();
 
-    assert!(observe_src_rid_ready(
-        &mut state,
-        &metrics,
-        &source_session,
-        src_media,
-        fallback_rid,
-        true,
-        now,
-    ));
+    assert!(route.observe_rid_ready(route.fallback_rid, true, now));
 
-    assert!(!observe_src_rid_ready(
-        &mut state,
-        &metrics,
-        &source_session,
-        src_media,
-        selected_rid,
-        false,
-        now + Duration::from_millis(10),
-    ));
-    assert_consumer_packet_gate(
-        &state,
-        src_media,
-        &consumer_session,
-        &PacketLayerGate::Rid(fallback_rid),
-        Some(&PacketLayerGate::Rid(selected_rid)),
+    assert!(!route.observe_rid_ready(route.selected_rid, false, now + Duration::from_millis(10)));
+    route.assert_packet_gate(
+        PacketLayerGate::Rid(route.fallback_rid),
+        Some(PacketLayerGate::Rid(route.selected_rid)),
     );
 
-    assert!(observe_src_rid_ready(
-        &mut state,
-        &metrics,
-        &source_session,
-        src_media,
-        selected_rid,
-        true,
-        now + Duration::from_millis(20),
-    ));
-    assert_consumer_packet_gate(
-        &state,
-        src_media,
-        &consumer_session,
-        &PacketLayerGate::Rid(selected_rid),
-        None,
-    );
+    assert!(route.observe_rid_ready(route.selected_rid, true, now + Duration::from_millis(20)));
+    route.assert_packet_gate(PacketLayerGate::Rid(route.selected_rid), None);
 }
 
 #[test]
@@ -568,15 +485,7 @@ fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
     let mut route = LocalVideoRoute::with_pending_rid_gate(431, 88_351, selected_rid);
 
     let now = Instant::now();
-    assert!(observe_src_rid_ready(
-        &mut route.state,
-        &route.metrics,
-        &route.source_session,
-        route.src_media,
-        selected_rid,
-        true,
-        now,
-    ));
+    assert!(route.observe_rid_ready(selected_rid, true, now));
     assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
 
     for (elapsed_ms, expected_forwarded) in [
@@ -587,14 +496,10 @@ fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
         (8_200, 5),
         (13_200, 6),
     ] {
-        assert!(!observe_src_rid_ready(
-            &mut route.state,
-            &route.metrics,
-            &route.source_session,
-            route.src_media,
+        assert!(!route.observe_rid_ready(
             selected_rid,
             true,
-            now + Duration::from_millis(elapsed_ms),
+            now + Duration::from_millis(elapsed_ms)
         ));
         assert_eq!(
             route.metrics.snapshot().rtc_route_control_forwarded(),
@@ -609,15 +514,7 @@ fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
     let mut route = LocalVideoRoute::with_pending_rid_gate(531, 88_451, selected_rid);
 
     let now = Instant::now();
-    assert!(observe_src_rid_ready(
-        &mut route.state,
-        &route.metrics,
-        &route.source_session,
-        route.src_media,
-        selected_rid,
-        true,
-        now,
-    ));
+    assert!(route.observe_rid_ready(selected_rid, true, now));
     assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
 
     drain_due_rid_kf_refreshes(
@@ -627,10 +524,7 @@ fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
     );
 
     assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 2);
-    assert_eq!(
-        drain_ready_sessions(&mut route.state),
-        vec![route.source_session.clone()]
-    );
+    route.assert_source_ready();
 }
 
 #[test]
@@ -656,22 +550,11 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
         stale_observed_at,
     );
 
-    assert!(observe_src_rid_ready(
-        &mut route.state,
-        &route.metrics,
-        &route.source_session,
-        route.src_media,
-        fallback_rid,
-        false,
-        now,
-    ));
+    assert!(route.observe_rid_ready(fallback_rid, false, now));
 
-    assert_consumer_packet_gate(
-        &route.state,
-        route.src_media,
-        &route.consumer_session,
-        &PacketLayerGate::Block,
-        Some(&PacketLayerGate::Rid(selected_rid)),
+    route.assert_packet_gate(
+        PacketLayerGate::Block,
+        Some(PacketLayerGate::Rid(selected_rid)),
     );
     assert_eq!(
         route
@@ -686,52 +569,24 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
         route.state.routes.effective_packet_gate(route.src_media),
         Some(PacketLayerGate::Block)
     );
-    assert_eq!(
-        drain_ready_sessions(&mut route.state),
-        vec![route.source_session.clone()]
-    );
+    route.assert_source_ready();
     assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
 
-    assert!(!observe_src_rid_ready(
-        &mut route.state,
-        &route.metrics,
-        &route.source_session,
-        route.src_media,
-        selected_rid,
-        false,
-        now + Duration::from_millis(10),
-    ));
-    assert_consumer_packet_gate(
-        &route.state,
-        route.src_media,
-        &route.consumer_session,
-        &PacketLayerGate::Block,
-        Some(&PacketLayerGate::Rid(selected_rid)),
+    assert!(!route.observe_rid_ready(selected_rid, false, now + Duration::from_millis(10)));
+    route.assert_packet_gate(
+        PacketLayerGate::Block,
+        Some(PacketLayerGate::Rid(selected_rid)),
     );
 
-    assert!(observe_src_rid_ready(
-        &mut route.state,
-        &route.metrics,
-        &route.source_session,
-        route.src_media,
-        selected_rid,
-        true,
-        now + Duration::from_millis(20),
-    ));
+    assert!(route.observe_rid_ready(selected_rid, true, now + Duration::from_millis(20)));
 
-    assert_consumer_packet_gate(
-        &route.state,
-        route.src_media,
-        &route.consumer_session,
-        &PacketLayerGate::Rid(selected_rid),
-        None,
-    );
+    route.assert_packet_gate(PacketLayerGate::Rid(selected_rid), None);
 }
 
 #[test]
 fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
-    let source_session = test_transport_session_key(141, 0, 142, UserId::Integer(143));
-    let first_consumer_session = test_transport_session_key(141, 1, 144, UserId::Integer(145));
+    let source_session = test_source_session_key(141);
+    let first_consumer_session = test_consumer_session_key_on_worker(141, 1);
     let second_consumer_session = test_transport_session_key(141, 1, 146, UserId::Integer(147));
     let first_consumer_mid = Mid::from("cam-down-a");
     let second_consumer_mid = Mid::from("cam-down-b");
@@ -1008,8 +863,8 @@ fn remote_source_teardown_drops_pending_gate_state() {
 
 #[test]
 fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is_missing() {
-    let source_session = test_transport_session_key(151, 0, 152, UserId::Integer(153));
-    let consumer_session = test_transport_session_key(151, 1, 154, UserId::Integer(155));
+    let source_session = test_source_session_key(151);
+    let consumer_session = test_consumer_session_key_on_worker(151, 1);
     let mut state = PacketLoopState::default();
     let src_media = TransportMediaId::new(33);
     let (command_tx, _command_rx) = mpsc::channel(1);
@@ -1122,8 +977,8 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
 
 #[test]
 fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
-    let source_session = test_transport_session_key(751, 0, 752, UserId::Integer(753));
-    let consumer_session = test_transport_session_key(751, 0, 754, UserId::Integer(755));
+    let source_session = test_source_session_key(751);
+    let consumer_session = test_consumer_session_key(751);
     let source_mid = Mid::from("cam-up");
     let consumer_mid = Mid::from("cam-down");
     let selected_rid = Rid::from("lo");
@@ -1230,7 +1085,7 @@ fn prepare_already_absent_producer_registration(
 
 #[test]
 fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
-    let session_key = test_transport_session_key(161, 0, 162, UserId::Integer(163));
+    let session_key = test_source_session_key(161);
     let producer_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let transport_media_id =
@@ -1253,7 +1108,7 @@ fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
 
 #[test]
 fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
-    let session_key = test_transport_session_key(261, 0, 262, UserId::Integer(263));
+    let session_key = test_source_session_key(261);
     let producer_mid = Mid::from("cam-up-negotiated");
     let mut state = PacketLoopState::default();
     let negotiated_parameters =
@@ -1284,8 +1139,8 @@ fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
 
 #[test]
 fn request_keyframe_ignores_wrong_source_owner() {
-    let source_session = test_transport_session_key(131, 0, 132, UserId::Integer(133));
-    let wrong_session = test_transport_session_key(131, 0, 134, UserId::Integer(135));
+    let source_session = test_source_session_key(131);
+    let wrong_session = test_consumer_session_key(131);
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
@@ -1308,8 +1163,8 @@ fn request_keyframe_ignores_wrong_source_owner() {
 
 #[test]
 fn remote_source_packet_gate_ignores_wrong_source_owner() {
-    let source_session = test_transport_session_key(141, 0, 142, UserId::Integer(143));
-    let wrong_session = test_transport_session_key(141, 0, 144, UserId::Integer(145));
+    let source_session = test_source_session_key(141);
+    let wrong_session = test_consumer_session_key(141);
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let src_media = prepare_source_session(&mut state, &source_session, source_mid, 101_010);
