@@ -500,9 +500,6 @@ fn plan_forwards_enforces_per_consumer_rid_gates_after_aggregate_admits() {
         Mid::from("cam-down-hi"),
         PacketLayerGate::Rid("hi".into()),
     );
-    state
-        .routes
-        .set_local_pkt_gate(src_media, Some(PacketLayerGate::Open));
     let mut pending_packets = vec![
         sample_forwarded_packet_with_rid(
             producer_session.clone(),
@@ -560,12 +557,6 @@ fn plan_forwards_enforces_per_consumer_temporal_ceilings_after_aggregate_admits(
         high_consumer_session.clone(),
         Mid::from("cam-down-high"),
         PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 2)),
-    );
-    state.routes.set_local_pkt_gate(
-        src_media,
-        Some(PacketLayerGate::OperatingPoint(
-            PacketOperatingPointGate::new(Some("hi".into()), 2),
-        )),
     );
     let mut pending_packets = vec![
         sample_forwarded_packet_with_frame_mark(

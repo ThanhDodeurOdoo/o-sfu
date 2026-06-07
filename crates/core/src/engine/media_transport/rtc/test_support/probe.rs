@@ -471,29 +471,25 @@ fn debug_route_entry(
     state: &PacketLoopState,
     src_media: TransportMediaId,
 ) -> Option<DebugRouteEntry> {
-    state
-        .routes
-        .local_route(src_media)
-        .map(|entry| DebugRouteEntry {
-            source_transport_media_id: src_media,
-            source_active: entry.source_active,
-            active_destination_count: entry.active_destination_count,
-            effective_packet_gate: state
-                .routes
-                .effective_packet_gate(src_media)
-                .as_ref()
-                .map_or(DebugPacketGate::Open, debug_packet_gate),
-            destinations: entry
-                .destinations
-                .iter()
-                .map(|destination| DebugRouteDestination {
-                    dest_session: destination.dest_session.clone(),
-                    dest_transport_media_id: destination.dest_transport_media_id,
-                    dest_mid: destination.dest_mid,
-                    active: destination.active,
-                })
-                .collect(),
-        })
+    let (entry, _, packet_gate) = state.routes.forward_view(src_media, false);
+    entry.map(|entry| DebugRouteEntry {
+        source_transport_media_id: src_media,
+        source_active: entry.source_active,
+        active_destination_count: entry.active_destination_count,
+        effective_packet_gate: packet_gate
+            .as_ref()
+            .map_or(DebugPacketGate::Open, debug_packet_gate),
+        destinations: entry
+            .destinations
+            .iter()
+            .map(|destination| DebugRouteDestination {
+                dest_session: destination.dest_session.clone(),
+                dest_transport_media_id: destination.dest_transport_media_id,
+                dest_mid: destination.dest_mid,
+                active: destination.active,
+            })
+            .collect(),
+    })
 }
 
 fn debug_packet_gate(packet_gate: &PacketLayerGate) -> DebugPacketGate {
