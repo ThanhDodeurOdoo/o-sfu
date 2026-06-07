@@ -5,7 +5,7 @@ use str0m::media::{KeyframeRequestKind, Mid, Rid};
 use super::super::{
     keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker},
     relay_registry::{RelayPacketMailbox, RelayTargetId},
-    route_control::{PacketLayerGate, PacketLayerMetadata, PacketRouteDecision},
+    route_control::PacketLayerGate,
     route_table::RouteTable,
     slots::ConsumerStreamHandle,
     source_route::MediaRouteDestination,
@@ -226,18 +226,6 @@ fn keyframe_tracker_decoder_refresh_clears_source_wide_pending_request() {
 }
 
 #[test]
-fn route_control_drops_packets_when_the_is_source_blocked() {
-    let mut state = RouteTable::default();
-    let src_media = TransportMediaId::new(19);
-    state.set_local_pkt_gate(src_media, Some(PacketLayerGate::Block));
-
-    assert_eq!(
-        state.decide_packet_route(src_media, PacketLayerMetadata::default()),
-        PacketRouteDecision::Drop
-    );
-}
-
-#[test]
 fn route_control_combines_local_and_remote_target_gates() {
     let mut state = RouteTable::default();
     let src_media = TransportMediaId::new(21);
@@ -287,10 +275,6 @@ fn route_control_refreshes_source_gate_after_relay_gate_removal() {
         state.effective_packet_gate(src_media),
         Some(PacketLayerGate::Rid("hi".into()))
     );
-    assert_eq!(
-        state.decide_packet_route(src_media, PacketLayerMetadata::new(Some("lo".into()), None)),
-        PacketRouteDecision::Drop
-    );
 }
 
 #[test]
@@ -313,10 +297,6 @@ fn route_control_refreshes_source_gate_after_local_gate_clear() {
     state.remove_relay_target(src_media, relay_target);
 
     assert_eq!(state.effective_packet_gate(src_media), None);
-    assert_eq!(
-        state.decide_packet_route(src_media, PacketLayerMetadata::new(Some("lo".into()), None)),
-        PacketRouteDecision::Forward
-    );
 }
 
 #[test]

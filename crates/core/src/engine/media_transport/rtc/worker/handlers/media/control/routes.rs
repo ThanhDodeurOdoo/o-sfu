@@ -171,20 +171,23 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn remove_c
         state.routes.prune_unrouted_remote_src(src_media);
         return;
     };
-    let (removed, moved) = removed;
     state.set_consumer_dst_idx(
-        &removed.dest_session,
-        removed.dest_mid,
-        removed.dest_transport_media_id,
+        &removed.destination.dest_session,
+        removed.destination.dest_mid,
+        removed.destination.dest_transport_media_id,
         src_media,
         None,
     );
-    if let Some((session, mid, media_id, idx)) = moved {
-        // `swap_remove` can move another consumer into `position`
-        // repair that consumer's feedback index before the route is reused
-        state.set_consumer_dst_idx(&session, mid, media_id, src_media, Some(idx));
+    if let Some(moved) = &removed.moved {
+        state.set_consumer_dst_idx(
+            &moved.session_key,
+            moved.mid,
+            moved.media_id,
+            src_media,
+            Some(moved.dst_idx),
+        );
     }
-    release_dst_stream(state, &removed);
+    release_dst_stream(state, &removed.destination);
 }
 
 pub(in crate::engine::media_transport::rtc::worker) fn remove_source_route(
@@ -239,7 +242,11 @@ pub(super) fn worker_set_consumer_pkt_gate(
     update_consumer_route(
         state,
         route,
-        ConsumerRouteMutation::PacketGate(packet_gate, now, true),
+        ConsumerRouteMutation::PacketGate {
+            packet_gate,
+            now,
+            refresh: ConsumerGateRefresh::Immediate,
+        },
     )
     .map(|_| ())
 }
@@ -259,7 +266,11 @@ pub(super) fn worker_set_consumer_pkt_gates(
         match update_consumer_route(
             state,
             &route,
-            ConsumerRouteMutation::PacketGate(packet_gate, now, false),
+            ConsumerRouteMutation::PacketGate {
+                packet_gate,
+                now,
+                refresh: ConsumerGateRefresh::Deferred,
+            },
         ) {
             Ok(route_changed) => {
                 changed |= route_changed;
@@ -287,7 +298,17 @@ pub(in crate::engine::media_transport::rtc) fn worker_set_consumer_pkt_gates_for
 #[derive(Clone, Copy)]
 enum ConsumerRouteMutation {
     Active(bool),
-    PacketGate(PacketLayerGate, Instant, bool),
+    PacketGate {
+        packet_gate: PacketLayerGate,
+        now: Instant,
+        refresh: ConsumerGateRefresh,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum ConsumerGateRefresh {
+    Immediate,
+    Deferred,
 }
 
 fn update_consumer_route(
@@ -324,27 +345,32 @@ fn update_consumer_route(
             consumer_media,
             active,
         ),
-        ConsumerRouteMutation::PacketGate(packet_gate, now, refresh) => {
+        ConsumerRouteMutation::PacketGate {
+            packet_gate,
+            now,
+            refresh,
+        } => {
             let (packet_gate, pending_gate) =
                 selected_rid::guarded_pkt_gate(state, src_media, packet_gate, now);
-            if refresh {
-                state.routes.set_consumer_pkt_gate(
+            match refresh {
+                ConsumerGateRefresh::Immediate => state.routes.set_consumer_pkt_gate(
                     src_media,
                     dst_idx,
                     consumer_key,
                     consumer_media,
                     packet_gate,
                     pending_gate,
-                )
-            } else {
-                state.routes.set_consumer_pkt_gate_batch(
-                    src_media,
-                    dst_idx,
-                    consumer_key,
-                    consumer_media,
-                    packet_gate,
-                    pending_gate,
-                )
+                ),
+                ConsumerGateRefresh::Deferred => {
+                    state.routes.set_consumer_pkt_gate_without_refresh(
+                        src_media,
+                        dst_idx,
+                        consumer_key,
+                        consumer_media,
+                        packet_gate,
+                        pending_gate,
+                    )
+                }
             }
         }
     }

@@ -175,20 +175,6 @@ impl PacketLayerMetadata {
     }
 }
 
-/// source-level route-control decision for the packet loop
-///
-/// this decision only covers the source-wide gate
-/// relay-target and local-destination gates still run during destination
-/// planning so each downstream route can keep its own selected layer
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg(test)]
-pub(in crate::engine::media_transport::rtc) enum PacketRouteDecision {
-    /// keep planning destinations for this packet
-    Forward,
-    /// stop fanout because no source-level policy permits this packet
-    Drop,
-}
-
 /// computes the permissive source gate needed to preserve all downstream gates
 ///
 /// the route-control state uses this before source-level packet filtering
