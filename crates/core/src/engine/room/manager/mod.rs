@@ -1,10 +1,5 @@
-//! Process-global room lookup and per-room lifecycle liveness.
-//!
-//! This module contains the boundary between "find or create the right room" and
-//! "run work only against a room that is still current". It keeps the directory
-//! keyed by issuer, UUID and instance id, and turns stale directory handles into
-//! no-ops before caller work runs.
-
+#[cfg(not(test))]
+use std::future::ready;
 #[cfg(test)]
 use std::sync::Mutex;
 use std::{collections::BTreeSet, future::Future, sync::Arc};
@@ -13,18 +8,18 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
 
 #[cfg(test)]
-pub(in crate::engine::room) use self::test_support::JoinPlacementTestGate;
+pub use self::test_support::JoinPlacementTestGate;
 use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
-    RoomUserStatsSnapshot, UserOutboundSender,
+    RoomUserStatsSnapshot,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
     effects::batch::RoomEffectContext,
     factory::RoomFactory,
-    membership::JoinSessionIntent,
+    membership::JoinUserRequest,
     placement::WorkerLoadIndex,
 };
 use crate::engine::{
-    ConnectionId, RoomInstanceId, UserId, UserPermissions,
+    ConnectionId, RoomInstanceId, UserId,
     diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
     media_transport::{MediaTransport, TransportSessionKey},
     metrics::RuntimeMetrics,
@@ -32,11 +27,9 @@ use crate::engine::{
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
+#[path = "TESTS/support.rs"]
 mod test_support;
 
-/// Runtime-wide params
-///
-/// stay fixed for the manager lifetime
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomManagerConfig {
     pub media_worker_count: usize,
@@ -60,10 +53,6 @@ pub struct RoomManagerDeps {
     pub metrics: Arc<RuntimeMetrics>,
 }
 
-/// Observability view for one live room
-///
-/// This merge immutable directory metadata with the current per-room
-/// user stats gathered from `MediaTransport`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeRoomStatsSnapshot {
     pub create_date: String,
@@ -73,83 +62,20 @@ pub struct RuntimeRoomStatsSnapshot {
     pub web_rtc_enabled: bool,
 }
 
-/// Prevalidated join input handed from signaling into the runtime room layer.
-///
-/// Bundling these fields keeps the join entrypoint stable as user admission
-/// data grows and makes it explicit that the outbound sender belongs to the
-/// requested user lifecycle
-pub struct JoinUserRequest {
-    pub user_id: UserId,
-    pub label: Option<String>,
-    pub permissions: UserPermissions,
-    pub sender: UserOutboundSender,
-}
-
-/// Room admission result with the committed transport routing key.
-///
-/// The room manager returns this after the room state has accepted the join and
-/// the routing boundary has committed the connection placement.
 #[derive(Debug, Clone)]
 pub struct RoomUserAdmission {
-    room: Arc<Room>,
-    connection_id: ConnectionId,
-    transport_session_key: TransportSessionKey,
+    pub room: Arc<Room>,
+    pub connection_id: ConnectionId,
+    pub transport_session_key: TransportSessionKey,
 }
 
-impl RoomUserAdmission {
-    #[must_use]
-    pub fn room(&self) -> &Arc<Room> {
-        &self.room
-    }
-
-    #[must_use]
-    pub const fn connection_id(&self) -> ConnectionId {
-        self.connection_id
-    }
-
-    #[must_use]
-    pub const fn transport_session_key(&self) -> &TransportSessionKey {
-        &self.transport_session_key
-    }
-}
-
-/// Read-only directory snapshot for runtime-facing listing and inspection
-///
-/// The snapshot keeps an `Arc<Room>` so callers can inspect live room state
-/// after listing metadata without accesing back into the directory.
 #[derive(Debug, Clone)]
 pub struct RuntimeRoomDirectorySnapshot {
-    room: Arc<Room>,
-    create_date: String,
-    remote_address: String,
+    pub room: Arc<Room>,
+    pub create_date: String,
+    pub remote_address: String,
 }
 
-impl RuntimeRoomDirectorySnapshot {
-    #[must_use]
-    pub fn room(&self) -> &Arc<Room> {
-        &self.room
-    }
-
-    #[must_use]
-    pub fn create_date(&self) -> &str {
-        &self.create_date
-    }
-
-    #[must_use]
-    pub fn remote_address(&self) -> &str {
-        &self.remote_address
-    }
-}
-
-/// process-global live-room directory keyed by issuer and UUID
-///
-/// [`RoomManager`] keeps room creation idempotent by issuer and stores the current
-/// room directory
-/// lifecycle leases prevent empty-room removal from racing
-/// accepted work, while room state locks and transition methods own the actual
-/// membership ordering
-/// runtime entrypoints should go through this type instead
-/// of coordinating directory lookup and teardown themselves
 #[derive(Debug)]
 pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
@@ -181,11 +107,6 @@ impl RoomManager {
         }
     }
 
-    /// Returns the live room for `issuer`, creating it on first request.
-    ///
-    /// Creation is idempotent by issuer, so repeated calls keep the existing
-    /// runtime placement and directory metadata for the room lifetime. Later
-    /// calls do not replace the original room definition.
     pub async fn serve_room(
         &self,
         issuer: &str,
@@ -219,17 +140,11 @@ impl RoomManager {
         room
     }
 
-    /// Returns the current live room for a UUID without taking its lifecycle
-    /// lock.
     pub async fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Room>> {
         let directory = self.directory.read().await;
         directory.get_by_uuid(uuid)
     }
 
-    /// Collects live observability snapshots for every room in the directory.
-    ///
-    /// This first snapshots the directory, then queries each room, so the
-    /// result is best-effort, not like one atomic process-wide instant.
     pub async fn stats_snapshots(
         &self,
         media_transport: &MediaTransport,
@@ -247,9 +162,9 @@ impl RoomManager {
             .await
             .into_iter()
             .map(|entry| RuntimeRoomDirectorySnapshot {
-                room: entry.room(),
-                create_date: entry.create_date().to_owned(),
-                remote_address: entry.remote_address().to_owned(),
+                room: entry.room,
+                create_date: entry.create_date,
+                remote_address: entry.remote_address,
             })
             .collect()
     }
@@ -257,9 +172,9 @@ impl RoomManager {
     pub async fn directory_snapshot(&self, room_id: &str) -> Option<RuntimeRoomDirectorySnapshot> {
         let entry = self.entry(room_id).await?;
         Some(RuntimeRoomDirectorySnapshot {
-            room: entry.room(),
-            create_date: entry.create_date().to_owned(),
-            remote_address: entry.remote_address().to_owned(),
+            room: entry.room,
+            create_date: entry.create_date,
+            remote_address: entry.remote_address,
         })
     }
 
@@ -268,12 +183,6 @@ impl RoomManager {
         self.media_worker_count
     }
 
-    /// Returns live directory snapshots for known room ids.
-    ///
-    /// Diagnostics user lookup uses this after resolving candidate rooms from
-    /// the diagnostics user index. Missing rooms are skipped because the
-    /// index and directory can be observed at slightly different instants while
-    /// room teardown is in progress.
     pub async fn directory_snapshots_for_room_ids(
         &self,
         room_ids: &[String],
@@ -283,18 +192,13 @@ impl RoomManager {
             .iter()
             .filter_map(|room_id| directory.entry(room_id))
             .map(|entry| RuntimeRoomDirectorySnapshot {
-                room: entry.room(),
-                create_date: entry.create_date().to_owned(),
-                remote_address: entry.remote_address().to_owned(),
+                room: entry.room,
+                create_date: entry.create_date,
+                remote_address: entry.remote_address,
             })
             .collect()
     }
 
-    /// Re-applies source packet selection policy for the targeted room instances.
-    ///
-    /// Missing or already-removed instance ids are skipped. Active-speaker data
-    /// is fetched once per call so every targeted room reacts to the same
-    /// observability snapshot.
     pub async fn sync_source_packet_selection_policies_for_runtime_ids(
         &self,
         room_instance_ids: &BTreeSet<RoomInstanceId>,
@@ -319,27 +223,9 @@ impl RoomManager {
         }
     }
 
-    /// drains due cleanup retries for rooms retained after teardown
-    ///
-    /// this is the runtime maintenance entrypoint for cleanup work captured
-    /// after room state has already forgotten users or media. callers should
-    /// pass the same [`MediaTransport`] used by normal room teardown so queued
-    /// operations keep targeting the resolved transport identities stored by
-    /// the room
-    ///
-    /// each room remains the owner of retry classification, backoff, metrics
-    /// and last-resort escalation. the manager only serializes the sweep with
-    /// the room lifecycle lock and removes a current room after it is empty
-    /// with no pending retry state
-    ///
-    /// the sweep is best effort. rooms removed or replaced while the directory
-    /// snapshot is being processed are skipped by `run_current_room_mutation`
-    ///
-    /// this is cold-path lifecycle work. it must not be called from packet
-    /// forwarding or transport hot loops
     pub async fn drain_cleanup_retries(&self, media_transport: &MediaTransport) {
         for entry in self.directory_entries().await {
-            let room = entry.room();
+            let room = entry.room;
             let room_id = room.uuid().to_owned();
             self.run_current_room_mutation(
                 &room_id,
@@ -359,16 +245,10 @@ impl RoomManager {
         }
     }
 
-    /// Joins a user through the current live room entry for `room_id`.
-    ///
-    /// On success this returns the current room and its new runtime connection
-    /// id plus the committed transport routing key. The room state transition
-    /// records live user and media deltas before async transport effects run.
-    ///
     /// # Errors
     ///
-    /// Returns [`RoomManagerJoinError`] when the room is missing or when room
-    /// admission rejects the user.
+    /// returns [`RoomManagerJoinError`] when the room is missing or admission
+    /// rejects the user
     pub async fn join_user(
         &self,
         room_id: &str,
@@ -379,20 +259,16 @@ impl RoomManager {
             .run_current_room_mutation(
                 room_id,
                 |room| async move {
-                    let worker_loads = self.worker_load_index(media_transport).await;
-                    let placement = room.plan_join_placement(worker_loads).await;
                     #[cfg(test)]
-                    self.wait_after_join_placement_for_test().await;
-                    room.join_session_with_cleanup(
-                        JoinSessionIntent {
-                            user_id: request.user_id,
-                            label: request.label,
-                            permissions: request.permissions,
-                            sender: request.sender,
-                            emit_joined_fanout: true,
-                            placement,
-                        },
+                    let after_planning = self.wait_after_join_placement_for_test();
+                    #[cfg(not(test))]
+                    let after_planning = ready(());
+                    let worker_loads = self.worker_load_index(media_transport).await;
+                    room.admit_session(
+                        request,
+                        worker_loads,
                         RoomEffectContext::runtime(media_transport),
+                        after_planning,
                         || self.factory.allocate_spillover_router(),
                     )
                     .await
@@ -420,20 +296,11 @@ impl RoomManager {
             media_transport.worker_pressure_snapshots(),
         );
         for entry in self.directory_entries().await {
-            let contribution = entry.room().worker_load_contribution().await;
-            for media_worker_id in contribution.session_worker_ids {
-                load_index.record_session(media_worker_id);
-            }
-            for media_worker_id in contribution.consumer_worker_ids {
-                load_index.record_consumer(media_worker_id);
-            }
+            entry.room.record_worker_load(&mut load_index).await;
         }
         load_index
     }
 
-    /// Closes one runtime connection if the room is still current.
-    ///
-    /// Returns `true` only when an active user was removed.
     pub async fn close_session(
         &self,
         room_id: &str,
@@ -457,10 +324,6 @@ impl RoomManager {
         did_remove_active_session
     }
 
-    /// Disconnects a batch of users through the current room entry.
-    ///
-    /// This is the bulk teardown path for room-level disconnects. The directory
-    /// entry is removed afterward if the batch leaves the room empty.
     pub async fn disconnect_users(
         &self,
         room_id: &str,
@@ -481,10 +344,6 @@ impl RoomManager {
         };
     }
 
-    /// Runs `action` only after acquiring a current-room lifecycle lease.
-    ///
-    /// The lease keeps empty-room removal from racing ahead of accepted work,
-    /// but no caller future runs while the lifecycle state is locked.
     #[cfg(test)]
     pub(super) async fn with_current_room<T, F, Fut>(&self, room_id: &str, action: F) -> Option<T>
     where
@@ -493,11 +352,8 @@ impl RoomManager {
     {
         let mutation = self.begin_current_room_mutation(room_id).await?;
         let room = Arc::clone(&mutation.room);
-        let output = action(Arc::clone(&room)).await;
-        let room_can_be_removed = self.room_can_be_removed(&room).await;
-        if mutation.finish(false, room_can_be_removed) {
-            self.remove_entry_if_current(room_id, &room).await;
-        }
+        let output = action(room).await;
+        self.finish_session_mutation(room_id, mutation, false).await;
         Some(output)
     }
 
@@ -528,16 +384,15 @@ impl RoomManager {
     ) {
         let room = Arc::clone(&mutation.room);
         let room_can_be_removed = self.room_can_be_removed(&room).await;
-        if mutation.finish(remove_if_empty, room_can_be_removed) {
+        if mutation.lease.finish(remove_if_empty, room_can_be_removed) {
             self.remove_entry_if_current(room_id, &room).await;
         }
     }
 
     async fn begin_current_room_mutation(&self, room_id: &str) -> Option<CurrentRoomMutation> {
         let entry = self.entry(room_id).await?;
-        let lifecycle = entry.lifecycle();
-        let lease = lifecycle.begin()?;
-        let room = entry.room();
+        let lease = entry.lifecycle.begin()?;
+        let room = entry.room;
         if self.is_current_entry(room_id, &room).await {
             return Some(CurrentRoomMutation { room, lease });
         }
@@ -567,7 +422,7 @@ impl RoomManager {
         room_instance_ids
             .iter()
             .filter_map(|room_instance_id| directory.entry_by_instance_id(*room_instance_id))
-            .map(|entry| entry.room())
+            .map(|entry| entry.room)
             .collect()
     }
 
@@ -576,12 +431,12 @@ impl RoomManager {
         entry: RoomDirectoryEntry,
         media_transport: &MediaTransport,
     ) -> RuntimeRoomStatsSnapshot {
-        let room = entry.room();
+        let room = entry.room;
         let users_stats = room.session_stats_snapshot(media_transport).await;
         RuntimeRoomStatsSnapshot {
-            create_date: entry.create_date().to_owned(),
+            create_date: entry.create_date,
             uuid: room.uuid().to_owned(),
-            remote_address: entry.remote_address().to_owned(),
+            remote_address: entry.remote_address,
             users_stats,
             web_rtc_enabled: room.web_rtc_enabled(),
         }
@@ -604,24 +459,8 @@ impl RoomManager {
     }
 }
 
-/// accepted manager work against one current room entry
-///
-/// this bundles the room with the lease that must be finished after caller
-/// work runs, so removal coordination cannot be skipped by accident
 #[derive(Debug)]
 struct CurrentRoomMutation {
-    /// room pointer that was current when the lifecycle lease was accepted
     room: Arc<Room>,
-    /// current-room lease that keeps empty-room removal waiting for this work
     lease: RoomLifecycleLease,
-}
-
-impl CurrentRoomMutation {
-    /// finish accepted room work and report whether this caller owns removal
-    ///
-    /// the caller computes `room_can_be_removed` after async effects finish so
-    /// cleanup retry state is observed at the final decision point
-    fn finish(self, remove_if_empty: bool, room_can_be_removed: bool) -> bool {
-        self.lease.finish(remove_if_empty, room_can_be_removed)
-    }
 }

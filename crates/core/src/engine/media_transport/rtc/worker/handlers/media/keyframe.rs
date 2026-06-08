@@ -30,7 +30,7 @@ use crate::engine::{
     },
 };
 
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_request_remote_kf(
+pub fn worker_request_remote_kf(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     src: &TransportSourceKey,
@@ -56,13 +56,13 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_r
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::engine::media_transport::rtc) enum KeyframeRequestTarget<'a> {
+pub enum KeyframeRequestTarget<'a> {
     Local(&'a TransportSessionKey, TransportMediaId),
     Remote(&'a TransportSourceKey, &'a RemoteSourceControl),
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(in crate::engine::media_transport::rtc) enum KeyframeRequestMode {
+pub enum KeyframeRequestMode {
     Track(Instant),
     Retry,
 }
@@ -83,7 +83,7 @@ impl KeyframeRequestMode {
     }
 }
 
-pub(in crate::engine::media_transport::rtc) fn request_kf_for_target(
+pub fn request_kf_for_target(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     target: KeyframeRequestTarget<'_>,
@@ -169,7 +169,7 @@ fn track_kf_req(
 }
 
 /// request a refresh frame for an already-declared consumer route
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn worker_request_consumer_kf(
+pub fn worker_request_consumer_kf(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     route: &TransportConsumerRoute,

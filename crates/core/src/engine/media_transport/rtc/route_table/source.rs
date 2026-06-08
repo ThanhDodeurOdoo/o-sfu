@@ -28,13 +28,13 @@ use crate::engine::media_transport::{
 };
 
 #[derive(Default)]
-pub(in crate::engine::media_transport::rtc) struct RidReadinessRouteUpdate {
-    pub(in crate::engine::media_transport::rtc) suspended_stale_gate: bool,
-    pub(in crate::engine::media_transport::rtc) selected_gate: RidReadinessSelectedGateUpdate,
+pub struct RidReadinessRouteUpdate {
+    pub suspended_stale_gate: bool,
+    pub selected_gate: RidReadinessSelectedGateUpdate,
 }
 
 impl RidReadinessRouteUpdate {
-    pub(in crate::engine::media_transport::rtc) fn changed_gate(&self) -> bool {
+    pub fn changed_gate(&self) -> bool {
         matches!(
             self.selected_gate,
             RidReadinessSelectedGateUpdate::Activated
@@ -58,7 +58,7 @@ impl RidReadinessRouteUpdate {
 }
 
 #[derive(Default, PartialEq, Eq)]
-pub(in crate::engine::media_transport::rtc) enum RidReadinessSelectedGateUpdate {
+pub enum RidReadinessSelectedGateUpdate {
     #[default]
     None,
     Pending,
@@ -67,17 +67,17 @@ pub(in crate::engine::media_transport::rtc) enum RidReadinessSelectedGateUpdate 
 }
 
 #[derive(Debug)]
-pub(in crate::engine::media_transport::rtc) struct MovedConsumerRoute {
-    pub(in crate::engine::media_transport::rtc) session_key: TransportSessionKey,
-    pub(in crate::engine::media_transport::rtc) mid: Mid,
-    pub(in crate::engine::media_transport::rtc) media_id: TransportMediaId,
-    pub(in crate::engine::media_transport::rtc) dst_idx: usize,
+pub struct MovedConsumerRoute {
+    pub session_key: TransportSessionKey,
+    pub mid: Mid,
+    pub media_id: TransportMediaId,
+    pub dst_idx: usize,
 }
 
 #[derive(Debug)]
-pub(in crate::engine::media_transport::rtc) struct RemovedConsumerRoute {
-    pub(in crate::engine::media_transport::rtc) destination: MediaRouteDestination,
-    pub(in crate::engine::media_transport::rtc) moved: Option<MovedConsumerRoute>,
+pub struct RemovedConsumerRoute {
+    pub destination: MediaRouteDestination,
+    pub moved: Option<MovedConsumerRoute>,
     pub(super) stopped_forwarding: bool,
 }
 

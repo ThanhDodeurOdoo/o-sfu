@@ -43,7 +43,8 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 type RelayRegistrationWorkers = Option<(Arc<RtcWorker>, Arc<RtcWorker>)>;
 
 impl MediaTransport {
-    pub(in crate::engine::media_transport) fn new(
+    #[must_use]
+    pub fn new(
         transport: &MediaTransportConfig,
         deps: &MediaTransportDeps,
         worker_ranges: Vec<crate::RtcPortRange>,

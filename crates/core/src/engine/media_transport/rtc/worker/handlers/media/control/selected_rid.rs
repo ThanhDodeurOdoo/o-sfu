@@ -110,7 +110,7 @@ pub fn observe_src_rid_ready(
 ///
 /// returns `true` when an effective gate changed and downstream planning should
 /// treat the source as route-control dirty
-pub(in crate::engine::media_transport::rtc) fn apply_src_rid_ready(
+pub fn apply_src_rid_ready(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     src_key: &TransportSessionKey,

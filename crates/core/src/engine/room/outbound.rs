@@ -36,15 +36,9 @@ pub struct TrackBindingUpdate {
 #[derive(Debug, Clone)]
 pub enum UserOutbound {
     Message(RoomEventMessage),
-    Request(Box<RoomEventRequest>),
+    SetupRemoteTrack(Box<RemoteTrackSetup>),
     TrackBindingUpdate(TrackBindingUpdate),
     Close(UserCloseReason),
-}
-
-/// targeted room request that requires websocket-side handling
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoomEventRequest {
-    SetupRemoteTrack(RemoteTrackSetup),
 }
 
 impl UserOutbound {
@@ -52,7 +46,7 @@ impl UserOutbound {
     pub(super) fn queued_bytes(&self) -> usize {
         match self {
             Self::Message(message) => message.queued_bytes(),
-            Self::Request(_) | Self::TrackBindingUpdate(_) | Self::Close(_) => 1024,
+            Self::SetupRemoteTrack(_) | Self::TrackBindingUpdate(_) | Self::Close(_) => 1024,
         }
     }
 }

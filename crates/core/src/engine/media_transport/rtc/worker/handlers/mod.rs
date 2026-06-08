@@ -21,12 +21,10 @@ mod publication;
 mod recv_stream;
 mod session;
 
-pub(in crate::engine::media_transport::rtc) use dispatcher::{
-    WorkerCommandContext, handle_worker_command,
-};
+pub use dispatcher::{WorkerCommandContext, handle_worker_command};
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) use media::worker_set_consumer_pkt_gates_for_bench;
-pub(in crate::engine::media_transport::rtc) use media::{
+pub use media::worker_set_consumer_pkt_gates_for_bench;
+pub use media::{
     KeyframeRequestMode, KeyframeRequestTarget, apply_src_rid_ready, drain_due_rid_kf_refreshes,
     request_kf_for_target,
 };

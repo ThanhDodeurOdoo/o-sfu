@@ -28,10 +28,10 @@ fn rfc3339_now() -> String {
 /// a manager snapshot can accept work without keeping the directory lock held
 #[derive(Debug, Clone)]
 pub(crate) struct RoomDirectoryEntry {
-    room: Arc<Room>,
-    lifecycle: RoomLifecycle,
-    create_date: String,
-    remote_address: String,
+    pub room: Arc<Room>,
+    pub lifecycle: RoomLifecycle,
+    pub create_date: String,
+    pub remote_address: String,
 }
 
 impl RoomDirectoryEntry {
@@ -42,26 +42,6 @@ impl RoomDirectoryEntry {
             create_date: rfc3339_now(),
             remote_address: remote_address.unwrap_or(UNKNOWN_REMOTE_ADDRESS).to_owned(),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn room(&self) -> Arc<Room> {
-        Arc::clone(&self.room)
-    }
-
-    #[must_use]
-    pub(crate) fn lifecycle(&self) -> RoomLifecycle {
-        self.lifecycle.clone()
-    }
-
-    #[must_use]
-    pub(crate) fn create_date(&self) -> &str {
-        &self.create_date
-    }
-
-    #[must_use]
-    pub(crate) fn remote_address(&self) -> &str {
-        &self.remote_address
     }
 }
 
@@ -198,7 +178,7 @@ impl RoomDirectory {
 
     #[must_use]
     pub(crate) fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Room>> {
-        self.by_uuid.get(uuid).map(RoomDirectoryEntry::room)
+        self.by_uuid.get(uuid).map(|entry| Arc::clone(&entry.room))
     }
 
     #[must_use]

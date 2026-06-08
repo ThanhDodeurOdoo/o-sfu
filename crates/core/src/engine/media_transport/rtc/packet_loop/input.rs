@@ -30,7 +30,7 @@ use super::super::{
 /// worker-input contract. Production construction stays limited to commands,
 /// relay packets and shutdown. Test construction can extend the bundle without
 /// adding probe-channel branches to the driver.
-pub(in crate::engine::media_transport::rtc) struct PacketLoopInputReceivers {
+pub struct PacketLoopInputReceivers {
     /// Worker-authored commands that mutate the authoritative RTC worker state.
     ///
     /// These commands are always checked before test probes so

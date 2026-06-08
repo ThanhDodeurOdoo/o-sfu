@@ -15,10 +15,11 @@ use crate::engine::{
 };
 
 #[cfg(test)]
+#[path = "TESTS/support.rs"]
 mod test_support;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) enum RoomRouterStateError {
+pub enum RoomRouterStateError {
     MissingSessionMapping { user_id: UserId },
     Router(RouterError),
 }
@@ -37,7 +38,7 @@ impl From<RouterError> for RoomRouterStateError {
 /// each user. It owns no transport runtime resources. Its job is to make pure
 /// router mutations line up with the room state that already accepted the
 /// signaling transition.
-pub(in crate::engine::room) struct RoomRouterState {
+pub struct RoomRouterState {
     router: Router<RoomRouterObserver>,
     rtp_capabilities: MediaCapabilities,
     sessions_by_user: BTreeMap<UserId, RouterSessionId>,
@@ -111,7 +112,7 @@ impl RoomRouterState {
     ///
     /// Returns the underlying [`RouterError`] when the pure router cannot open
     /// either directional transport for the user.
-    pub(in crate::engine::room) fn ensure_session_transports(
+    pub fn ensure_session_transports(
         &mut self,
         user_id: &UserId,
     ) -> Result<(), RoomRouterStateError> {

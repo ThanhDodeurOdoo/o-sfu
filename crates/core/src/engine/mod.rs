@@ -12,16 +12,16 @@
 //! RTC workers or room-state internals.
 
 pub mod diagnostics;
-pub(in crate::engine) mod h264_payloads;
+pub mod h264_payloads;
 mod hot_path;
 pub mod media_transport;
 pub mod metrics;
 pub mod packet_sink_registry;
 pub mod recording;
 pub mod room;
-pub(in crate::engine) mod router_events;
+pub mod router_events;
 pub mod source_model;
-pub(in crate::engine) mod sync;
+pub mod sync;
 
 pub use o_sfu_model::{
     AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,

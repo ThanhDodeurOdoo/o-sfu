@@ -215,7 +215,7 @@ pub(crate) async fn workers_response(
             .set_pressure(diagnostics_worker_pressure(pressure.pressure));
     }
     for entry in rooms.directory_snapshots().await {
-        let room = entry.room();
+        let room = &entry.room;
         let room_id = room.uuid();
         let users = room.diagnostics_user_views(transport).await;
         if users.is_empty() {
@@ -268,17 +268,17 @@ pub(crate) async fn user_detail_response(
     }
     let mut matches = Vec::new();
     for entry in rooms.directory_snapshots_for_room_ids(&room_ids).await {
-        let Some((user_view, user_id)) = entry
-            .room()
+        let room = &entry.room;
+        let Some((user_view, user_id)) = room
             .diagnostics_matching_user(requested_user_id, transport)
             .await
         else {
             continue;
         };
         matches.push(DiagnosticsUserDetail {
-            room_id: entry.room().uuid().to_owned(),
-            recent_events: diagnostics.user_recent_events(entry.room().uuid(), &user_id),
-            recording_state: entry.room().recording_state().await,
+            room_id: room.uuid().to_owned(),
+            recent_events: diagnostics.user_recent_events(room.uuid(), &user_id),
+            recording_state: room.recording_state().await,
             user: user_view,
         });
     }
@@ -310,33 +310,33 @@ async fn room_snapshot(
     transport: &MediaTransport,
     diagnostics: &DiagnosticsStore,
 ) -> DiagnosticsRoomSnapshot {
-    let users = entry.room().diagnostics_user_views(transport).await;
-    let sources = entry.room().diagnostics_sources(transport).await;
+    let room = &entry.room;
+    let users = room.diagnostics_user_views(transport).await;
+    let sources = room.diagnostics_sources(transport).await;
     let source_count = sources.len();
     let transport = transport_counts(&users);
     let publication_count = users.iter().map(|user| user.publications.len()).sum();
     let subscription_count = users.iter().map(|user| user.subscriptions.len()).sum();
     DiagnosticsRoomSnapshot {
         detail: DiagnosticsRoomDetail {
-            recent_events: diagnostics.room_recent_events(entry.room().uuid()),
+            recent_events: diagnostics.room_recent_events(room.uuid()),
             users: users.clone(),
             sources,
             summary: DiagnosticsRoomSummary {
-                create_date: entry.create_date().to_owned(),
-                media_worker_id: entry
-                    .room()
+                create_date: entry.create_date.clone(),
+                media_worker_id: room
                     .assigned_primary_media_worker_id()
                     .await
                     .map_or(0, MediaWorkerId::as_usize),
                 publication_count,
-                recording_state: entry.room().recording_state().await,
-                remote_address: entry.remote_address().to_owned(),
+                recording_state: room.recording_state().await,
+                remote_address: entry.remote_address.clone(),
                 source_count,
                 user_count: users.len(),
                 subscription_count,
                 transport,
-                uuid: entry.room().uuid().to_owned(),
-                web_rtc_enabled: entry.room().web_rtc_enabled(),
+                uuid: room.uuid().to_owned(),
+                web_rtc_enabled: room.web_rtc_enabled(),
             },
         },
     }

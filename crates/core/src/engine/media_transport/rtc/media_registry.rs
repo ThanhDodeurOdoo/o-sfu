@@ -676,4 +676,5 @@ impl PacketLoopState {
 }
 
 #[cfg(test)]
+#[path = "TESTS/media_registry.rs"]
 mod tests;

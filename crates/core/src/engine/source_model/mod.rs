@@ -53,7 +53,9 @@ pub use self::{
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
+#[path = "TESTS/support.rs"]
 pub mod test_support;
 
 #[cfg(test)]
-mod tests;
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;

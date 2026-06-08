@@ -20,9 +20,7 @@ use crate::engine::media_transport::{
 };
 
 #[derive(Clone, Copy)]
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) struct ConsumerRouteRegistration<
-    'a,
-> {
+pub struct ConsumerRouteRegistration<'a> {
     pub consumer_key: &'a TransportSessionKey,
     pub consumer_media: TransportMediaId,
     pub consumer_stream: ConsumerStreamHandle,
@@ -46,7 +44,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) struct Cons
 /// returns `InvalidInput` when a source id belongs to another owner, when the
 /// media id names a consumer or when a remote source is missing its control path
 /// returns `TransportUnavailable` when the local source media id does not exist
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_route_src_registered(
+pub fn ensure_route_src_registered(
     state: &mut PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source: &TransportSourceKey,
@@ -79,7 +77,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_r
 /// source owner or is not a producer source for a local route
 /// returns `TransportUnavailable` when the expected local producer or remote
 /// source registration is gone
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_existing_route_src(
+pub fn ensure_existing_route_src(
     state: &PacketLoopState,
     route_owner_session_key: &TransportSessionKey,
     source: &TransportSourceKey,
@@ -99,7 +97,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_e
     }
 }
 
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register_consumer_route(
+pub fn register_consumer_route(
     state: &mut PacketLoopState,
     registration: ConsumerRouteRegistration<'_>,
 ) {
@@ -144,9 +142,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn register
     );
 }
 
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn consumer_payload_type(
-    consumer_rtp: &RouterRtpParameters,
-) -> Option<Pt> {
+pub fn consumer_payload_type(consumer_rtp: &RouterRtpParameters) -> Option<Pt> {
     consumer_rtp
         .bindings()
         .find_map(|encoding| encoding.payload_type().map(Pt::from))
@@ -158,7 +154,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn consumer
         })
 }
 
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn remove_consumer_route(
+pub fn remove_consumer_route(
     state: &mut PacketLoopState,
     consumer_key: &TransportSessionKey,
     consumer_media: TransportMediaId,
@@ -190,10 +186,7 @@ pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn remove_c
     release_dst_stream(state, &removed.destination);
 }
 
-pub(in crate::engine::media_transport::rtc::worker) fn remove_source_route(
-    state: &mut PacketLoopState,
-    src_media: TransportMediaId,
-) {
+pub fn remove_source_route(state: &mut PacketLoopState, src_media: TransportMediaId) {
     let Some(route_entry) = state.routes.take_route(src_media) else {
         return;
     };
@@ -286,7 +279,7 @@ pub(super) fn worker_set_consumer_pkt_gates(
 }
 
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) fn worker_set_consumer_pkt_gates_for_bench(
+pub fn worker_set_consumer_pkt_gates_for_bench(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
     updates: Vec<ConsumerPacketGateCommand>,
@@ -385,7 +378,7 @@ fn update_consumer_route(
 /// returns `InvalidInput` when the media id exists but is not owned by
 /// `src_key` as a producer
 /// returns `TransportUnavailable` when the media id is not registered
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) fn ensure_local_producer_mid(
+pub fn ensure_local_producer_mid(
     state: &PacketLoopState,
     src_key: &TransportSessionKey,
     src_media: TransportMediaId,

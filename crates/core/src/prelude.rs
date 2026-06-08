@@ -1,9 +1,3 @@
-//! Application-facing media-core imports.
-//!
-//! This is the supported front door for configuration, sessions, negotiation,
-//! source intent and caller-facing outcomes. Concrete room, diagnostics and
-//! transport integration remain under [`crate::server`].
-
 pub use crate::{
     Bitrate, ConnectionId, RoomInstanceId,
     engine::{
@@ -22,13 +16,8 @@ pub use crate::{
         RoomWorkerPolicy, RoutingOptions, RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags,
         SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
     },
-    room::{
-        MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
-        RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
-        TransportEffectOutcome, UnpublishOutcome,
-    },
     sfu::{
-        InitialOffer, MediaNegotiation, MediaPresence, MediaPublication, MediaSession,
-        MediaSubscription, NegotiationOffer, SfuCore, SfuCoreError, UploadEncoding, UploadSlot,
+        MediaSession, NegotiationOffer, SessionError, SessionEvent, SfuCore, SfuCoreError,
+        UploadEncoding, UploadSlot,
     },
 };

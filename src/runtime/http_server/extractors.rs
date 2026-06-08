@@ -11,7 +11,7 @@ use crate::runtime::{
     DiagnosticsStore, MediaTransport, RuntimeMetrics, RuntimeState,
     auth::{self, HttpDisconnectClaims, HttpRoomClaims},
     http_server::contract::CreateRoomQuery,
-    request_origin::{RequestOrigin, ResolvedRequestOrigin},
+    request_origin::RequestOrigin,
     room::{RoomConfig, RoomManager},
 };
 
@@ -76,8 +76,8 @@ impl FromRequestParts<RuntimeState> for VerifiedRoomRequest {
         parts: &mut Parts,
         state: &RuntimeState,
     ) -> Result<Self, Self::Rejection> {
-        let origin = match ResolvedRequestOrigin::from_request_parts(parts, state).await {
-            Ok(ResolvedRequestOrigin(origin)) => origin,
+        let origin = match RequestOrigin::from_request_parts(parts, state).await {
+            Ok(origin) => origin,
             Err(error) => match error {},
         };
         let Query(query) = Query::<CreateRoomQuery>::from_request_parts(parts, state)

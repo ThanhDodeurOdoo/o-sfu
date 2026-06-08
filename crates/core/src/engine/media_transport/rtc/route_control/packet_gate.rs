@@ -26,7 +26,7 @@ use str0m::media::Rid;
 /// by the time a gate reaches this file, "selected thumbnail quality" or
 /// "active speaker audio policy" has already been projected into layer facts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(in crate::engine::media_transport) enum PacketLayerGate {
+pub enum PacketLayerGate {
     /// allow every packet layer for this route
     #[default]
     Open,
@@ -51,7 +51,7 @@ pub(in crate::engine::media_transport) enum PacketLayerGate {
 /// this lets route control express sources that have temporal layering without
 /// simulcast rid separation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::media_transport) struct PacketOperatingPointGate {
+pub struct PacketOperatingPointGate {
     /// optional rid restriction for the selected operating point
     rid: Option<Rid>,
     /// highest temporal layer id that may pass through the gate
@@ -128,10 +128,7 @@ impl PacketLayerGate {
     ///
     /// the packet loop calls this on the forwarding hot path
     /// it must remain a pure metadata predicate with no source-state mutation
-    pub(in crate::engine::media_transport::rtc) fn permits(
-        &self,
-        metadata: PacketLayerMetadata,
-    ) -> bool {
+    pub fn permits(&self, metadata: PacketLayerMetadata) -> bool {
         match self {
             Self::Open => true,
             Self::Block => false,
@@ -148,7 +145,7 @@ impl PacketLayerGate {
 /// temporal-layer metadata comes from frame-marking state when the packet
 /// carries it
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(in crate::engine::media_transport::rtc) struct PacketLayerMetadata {
+pub struct PacketLayerMetadata {
     /// resolved rid for this packet when one is known
     rid: Option<Rid>,
     /// temporal layer id carried by frame-marking metadata when present
@@ -183,7 +180,7 @@ impl PacketLayerMetadata {
 /// destination-level gates still apply later and perform the final narrowing
 ///
 /// returns `None` when no gate was installed by any caller
-pub(in crate::engine::media_transport::rtc) fn aggregate_packet_gates<'a>(
+pub fn aggregate_packet_gates<'a>(
     packet_gates: impl IntoIterator<Item = &'a PacketLayerGate>,
 ) -> Option<PacketLayerGate> {
     let mut aggregate = None;
@@ -204,7 +201,7 @@ pub(in crate::engine::media_transport::rtc) fn aggregate_packet_gates<'a>(
 /// `None` means "no gate installed" and acts as the identity value
 /// this is used to apply source-level restrictions such as transport audio
 /// policy after downstream gates have already been widened into one source gate
-pub(in crate::engine::media_transport::rtc) fn intersect_packet_gates(
+pub fn intersect_packet_gates(
     first: Option<PacketLayerGate>,
     second: Option<PacketLayerGate>,
 ) -> Option<PacketLayerGate> {
@@ -335,84 +332,5 @@ fn intersect_operating_points(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        PacketLayerGate, PacketLayerMetadata, PacketOperatingPointGate, aggregate_packet_gates,
-    };
-
-    #[test]
-    fn packet_gate_only_forwards_the_selected_rid() {
-        let gate = PacketLayerGate::Rid("hi".into());
-
-        assert!(gate.permits(PacketLayerMetadata::new(Some("hi".into()), None)));
-        assert!(!gate.permits(PacketLayerMetadata::new(Some("lo".into()), None)));
-        assert!(!gate.permits(PacketLayerMetadata::default()));
-    }
-
-    #[test]
-    fn packet_gate_forwards_only_the_selected_operating_point() {
-        let gate =
-            PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1));
-
-        assert!(gate.permits(PacketLayerMetadata::new(Some("hi".into()), Some(1))));
-        assert!(!gate.permits(PacketLayerMetadata::new(Some("hi".into()), Some(2))));
-        assert!(!gate.permits(PacketLayerMetadata::new(Some("lo".into()), Some(1))));
-        assert!(!gate.permits(PacketLayerMetadata::new(Some("hi".into()), None)));
-    }
-
-    #[test]
-    fn aggregate_packet_gates_prefers_a_shared_selected_rid() {
-        assert_eq!(
-            aggregate_packet_gates([
-                &PacketLayerGate::Rid("hi".into()),
-                &PacketLayerGate::Rid("hi".into()),
-                &PacketLayerGate::Block,
-            ]),
-            Some(PacketLayerGate::Rid("hi".into()))
-        );
-    }
-
-    #[test]
-    fn aggregate_packet_gates_reopens_when_routes_disagree() {
-        assert_eq!(
-            aggregate_packet_gates([
-                &PacketLayerGate::Rid("hi".into()),
-                &PacketLayerGate::Rid("lo".into()),
-            ]),
-            Some(PacketLayerGate::Open)
-        );
-        assert_eq!(
-            aggregate_packet_gates([&PacketLayerGate::Rid("hi".into()), &PacketLayerGate::Open]),
-            Some(PacketLayerGate::Open)
-        );
-    }
-
-    #[test]
-    fn aggregate_packet_gates_widens_shared_operating_points() {
-        assert_eq!(
-            aggregate_packet_gates([
-                &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-                    Some("hi".into()),
-                    0,
-                )),
-                &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-                    Some("hi".into()),
-                    2,
-                )),
-            ]),
-            Some(PacketLayerGate::OperatingPoint(
-                PacketOperatingPointGate::new(Some("hi".into()), 2)
-            ))
-        );
-        assert_eq!(
-            aggregate_packet_gates([
-                &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-                    Some("hi".into()),
-                    1,
-                )),
-                &PacketLayerGate::Rid("hi".into()),
-            ]),
-            Some(PacketLayerGate::Rid("hi".into()))
-        );
-    }
-}
+#[path = "TESTS/packet_gate.rs"]
+mod tests;

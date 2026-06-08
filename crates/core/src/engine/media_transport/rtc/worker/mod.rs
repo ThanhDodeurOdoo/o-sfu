@@ -35,6 +35,7 @@ mod handlers;
 mod lifecycle;
 
 #[cfg(any(test, feature = "testing-transport"))]
+#[path = "TESTS/support.rs"]
 mod test_support;
 
 use std::{
@@ -48,7 +49,7 @@ use std::{
 };
 
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) use handlers::worker_set_consumer_pkt_gates_for_bench;
+pub use handlers::worker_set_consumer_pkt_gates_for_bench;
 pub(super) use handlers::{
     KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_rid_ready,
     drain_due_rid_kf_refreshes, handle_worker_command, request_kf_for_target,
@@ -204,7 +205,7 @@ impl RtcWorker {
 
 impl RtcWorker {
     #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(in crate::engine::media_transport::rtc) async fn create_initial_session_offer(
+    pub async fn create_initial_session_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -216,7 +217,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn create_session_renegotiation_offer(
+    pub async fn create_session_renegotiation_offer(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
@@ -230,7 +231,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn apply_session_answer(
+    pub async fn apply_session_answer(
         &self,
         session_key: &TransportSessionKey,
         answer_sdp: &str,
@@ -246,7 +247,7 @@ impl RtcWorker {
 
 impl RtcWorker {
     #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(in crate::engine::media_transport::rtc) async fn close_session(
+    pub async fn close_session(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<CloseSessionState, TransportAdapterError> {
@@ -263,7 +264,7 @@ impl RtcWorker {
 
 impl RtcWorker {
     #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(in crate::engine::media_transport::rtc) async fn remove_media(
+    pub async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -277,7 +278,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport) async fn negotiated_producer_parameters(
+    pub async fn negotiated_producer_parameters(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -293,7 +294,7 @@ impl RtcWorker {
     }
 
     #[cfg(any(test, feature = "internal-benchmarks"))]
-    pub(in crate::engine::media_transport::rtc) async fn add_recv_media(
+    pub async fn add_recv_media(
         &self,
         session_key: &TransportSessionKey,
         media_kind: MediaKind,
@@ -309,7 +310,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn add_send_media(
+    pub async fn add_send_media(
         &self,
         consumer_key: &TransportSessionKey,
         media_kind: MediaKind,
@@ -339,7 +340,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn set_producer_active(
+    pub async fn set_producer_active(
         &self,
         source: &TransportSourceKey,
         active: bool,
@@ -352,7 +353,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn set_consumer_active(
+    pub async fn set_consumer_active(
         &self,
         route: &TransportConsumerRoute,
         active: bool,
@@ -365,7 +366,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn set_consumer_pkt_gate(
+    pub async fn set_consumer_pkt_gate(
         &self,
         route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
@@ -378,7 +379,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn activate_relay_route(
+    pub async fn activate_relay_route(
         &self,
         source: &TransportSourceKey,
         target: &Self,
@@ -388,7 +389,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn deactivate_relay_route(
+    pub async fn deactivate_relay_route(
         &self,
         src_media: TransportMediaId,
         target: &Self,
@@ -398,7 +399,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn apply_relay_target_activity(
+    pub async fn apply_relay_target_activity(
         &self,
         source: &TransportSourceKey,
         target: &Self,
@@ -409,7 +410,7 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::media_transport::rtc) async fn set_receiver_bwe_targets<'a>(
+    pub async fn set_receiver_bwe_targets<'a>(
         &self,
         updates: impl IntoIterator<Item = &'a ReceiverBweTargetUpdate>,
     ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
@@ -444,7 +445,7 @@ impl RtcWorker {
         ))
     }
 
-    pub(in crate::engine::media_transport) fn relay_install_request(
+    pub fn relay_install_request(
         &self,
         source: TransportSourceKey,
     ) -> Result<RouteControlRequest, TransportAdapterError> {
@@ -455,17 +456,14 @@ impl RtcWorker {
         })
     }
 
-    pub(in crate::engine::media_transport) fn relay_release_request(
-        &self,
-        src_media: TransportMediaId,
-    ) -> RouteControlRequest {
+    pub fn relay_release_request(&self, src_media: TransportMediaId) -> RouteControlRequest {
         RouteControlRequest::RemoveRelayTarget {
             src_media,
             target_id: self.relay_target_id,
         }
     }
 
-    pub(in crate::engine::media_transport) fn relay_activity_request(
+    pub fn relay_activity_request(
         &self,
         source: TransportSourceKey,
         active: bool,

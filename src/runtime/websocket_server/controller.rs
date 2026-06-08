@@ -14,7 +14,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use tracing::{Instrument, Span, field, info, warn};
+use tracing::{Instrument, Span, field, warn};
 
 use super::{
     admission::{PreAuthWebSocketAdmissionRejection, PreAuthWebSocketPermit},
@@ -26,7 +26,7 @@ use crate::{
     core::prelude::SfuCore,
     runtime::{
         MediaTransport, RuntimeMetrics, RuntimeState,
-        request_origin::ResolvedRequestOrigin,
+        request_origin::RequestOrigin,
         room::RoomManager,
         telemetry::{
             self,
@@ -62,7 +62,7 @@ impl FromRef<RuntimeState> for WebSocketServices {
 
 pub(crate) async fn upgrade(
     State(services): State<WebSocketServices>,
-    ResolvedRequestOrigin(origin): ResolvedRequestOrigin,
+    origin: RequestOrigin,
     websocket: WebSocketUpgrade,
 ) -> Response {
     let remote_address = Arc::<str>::from(origin.remote_address);
@@ -121,11 +121,6 @@ async fn handle_socket(
             field::display(remote_address.as_ref()),
         );
         services.metrics.record_ws_connection_accepted();
-        info!(
-            event = telemetry_event::WS_CONNECTION_ACCEPTED,
-            remote_address = remote_address.as_ref(),
-            "accepted websocket connection"
-        );
         let handshake_span = telemetry::ws_handshake_span();
         handshake_span.record(
             telemetry_field::REMOTE_ADDRESS,

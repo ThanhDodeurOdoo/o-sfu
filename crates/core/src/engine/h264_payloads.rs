@@ -6,7 +6,7 @@
 //! forwarding targets
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine) struct H264PayloadSpec {
+pub struct H264PayloadSpec {
     payload_type: u8,
     packetization_mode: H264PacketizationMode,
     profile_level_id: u32,
@@ -44,7 +44,7 @@ impl H264PayloadSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine) enum H264PacketizationMode {
+pub enum H264PacketizationMode {
     SingleNalUnit,
     NonInterleaved,
 }
@@ -62,7 +62,7 @@ impl H264PacketizationMode {
     }
 }
 
-pub(in crate::engine) const H264_PAYLOAD_SPECS: &[H264PayloadSpec] = &[
+pub const H264_PAYLOAD_SPECS: &[H264PayloadSpec] = &[
     H264PayloadSpec::new(127, H264PacketizationMode::NonInterleaved, 0x0042_001f),
     H264PayloadSpec::new(125, H264PacketizationMode::SingleNalUnit, 0x0042_001f),
     H264PayloadSpec::new(108, H264PacketizationMode::NonInterleaved, 0x0042_e01f),

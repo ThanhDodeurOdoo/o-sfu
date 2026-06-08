@@ -292,4 +292,5 @@ fn project_bundle_update(event: ProtocolEvent) -> Option<BundleUpdate> {
 }
 
 #[cfg(test)]
+#[path = "host_bridge/TESTS/mod.rs"]
 mod tests;

@@ -1,20 +1,24 @@
+use std::slice;
+
 use o_sfu_router::{MediaKind, MediaStream as RouterRtpParameters};
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
-use super::batch::{MediaCountDelta, execute_relay_route_effects};
+use super::{
+    batch::RoomGaugeDelta, consumer_route::ConsumerRouteEffect, policy::RoomPolicyPlan,
+    transport::execute_relay_route_effects,
+};
 use crate::engine::{
     diagnostics::DiagnosticsEventData,
-    media_transport::{
-        ConsumerActivity, MediaTransport, TransportConsumerRoute, TransportSourceKey,
-    },
+    media_transport::{ConsumerActivity, MediaTransport, TransportConsumerRoute},
     room::{
-        Room, SourcePolicyEvent, UserOutbound,
+        Room, UserOutbound,
         cleanup::TransportCleanupOperation,
         media_graph::{
             ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
         },
     },
+    source_model::UserStreamId,
 };
 
 #[derive(Debug)]
@@ -32,49 +36,53 @@ impl ConsumerSetupEffect {
         self,
         room: &Room,
         media_transport: &MediaTransport,
-    ) -> Option<DiagnosticsEventData> {
-        let relays = self.setup.transport_input().relays;
+    ) -> ConsumerSetupEffectOutcome {
+        let relays = &self.setup.relays;
         if !execute_relay_route_effects(room, media_transport, relays).await {
-            release_failed_setup(room, self.setup, media_transport).await;
-            return None;
+            return release_failed_setup(room, self.setup, media_transport).await;
         }
-        let input = self.setup.transport_input();
-        let target = input.target.clone();
-        let activity = ConsumerActivity::from_active(input.active);
+        let target = self.setup.target.clone();
+        let activity =
+            ConsumerActivity::from_active(self.setup.reservation.selection().delivery_active());
         let Some((route, mid)) = declare_consumer(
             &target,
-            input.rtp,
+            &self.setup.track.rtp,
             activity,
             self.origin,
-            room,
             media_transport,
         )
         .await
         else {
-            release_failed_setup(room, self.setup, media_transport).await;
-            return None;
+            return release_failed_setup(room, self.setup, media_transport).await;
         };
-        let (before, outbound, after) = {
+        let (before, after, outcome) = {
             let mut state = room.state.write().await;
-            let before = state.media_counts();
-            let outbound = self
-                .setup
-                .commit(&mut state, route.consumer_transport_media_id(), mid);
-            let after = state.media_counts();
+            let commit = state.commit_pending_consumer_setup(
+                self.setup,
+                route.consumer_transport_media_id(),
+                mid,
+            );
             drop(state);
-            (before, outbound, after)
+            commit
         };
-        finish(
+        finish_setup(
             room,
             media_transport,
-            &target,
+            target,
             self.origin,
             route,
-            MediaCountDelta::new(before, after),
-            outbound,
+            RoomGaugeDelta::media(before, after),
+            outcome,
         )
         .await
     }
+}
+
+#[derive(Debug)]
+pub(super) struct ConsumerSetupEffectOutcome {
+    pub(super) gauge: RoomGaugeDelta,
+    pub(super) diagnostics: Option<DiagnosticsEventData>,
+    pub(super) policy: RoomPolicyPlan,
 }
 
 async fn declare_consumer(
@@ -82,41 +90,14 @@ async fn declare_consumer(
     rtp: &RouterRtpParameters,
     activity: ConsumerActivity,
     origin: ConsumerSetupOrigin,
-    room: &Room,
     media_transport: &MediaTransport,
 ) -> Option<(TransportConsumerRoute, Option<String>)> {
-    let (consumer_session, producer_session) = {
-        let state = room.state.read().await;
-        (
-            state.committed_transport_user_key(
-                target.consumer_user_id(),
-                target.consumer_connection_id(),
-            ),
-            state.committed_transport_user_key(
-                target.producer_user_id(),
-                target.producer_connection_id(),
-            ),
-        )
-    };
-    let Some((consumer_session, producer_session)) = consumer_session.zip(producer_session) else {
-        warn!(
-            consumer_user_id = ?target.consumer_user_id(),
-            consumer_connection_id = ?target.consumer_connection_id(),
-            producer_user_id = ?target.producer_user_id(),
-            producer_connection_id = ?target.producer_connection_id(),
-            source_transport_media_id = ?target.transport_media_id(),
-            consumer_mid = rtp.mid(),
-            ?origin,
-            "skipping consumer setup because routing no longer owns the target sessions"
-        );
-        return None;
-    };
     match media_transport
         .consume_media(
-            &consumer_session,
-            target.media_kind(),
-            &producer_session,
-            target.transport_media_id(),
+            &target.user_session,
+            target.kind,
+            &target.producer_session,
+            target.media,
             rtp,
             activity,
         )
@@ -124,24 +105,17 @@ async fn declare_consumer(
     {
         Ok(consumer_media) => {
             let mid = media_transport
-                .transport_media_mid(&consumer_session, consumer_media)
+                .transport_media_mid(&target.user_session, consumer_media)
                 .await;
-            Some((
-                TransportConsumerRoute::new(
-                    consumer_session,
-                    consumer_media,
-                    TransportSourceKey::new(producer_session, target.transport_media_id()),
-                ),
-                mid,
-            ))
+            Some((target.transport_consumer_route(consumer_media), mid))
         }
         Err(error) => {
             warn!(
-                consumer_user_id = ?target.consumer_user_id(),
-                consumer_connection_id = ?target.consumer_connection_id(),
-                producer_user_id = ?target.producer_user_id(),
-                producer_connection_id = ?target.producer_connection_id(),
-                source_transport_media_id = ?target.transport_media_id(),
+                consumer_user_id = ?target.user,
+                consumer_connection_id = ?target.connection,
+                producer_user_id = ?target.producer_user,
+                producer_connection_id = ?target.producer_connection,
+                source_transport_media_id = ?target.media,
                 error = ?error,
                 consumer_mid = rtp.mid(),
                 ?origin,
@@ -152,93 +126,94 @@ async fn declare_consumer(
     }
 }
 
-async fn finish(
+async fn finish_setup(
     room: &Room,
     media_transport: &MediaTransport,
-    target: &ConsumerSetupTarget,
+    target: ConsumerSetupTarget,
     origin: ConsumerSetupOrigin,
     route: TransportConsumerRoute,
-    delta: MediaCountDelta,
+    gauge: RoomGaugeDelta,
     outcome: ConsumerSetupOutcome,
-) -> Option<DiagnosticsEventData> {
-    let commit = match outcome {
-        ConsumerSetupOutcome::Committed(commit) => commit,
-        ConsumerSetupOutcome::Released(relays) => {
-            delta.record(room);
-            execute_relay_route_effects(room, media_transport, &relays).await;
-            room.handle_source_policy_event(
-                SourcePolicyEvent::FanoutPressureChanged,
-                Some(media_transport),
-            )
-            .await;
-            let cleanup = [TransportCleanupOperation::RemoveMedia {
-                session_key: route.consumer_session_key().clone(),
-                connection_id: target.consumer_connection_id(),
-                transport_media_id: route.consumer_transport_media_id(),
-            }];
-            room.execute_transport_cleanup_operations(media_transport, &cleanup)
-                .await;
-            return None;
+) -> ConsumerSetupEffectOutcome {
+    match outcome {
+        ConsumerSetupOutcome::Committed {
+            sender,
+            track,
+            transport_activity_update,
+        } => {
+            if let Some(active) = transport_activity_update {
+                sync_activity(media_transport, &route, &target.stream, target.kind, active).await;
+            }
+            let diagnostics = setup_diagnostics(room.uuid(), &target, origin, &route);
+            let _ = sender.send(UserOutbound::SetupRemoteTrack(Box::new(track)));
+            ConsumerSetupEffectOutcome {
+                gauge,
+                diagnostics: Some(diagnostics),
+                policy: RoomPolicyPlan::default(),
+            }
         }
-    };
-    delta.record(room);
-    if let Some(active) = commit.transport_activity_update {
-        sync_activity(media_transport, target, &route, active).await;
+        ConsumerSetupOutcome::Released(relays) => {
+            execute_relay_route_effects(room, media_transport, &relays).await;
+            let cleanup = TransportCleanupOperation::RemoveMedia {
+                session_key: route.consumer_session_key().clone(),
+                connection_id: target.connection,
+                transport_media_id: route.consumer_transport_media_id(),
+            };
+            room.execute_transport_cleanup_operations(media_transport, slice::from_ref(&cleanup))
+                .await;
+            ConsumerSetupEffectOutcome {
+                gauge,
+                diagnostics: None,
+                policy: fanout_pressure_plan(),
+            }
+        }
     }
-    let _ = commit.sender.send(UserOutbound::Request(Box::new(
-        commit.track.into_room_event_request(),
-    )));
-    Some(
-        DiagnosticsEventData::for_user(
-            room.uuid(),
-            target.consumer_user_id(),
-            telemetry_event::SUBSCRIBE_SUCCEEDED,
-        )
-        .with_connection_id(target.consumer_connection_id().as_u64())
+}
+
+fn setup_diagnostics(
+    room_id: &str,
+    target: &ConsumerSetupTarget,
+    origin: ConsumerSetupOrigin,
+    route: &TransportConsumerRoute,
+) -> DiagnosticsEventData {
+    DiagnosticsEventData::for_user(room_id, &target.user, telemetry_event::SUBSCRIBE_SUCCEEDED)
+        .with_connection_id(target.connection.as_u64())
         .with_media_worker_id(route.consumer_session_key().media_worker_id().as_usize())
         .with_transport_media_id(route.consumer_transport_media_id().as_u64())
         .insert_field(
             "producer_user_id",
-            serde_json::to_value(target.producer_user_id()).unwrap_or(serde_json::Value::Null),
+            serde_json::to_value(&target.producer_user).unwrap_or(serde_json::Value::Null),
         )
-        .insert_field(
-            "source_transport_media_id",
-            target.transport_media_id().as_u64(),
-        )
-        .insert_field("stream_id", target.stream_id().to_string())
-        .insert_field("origin", origin.as_diagnostic_str()),
-    )
+        .insert_field("source_transport_media_id", target.media.as_u64())
+        .insert_field("stream_id", target.stream.to_string())
+        .insert_field("origin", origin.as_diagnostic_str())
 }
 
 async fn sync_activity(
     media_transport: &MediaTransport,
-    target: &ConsumerSetupTarget,
     route: &TransportConsumerRoute,
+    stream: &UserStreamId,
+    kind: MediaKind,
     active: bool,
 ) {
-    if media_transport
-        .set_consumer_active(route, ConsumerActivity::from_active(active))
-        .await
-        .is_err()
-    {
+    let outcome = ConsumerRouteEffect::new(route)
+        .with_activity(active)
+        .with_keyframe(active && kind == MediaKind::Video)
+        .execute(media_transport)
+        .await;
+    if outcome.activity_failed {
         warn!(
             ?route,
-            stream_id = %target.stream_id(),
+            stream_id = %stream,
             active,
             "media transport failed to correct in-flight consumer setup activity"
         );
         return;
     }
-    if active
-        && target.media_kind() == MediaKind::Video
-        && media_transport
-            .request_consumer_keyframe(route)
-            .await
-            .is_err()
-    {
+    if outcome.keyframe_failed {
         warn!(
             ?route,
-            stream_id = %target.stream_id(),
+            stream_id = %stream,
             "media transport failed to request keyframe after consumer setup activity correction"
         );
     }
@@ -248,20 +223,23 @@ async fn release_failed_setup(
     room: &Room,
     setup: PendingConsumerSetup,
     media_transport: &MediaTransport,
-) {
+) -> ConsumerSetupEffectOutcome {
     let (before, after, relays) = {
         let mut state = room.state.write().await;
-        let before = state.media_counts();
-        let relays = setup.release(&mut state);
-        let after = state.media_counts();
+        let (before, after, relays) = state.release_pending_consumer_setup(setup);
         drop(state);
         (before, after, relays)
     };
-    MediaCountDelta::new(before, after).record(room);
     execute_relay_route_effects(room, media_transport, &relays).await;
-    room.handle_source_policy_event(
-        SourcePolicyEvent::FanoutPressureChanged,
-        Some(media_transport),
-    )
-    .await;
+    ConsumerSetupEffectOutcome {
+        gauge: RoomGaugeDelta::media(before, after),
+        diagnostics: None,
+        policy: fanout_pressure_plan(),
+    }
+}
+
+fn fanout_pressure_plan() -> RoomPolicyPlan {
+    let mut policy = RoomPolicyPlan::default();
+    policy.fanout_pressure_changed();
+    policy
 }

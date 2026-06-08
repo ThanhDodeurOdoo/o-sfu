@@ -90,6 +90,9 @@
 //!   diagnostics, source-policy wakeups and metrics.
 //! - [`buffers`] owns the reusable allocation surface used by the whole turn.
 
+#[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
 mod buffers;
 mod event_observation;
 mod forward_flush;
@@ -99,19 +102,15 @@ mod keyframe_requests;
 mod lag;
 mod loop_driver;
 mod session_drain;
-#[cfg(test)]
-mod tests;
 mod udp;
 
 #[cfg(test)]
 pub use event_observation::{transport_health_from_event, transport_ice_state};
 
 #[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
-pub(in crate::engine::media_transport::rtc) use self::ingress_routing::{
-    PacketRouteDatagram, route_pkt_to_session_at,
-};
+pub use self::ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at};
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) use self::{
+pub use self::{
     buffers::PacketLoopBuffers,
     forward_flush::{
         drain_relay_packets, flush_forward_routes, record_incoming_stats_for_benchmark,
@@ -121,7 +120,7 @@ pub(in crate::engine::media_transport::rtc) use self::{
     session_drain::{SessionDrainContext, drain_ready_sessions},
     udp::UdpIngressBenchHarness,
 };
-pub(in crate::engine::media_transport::rtc) use self::{
+pub use self::{
     input::PacketLoopInputReceivers,
     lag::PacketLoopLagSnapshot,
     loop_driver::{PacketLoopConfig, run_packet_loop},

@@ -1,6 +1,7 @@
-//! per-route selector choice for receiver video policy
-
-use super::input::{ReceiverVideoRouteInput, SelectableRouteEncodings};
+use super::{
+    input::{ReceiverVideoRouteInput, SelectableRouteEncodings},
+    selection::{AdaptationCounts, ReceiverRouteSelection},
+};
 use crate::{
     Bitrate,
     engine::source_model::{
@@ -12,48 +13,7 @@ use crate::{
 const MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD: usize = 3;
 const THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ConsumerAdaptationPlan {
-    pub selector: SourceSelector,
-    pub pressure_observations: u8,
-    pub upgrade_observations: u8,
-    pub request_keyframe: bool,
-}
-
-impl ConsumerAdaptationPlan {
-    pub(super) const fn confirmed(selector: SourceSelector, request_keyframe: bool) -> Self {
-        Self {
-            selector,
-            pressure_observations: 0,
-            upgrade_observations: 0,
-            request_keyframe,
-        }
-    }
-
-    const fn hold(
-        selector: SourceSelector,
-        pressure_observations: u8,
-        upgrade_observations: u8,
-    ) -> Self {
-        Self {
-            selector,
-            pressure_observations,
-            upgrade_observations,
-            request_keyframe: false,
-        }
-    }
-
-    pub(super) const fn from_current(current: ConsumerSourceSelection) -> Self {
-        Self {
-            selector: current.selector(),
-            pressure_observations: current.pressure_observations(),
-            upgrade_observations: current.upgrade_observations(),
-            request_keyframe: false,
-        }
-    }
-}
-
-pub(super) fn route_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ConsumerAdaptationPlan> {
+pub(super) fn route_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
     match route.adaptation_policy() {
         SourceAdaptationPolicy::ReadableDetail => {
             readable_detail_plan(route.encodings(), route.current_selection)
@@ -62,8 +22,12 @@ pub(super) fn route_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<Consumer
         SourceAdaptationPolicy::None => None,
     }
     .or_else(|| {
-        (route.adaptation_policy() != SourceAdaptationPolicy::None)
-            .then(|| ConsumerAdaptationPlan::from_current(route.current_selection))
+        (route.adaptation_policy() != SourceAdaptationPolicy::None).then(|| {
+            adaptation_hold(
+                route.current_selection,
+                AdaptationCounts::from_current(route.current_selection),
+            )
+        })
     })
 }
 
@@ -108,7 +72,7 @@ pub(super) fn cheapest_useful_selector(
         })
 }
 
-fn scalable_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ConsumerAdaptationPlan> {
+fn scalable_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
     let encodings = route.encodings();
     if encodings.len() < 2 {
         return None;
@@ -126,55 +90,53 @@ fn scalable_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ConsumerAdaptati
     let selector_changed = target_selector != current.selector();
     let request_keyframe = selector_changed;
     if target_index == current_index || route.receiver_bandwidth.is_none() {
-        return Some(ConsumerAdaptationPlan::confirmed(
-            target_selector,
-            request_keyframe,
-        ));
+        return Some(adaptation_send(target_selector, request_keyframe));
     }
     if target_index < current_index {
-        let pressure_observations = current
-            .pressure_observations()
-            .saturating_add(1)
-            .min(super::hysteresis::DOWNSWITCH_PRESSURE_OBSERVATIONS);
-        if pressure_observations >= super::hysteresis::DOWNSWITCH_PRESSURE_OBSERVATIONS {
-            return Some(ConsumerAdaptationPlan::confirmed(
-                target_selector,
-                request_keyframe,
-            ));
+        let counts = AdaptationCounts::next_pressure(
+            current,
+            super::hysteresis::DOWNSWITCH_PRESSURE_OBSERVATIONS,
+        );
+        if counts.pressure >= super::hysteresis::DOWNSWITCH_PRESSURE_OBSERVATIONS {
+            return Some(adaptation_send(target_selector, request_keyframe));
         }
-        return Some(ConsumerAdaptationPlan::hold(
-            current.selector(),
-            pressure_observations,
-            0,
-        ));
+        return Some(adaptation_hold(current, counts));
     }
-    let upgrade_observations = current
-        .upgrade_observations()
-        .saturating_add(1)
-        .min(super::hysteresis::UPSWITCH_STABLE_OBSERVATIONS);
-    if upgrade_observations >= super::hysteresis::UPSWITCH_STABLE_OBSERVATIONS {
-        return Some(ConsumerAdaptationPlan::confirmed(target_selector, true));
+    let counts =
+        AdaptationCounts::next_upgrade(current, super::hysteresis::UPSWITCH_STABLE_OBSERVATIONS);
+    if counts.upgrade >= super::hysteresis::UPSWITCH_STABLE_OBSERVATIONS {
+        return Some(adaptation_send(target_selector, true));
     }
-    Some(ConsumerAdaptationPlan::hold(
-        current.selector(),
-        0,
-        upgrade_observations,
-    ))
+    Some(adaptation_hold(current, counts))
 }
 
 fn readable_detail_plan(
     encodings: SelectableRouteEncodings<'_>,
     current: ConsumerSourceSelection,
-) -> Option<ConsumerAdaptationPlan> {
+) -> Option<ReceiverRouteSelection> {
     if encodings.len() < 2 {
         return None;
     }
     let target_index = encodings.len().saturating_sub(1);
     let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
-    Some(ConsumerAdaptationPlan::confirmed(
+    Some(adaptation_send(
         target_selector,
         target_selector != current.selector(),
     ))
+}
+
+const fn adaptation_send(
+    selector: SourceSelector,
+    request_keyframe: bool,
+) -> ReceiverRouteSelection {
+    ReceiverRouteSelection::send(selector, AdaptationCounts::reset(), request_keyframe)
+}
+
+const fn adaptation_hold(
+    current: ConsumerSourceSelection,
+    counts: AdaptationCounts,
+) -> ReceiverRouteSelection {
+    ReceiverRouteSelection::send(current.selector(), counts, false)
 }
 
 fn desired_encoding_index(

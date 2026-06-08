@@ -31,36 +31,24 @@ use crate::{
     },
 };
 
-/// Core mutable state for a single SFU room (room).
-///
-/// Owns room-level user state and the room media graph. Every mutation returns
-/// an `*Outcome` value that carries deferred side effects such as fanout
-/// messages or kicked senders. The caller is responsible for calling `.emit()`
-/// on outcomes after releasing any lock on this state so the critical section
-/// stays pure and non-blocking.
-///
-/// The two-phase patterns (`prepare_*` / `commit_*`) allow async transport work
-/// to happen between phases without holding the state lock.
 #[derive(Debug)]
-pub(in crate::engine::room) struct RoomState {
+pub struct RoomState {
     pub(super) admission_policy: RoomAdmissionPolicy,
-    pub(in crate::engine::room) media_limits: RoomMediaLimits,
-    pub(in crate::engine::room) users: BTreeMap<UserId, ActiveUser>,
-    /// Monotonically increasing: each join, including re-joins, gets a fresh id
-    /// so stale async callbacks from a previous connection are rejected.
+    pub media_limits: RoomMediaLimits,
+    pub users: BTreeMap<UserId, ActiveUser>,
+    /// rejects stale async callbacks from previous connections
     pub(super) next_connection_id: u64,
-    pub(in crate::engine::room) next_source_id: u64,
-    pub(in crate::engine::room) next_source_encoding_id: u64,
-    pub(in crate::engine::room) next_producer_id: u64,
-    pub(in crate::engine::room) next_consumer_id: u64,
+    pub next_source_id: u64,
+    pub next_source_encoding_id: u64,
+    pub next_producer_id: u64,
+    pub next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
-    pub(in crate::engine::room) media: RoomMediaGraph,
-    /// committed routing identity inside the room state lock
-    pub(in crate::engine::room) routing: RoomRoutingState,
+    pub media: RoomMediaGraph,
+    pub routing: RoomRoutingState,
 }
 
 #[derive(Debug)]
-pub(in crate::engine::room) struct ActiveUser {
+pub struct ActiveUser {
     #[allow(
         dead_code,
         reason = "stored for future user display and recording metadata"
@@ -70,12 +58,12 @@ pub(in crate::engine::room) struct ActiveUser {
     pub(super) permissions: RoomUserPermissions,
     pub(super) info: UserInfo,
     pub(super) server_featured: Option<bool>,
-    pub(in crate::engine::room) negotiation: UserNegotiation,
-    pub(in crate::engine::room) desired_source_subscriptions:
+    pub negotiation: UserNegotiation,
+    pub desired_source_subscriptions:
         BTreeMap<UserId, BTreeMap<UserStreamId, SourceSubscriptionIntent>>,
-    pub(in crate::engine::room) parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
-    pub(in crate::engine::room) connection_id: ConnectionId,
-    pub(in crate::engine::room) sender: OutboundSender,
+    pub parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
+    pub connection_id: ConnectionId,
+    pub sender: OutboundSender,
 }
 
 impl ActiveUser {
@@ -136,17 +124,6 @@ impl RoomState {
                 &RoomRouterStateFactory::new(router_event_sink),
             ),
         }
-    }
-
-    pub fn collect_user_transport_removals(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        self.media.transport_removals_for_users(departing_user_ids)
-    }
-
-    pub fn purge_user_media_state(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
-        self.media.remove_user_media(user_id)
     }
 
     pub fn user_for_connection(
@@ -210,11 +187,11 @@ impl RoomState {
         route: &ConsumerRouteTransportRef,
     ) -> TransportConsumerRoute {
         TransportConsumerRoute::new(
-            self.transport_user_key(route.consumer_user_id(), route.consumer_connection_id()),
-            route.consumer_media(),
+            self.transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
+            route.consumer_media,
             TransportSourceKey::new(
-                self.transport_user_key(route.source_user_id(), route.source_connection_id()),
-                route.source_media(),
+                self.transport_user_key(&route.source_user_id, route.source_connection_id),
+                route.source_media,
             ),
         )
     }
@@ -226,11 +203,11 @@ impl RoomState {
         removals
             .into_iter()
             .map(|removal| {
-                let connection_id = removal.connection();
+                let connection_id = removal.connection;
                 TransportCleanupOperation::RemoveMedia {
-                    session_key: self.transport_user_key(removal.user(), connection_id),
+                    session_key: self.transport_user_key(&removal.user, connection_id),
                     connection_id,
-                    transport_media_id: removal.transport_media(),
+                    transport_media_id: removal.transport_media,
                 }
             })
             .collect()
@@ -251,7 +228,7 @@ impl RoomState {
             .collect()
     }
 
-    pub(super) fn resolved_relay_route_effects_with_displaced(
+    pub fn resolved_relay_route_effects_with_displaced(
         &self,
         effects: impl IntoIterator<Item = RelayRouteEffect>,
         user_id: &UserId,
@@ -427,33 +404,25 @@ impl RoomState {
         )
     }
 
-    pub(in crate::engine::room) fn current_live_consumer_routes(
-        &self,
-    ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
+    pub fn current_live_consumer_routes(&self) -> impl Iterator<Item = ConsumerRouteView<'_>> {
         self.media.live_consumer_routes().filter(|route| {
             self.user_connection_id(&route.consumer_user_id)
                 .is_some_and(|connection_id| connection_id == route.state.consumer_connection_id)
         })
     }
 
-    pub(in crate::engine::room) fn source_policy_live_consumer_routes(
-        &self,
-    ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.current_live_consumer_routes()
-    }
-
-    pub(in crate::engine::room) fn source_policy_media_limits(&self) -> RoomMediaLimits {
+    pub fn source_policy_media_limits(&self) -> RoomMediaLimits {
         self.media_limits
     }
 
-    pub(in crate::engine::room) fn source_policy_source(
+    pub fn source_policy_source(
         &self,
         source_id: PublishedSourceId,
     ) -> Option<&PublishedSourceDescriptor> {
         self.media.source(source_id)
     }
 
-    pub(in crate::engine::room) fn source_policy_owner_has_promotable_source_in_group(
+    pub fn source_policy_owner_has_promotable_source_in_group(
         &self,
         owner_user_id: &UserId,
         group: ActiveSpeakerGroup,
@@ -462,7 +431,7 @@ impl RoomState {
             .owner_has_promotable_source_in_group(owner_user_id, group)
     }
 
-    pub(in crate::engine::room) fn source_policy_layout_preference(
+    pub fn source_policy_layout_preference(
         &self,
         consumer_user_id: &UserId,
         source_user_id: &UserId,
@@ -475,7 +444,7 @@ impl RoomState {
             .and_then(|intent| intent.layout())
     }
 
-    pub(in crate::engine::room) fn source_policy_user_featured_states(
+    pub fn source_policy_user_featured_states(
         &self,
     ) -> impl Iterator<Item = (&UserId, Option<bool>)> {
         self.users
@@ -483,7 +452,7 @@ impl RoomState {
             .map(|(user_id, user)| (user_id, user.featured()))
     }
 
-    pub(in crate::engine::room) fn update_source_policy_consumer_selection(
+    pub fn update_source_policy_consumer_selection(
         &mut self,
         route: &ConsumerRouteTransportRef,
         source_id: PublishedSourceId,
@@ -493,7 +462,7 @@ impl RoomState {
             .update_consumer_source_selection(route, source_id, update_selection);
     }
 
-    pub(in crate::engine::room) fn update_source_policy_featured_user(
+    pub fn update_source_policy_featured_user(
         &mut self,
         user_id: &UserId,
         featured: Option<bool>,

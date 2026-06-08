@@ -1,63 +1,21 @@
-//! Source policy action vocabulary.
-//!
-//! Policy planners emit source-domain updates, not transport calls. This file
-//! holds the shared effect-bound update types consumed by the post-lock source
-//! policy executor.
-
 use super::super::media_graph::ConsumerRouteTransportRef;
-use crate::{
-    Bitrate,
-    engine::{
-        ConnectionId, UserId,
-        media_transport::SourcePacketGate,
-        source_model::{
-            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
-            ReceiverVideoBudgetDiagnostics, SourceSelector,
-        },
+use crate::engine::{
+    UserId,
+    media_transport::{ReceiverBweTargetUpdate, SourcePacketGate},
+    source_model::{
+        ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
+        ReceiverVideoBudgetDiagnostics, SourceSelector,
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct ReceiverBweTargetPlan {
-    user_id: UserId,
-    connection_id: ConnectionId,
-    target: Bitrate,
-}
-
-impl ReceiverBweTargetPlan {
-    pub fn new(user_id: UserId, connection_id: ConnectionId, target: Bitrate) -> Self {
-        Self {
-            user_id,
-            connection_id,
-            target,
-        }
-    }
-
-    pub fn user_id(&self) -> &UserId {
-        &self.user_id
-    }
-
-    pub const fn connection_id(&self) -> ConnectionId {
-        self.connection_id
-    }
-
-    pub const fn target(&self) -> Bitrate {
-        self.target
-    }
-
-    pub const fn set_target(&mut self, target: Bitrate) {
-        self.target = target;
-    }
-}
-
 #[derive(Debug)]
-pub(in crate::engine::room) struct ReceiverVideoPolicyPlan {
+pub struct ReceiverVideoPolicyPlan {
     pub consumer_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
-    pub receiver_bwe_targets: Vec<ReceiverBweTargetPlan>,
+    pub receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(in crate::engine::room) struct BudgetSolverOutcomes {
+pub struct BudgetSolverOutcomes {
     bits: u8,
 }
 
@@ -105,13 +63,9 @@ impl BudgetSolverOutcomes {
     }
 }
 
-/// One receiver-side source selection that is ready for the effect boundary.
-///
-/// The update carries the transport handles and connection ids observed while
-/// planning. Commit revalidates them after async transport work so stale
-/// replacement or cleanup events cannot write selector state onto a newer route.
+/// receiver-side source selection revalidated after transport effects
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct ConsumerPacketSelectionUpdate {
+pub struct ConsumerPacketSelectionUpdate {
     pub route: ConsumerRouteTransportRef,
     pub source_id: PublishedSourceId,
     pub selector: SourceSelector,
@@ -153,28 +107,15 @@ impl ConsumerPacketSelectionUpdate {
     }
 }
 
-/// Featured state derived from active-speaker observations.
-///
-/// This lives beside the video route actions because current featured
-/// projection and quality floor both derive from the same transport
-/// active-speaker snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct FeaturedUserUpdate {
-    user_id: UserId,
-    featured: Option<bool>,
+pub struct FeaturedUserUpdate {
+    pub user_id: UserId,
+    pub featured: Option<bool>,
 }
 
 impl FeaturedUserUpdate {
     #[must_use]
     pub fn new(user_id: UserId, featured: Option<bool>) -> Self {
         Self { user_id, featured }
-    }
-
-    pub fn user_id(&self) -> &UserId {
-        &self.user_id
-    }
-
-    pub const fn featured(&self) -> Option<bool> {
-        self.featured
     }
 }

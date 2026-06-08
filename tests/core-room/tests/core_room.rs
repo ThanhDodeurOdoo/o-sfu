@@ -7,14 +7,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Result;
 use o_sfu_core::{
-    prelude::{
-        PublicationActivity, PublicationActivityOutcome, RoomWorkerPolicy, SfuCore,
-        SourceSubscriptionIntent, SubscriptionUpdateOutcome, TransportEffectOutcome,
-        UnpublishOutcome, UserStreamId,
-    },
+    prelude::{ConnectionId, RoomWorkerPolicy, SfuCore, SourceSubscriptionIntent, UserStreamId},
     server::{
         room::{
-            JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerJoinError,
+            JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager,
+            RoomManagerJoinError,
             test_support::{
                 TestSourceKind, TestSubscriptionStates, stream_id_for_source,
                 subscription_intents_from_test_states,
@@ -55,6 +52,20 @@ fn pause_audio_and_scalable_video_intents() -> SubscriptionIntents {
         scalable_video: Some(false),
         ..TestSubscriptionStates::default()
     })
+}
+
+async fn update_subscription(
+    core: &SfuCore,
+    room: &Arc<Room>,
+    subscriber_id: &UserId,
+    subscriber_connection_id: ConnectionId,
+    publisher_id: &UserId,
+    intents: &SubscriptionIntents,
+) -> bool {
+    let session = core
+        .session(room, subscriber_id, subscriber_connection_id)
+        .await;
+    session.subscribe(publisher_id, intents).await.is_ok()
 }
 
 #[tokio::test]
@@ -265,18 +276,12 @@ async fn source_fanout_pressure_clears_after_unpublish() -> Result<()> {
     let room = serve_room(&manager, "issuer-load-fanout-clear").await;
     let stream_id = seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
     let publisher_id = UserId::Integer(1);
-    let publisher_connection = user_connection_id(&room, &publisher_id).await?;
-    let core = SfuCore::new(media_transport.clone());
 
-    assert_eq!(
-        core.session(&room, &publisher_id, publisher_connection)
+    assert!(
+        room.test_api()
+            .media()
+            .unpublish_track(&publisher_id, &stream_id, &media_transport)
             .await
-            .publication()
-            .unpublish(&stream_id)
-            .await,
-        UnpublishOutcome::Unpublished {
-            cleanup: TransportEffectOutcome::Applied
-        }
     );
     join_user(&manager, &room, 3, &media_transport).await?;
 
@@ -331,25 +336,31 @@ async fn subscription_change_pauses_and_resumes_consumer_silently() -> Result<()
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert_eq!(
-        core.session(&ready.room, &subscriber_id, subscriber_connection_id)
-            .await
-            .subscription()
-            .update(&publisher_id, &pause_scalable_video_intents())
-            .await,
-        SubscriptionUpdateOutcome::Applied
+    assert!(
+        update_subscription(
+            &core,
+            &ready.room,
+            &subscriber_id,
+            subscriber_connection_id,
+            &publisher_id,
+            &pause_scalable_video_intents(),
+        )
+        .await
     );
     ready.assert_no_outbound(1)?;
     ready.assert_no_outbound(2)?;
     assert_eq!(ready.room.test_api().inspect().consumer_count().await, 1);
 
-    assert_eq!(
-        core.session(&ready.room, &subscriber_id, subscriber_connection_id)
-            .await
-            .subscription()
-            .update(&publisher_id, &resume_scalable_video_intents())
-            .await,
-        SubscriptionUpdateOutcome::Applied
+    assert!(
+        update_subscription(
+            &core,
+            &ready.room,
+            &subscriber_id,
+            subscriber_connection_id,
+            &publisher_id,
+            &resume_scalable_video_intents(),
+        )
+        .await
     );
     ready.assert_no_outbound(1)?;
     ready.assert_no_outbound(2)?;
@@ -366,13 +377,16 @@ async fn subscription_change_persists_preference_for_future_consumer_setup() -> 
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert_eq!(
-        core.session(&ready.room, &subscriber_id, subscriber_connection_id)
-            .await
-            .subscription()
-            .update(&publisher_id, &pause_audio_and_scalable_video_intents())
-            .await,
-        SubscriptionUpdateOutcome::Applied
+    assert!(
+        update_subscription(
+            &core,
+            &ready.room,
+            &subscriber_id,
+            subscriber_connection_id,
+            &publisher_id,
+            &pause_audio_and_scalable_video_intents(),
+        )
+        .await
     );
     ready.assert_no_outbound(1)?;
     ready.assert_no_outbound(2)?;
@@ -401,13 +415,16 @@ async fn subscription_change_handles_multiple_stream_types() -> Result<()> {
     let subscriber_id = UserId::Integer(2);
     let publisher_id = UserId::Integer(1);
     let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert_eq!(
-        core.session(&ready.room, &subscriber_id, subscriber_connection_id)
-            .await
-            .subscription()
-            .update(&publisher_id, &pause_audio_and_scalable_video_intents())
-            .await,
-        SubscriptionUpdateOutcome::Applied
+    assert!(
+        update_subscription(
+            &core,
+            &ready.room,
+            &subscriber_id,
+            subscriber_connection_id,
+            &publisher_id,
+            &pause_audio_and_scalable_video_intents(),
+        )
+        .await
     );
 
     ready.assert_no_outbound(1)?;
@@ -432,10 +449,6 @@ async fn publication_activity_after_source_owner_leave_is_a_noop() -> Result<()>
     let publisher_id = UserId::Integer(1);
     let publisher_connection = user_connection_id(&ready.room, &publisher_id).await?;
     let core = SfuCore::new(ready.media_transport.clone());
-    let publisher_room = Arc::clone(&ready.room);
-    let publisher_session = core
-        .session(&publisher_room, &publisher_id, publisher_connection)
-        .await;
 
     close_user(
         &ready.manager,
@@ -449,23 +462,27 @@ async fn publication_activity_after_source_owner_leave_is_a_noop() -> Result<()>
 
     let subscriber_id = UserId::Integer(2);
     let subscriber_connection = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert_eq!(
-        core.session(&ready.room, &subscriber_id, subscriber_connection)
-            .await
-            .subscription()
-            .update(&publisher_id, &pause_scalable_video_intents())
-            .await,
-        SubscriptionUpdateOutcome::Applied
+    assert!(
+        update_subscription(
+            &core,
+            &ready.room,
+            &subscriber_id,
+            subscriber_connection,
+            &publisher_id,
+            &pause_scalable_video_intents(),
+        )
+        .await
     );
     ready.assert_no_outbound(2)?;
 
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
-    assert_eq!(
-        publisher_session
-            .publication()
-            .set_activity(&stream_id, PublicationActivity::Inactive)
-            .await,
-        PublicationActivityOutcome::MissingPublication
+    assert!(
+        !ready
+            .room
+            .test_api()
+            .media()
+            .set_publication_active(&publisher_id, &stream_id, false, &ready.media_transport)
+            .await
     );
     Ok(())
 }

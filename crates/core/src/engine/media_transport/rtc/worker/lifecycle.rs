@@ -368,10 +368,7 @@ impl RtcWorker {
     ///
     /// returns [`TransportAdapterError::TransportUnavailable`] when worker boot,
     /// command send or response receive fails
-    pub(in crate::engine::media_transport) async fn request_worker<T, F>(
-        &self,
-        build_command: F,
-    ) -> Result<T, TransportAdapterError>
+    pub async fn request_worker<T, F>(&self, build_command: F) -> Result<T, TransportAdapterError>
     where
         F: FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
     {
@@ -390,7 +387,7 @@ impl RtcWorker {
     ///
     /// returns [`TransportAdapterError::TransportUnavailable`] when the command
     /// mailbox is closed or the response sender is dropped before answering
-    pub(in crate::engine::media_transport) async fn send_worker_command<T, F>(
+    pub async fn send_worker_command<T, F>(
         &self,
         worker_handle: &RtcWorkerHandle,
         build_command: F,
@@ -660,42 +657,5 @@ fn backlog_pressure_score(backlog_depth: usize, capacity: usize) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::*;
-
-    #[test]
-    fn placement_pressure_reads_packet_loop_lag_from_atomic_snapshot() -> Result<(), &'static str> {
-        let adapter = RtcWorker::default();
-        let now = Instant::now();
-        let started_at = now.checked_sub(Duration::from_millis(200)).unwrap_or(now);
-        let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(started_at));
-        packet_loop_lag.publish_for_test(37, started_at + Duration::from_millis(150));
-        let (command_tx, _command_rx) = mpsc::channel(1);
-        let (relay_tx, _relay_rx) = mpsc::channel(RELAY_MAILBOX_CAPACITY);
-        let debug_channels = super::super::super::test_support::RtcWorkerDebugChannels::new();
-
-        let worker_handle = RtcWorkerHandle {
-            command_tx,
-            debug_handle: debug_channels.handle(),
-            relay_mailbox: RelayPacketMailbox::new(relay_tx),
-            bitrate_registry: Arc::new(Mutex::new(BitrateRegistry::default())),
-            snapshot_state: Arc::new(Mutex::new(
-                super::super::super::state::RtcSnapshotState::default(),
-            )),
-            packet_loop_lag,
-        };
-        {
-            let Ok(mut worker_slot) = adapter.worker_handle.lock() else {
-                return Err("worker slot lock poisoned");
-            };
-            worker_slot.store(worker_handle);
-        }
-
-        let snapshot = adapter.placement_pressure_snapshot(&[]);
-
-        assert_eq!(snapshot.packet_loop_lag_ms, 37);
-        Ok(())
-    }
-}
+#[path = "TESTS/lifecycle.rs"]
+mod tests;

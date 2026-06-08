@@ -1,10 +1,11 @@
 //! Native signaling protocol surface and wire codec.
 
+#[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
 mod catalog;
 mod codec;
 mod envelope;
-#[cfg(test)]
-mod tests;
 mod wire_catalog;
 
 pub use catalog::{

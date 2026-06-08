@@ -16,13 +16,13 @@ const DEFAULT_HIGH_RESOLUTION_SCALE: u16 = 1;
 const MAX_SEND_STREAMS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::media_transport::rtc) struct NegotiatedRid {
+pub struct NegotiatedRid {
     pub rid: Str0mRid,
     pub max_bitrate: Option<Bitrate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::media_transport::rtc) struct SimulcastAnswerError;
+pub struct SimulcastAnswerError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SimulcastLayerSpec<'a> {

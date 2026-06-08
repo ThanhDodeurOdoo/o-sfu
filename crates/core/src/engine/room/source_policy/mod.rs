@@ -1,24 +1,12 @@
-//! Pure room source policy.
-//!
-//! The source-selection path is split into a one-way pipeline:
-//! immutable input from `RoomState` and transport observations, layout
-//! intent, pure budget planning, semantic route actions, selector-to-packet-gate
-//! projection, and stale-update commits after async effects finish.
-//!
-//! The packet loop consumes only transport packet gates. It never sees receiver
-//! bandwidth, active-speaker layout, source descriptors, or route-pause reasons.
-
 mod action;
-mod active_speaker;
 mod audio;
-mod commit;
 mod effects;
+mod input;
 mod sync;
 mod video;
 
-pub(in crate::engine::room) use self::{
-    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, ReceiverBweTargetPlan},
-    active_speaker::rank_active_speaker_sources,
+pub use self::{
+    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
     effects::SourcePolicyEffectPlan,
     sync::SourcePolicyEvent,
     video::VideoAdmissionRank,

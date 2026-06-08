@@ -714,4 +714,5 @@ fn next_recovery_delay(current_delay_ms: u32) -> u32 {
 }
 
 #[cfg(test)]
+#[path = "core/TESTS/mod.rs"]
 mod tests;

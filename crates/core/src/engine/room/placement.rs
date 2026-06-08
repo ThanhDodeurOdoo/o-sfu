@@ -1,37 +1,8 @@
-//! join-time placement planning for room-local media workers
-//!
-//! the room manager gathers process-wide worker pressure after admission has
-//! selected a live room
-//! [`Room::plan_join_placement`] combines that load snapshot with room-local
-//! policy state before the membership transition commits
-//!
-//! the planner ranks workers from committed room state plus transport pressure
-//! snapshots, then returns a decision that membership resolves into a concrete
-//! placement
-//!
-//! this is cold-path control-plane work
-//! the packet loop only sees the resolved transport keys after the join has
-//! committed
-//!
-//! joins pass through three placement shapes:
-//!
-//! ```text
-//! room snapshot -> planned decision -> resolved placement -> committed mapping
-//! ```
-//!
-//! the room can compute a [`RoomPlacementDecision`] before it takes the room
-//! write lock
-//! [`JoinPlacementPlan::resolve_for_commit`] converts that decision into a
-//! concrete [`ResolvedPlacement`] while the membership transition is being
-//! applied
-//! the room routing state records the final mapping only after the join is
-//! accepted
-
 use std::{collections::BTreeMap, iter};
 
 use o_sfu_router::RouterId;
 
-use super::{Room, SourcePolicyEvent};
+use super::Room;
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
     engine::{
@@ -41,64 +12,31 @@ use crate::{
     },
 };
 
-/// runtime placement seed passed into a room at construction
-///
-/// a production room is created with a stable [`RoomInstanceId`] and primary
-/// [`RouterId`], but worker identity may not exist until the first join commits
-/// placement
-/// tests and explicit runtime builders may still pass a complete placement set
-/// when they need a pre-assigned room
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomRuntimeContext {
-    /// live instance id used for transport keys, diagnostics and teardown
     instance: RoomInstanceId,
-    /// primary router reserved before a worker assignment exists
     primary_router: RouterId,
-    /// pre-existing local placements for rooms that start already assigned
     initial_local_router_placements: Option<LocalRoomRouterPlacements>,
 }
 
-/// one room-local router placement and its owning media worker
-///
-/// a placement is the unit that room membership, transport routing and local
-/// spillover agree on
-/// the router side identifies the room-local routing graph
-/// while [`MediaWorkerId`] identifies the local rtc worker that should host the
-/// transport session for users placed there
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalRouterRuntimeContext {
-    /// router id used inside the room topology
     pub router: RouterId,
-    /// rtc media worker used for transport sessions placed here
     pub media_worker: MediaWorkerId,
 }
 
-/// non-empty router placement set assigned to one live room
-///
-/// the primary placement is stored with spillover placements so callers cannot
-/// express a primary router that disagrees with the placement list
-/// a value of this type means at least one real [`MediaWorkerId`] has been
-/// assigned
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalRoomRouterPlacements {
-    /// first placement used by strict rooms and empty-room reuse
     primary: LocalRouterRuntimeContext,
-    /// extra local routers attached by bounded or load-triggered spillover
     spillover: Vec<LocalRouterRuntimeContext>,
 }
 
-/// failure to build [`LocalRoomRouterPlacements`] from an unchecked list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalRoomRouterPlacementsError {
-    /// no placement was supplied, so there is no primary router
     Empty,
 }
 
 impl LocalRoomRouterPlacements {
-    /// creates a placement set from an explicit primary placement
-    ///
-    /// callers should use this when the primary router is already known
-    /// use [`Self::try_from_vec`] for unchecked primary-first lists
     #[must_use]
     pub fn new(
         primary: LocalRouterRuntimeContext,
@@ -107,12 +45,9 @@ impl LocalRoomRouterPlacements {
         Self { primary, spillover }
     }
 
-    /// builds a placement set from the primary-first runtime placement list
-    ///
     /// # Errors
     ///
-    /// returns [`LocalRoomRouterPlacementsError::Empty`] when no primary
-    /// placement is supplied
+    /// returns [`LocalRoomRouterPlacementsError::Empty`] when `placements` is empty
     pub fn try_from_vec(
         placements: Vec<LocalRouterRuntimeContext>,
     ) -> Result<Self, LocalRoomRouterPlacementsError> {
@@ -128,13 +63,7 @@ impl LocalRoomRouterPlacements {
         self.primary
     }
 
-    /// records a placement without duplicating a router entry
-    ///
-    /// join finalization uses this after resolving a placement
-    /// if the router is already known, the worker mapping is replaced so stale
-    /// test fixtures or recovered runtime state cannot leave two entries for the
-    /// same router
-    pub(in crate::engine::room) fn upsert(&mut self, placement: LocalRouterRuntimeContext) {
+    pub fn upsert(&mut self, placement: LocalRouterRuntimeContext) {
         if self.primary.router == placement.router {
             self.primary = placement;
             return;
@@ -156,11 +85,6 @@ impl LocalRoomRouterPlacements {
 }
 
 impl RoomRuntimeContext {
-    /// builds a context for rooms that already have a primary worker placement
-    ///
-    /// this is used by tests and integration paths that need explicit placement
-    /// normal room creation should use the unassigned constructor so it does not
-    /// invent a worker id before the first join
     #[must_use]
     pub fn new(
         instance: RoomInstanceId,
@@ -176,16 +100,8 @@ impl RoomRuntimeContext {
         }
     }
 
-    /// builds a context for a newly allocated production room
-    ///
-    /// the primary router is reserved immediately so topology can be initialized,
-    /// but no [`MediaWorkerId`] is available until the join planner commits the
-    /// first session placement
     #[must_use]
-    pub(in crate::engine::room) const fn new_unassigned(
-        instance: RoomInstanceId,
-        primary_router: RouterId,
-    ) -> Self {
+    pub const fn new_unassigned(instance: RoomInstanceId, primary_router: RouterId) -> Self {
         Self {
             instance,
             primary_router,
@@ -193,12 +109,9 @@ impl RoomRuntimeContext {
         }
     }
 
-    /// builds a context from a primary-first placement list
-    ///
     /// # Errors
     ///
-    /// returns [`LocalRoomRouterPlacementsError::Empty`] when the placement
-    /// list has no primary router
+    /// returns [`LocalRoomRouterPlacementsError::Empty`] when `placements` is empty
     pub fn try_from_placements(
         instance: RoomInstanceId,
         placements: Vec<LocalRouterRuntimeContext>,
@@ -221,71 +134,20 @@ impl RoomRuntimeContext {
         self.primary_router
     }
 
-    /// returns pre-assigned placements when construction supplied them
-    ///
-    /// `None` means the room has a primary router but no committed worker yet
     #[must_use]
-    pub(in crate::engine::room) fn initial_local_router_placements(
-        &self,
-    ) -> Option<&LocalRoomRouterPlacements> {
+    pub fn initial_local_router_placements(&self) -> Option<&LocalRoomRouterPlacements> {
         self.initial_local_router_placements.as_ref()
     }
 }
 
-/// concrete placement selected for a join but not yet recorded
-///
-/// this separates planning from mutation
-/// the manager can carry a plan across async work, then membership resolves it
-/// under the room write lock and records the final placement only if the state
-/// transition succeeds
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::room) struct ResolvedPlacement(LocalRouterRuntimeContext);
-
-impl ResolvedPlacement {
-    /// builds a resolved placement without running the planner
-    ///
-    /// test harnesses use this to target a specific router and worker while still
-    /// exercising the normal membership commit path
-    #[cfg(test)]
-    pub const fn for_test(placement: LocalRouterRuntimeContext) -> Self {
-        Self(placement)
-    }
-
-    pub const fn into_context(self) -> LocalRouterRuntimeContext {
-        self.0
-    }
-}
-
-/// snapshot of one room's local placement surface at the start of a join
-///
-/// `has_assigned_placements` separates a brand-new room from a room that has
-/// already committed its first placement but is temporarily empty
-/// strict rooms rely on that distinction so their first worker remains stable
-/// across leave and rejoin cycles
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RoomPlacementUsageSnapshot {
+pub struct RoomPlacementUsageSnapshot {
     primary_router: RouterId,
     has_assigned_placements: bool,
     placements: Vec<LocalRouterRuntimeContext>,
 }
 
-/// room contribution to process-wide worker load
-///
-/// sessions are counted on the worker that owns their transport session
-/// consumers are counted on the receiver worker because that worker owns egress
-/// delivery
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct RoomWorkerLoadContribution {
-    pub(super) session_worker_ids: Vec<MediaWorkerId>,
-    pub(super) consumer_worker_ids: Vec<MediaWorkerId>,
-}
-
 impl RoomPlacementUsageSnapshot {
-    /// creates a read-only placement snapshot for one join decision
-    ///
-    /// callers must pass `has_assigned_placements` separately because an empty
-    /// placement list can mean either "new room" or "room already assigned but no
-    /// current connections"
     #[must_use]
     pub(super) fn new(
         primary_router: RouterId,
@@ -304,10 +166,6 @@ impl RoomPlacementUsageSnapshot {
         self.primary_router
     }
 
-    /// next router id available to fake transports that allocate local routers
-    ///
-    /// production allocation stays in [`crate::engine::room::factory::RoomFactory`]
-    /// so this snapshot remains a read-only view for normal joins
     #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
     pub(super) fn next_local_router_id(&self) -> RouterId {
@@ -322,10 +180,6 @@ impl RoomPlacementUsageSnapshot {
         RouterId(router_id)
     }
 
-    /// returns placements that are available for reuse by a new join
-    ///
-    /// a room that has never committed placement behaves like it has no assigned
-    /// placements even though its primary router has already been reserved
     fn assigned_placements(&self) -> &[LocalRouterRuntimeContext] {
         if self.has_assigned_placements {
             &self.placements
@@ -335,33 +189,17 @@ impl RoomPlacementUsageSnapshot {
     }
 }
 
-/// pure placement result returned to the room manager
-///
-/// the decision may defer router allocation
-/// this keeps planning independent from the room write lock while still letting
-/// finalization allocate spillover only if the join is going to commit
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RoomPlacementDecision {
-    /// assign the primary router to this worker for the first committed session
+pub enum RoomPlacementDecision {
     AssignPrimary { media_worker_id: MediaWorkerId },
-    /// place the session on an already committed room-local router
     UseExisting(LocalRouterRuntimeContext),
-    /// allocate another local router on this worker before committing the join
     AllocateSpillover { media_worker_id: MediaWorkerId },
 }
 
-/// placement work carried from manager admission to room commit
-///
-/// this type stores the pure decision plus the worker load snapshot used to make
-/// it
-/// resolving can happen later against a fresher room snapshot, so stale plans
-/// never force a router that is no longer valid
 #[derive(Debug)]
-pub(super) enum JoinPlacementPlan {
-    /// already resolved placement used by targeted test harnesses
+pub enum JoinPlacementPlan {
     #[cfg(any(test, feature = "testing-transport"))]
-    Resolved(ResolvedPlacement),
-    /// deferred decision produced from process-wide worker pressure
+    Resolved(LocalRouterRuntimeContext),
     Planned {
         decision: RoomPlacementDecision,
         worker_loads: WorkerLoadIndex,
@@ -369,14 +207,8 @@ pub(super) enum JoinPlacementPlan {
     },
 }
 
-/// state that adds hysteresis to load-triggered placement
-///
-/// receiver pressure can fluctuate across adjacent joins
-/// the activation streak prevents one noisy sample from allocating spillover
-/// cooldowns let idle spillover routers detach only after remaining idle for the
-/// configured window
 #[derive(Debug, Default)]
-pub(in crate::engine::room) struct LoadTriggeredPlacementState {
+pub struct LoadTriggeredPlacementState {
     activation_streak: usize,
     source_fanout_pressure: bool,
     cooldown_by_router: BTreeMap<RouterId, usize>,
@@ -396,11 +228,6 @@ impl LoadTriggeredPlacementState {
         self.activation_streak >= policy.parts().activation_window
     }
 
-    /// returns spillover routers that have stayed idle long enough to detach
-    ///
-    /// callers pass the complete current idle set
-    /// routers missing from that set lose their cooldown so a short burst of
-    /// traffic requires a fresh idle window before detachment
     pub fn cooldown_detachments(
         &mut self,
         idle_router_ids: &[RouterId],
@@ -430,17 +257,31 @@ impl LoadTriggeredPlacementState {
 }
 
 impl Room {
-    pub(in crate::engine::room) async fn plan_join_placement(
-        &self,
-        worker_loads: WorkerLoadIndex,
-    ) -> JoinPlacementPlan {
+    pub async fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+        self.state.read().await.placement_usage_snapshot()
+    }
+
+    pub async fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
+        let state = self.state.read().await;
+        for (user_id, connection_id) in state.transport_user_entries() {
+            loads.record_session(
+                state
+                    .transport_user_key(&user_id, connection_id)
+                    .media_worker_id(),
+            );
+        }
+        for (_, connection_id) in state.transport_consumer_entries() {
+            loads.record_consumer(state.media_worker_id_for_connection(connection_id));
+        }
+    }
+
+    pub async fn plan_join_placement(&self, worker_loads: WorkerLoadIndex) -> JoinPlacementPlan {
         let room_snapshot = self.placement_usage_snapshot().await;
         let policy = self.room_worker_policy();
         let planner = RoomPlacementPlanner::new(policy);
         let decision = match policy.spillover() {
             RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
-                self.handle_source_policy_event(SourcePolicyEvent::FanoutPressureChanged, None)
-                    .await;
+                self.observe_source_fanout_pressure().await;
                 let mut load_state = lock_unpoisoned(&self.load_triggered_placement);
                 planner.choose_with_load_state(&room_snapshot, &worker_loads, &mut load_state)
             }
@@ -449,6 +290,22 @@ impl Room {
             }
         };
         JoinPlacementPlan::planned(decision, worker_loads, policy)
+    }
+
+    pub async fn observe_source_fanout_pressure(&self) {
+        let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) =
+            self.room_worker_policy().spillover()
+        else {
+            return;
+        };
+        let policy = policy.parts();
+        let pressured = {
+            let state = self.state.read().await;
+            state.source_fanout_pressure(policy.max_fanout_per_source, |connection_id| {
+                state.media_worker_id_for_connection(connection_id)
+            })
+        };
+        lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
     }
 }
 
@@ -465,18 +322,11 @@ impl JoinPlacementPlan {
         }
     }
 
-    /// resolves a placement plan immediately before committing membership state
-    ///
-    /// the room snapshot passed here should be the latest snapshot available
-    /// under the room write lock
-    /// if the original decision targeted a placement that was removed or the room
-    /// reached its placement cap, this method falls back to the least loaded
-    /// currently assigned placement
     pub(super) fn resolve_for_commit(
         self,
         room: &RoomPlacementUsageSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> ResolvedPlacement {
+    ) -> LocalRouterRuntimeContext {
         let (decision, worker_loads, policy) = match self {
             #[cfg(any(test, feature = "testing-transport"))]
             Self::Resolved(placement) => return placement,
@@ -492,39 +342,35 @@ impl JoinPlacementPlan {
             return match decision {
                 RoomPlacementDecision::AssignPrimary { media_worker_id }
                 | RoomPlacementDecision::AllocateSpillover { media_worker_id } => {
-                    ResolvedPlacement(LocalRouterRuntimeContext {
+                    LocalRouterRuntimeContext {
                         router: room.primary_router(),
                         media_worker: media_worker_id,
-                    })
+                    }
                 }
-                RoomPlacementDecision::UseExisting(placement) => {
-                    ResolvedPlacement(LocalRouterRuntimeContext {
-                        router: room.primary_router(),
-                        media_worker: placement.media_worker,
-                    })
-                }
+                RoomPlacementDecision::UseExisting(placement) => LocalRouterRuntimeContext {
+                    router: room.primary_router(),
+                    media_worker: placement.media_worker,
+                },
             };
         };
         match decision {
-            RoomPlacementDecision::AssignPrimary { .. } => {
-                ResolvedPlacement(worker_loads.least_loaded_placement(
-                    assigned_placements,
-                    first_assigned,
-                    score_policy,
-                ))
-            }
+            RoomPlacementDecision::AssignPrimary { .. } => worker_loads.least_loaded_placement(
+                assigned_placements,
+                first_assigned,
+                score_policy,
+            ),
             RoomPlacementDecision::UseExisting(placement) => {
                 if let Some(assigned) = assigned_placements
                     .iter()
                     .find(|assigned| assigned.router == placement.router)
                 {
-                    return ResolvedPlacement(*assigned);
+                    return *assigned;
                 }
-                ResolvedPlacement(worker_loads.least_loaded_placement(
+                worker_loads.least_loaded_placement(
                     assigned_placements,
                     first_assigned,
                     score_policy,
-                ))
+                )
             }
             RoomPlacementDecision::AllocateSpillover { .. } => {
                 let placement_cap = policy
@@ -532,39 +378,29 @@ impl JoinPlacementPlan {
                     .min(worker_loads.worker_count())
                     .max(1);
                 if assigned_placements.len() >= placement_cap {
-                    return ResolvedPlacement(worker_loads.least_loaded_placement(
+                    return worker_loads.least_loaded_placement(
                         assigned_placements,
                         first_assigned,
                         score_policy,
-                    ));
+                    );
                 }
                 // router allocation stays in final resolution so stale plans do
                 // not reserve spillover the room no longer needs
-                ResolvedPlacement(LocalRouterRuntimeContext {
+                LocalRouterRuntimeContext {
                     router: allocate_spillover_router(),
                     media_worker: worker_loads
                         .least_loaded_worker(assigned_placements, score_policy),
-                })
+                }
             }
         }
     }
 }
 
-/// aggregate placement load for one local media worker
-///
-/// the room manager builds this from committed room mappings plus
-/// transport-observed pressure
-/// each value is a one-join snapshot rather than a continuously maintained
-/// counter
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WorkerPlacementLoad {
-    /// worker this load describes after normalization by configured worker count
     media_worker_id: MediaWorkerId,
-    /// sessions currently mapped to this worker
     session_count: usize,
-    /// consumers whose receiver-side egress is owned by this worker
     consumer_count: usize,
-    /// transport pressure published by the worker observability boundary
     pressure: TransportPlacementPressureSnapshot,
 }
 
@@ -590,7 +426,6 @@ impl WorkerPlacementLoad {
         self.consumer_count = self.consumer_count.saturating_add(1);
     }
 
-    /// score used by placement ranking where lower values are preferred
     fn score(self, policy: LocalSpilloverPolicy) -> WorkerPlacementScore {
         WorkerPlacementScore {
             overloaded: self.is_overloaded(policy),
@@ -605,7 +440,6 @@ impl WorkerPlacementLoad {
         }
     }
 
-    /// whether adding another receiver would cross any spillover trigger
     fn is_overloaded(self, policy: LocalSpilloverPolicy) -> bool {
         let policy = policy.parts();
         self.session_count.saturating_add(1) >= policy.min_receiver_count
@@ -623,12 +457,7 @@ impl WorkerPlacementLoad {
     }
 }
 
-/// ordered load tuple used as the deterministic worker tie-break
-///
-/// the field order is the policy contract
-/// overloaded workers lose first, then consumer count, session count, worker
-/// pressure, packet-loop lag, command backlog, relay mailbox depth, egress
-/// bitrate and worker id decide ties
+/// ordered worker score where field order defines the tie-break policy
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct WorkerPlacementScore {
     overloaded: bool,
@@ -642,23 +471,12 @@ struct WorkerPlacementScore {
     media_worker_id: MediaWorkerId,
 }
 
-/// load accumulator for one placement decision
-///
-/// every configured worker receives an entry, even if transport observability
-/// has not published pressure yet
-/// this lets first-join placement prefer unused workers
 #[derive(Debug)]
-pub(super) struct WorkerLoadIndex {
+pub struct WorkerLoadIndex {
     loads: Vec<WorkerPlacementLoad>,
 }
 
 impl WorkerLoadIndex {
-    /// create a complete worker load set from best-effort transport pressure
-    ///
-    /// missing snapshots are treated as idle workers
-    /// snapshot worker ids are normalized by the configured worker count because
-    /// fake transports can replay stale test data across differently sized
-    /// runtimes
     #[must_use]
     pub(super) fn new(
         media_worker_count: usize,
@@ -704,10 +522,6 @@ impl WorkerLoadIndex {
             .get_mut(media_worker_id.as_usize() % worker_count)
     }
 
-    /// returns the load bucket for a possibly noncanonical worker id
-    ///
-    /// noncanonical ids are folded by the configured worker count because test
-    /// and diagnostics boundaries can replay raw ids from a different runtime
     fn load_for_worker(&self, media_worker_id: MediaWorkerId) -> WorkerPlacementLoad {
         let media_worker_id =
             MediaWorkerId::from_raw(media_worker_id.as_usize() % self.worker_count());
@@ -722,11 +536,6 @@ impl WorkerLoadIndex {
             })
     }
 
-    /// returns the least loaded worker outside the current room placements
-    ///
-    /// when all workers are already used by the room, the same scoring fallback
-    /// chooses among every configured worker so callers still get deterministic
-    /// placement
     #[expect(
         clippy::unreachable,
         reason = "WorkerLoadIndex::new normalizes the worker count to at least one load"
@@ -752,10 +561,6 @@ impl WorkerLoadIndex {
         load.media_worker_id
     }
 
-    /// returns the least loaded placement from the room-local placement list
-    ///
-    /// `fallback` represents the caller's known valid placement and protects
-    /// against stale or empty snapshots without synthesizing a router or worker id
     fn least_loaded_placement(
         &self,
         placements: &[LocalRouterRuntimeContext],
@@ -774,29 +579,17 @@ impl WorkerLoadIndex {
     }
 }
 
-/// pure policy evaluator for join-time room placement
-///
-/// the planner reads one room snapshot and one process-wide load snapshot
-/// the caller serializes the eventual room mutation so later joins observe the
-/// committed placement
 #[derive(Debug, Clone)]
 pub(super) struct RoomPlacementPlanner {
     policy: RoomWorkerPolicy,
 }
 
 impl RoomPlacementPlanner {
-    /// create a planner for one room-worker policy
     #[must_use]
     pub(super) const fn new(policy: RoomWorkerPolicy) -> Self {
         Self { policy }
     }
 
-    /// choose the placement for the next session joining a room
-    ///
-    /// strict rooms keep their first assigned worker
-    /// bounded rooms allocate unused workers until the cap
-    /// load-triggered rooms reuse a capable room worker and allocate only when
-    /// all existing room placements are pressured
     #[must_use]
     pub(super) fn choose(
         &self,
@@ -807,12 +600,6 @@ impl RoomPlacementPlanner {
         self.choose_with_load_state(room, load_index, &mut load_state)
     }
 
-    /// chooses a placement while reusing caller-managed load-triggered state
-    ///
-    /// callers that keep [`LoadTriggeredPlacementState`] across joins get the
-    /// activation-window behavior for load-triggered spillover
-    /// callers that use [`Self::choose`] get a stateless decision suitable for
-    /// strict or bounded policies
     pub(super) fn choose_with_load_state(
         &self,
         room: &RoomPlacementUsageSnapshot,
@@ -876,7 +663,6 @@ impl RoomPlacementPlanner {
     }
 }
 
-/// returns the score policy used when the room policy has no load thresholds
 fn score_policy(policy: RoomWorkerPolicy) -> LocalSpilloverPolicy {
     match policy.spillover() {
         RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => policy,
@@ -887,4 +673,5 @@ fn score_policy(policy: RoomWorkerPolicy) -> LocalSpilloverPolicy {
 }
 
 #[cfg(test)]
+#[path = "TESTS/placement.rs"]
 mod tests;
