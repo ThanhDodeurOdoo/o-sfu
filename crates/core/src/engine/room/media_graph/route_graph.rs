@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use super::{
     ConsumerKey, ConsumerSourceSelection, ConsumerState, TransportMediaRemoval,
-    remove_from_index_set, subscription::ConsumerSetupTarget,
+    consumer_setup::ConsumerSetupTarget, remove_from_index_set,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
@@ -28,7 +28,7 @@ type RelayOwners = BTreeMap<ConsumerKey, RelayRouteActivity>;
 struct RouteReservationId(u64);
 
 #[derive(Debug)]
-pub(super) struct ConsumerRouteReservation {
+pub struct ConsumerRouteReservation {
     key: ConsumerKey,
     selection: ConsumerSourceSelection,
     id: RouteReservationId,
@@ -58,20 +58,20 @@ struct TakenPendingRoute {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct RelayRouteEffect {
+pub struct RelayRouteEffect {
     pub route: RelayRouteKey,
     pub action: TransportRelayRouteAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct ResolvedRelayRouteEffect {
+pub struct ResolvedRelayRouteEffect {
     pub route: RelayRouteKey,
     pub source_session_key: TransportSessionKey,
     pub action: TransportRelayRouteAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::engine::room) struct RelayRouteKey {
+pub struct RelayRouteKey {
     pub source_user: UserId,
     pub source_connection: ConnectionId,
     pub source_media: TransportMediaId,
@@ -316,8 +316,6 @@ impl RouteGraph {
         &mut self,
         reservation: &ConsumerRouteReservation,
         target: &ConsumerSetupTarget,
-        source_connection: ConnectionId,
-        source_media: TransportMediaId,
         target_worker: MediaWorkerId,
         active: bool,
     ) -> Vec<RelayRouteEffect> {
@@ -333,13 +331,8 @@ impl RouteGraph {
                 return Vec::new();
             }
             let relay = RouteRelay {
-                route: RelayRouteKey {
-                    source_user: target.producer_user_id().clone(),
-                    source_connection,
-                    source_media,
-                    target_worker,
-                },
-                connection: target.consumer_connection_id(),
+                route: target.relay_route_key(target_worker),
+                connection: target.connection,
                 activity: RelayRouteActivity::from_active(active),
             };
             if pending_relay.as_ref() == Some(&relay) {
@@ -446,7 +439,7 @@ impl ConsumerRouteReservation {
         &self.key
     }
 
-    pub(super) const fn selection(&self) -> ConsumerSourceSelection {
+    pub const fn selection(&self) -> ConsumerSourceSelection {
         self.selection
     }
 }

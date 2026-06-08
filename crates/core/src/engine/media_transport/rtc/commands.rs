@@ -165,9 +165,7 @@ pub struct ConsumerPacketGateCommand {
 }
 
 impl ConsumerPacketGateCommand {
-    pub(in crate::engine::media_transport) fn from_update(
-        update: &ConsumerPacketGateUpdate,
-    ) -> Self {
+    pub fn from_update(update: &ConsumerPacketGateUpdate) -> Self {
         Self::new(
             update.route().consumer_session_key().clone(),
             update.route().consumer_transport_media_id(),
@@ -176,7 +174,7 @@ impl ConsumerPacketGateCommand {
     }
 
     /// builds one consumer update for a source-scoped packet-gate batch
-    pub(in crate::engine::media_transport::rtc) fn new(
+    pub fn new(
         consumer_key: TransportSessionKey,
         consumer_media: TransportMediaId,
         packet_gate: PacketLayerGate,
@@ -189,14 +187,12 @@ impl ConsumerPacketGateCommand {
     }
 
     /// splits the batch entry for worker-side validation and route mutation
-    pub(in crate::engine::media_transport::rtc) fn into_parts(
-        self,
-    ) -> (TransportSessionKey, TransportMediaId, PacketLayerGate) {
+    pub fn into_parts(self) -> (TransportSessionKey, TransportMediaId, PacketLayerGate) {
         (self.consumer_key, self.consumer_media, self.packet_gate)
     }
 }
 
-pub(in crate::engine::media_transport) enum RtcMediaControlCommand {
+pub enum RtcMediaControlCommand {
     Apply {
         request: RouteControlRequest,
         response: Option<RtcWorkerResponse<()>>,
@@ -208,7 +204,7 @@ pub(in crate::engine::media_transport) enum RtcMediaControlCommand {
     },
 }
 
-pub(in crate::engine::media_transport) enum RouteControlRequest {
+pub enum RouteControlRequest {
     SetProducerActive {
         source: TransportSourceKey,
         active: bool,
@@ -252,7 +248,7 @@ pub(in crate::engine::media_transport) enum RouteControlRequest {
 }
 
 impl RouteControlRequest {
-    pub(in crate::engine::media_transport) fn set_consumer_packet_gate(
+    pub fn set_consumer_packet_gate(
         route: TransportConsumerRoute,
         packet_gate: &SourcePacketGate,
     ) -> Self {
@@ -282,7 +278,7 @@ fn packet_layer_gate(packet_gate: &SourcePacketGate) -> PacketLayerGate {
 /// state, media commands mutate producer or consumer registrations, relay
 /// commands mutate cross-worker fanout and observability commands read
 /// worker-local snapshots
-pub(in crate::engine::media_transport) enum RtcWorkerCommand {
+pub enum RtcWorkerCommand {
     /// bootstrap a session before any media registration exists
     ///
     /// this may bind the shared UDP socket, allocate the worker-local `Rtc`,
@@ -434,10 +430,7 @@ pub(in crate::engine::media_transport) enum RtcWorkerCommand {
 }
 
 impl RtcWorkerCommand {
-    pub(in crate::engine::media_transport) fn media_control(
-        request: RouteControlRequest,
-        response: RtcWorkerResponse<()>,
-    ) -> Self {
+    pub fn media_control(request: RouteControlRequest, response: RtcWorkerResponse<()>) -> Self {
         Self::MediaControl(RtcMediaControlCommand::Apply {
             request,
             response: Some(response),

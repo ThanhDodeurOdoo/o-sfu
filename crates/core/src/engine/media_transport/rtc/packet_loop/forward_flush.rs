@@ -150,7 +150,7 @@ pub(super) fn record_incoming_stats(
 }
 
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) fn record_incoming_stats_for_benchmark(
+pub fn record_incoming_stats_for_benchmark(
     state: &mut PacketLoopState,
     source_policy_signal: &SourcePolicySignal,
     metrics: &impl RtcRouteControlMetrics,
@@ -292,7 +292,7 @@ fn source_is_video(
 /// Relay messages are already decoded as `ForwardedPacket` values by their
 /// source worker. The cap keeps command handling and UDP receive responsive
 /// under cross-worker fanout spikes.
-pub(crate) fn drain_relay_packets(
+pub fn drain_relay_packets(
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     pending_packets: &mut Vec<ForwardedPacket>,
     max_packets: usize,
@@ -333,7 +333,7 @@ pub(crate) fn drain_relay_packets(
 /// can change while packets are already batched. Relay overload is counted and
 /// dropped. Other destination errors are logged and the loop continues flushing
 /// the remaining planned destinations.
-pub(in crate::engine::media_transport::rtc) fn flush_forward_routes(
+pub fn flush_forward_routes(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     rtp_metrics: &RtpMetricsRecorder,

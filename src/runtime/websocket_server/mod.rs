@@ -1,25 +1,12 @@
-//! This node turns an upgraded socket into an authenticated RTC user. It handles
-//! WebSocket mechanics then delegates authenticated messages to
-//! [`crate::application::user_session::User`].
-//!
-//! ```text
-//! websocket_server
-//! |- admission        -> pre-auth WebSocket concurrency budget
-//! |- controller       -> upgrade boundary
-//! |- handshake        -> first-frame authentication
-//! |- session_loop     -> active socket lifecycle after authentication
-//! `- io               -> socket writer boundary and close helpers
-//! ```
-//!
-//! The rest of the runtime should keep WebSocket close codes, ping/pong liveness
-//! and reader/writer management behind this module.
+#[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
+mod accepted_user;
 mod admission;
 mod controller;
 mod handshake;
 pub(crate) mod io;
 mod session_loop;
-#[cfg(test)]
-mod tests;
 
 pub use handshake::decode_auth_payload_text;
 pub use io::{

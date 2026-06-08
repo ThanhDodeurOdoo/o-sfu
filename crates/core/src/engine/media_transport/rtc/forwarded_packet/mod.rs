@@ -34,6 +34,7 @@ use crate::engine::{
 };
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
+#[path = "TESTS/support.rs"]
 pub mod test_support;
 
 /// one RTP packet staged for packet-loop observation and forwarding
@@ -204,7 +205,8 @@ impl ForwardedPacket {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::engine) fn stable_src_key(&self) -> Option<&TransportSessionKey> {
+    #[must_use]
+    pub fn stable_src_key(&self) -> Option<&TransportSessionKey> {
         match &self.source {
             ForwardedPacketSource::Local(_) => None,
             ForwardedPacketSource::Relayed(session_key) => Some(session_key),
@@ -471,4 +473,5 @@ fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
 }
 
 #[cfg(test)]
-mod tests;
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;

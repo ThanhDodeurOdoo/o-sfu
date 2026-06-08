@@ -7,10 +7,12 @@ mod rtp;
 mod snapshot;
 
 #[cfg(any(test, feature = "test-support"))]
+#[path = "TESTS/test_support.rs"]
 pub mod test_support;
 
 #[cfg(test)]
-mod tests;
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
 
 pub use self::{
     catalog::RuntimeMetrics,

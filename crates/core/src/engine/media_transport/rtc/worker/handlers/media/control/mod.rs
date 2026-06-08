@@ -40,19 +40,15 @@ mod responses;
 mod routes;
 mod selected_rid;
 
-pub(in crate::engine::media_transport::rtc::worker) use responses::{
-    apply_route_control_request, respond_set_consumer_pkt_gates,
-};
-pub(in crate::engine::media_transport::rtc::worker) use routes::remove_source_route;
+pub use responses::{apply_route_control_request, respond_set_consumer_pkt_gates};
+pub use routes::remove_source_route;
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) use routes::worker_set_consumer_pkt_gates_for_bench;
+pub use routes::worker_set_consumer_pkt_gates_for_bench;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_src,
     ensure_local_producer_mid, ensure_route_src_registered, register_consumer_route,
     remove_consumer_route,
 };
 #[cfg(test)]
-pub(in crate::engine::media_transport::rtc::worker::handlers::media) use selected_rid::observe_src_rid_ready;
-pub(in crate::engine::media_transport::rtc) use selected_rid::{
-    apply_src_rid_ready, drain_due_rid_kf_refreshes,
-};
+pub use selected_rid::observe_src_rid_ready;
+pub use selected_rid::{apply_src_rid_ready, drain_due_rid_kf_refreshes};

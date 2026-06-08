@@ -22,6 +22,7 @@ mod config;
 mod policy_invalidation;
 mod rtc;
 #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
+#[path = "TESTS/test_support/mod.rs"]
 pub mod test_support;
 mod types;
 mod workers;
@@ -784,4 +785,5 @@ impl MediaTransport {
 }
 
 #[cfg(test)]
-mod tests;
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;

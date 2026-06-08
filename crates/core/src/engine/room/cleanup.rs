@@ -5,58 +5,9 @@
 //! This module contains the small amount of retry state needed when the effect
 //! fails after the room can no longer derive it from `RoomState`.
 //!
-//! This module keeps the room cleanup boundary after membership or media state
-//! has already committed. It executes cleanup operations against the media
-//! transport outside room-state locks, records retry state and escalates
-//! unrecoverable operations through coarse transport-user cleanup.
-//!
-//! # Lifecycle graph
-//!
-//! ```text
-//! room state transition commits
-//!             |
-//!             v
-//! cleanup intent captured from the transition
-//!             |
-//!             v
-//! transport cleanup effect runs outside room locks
-//!             |
-//!      +------+------+
-//!      |             |
-//!      v             v
-//!   success      failure
-//!      |             |
-//!      v             v
-//!   done       classify failure
-//!                    |
-//!     +--------------+--------------+--------------+
-//!     |                             |              |
-//!     v                             v              v
-//! recoverable                 terminal       retry queue full
-//!     |                             |              |
-//!     v                             v              v
-//! queue or reuse retry      record failure   record failure
-//!     |                             |              |
-//!     v                             v              v
-//! due retry cycle           transport-user cleanup when operation is media
-//!     |
-//!     v
-//! transport cleanup retry
-//!     |
-//!     +----------+----------+----------+
-//!     |          |          |          |
-//!     v          v          v          v
-//! success   recoverable terminal  retries exhausted
-//!     |          |          |          |
-//!     v          v          v          v
-//! remove    backoff    record failure record failure
-//! pending   by cycle        |          |
-//!                |          v          v
-//!                +----> transport-user cleanup when operation is media
-//!
-//! room shutdown removes the remaining pending entries and records each one as
-//! an abandoned cleanup failure.
-//! ```
+//! Cleanup operations run outside room-state locks. Recoverable failures enter
+//! the bounded room retry queue. Terminal failures, retry exhaustion, queue
+//! pressure and room shutdown are recorded as explicit cleanup failures.
 //!
 //! # Invariants
 //!
@@ -103,62 +54,21 @@ fn warn_transport_cleanup_failure(operation: &TransportCleanupOperation, message
     );
 }
 
-/// Maximum number of distinct cleanup operations one room may retain.
-///
-/// Cleanup failures are rare cold-path work. A fixed cap prevents a broken
-/// transport boundary from turning room teardown into unbounded memory growth.
 pub(super) const CLEANUP_RETRY_CAPACITY: usize = 128;
 
-/// Number of failed retry attempts before room-local recovery gives up.
-///
-/// The first transport failure inserts the operation. Only later attempts made
-/// by the reconciler count toward this limit.
 pub(super) const CLEANUP_MAX_RETRIES: u8 = 3;
 
-/// transport-side cleanup effect whose room state has already been removed
-///
-/// the room uses this enum as the stable retry key after membership or media
-/// state has been committed
-/// keeping the operation explicit avoids rebuilding
-/// cleanup intent from current room state, which may already forget the user,
-/// publication or subscription that triggered teardown
-///
-/// # Resource split
-///
-/// the operation stores the identity needed by `MediaTransport` but does not
-/// hold transport resources or prove that those resources still exist
-/// a retry that finds the resource gone is treated by the adapter contract,
-/// then converted into a retry action by `CleanupReconciler`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::engine::room) enum TransportCleanupOperation {
-    /// remove one media object from an already detached transport user
-    ///
-    /// this is used after room media state has forgotten the publication or
-    /// subscription
-    /// if it cannot be recovered, room cleanup escalates by closing the
-    /// transport user so worker-level state can release anything still
-    /// attached to that session
+pub enum TransportCleanupOperation {
     RemoveMedia {
         session_key: TransportSessionKey,
         connection_id: ConnectionId,
         transport_media_id: TransportMediaId,
     },
-    /// close the whole transport user after room membership has moved on
-    ///
-    /// this is the final cleanup operation for user teardown
-    /// it is retried
-    /// when the adapter is temporarily unavailable, then abandoned explicitly
-    /// if the room itself is removed before recovery completes
     CloseUser {
         session_key: TransportSessionKey,
         connection_id: ConnectionId,
     },
-    /// release one relay route after route state has forgotten the consumer
-    ///
-    /// the source session key is resolved when the effect fails so retry does
-    /// not depend on room state still containing the source user
-    /// escalation can close the source transport user because that is the
-    /// narrowest cleanup target left when a relay mailbox refuses the release
     ReleaseRelayRoute {
         source_session_key: TransportSessionKey,
         route: RelayRouteKey,
@@ -166,11 +76,6 @@ pub(in crate::engine::room) enum TransportCleanupOperation {
 }
 
 impl TransportCleanupOperation {
-    /// return the room user that should receive diagnostics for this cleanup effect
-    ///
-    /// media and user cleanup use the resolved transport session key
-    /// relay-route cleanup reports the source user because the source worker
-    /// hosts the mailbox being released
     #[must_use]
     pub(super) fn user_id(&self) -> &UserId {
         match self {
@@ -181,10 +86,6 @@ impl TransportCleanupOperation {
         }
     }
 
-    /// return the connection used to correlate cleanup telemetry
-    ///
-    /// for relay releases this is the source connection because source-worker
-    /// cleanup has the remaining precise route identity
     #[must_use]
     pub(super) const fn connection_id(&self) -> ConnectionId {
         match self {
@@ -195,10 +96,6 @@ impl TransportCleanupOperation {
         }
     }
 
-    /// return the media id involved in this cleanup when the operation has one
-    ///
-    /// user close has no media id because it addresses the whole transport
-    /// session
     #[must_use]
     pub(super) const fn transport_media_id(&self) -> Option<TransportMediaId> {
         match self {
@@ -210,11 +107,6 @@ impl TransportCleanupOperation {
         }
     }
 
-    /// return the transport session key used by the adapter
-    ///
-    /// every cleanup operation is stored with the adapter-facing identity it
-    /// needs for retry so finalization never has to reconstruct cleanup scope from
-    /// current room state
     #[must_use]
     pub(super) const fn session_key(&self) -> &TransportSessionKey {
         match self {
@@ -227,12 +119,6 @@ impl TransportCleanupOperation {
         }
     }
 
-    /// report whether unrecovered cleanup can be escalated by closing a transport user
-    ///
-    /// media removal and relay release can still leave worker state attached to
-    /// a session
-    /// a failed user close already targets that session, so repeating the same
-    /// close is not a stronger escalation
     #[must_use]
     pub(super) const fn needs_owner_drop(&self) -> bool {
         matches!(
@@ -242,84 +128,34 @@ impl TransportCleanupOperation {
     }
 }
 
-/// Outcome returned when a fresh cleanup failure is classified.
-///
-/// Room cleanup records metrics and decides escalation from this value.
-/// The reconciler only answers whether retry state was created, was already
-/// present, could not be stored or should not be retried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CleanupFailureAction {
-    /// The operation was inserted and is due for a retry on the next
-    /// reconciliation pass.
     RetryQueued,
-    /// The same operation was already pending, so no new queue entry or retry
-    /// metric should be created for this failure.
     RetryAlreadyQueued,
-    /// The bounded retry queue is full and the caller must escalate without
-    /// storing more room-local state.
     QueueFull,
-    /// The adapter reported a deterministic contract failure that another
-    /// retry cannot fix.
     Terminal,
 }
 
-/// Outcome returned after a queued cleanup operation is attempted again.
-///
-/// This separates retry bookkeeping from transport side effects. The caller
-/// remains responsible for metrics, logging and terminal escalation because
-/// those actions need room context and media transport access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CleanupRetryAction {
-    /// The adapter accepted the cleanup and the pending entry was removed.
     Succeeded,
-    /// The cleanup still looks recoverable and remains queued for a later pass.
     Requeued,
-    /// The recoverable failure repeated too many times for room-local retry to
-    /// keep owning the operation.
     Exhausted,
-    /// The retry encountered a deterministic contract failure and was removed.
     Terminal,
 }
 
-/// Bounded retry state for failed room cleanup effects.
-///
-/// # Concurrency
-///
-/// `Room` protects the reconciler with a standard mutex because all methods are
-/// short synchronous bookkeeping steps. Callers must drop that guard before
-/// awaiting media transport work. Holding the guard across `.await` would
-/// couple room cleanup recovery to adapter latency and could block unrelated
-/// cold-path teardown work.
 #[derive(Debug, Default)]
 pub(super) struct CleanupReconciler {
-    /// Pending operations keyed by their transport cleanup identity.
-    ///
-    /// A map is used instead of a queue so the same cleanup effect cannot be
-    /// enqueued repeatedly while retries are already in flight.
     pending: BTreeMap<TransportCleanupOperation, PendingCleanupRetry>,
 }
 
-/// Retry state for one pending cleanup operation.
-///
-/// The delay is expressed in cleanup reconciliation cycles, not wall-clock
-/// time. That keeps recovery tied to room teardown activity and avoids adding a
-/// timer task to the room domain.
 #[derive(Debug, Clone, Copy)]
 struct PendingCleanupRetry {
-    /// Failed retry attempts after the original cleanup failure.
     attempts: u8,
-    /// Reconciliation cycles to skip before the next retry is due.
     wait_cycles: u8,
 }
 
 impl CleanupReconciler {
-    /// Classifies a newly failed cleanup effect and stores retry state when the
-    /// failure is recoverable.
-    ///
-    /// `TransportUnavailable` is treated as recoverable because it can mean the
-    /// adapter, worker or worker boundary is temporarily not ready. Invalid input
-    /// and unsupported feature errors are terminal because they mean a room
-    /// workflow asked for an operation the transport boundary cannot perform.
     pub(super) fn record_failure(
         &mut self,
         operation: TransportCleanupOperation,
@@ -343,13 +179,6 @@ impl CleanupReconciler {
         }
     }
 
-    /// Returns operations that should be retried during the current cleanup
-    /// reconciliation cycle.
-    ///
-    /// The first retry is due immediately so transient adapter gaps are closed
-    /// before teardown returns to its caller. Later failures wait a small number
-    /// of cleanup cycles. This keeps recovery deterministic without introducing
-    /// a timer wheel or background task inside the room domain.
     pub(super) fn due_retries(&mut self) -> Vec<TransportCleanupOperation> {
         let mut due = Vec::new();
         for (operation, retry) in &mut self.pending {
@@ -362,12 +191,6 @@ impl CleanupReconciler {
         due
     }
 
-    /// Applies the result of a retry attempt and returns the next cleanup
-    /// action.
-    ///
-    /// The retry counter is advanced only after a queued retry fails. The
-    /// original failure that inserted the operation is not counted as a retry
-    /// attempt, which keeps metrics aligned with actual retry work.
     pub(super) fn record_retry_result(
         &mut self,
         operation: &TransportCleanupOperation,
@@ -397,12 +220,6 @@ impl CleanupReconciler {
         }
     }
 
-    /// Drops all pending retry state because the owning room is leaving the
-    /// directory.
-    ///
-    /// The returned count lets the caller publish one shutdown failure metric
-    /// per abandoned operation. Once a room is removed there is no authoritative
-    /// owner left that can safely retry transport cleanup later.
     pub(super) fn abandon_pending(&mut self) -> usize {
         let abandoned = self.pending.len();
         self.pending.clear();
@@ -427,8 +244,6 @@ impl CleanupReconciler {
     }
 }
 
-/// Distinguishes deterministic adapter contract failures from failures that
-/// may be fixed by retrying after the transport boundary catches up.
 const fn cleanup_error_is_terminal(error: TransportAdapterError) -> bool {
     matches!(
         error,
@@ -437,12 +252,7 @@ const fn cleanup_error_is_terminal(error: TransportAdapterError) -> bool {
 }
 
 impl Room {
-    /// execute cleanup operations after room state has already moved on
-    ///
-    /// callers pass operations captured before async work starts
-    /// recoverable failures enter the room retry queue
-    /// terminal failures go through the same escalation path used by delayed retries
-    pub(in crate::engine::room) async fn execute_transport_cleanup_operations(
+    pub async fn execute_transport_cleanup_operations(
         &self,
         media_transport: &MediaTransport,
         operations: &[TransportCleanupOperation],
@@ -463,12 +273,6 @@ impl Room {
         cleanup
     }
 
-    /// Executes one cleanup operation against the media transport.
-    ///
-    /// This method contains no retry or metric logic. Keeping the
-    /// transport call separate from reconciliation makes it clear that room
-    /// cleanup state is updated synchronously, then async adapter work is
-    /// attempted after the relevant room lock has been released.
     async fn execute_transport_cleanup_operation(
         &self,
         operation: &TransportCleanupOperation,
@@ -501,14 +305,6 @@ impl Room {
         }
     }
 
-    /// Records a failed first cleanup attempt and performs any immediate
-    /// escalation required by the failure class.
-    ///
-    /// Recoverable failures stay in the room retry queue. Terminal
-    /// failures and queue pressure are surfaced through metrics, then media
-    /// cleanup failures ask the media transport to drop the owning user so a
-    /// lower layer can release resources that the room can no longer address
-    /// precisely.
     async fn record_cleanup_failure(
         &self,
         operation: &TransportCleanupOperation,
@@ -540,13 +336,6 @@ impl Room {
         }
     }
 
-    /// Drains all cleanup retries that are due in the current reconciliation
-    /// cycle.
-    ///
-    /// The reconciler guard is only held while selecting work or recording the
-    /// retry result. Transport adapter calls happen between those bookkeeping
-    /// steps, which prevents adapter latency from blocking other room cleanup
-    /// decisions.
     async fn reconcile_transport_cleanup_retries(&self, media_transport: &MediaTransport) {
         loop {
             let retries = self.cleanup_reconciler().due_retries();
@@ -566,29 +355,11 @@ impl Room {
         }
     }
 
-    /// lets runtime maintenance poll this room's due cleanup work
-    ///
-    /// the room keeps retry ordering and failure classification inside the
-    /// reconciler. callers only decide when to poll and must not hold the room
-    /// state lock while invoking this method
-    ///
-    /// this method does not remove the room from the manager. the manager owns
-    /// directory lifetime after checking empty state and pending retry state
-    /// under the lifecycle lock
-    pub(in crate::engine::room) async fn drain_cleanup_retries(
-        &self,
-        media_transport: &MediaTransport,
-    ) {
+    pub async fn drain_cleanup_retries(&self, media_transport: &MediaTransport) {
         self.reconcile_transport_cleanup_retries(media_transport)
             .await;
     }
 
-    /// Converts a retry outcome into metrics and final escalation.
-    ///
-    /// Requeued operations remain in the room retry queue. Exhausted or terminal media
-    /// cleanup operations are escalated by closing the transport user.
-    /// That user is the only remaining precise cleanup scope when room state has already
-    /// forgotten the detached media or relay target.
     async fn record_cleanup_retry_action(
         &self,
         operation: &TransportCleanupOperation,
@@ -614,11 +385,6 @@ impl Room {
         }
     }
 
-    /// record an unrecovered cleanup failure and apply the transport-user fallback
-    ///
-    /// every terminal path reaches this helper so metrics, warning text and
-    /// last-resort cleanup cannot drift between first failure and retry
-    /// exhaustion
     async fn escalate_cleanup(
         &self,
         operation: &TransportCleanupOperation,
@@ -637,14 +403,6 @@ impl Room {
             .await;
     }
 
-    /// Asks the transport boundary to release the transport user for an
-    /// unrecovered cleanup operation.
-    ///
-    /// This is a last-resort cleanup path. It applies to media and relay target
-    /// failures because closing a user cleanup operation cannot be made stronger
-    /// by closing the same user again. The room records the escalation even when
-    /// the adapter refuses the close so operators can correlate unrecovered
-    /// cleanup with worker-level state.
     async fn force_transport_cleanup_owner_drop(
         &self,
         operation: &TransportCleanupOperation,
@@ -670,35 +428,26 @@ impl Room {
         }
     }
 
-    /// Abandons pending cleanup retries when the room leaves the directory.
-    ///
-    /// Once the manager removes the room, there is no authoritative room left
-    /// to keep retrying transport effects. Each abandoned operation is reported
-    /// as a shutdown cleanup failure so the telemetry surface can distinguish
-    /// expected room removal from retry exhaustion.
-    pub(in crate::engine::room) fn abandon_cleanup_retries_for_shutdown(&self) {
+    pub fn abandon_cleanup_retries_for_shutdown(&self) {
         let abandoned = self.cleanup_reconciler().abandon_pending();
         for _ in 0..abandoned {
             self.metrics.record_transport_cleanup_failure(Shutdown);
         }
     }
 
-    pub(in crate::engine::room) fn has_pending_cleanup_retries(&self) -> bool {
+    pub fn has_pending_cleanup_retries(&self) -> bool {
         self.cleanup_reconciler().has_pending()
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::engine::room) async fn force_cleanup_retry_cycle_for_test(
-        &self,
-        media_transport: &MediaTransport,
-    ) {
+    pub async fn force_cleanup_retry_cycle_for_test(&self, media_transport: &MediaTransport) {
         self.cleanup_reconciler().force_due_for_test();
         self.reconcile_transport_cleanup_retries(media_transport)
             .await;
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(in crate::engine::room) fn pending_cleanup_retry_count_for_test(&self) -> usize {
+    pub fn pending_cleanup_retry_count_for_test(&self) -> usize {
         self.cleanup_reconciler().pending_count()
     }
 

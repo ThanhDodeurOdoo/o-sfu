@@ -169,7 +169,7 @@ pub async fn join_user_with_receiver(
         )
         .await
         .map_err(|error| anyhow!("user should join through manager: {error:?}"))?;
-    Ok((session.connection_id(), receiver))
+    Ok((session.connection_id, receiver))
 }
 
 pub async fn close_user(

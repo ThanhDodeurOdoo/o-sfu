@@ -25,7 +25,7 @@ use crate::engine::{
 
 /// keyframe feedback emitted by one consumer session before producer lookup
 #[derive(Debug, Clone, Copy)]
-pub(in crate::engine::media_transport::rtc) struct PendingKeyframeRequest {
+pub struct PendingKeyframeRequest {
     pub(super) consumer_mid: Mid,
     pub(super) consumer_rid: Option<Rid>,
     pub(super) kind: KeyframeRequestKind,
@@ -79,7 +79,7 @@ pub(super) fn flush_pending_kf_reqs(
 }
 
 /// resolves staged keyframe requests at a supplied time for tests and benchmarks
-pub(in crate::engine::media_transport::rtc) fn flush_pending_kf_reqs_at(
+pub fn flush_pending_kf_reqs_at(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,
@@ -171,7 +171,7 @@ pub(in crate::engine::media_transport::rtc) fn flush_pending_kf_reqs_at(
 }
 
 /// drain retry deadlines after new feedback has had a chance to arm them
-pub(in crate::engine::media_transport::rtc) fn drain_due_kf_retries(
+pub fn drain_due_kf_retries(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,
     buffers: &mut PacketLoopBuffers,

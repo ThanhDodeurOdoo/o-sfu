@@ -1,13 +1,3 @@
-//! Media-core facade for the `o-sfu` server.
-//!
-//! Stable callers use [`prelude`] for ordinary media work and [`server`] only
-//! when they need concrete room, transport, diagnostics, metrics or recording
-//! integration.
-//!
-//! The crate root keeps only fundamental value types: [`Bitrate`],
-//! [`ConnectionId`], [`MediaWorkerId`] and [`RoomInstanceId`]. The private
-//! engine tree stays hidden so new exposed types must fit [`prelude`] or
-//! [`server`] first.
 use std::fmt::{self, Display, Formatter};
 
 mod engine;
@@ -22,11 +12,7 @@ pub(crate) use options::{
     RoomMediaLimits, RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
     RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
-pub(crate) use room::{
-    MediaSessionIdentity, PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
-    RollbackStagedPublishOutcome, SessionNegotiationOutcome, SubscriptionUpdateOutcome,
-    TransportEffectOutcome, UnpublishOutcome,
-};
+pub(crate) use room::{PublishIntentOutcome, TransportEffectOutcome, UnpublishIntentOutcome};
 
 /// Media bitrate stored as bits per second (not bytes per second).
 ///

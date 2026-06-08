@@ -1,115 +1,75 @@
-//! immutable input snapshot for pure receiver video policy
-//!
-//! this boundary normalizes room indexes and transport observations into
-//! route-shaped facts so the staged planner stays pure and deterministic
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::MediaKind;
 
 use super::{
-    super::{super::media_graph::ConsumerRouteTransportRef, action::ReceiverBweTargetPlan},
-    layout::{ReceiverVideoLayoutIntent, featured_source_user_ids_for_active_speakers},
+    super::input::{SourcePolicyInput, SourcePolicyRouteInput},
+    layout::ReceiverVideoLayoutIntent,
 };
 use crate::{
     Bitrate,
     engine::{
         UserId,
-        media_transport::{ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId},
-        room::state::RoomState,
+        room::{media_graph::ConsumerRouteTransportRef, state::RoomState},
         source_model::{
-            ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
-            PublishedSourceId, SourceAdaptationPolicy, SourceEncodingDescriptor,
+            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
+            SourceAdaptationPolicy, SourceEncodingDescriptor,
         },
     },
 };
 
-#[derive(Debug)]
-pub(in crate::engine::room) struct ReceiverVideoPolicyInput<'a> {
-    pub routes: Vec<ReceiverVideoRouteInput<'a>>,
-    pub receiver_bwe_targets: BTreeMap<UserId, ReceiverBweTargetPlan>,
-    pub max_video_downloads_per_receiver: usize,
-}
-
-impl<'a> ReceiverVideoPolicyInput<'a> {
-    #[must_use]
-    pub fn from_state(
-        state: &'a RoomState,
-        ranked_active_speaker_sources: &[ActiveSpeakerSource],
-        receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
-    ) -> Self {
-        let featured_source_user_ids =
-            featured_source_user_ids_for_active_speakers(state, ranked_active_speaker_sources);
-        let active_speaker_rank_by_user =
-            active_speaker_rank_by_user(state, ranked_active_speaker_sources);
-        let receiver_bandwidth_by_user = receiver_bandwidth_by_user(receiver_bandwidth_snapshot);
-        let visible_scalable_route_counts =
-            visible_scalable_route_counts_by_consumer(state, &featured_source_user_ids);
-        let receiver_bwe_targets = state
-            .transport_user_entries()
-            .into_iter()
-            .map(|(user_id, connection_id)| {
-                (
-                    user_id.clone(),
-                    ReceiverBweTargetPlan::new(user_id, connection_id, Bitrate::zero()),
-                )
+pub(super) fn receiver_video_routes<'a>(
+    state: &RoomState,
+    input: &SourcePolicyInput<'a>,
+) -> Vec<ReceiverVideoRouteInput<'a>> {
+    let visible_scalable_route_counts = visible_scalable_route_counts_by_consumer(
+        state,
+        &input.routes,
+        &input.featured_source_user_ids,
+    );
+    input
+        .routes
+        .iter()
+        .filter_map(|route| {
+            let source = route.source;
+            if source.media_kind() != MediaKind::Video
+                || source.policy().adaptation() == SourceAdaptationPolicy::None
+            {
+                return None;
+            }
+            let layout_intent = state.receiver_video_layout_intent(
+                &route.route.consumer_user_id,
+                source,
+                &input.featured_source_user_ids,
+            );
+            Some(ReceiverVideoRouteInput {
+                user_count: input.user_count,
+                source,
+                route: route.route.clone(),
+                current_selection: route.current_selection,
+                layout_intent,
+                visible_scalable_route_count: visible_scalable_route_counts
+                    .get(&route.route.consumer_user_id)
+                    .copied()
+                    .unwrap_or(1),
+                active_speaker_rank: input
+                    .active_speaker_rank_by_user
+                    .get(source.owner().user_id())
+                    .copied(),
+                receiver_bandwidth: input
+                    .receiver_bandwidth_by_user
+                    .get(&route.route.consumer_user_id)
+                    .copied(),
             })
-            .collect();
-        let routes = state
-            .source_policy_live_consumer_routes()
-            .filter_map(|route| {
-                let source = route.source;
-                if source.media_kind() != MediaKind::Video
-                    || source.policy().adaptation() == SourceAdaptationPolicy::None
-                {
-                    return None;
-                }
-                if !route.producer.active {
-                    return None;
-                }
-                let current_selection = route.selection_or_open(true);
-                if !current_selection.active() {
-                    return None;
-                }
-                let layout_intent = state.receiver_video_layout_intent(
-                    &route.consumer_user_id,
-                    source,
-                    &featured_source_user_ids,
-                );
-                Some(ReceiverVideoRouteInput {
-                    user_count: state.user_count(),
-                    source,
-                    transport_ref: route.transport_ref(),
-                    current_selection,
-                    layout_intent,
-                    visible_scalable_route_count: visible_scalable_route_counts
-                        .get(&route.consumer_user_id)
-                        .copied()
-                        .unwrap_or(1),
-                    active_speaker_rank: active_speaker_rank_by_user
-                        .get(source.owner().user_id())
-                        .copied(),
-                    receiver_bandwidth: receiver_bandwidth_by_user
-                        .get(&route.consumer_user_id)
-                        .copied(),
-                })
-            })
-            .collect();
-        Self {
-            routes,
-            receiver_bwe_targets,
-            max_video_downloads_per_receiver: state
-                .source_policy_media_limits()
-                .max_video_downloads_per_receiver(),
-        }
-    }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::engine::room) struct ReceiverVideoRouteInput<'a> {
+pub struct ReceiverVideoRouteInput<'a> {
     pub user_count: usize,
     pub source: &'a PublishedSourceDescriptor,
-    pub transport_ref: ConsumerRouteTransportRef,
+    pub route: ConsumerRouteTransportRef,
     pub current_selection: ConsumerSourceSelection,
     pub layout_intent: ReceiverVideoLayoutIntent,
     pub visible_scalable_route_count: usize,
@@ -127,7 +87,7 @@ impl ReceiverVideoRouteInput<'_> {
     }
 
     pub fn consumer_user_id(&self) -> &UserId {
-        self.transport_ref.consumer_user_id()
+        &self.route.consumer_user_id
     }
 
     pub fn encodings(&self) -> SelectableRouteEncodings<'_> {
@@ -136,7 +96,7 @@ impl ReceiverVideoRouteInput<'_> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(in crate::engine::room) struct SelectableRouteEncodings<'a> {
+pub struct SelectableRouteEncodings<'a> {
     source: &'a PublishedSourceDescriptor,
 }
 
@@ -163,195 +123,28 @@ impl<'a> SelectableRouteEncodings<'a> {
 
 fn visible_scalable_route_counts_by_consumer(
     state: &RoomState,
+    routes: &[SourcePolicyRouteInput<'_>],
     featured_source_user_ids: &BTreeSet<UserId>,
 ) -> BTreeMap<UserId, usize> {
     let mut counts = BTreeMap::new();
-    for route in state.source_policy_live_consumer_routes() {
+    for route in routes {
         let source = route.source;
         if source.media_kind() != MediaKind::Video
             || source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo
         {
             continue;
         }
-        if !route.producer.active || !route.selection_or_open(true).active() {
-            continue;
-        }
         let layout_intent = state.receiver_video_layout_intent(
-            &route.consumer_user_id,
+            &route.route.consumer_user_id,
             source,
             featured_source_user_ids,
         );
         if !layout_intent.counts_toward_visible_budget() {
             continue;
         }
-        *counts.entry(route.consumer_user_id.clone()).or_default() += 1;
+        *counts
+            .entry(route.route.consumer_user_id.clone())
+            .or_default() += 1;
     }
     counts
-}
-
-fn receiver_bandwidth_by_user(snapshot: &ReceiverBandwidthSnapshot) -> BTreeMap<UserId, Bitrate> {
-    snapshot
-        .per_session
-        .iter()
-        .map(|(session_key, estimate_bps)| (session_key.user_id().clone(), *estimate_bps))
-        .collect()
-}
-
-fn active_speaker_rank_by_user(
-    state: &RoomState,
-    ranked_active_speaker_sources: &[ActiveSpeakerSource],
-) -> BTreeMap<UserId, usize> {
-    let mut ranks = BTreeMap::new();
-    for source in ranked_active_speaker_sources {
-        let Some(user_id) =
-            featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
-        else {
-            continue;
-        };
-        let next_rank = ranks.len();
-        ranks.entry(user_id).or_insert(next_rank);
-    }
-    ranks
-}
-
-pub(super) fn featured_source_owner_for_active_speaker_source(
-    state: &RoomState,
-    transport_media_id: TransportMediaId,
-) -> Option<UserId> {
-    let entry = state.source_transport_media_entry(transport_media_id)?;
-    let detector_source = state.source_policy_source(entry.source_id())?;
-    let detector_policy = detector_source.policy().active_speaker()?;
-    if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
-        return None;
-    }
-    let owner_user_id = entry.owner_user_id().clone();
-    state
-        .source_policy_owner_has_promotable_source_in_group(&owner_user_id, detector_policy.group())
-        .then_some(owner_user_id)
-}
-
-pub(super) fn first_featured_source_user_for_active_speakers(
-    state: &RoomState,
-    ranked_active_speaker_sources: &[ActiveSpeakerSource],
-) -> Option<UserId> {
-    ranked_active_speaker_sources.iter().find_map(|source| {
-        featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
-    })
-}
-
-pub(super) fn first_featured_source_users_for_active_speakers(
-    state: &RoomState,
-    ranked_active_speaker_sources: &[ActiveSpeakerSource],
-    limit: usize,
-) -> BTreeSet<UserId> {
-    ranked_active_speaker_sources
-        .iter()
-        .filter_map(|source| {
-            featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
-        })
-        .take(limit)
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use o_sfu_router::{MediaKind, Rid};
-
-    use super::*;
-    use crate::engine::{
-        ConnectionId,
-        source_model::{
-            PublishedSourceDescriptorParts, PublishedSourceOwner, SourceEncodingDescriptorParts,
-            SourceEncodingId, SourceModelError, SourcePolicy, SourceRoomPolicySelector,
-            UserStreamId,
-        },
-    };
-
-    fn source_encoding(
-        source_id: PublishedSourceId,
-        encoding_id: SourceEncodingId,
-        rid: &str,
-        max_bitrate: Bitrate,
-    ) -> SourceEncodingDescriptor {
-        SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
-            encoding_id,
-            source_id,
-            rid: Some(Rid::new(rid)),
-            primary_ssrc: None,
-            repair_ssrc: None,
-            max_bitrate: Some(max_bitrate),
-            resolution_scale: None,
-            max_framerate: None,
-            policy_role: None,
-            max_temporal_layer_id: None,
-            negotiated_format: None,
-        })
-    }
-
-    #[test]
-    fn route_input_uses_descriptor_owned_selectable_encoding_order() -> Result<(), SourceModelError>
-    {
-        let source_id = PublishedSourceId::from_raw(19);
-        let low_encoding_id = SourceEncodingId::from_raw(1);
-        let middle_encoding_id = SourceEncodingId::from_raw(2);
-        let high_encoding_id = SourceEncodingId::from_raw(3);
-        let source_user_id = UserId::Integer(4);
-        let consumer_user_id = UserId::Integer(5);
-        let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-            source_id,
-            owner: PublishedSourceOwner::new(source_user_id.clone()),
-            stream_id: UserStreamId::new("camera"),
-            media_kind: MediaKind::Video,
-            policy: SourcePolicy::hidden(),
-            mid: None,
-            encodings: vec![
-                source_encoding(source_id, high_encoding_id, "hi", Bitrate::from_kbps(900)),
-                source_encoding(source_id, low_encoding_id, "lo", Bitrate::from_kbps(150)),
-                source_encoding(
-                    source_id,
-                    middle_encoding_id,
-                    "mid",
-                    Bitrate::from_kbps(450),
-                ),
-            ],
-        })?;
-        let route = ReceiverVideoRouteInput {
-            user_count: 2,
-            source: &source,
-            transport_ref: ConsumerRouteTransportRef::from_parts(
-                consumer_user_id,
-                ConnectionId::from_raw(10),
-                TransportMediaId::new(12),
-                source_user_id,
-                ConnectionId::from_raw(9),
-                TransportMediaId::new(11),
-            ),
-            current_selection: ConsumerSourceSelection::open(true),
-            layout_intent: ReceiverVideoLayoutIntent::new(
-                SourceRoomPolicySelector::VisibleThumbnail,
-            ),
-            visible_scalable_route_count: 1,
-            active_speaker_rank: None,
-            receiver_bandwidth: None,
-        };
-
-        let selectable_encoding_ids = route
-            .encodings()
-            .iter()
-            .map(SourceEncodingDescriptor::encoding_id)
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            selectable_encoding_ids,
-            vec![low_encoding_id, middle_encoding_id, high_encoding_id]
-        );
-        assert_eq!(
-            route
-                .encodings()
-                .get(1)
-                .map(SourceEncodingDescriptor::encoding_id),
-            Some(middle_encoding_id)
-        );
-        Ok(())
-    }
 }

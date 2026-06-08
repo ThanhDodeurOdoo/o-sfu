@@ -3,6 +3,7 @@
 //! This crate keep all the routing logic pure, independant from async runtime
 mod model;
 #[cfg(any(test, feature = "test-support"))]
+#[path = "TESTS/test_support/mod.rs"]
 pub mod test_support;
 
 pub use self::model::{

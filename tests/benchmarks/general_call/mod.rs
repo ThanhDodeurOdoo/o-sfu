@@ -18,8 +18,7 @@ use o_sfu_core::{
     prelude::{
         Bitrate, CodecPreferences, ConnectionId, MediaCodecFlags, RoomMediaLimits,
         RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags, SessionBitrateLimits, SfuCore,
-        SourceSubscriptionIntent, SubscriptionUpdateOutcome, UnpublishOutcome, UserStreamId,
-        VideoBitrateLimits,
+        SourceSubscriptionIntent, UserStreamId, VideoBitrateLimits,
     },
     server::{
         diagnostics::DiagnosticsStore,
@@ -337,7 +336,7 @@ impl GeneralCallScenario {
         }
         if self
             .user_connections
-            .insert(raw_user_id, admission.connection_id())
+            .insert(raw_user_id, admission.connection_id)
             .is_some()
         {
             return Err(anyhow!("user {raw_user_id} connection already exists"));
@@ -426,27 +425,21 @@ impl GeneralCallScenario {
 
     async fn unpublish_camera(&mut self, raw_user_id: RawUserId) -> Result<()> {
         let user_id = user(raw_user_id);
-        let connection_id = self.connection_id(raw_user_id)?;
         let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
-        let outcome = self
-            .core
-            .session(self.room.as_ref(), &user_id, connection_id)
+        if self
+            .room
+            .test_api()
+            .media()
+            .unpublish_track(&user_id, &stream_id, &self.media_transport)
             .await
-            .publication()
-            .unpublish(&stream_id)
-            .await;
-        match outcome {
-            UnpublishOutcome::Unpublished { .. } => {
-                if self.media.camera.remove(&raw_user_id).is_none() {
-                    return Err(anyhow!("user {raw_user_id} camera media was not tracked"));
-                }
-                self.stats.unpublications = self.stats.unpublications.saturating_add(1);
-                Ok(())
+        {
+            if self.media.camera.remove(&raw_user_id).is_none() {
+                return Err(anyhow!("user {raw_user_id} camera media was not tracked"));
             }
-            UnpublishOutcome::MissingPublication => {
-                Err(anyhow!("user {raw_user_id} camera publication was missing"))
-            }
+            self.stats.unpublications = self.stats.unpublications.saturating_add(1);
+            return Ok(());
         }
+        Err(anyhow!("user {raw_user_id} camera publication was missing"))
     }
 
     async fn close_user(&mut self, raw_user_id: RawUserId) -> Result<()> {
@@ -535,26 +528,16 @@ impl GeneralCallScenario {
         let receiver_user_id = user(receiver);
         let publisher_user_id = user(publisher);
         let receiver_connection_id = self.connection_id(receiver)?;
-        let outcome = self
+        let session = self
             .core
-            .session(
-                self.room.as_ref(),
-                &receiver_user_id,
-                receiver_connection_id,
-            )
-            .await
-            .subscription()
-            .update(&publisher_user_id, intents)
+            .session(&self.room, &receiver_user_id, receiver_connection_id)
             .await;
-        match outcome {
-            SubscriptionUpdateOutcome::Applied => {
-                self.stats.subscription_updates = self.stats.subscription_updates.saturating_add(1);
-                Ok(())
-            }
-            SubscriptionUpdateOutcome::StaleConnection => {
-                Err(anyhow!("user {receiver} subscription update was stale"))
-            }
-        }
+        session
+            .subscribe(&publisher_user_id, intents)
+            .await
+            .map_err(|error| anyhow!("user {receiver} subscription update failed: {error}"))?;
+        self.stats.subscription_updates = self.stats.subscription_updates.saturating_add(1);
+        Ok(())
     }
 
     async fn run_media_time(&mut self, duration: Duration) -> Result<()> {

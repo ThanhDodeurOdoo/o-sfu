@@ -11,11 +11,12 @@
 //! Read this node before the WebSocket path when you need the server's non-streaming
 //! control plane.
 
+#[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
 pub(crate) mod contract;
 mod controller;
 mod extractors;
-#[cfg(test)]
-mod tests;
 
 #[cfg(test)]
 pub(crate) use controller::app;

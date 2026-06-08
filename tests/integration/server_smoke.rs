@@ -498,6 +498,28 @@ async fn replaced_socket_cannot_broadcast_or_change_info_from_integration_test()
 }
 
 #[tokio::test]
+async fn replaced_socket_recording_request_is_kicked_from_integration_test() -> TestResult {
+    let (server, room) = server_with_room("issuer-replacement-recording-guard").await?;
+    let bob_token = token(&room, UserId::Integer(2))?;
+    let (mut alice, mut bob) =
+        protocol_pair(&server, &room, UserId::Integer(1), UserId::Integer(2)).await?;
+    let (replacement, _welcome) = require_some(
+        ProtocolWebSocketClient::authenticate_and_negotiate(&server, &bob_token).await,
+        "replacement should negotiate",
+    )?;
+
+    assert_peer_left(&mut alice, UserId::Integer(2)).await?;
+    assert_peer_joined(&mut alice, UserId::Integer(2)).await?;
+
+    let _ = bob.send_start_recording("stale-recording-start").await;
+    assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
+    require_some(replacement.close().await, "replacement should close")?;
+    require_some(alice.close().await, "alice should close")?;
+    assert!(server.wait_for_room_absence(&room).await);
+    Ok(())
+}
+
+#[tokio::test]
 async fn numeric_string_user_ids_share_one_runtime_identity() -> TestResult {
     let (server, room) = server_with_room("issuer-runtime-user-id-normalization").await?;
     let string_token = token(&room, UserId::String("42".to_owned()))?;

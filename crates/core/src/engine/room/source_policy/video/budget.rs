@@ -1,9 +1,7 @@
-//! receiver-level video budget solver
-
 use super::{
     adaptation::cheapest_useful_selector,
     admission::active_route_count,
-    planner::{PlannedReceiverRoute, RouteOutcome},
+    receiver::{PlannedReceiverRoute, RouteOutcome},
 };
 use crate::{
     Bitrate,
@@ -22,13 +20,13 @@ pub(super) fn apply_overload_policy(
         return;
     }
     for route in routes.iter_mut().filter(|route| route_can_downgrade(route)) {
-        let Some((selector, bitrate)) = cheapest_useful_selector(route.input().encodings()) else {
-            let selected_bitrate = route.selected_bitrate();
+        let Some((selector, bitrate)) = cheapest_useful_selector(route.route.encodings()) else {
+            let selected_bitrate = route.selected_bitrate;
             route.pause(PolicyPauseReason::MissingUsableLayer, RouteOutcome::Neutral);
             total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
             continue;
         };
-        let selected_bitrate = route.selected_bitrate();
+        let selected_bitrate = route.selected_bitrate;
         if bitrate < selected_bitrate {
             total_bitrate = total_bitrate
                 .saturating_sub(selected_bitrate)
@@ -50,7 +48,7 @@ pub(super) fn apply_overload_policy(
         if total_bitrate <= receiver_bandwidth {
             break;
         }
-        let selected_bitrate = route.selected_bitrate();
+        let selected_bitrate = route.selected_bitrate;
         let pause_reason = pause_reason_for_route(route);
         route.pause(pause_reason, RouteOutcome::Paused);
         total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
@@ -77,14 +75,14 @@ pub(super) fn diagnostics(
 fn selected_receiver_bitrate(routes: &[PlannedReceiverRoute<'_>]) -> Bitrate {
     routes
         .iter()
-        .filter(|route| route.decision().sends_media())
+        .filter(|route| route.selection.policy_pause_reason.is_none())
         .fold(Bitrate::zero(), |total, route| {
-            total.saturating_add(route.selected_bitrate())
+            total.saturating_add(route.selected_bitrate)
         })
 }
 
 fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
-    let input = route.input();
+    let input = route.route;
     input.adaptation_policy() == SourceAdaptationPolicy::ScalableVideo
         && matches!(
             input.layout_intent.priority(),
@@ -94,7 +92,7 @@ fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
 
 fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
     matches!(
-        route.input().layout_intent.priority(),
+        route.route.layout_intent.priority(),
         SourceRoutePriority::PinnedOrFeatured
             | SourceRoutePriority::ReadableDetail
             | SourceRoutePriority::ActiveSpeaker
@@ -102,7 +100,7 @@ fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
 }
 
 fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
-    match route.input().layout_intent.priority() {
+    match route.route.layout_intent.priority() {
         SourceRoutePriority::HiddenOrOverflow => 0,
         SourceRoutePriority::VisibleThumbnail => 1,
         SourceRoutePriority::ActiveSpeaker => 2,
@@ -112,7 +110,7 @@ fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
 }
 
 fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason {
-    let intent = route.input().layout_intent;
+    let intent = route.route.layout_intent;
     match intent.priority() {
         SourceRoutePriority::HiddenOrOverflow => match intent.role() {
             SourceRoomPolicySelector::Hidden => PolicyPauseReason::HiddenTile,

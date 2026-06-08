@@ -20,163 +20,175 @@ impl RecordingPermissions {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StartRecordingPlan {
+    Start {
+        audio: bool,
+        video: bool,
+        transcription: bool,
+    },
+    UpdateTranscription(bool),
+}
+
+impl StartRecordingPlan {
+    fn new(
+        current: &RecordingState,
+        permissions: RecordingPermissions,
+        options: &RecordingOptions,
+    ) -> Option<Self> {
+        if !permissions.any() {
+            return None;
+        }
+        if current.recording == Some(true) {
+            if options.audio.is_some() || options.video.is_some() || !permissions.transcription {
+                return None;
+            }
+            return Some(Self::UpdateTranscription(options.transcription?));
+        }
+        let audio = options.audio.unwrap_or(false);
+        let video = options.video.unwrap_or(false);
+        let transcription = options.transcription.unwrap_or(false);
+        if (!audio && !video && !transcription)
+            || (audio && !permissions.audio)
+            || (video && !permissions.video)
+            || (transcription && !permissions.transcription)
+        {
+            return None;
+        }
+        Some(Self::Start {
+            audio,
+            video,
+            transcription,
+        })
+    }
+}
+
 impl Room {
-    /// Validate and apply a recording-start request for one live user
-    /// without exposing recording-service details to the signaling edge.
-    pub async fn start_recording_runtime(
+    pub(crate) async fn apply_recording_start(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
         options: RecordingOptions,
     ) -> bool {
-        let request_context = {
-            let state = self.state.read().await;
-            state.recording_request_context(user_id, connection_id)
+        let Some((permissions, current_state)) =
+            self.recording_request(user_id, connection_id).await
+        else {
+            return self.reject_recording_start();
         };
-        let Some(request_context) = request_context else {
-            self.metrics.record_recording_start_rejected();
-            return false;
+        let Some(plan) = StartRecordingPlan::new(&current_state, permissions, &options) else {
+            return self.reject_recording_start();
         };
-        let permissions = self.recording_permissions(request_context.permissions());
-        if !permissions.any() {
-            self.metrics.record_recording_start_rejected();
-            return false;
-        }
-
-        let current_state = request_context.recording_state();
-        let media_worker_id = self.media_worker_id_for_connection(connection_id).await;
-        if current_state.recording == Some(true) {
-            if options.audio.is_some() || options.video.is_some() {
-                self.metrics.record_recording_start_rejected();
-                return false;
+        let next_state = match &plan {
+            StartRecordingPlan::Start {
+                audio,
+                video,
+                transcription,
+            } => {
+                if self.recording_service.start().is_err() {
+                    return self.reject_recording_start();
+                }
+                active_recording_state(*audio, *transcription, *video)
             }
-            let Some(transcription) = options.transcription else {
-                self.metrics.record_recording_start_rejected();
-                return false;
-            };
-            if !permissions.transcription {
-                self.metrics.record_recording_start_rejected();
-                return false;
+            StartRecordingPlan::UpdateTranscription(transcription) => {
+                let mut state = current_state;
+                state.transcription = Some(*transcription);
+                state
             }
-            let mut next_state = current_state.clone();
-            next_state.transcription = Some(transcription);
-            let fanout = {
-                let mut state = self.state.write().await;
-                state.apply_recording_state_update(next_state, None)
-            };
-            if let Some(fanout) = fanout {
-                fanout.emit();
-            }
-            self.metrics.record_recording_start_accepted();
-            self.diagnostics.record(
-                DiagnosticsEventData::for_user(
-                    self.uuid(),
-                    user_id,
-                    telemetry_event::RECORDING_STARTED,
-                )
-                .with_connection_id(connection_id.as_u64())
-                .with_media_worker_id(media_worker_id)
-                .insert_field("transcription", transcription),
-            );
-            return true;
-        }
-
-        let wants_audio = options.audio.unwrap_or(false);
-        let wants_video = options.video.unwrap_or(false);
-        let wants_transcription = options.transcription.unwrap_or(false);
-        if (!wants_audio && !wants_video && !wants_transcription)
-            || (wants_audio && !permissions.audio)
-            || (wants_video && !permissions.video)
-            || (wants_transcription && !permissions.transcription)
-        {
-            self.metrics.record_recording_start_rejected();
-            return false;
-        }
-
-        if self.recording_service.start().is_err() {
-            self.metrics.record_recording_start_rejected();
-            return false;
-        }
-
-        let fanout = {
-            let mut state = self.state.write().await;
-            state.apply_recording_state_update(
-                RecordingState {
-                    recording: Some(true),
-                    audio: Some(wants_audio),
-                    transcription: Some(wants_transcription),
-                    video: Some(wants_video),
-                },
-                None,
-            )
         };
-        if let Some(fanout) = fanout {
-            fanout.emit();
-        }
+
+        self.apply_recording_state(next_state, None).await;
         self.metrics.record_recording_start_accepted();
-        self.metrics.add_active_recording_rooms(1);
-        self.diagnostics.record(
-            DiagnosticsEventData::for_user(
-                self.uuid(),
-                user_id,
-                telemetry_event::RECORDING_STARTED,
-            )
-            .with_connection_id(connection_id.as_u64())
-            .with_media_worker_id(media_worker_id)
-            .insert_field("audio", wants_audio)
-            .insert_field("transcription", wants_transcription)
-            .insert_field("video", wants_video),
-        );
+        if matches!(plan, StartRecordingPlan::Start { .. }) {
+            self.metrics.add_active_recording_rooms(1);
+        }
+        self.record_start_diagnostics(user_id, connection_id, &plan)
+            .await;
         true
     }
 
-    /// Validate and apply a recording-stop request for one live user.
-    pub async fn stop_recording_runtime(
+    pub(crate) async fn apply_recording_stop(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> bool {
-        let request_context = {
-            let state = self.state.read().await;
-            state.recording_request_context(user_id, connection_id)
+        let Some((permissions, current_state)) =
+            self.recording_request(user_id, connection_id).await
+        else {
+            return self.reject_recording_stop();
         };
-        let Some(request_context) = request_context else {
-            self.metrics.record_recording_stop_rejected();
-            return false;
-        };
-        if !self
-            .recording_permissions(request_context.permissions())
-            .any()
-        {
-            self.metrics.record_recording_stop_rejected();
-            return false;
+        if !permissions.any() {
+            return self.reject_recording_stop();
         }
-        let current_state = request_context.recording_state();
         if current_state.recording != Some(true) {
             self.metrics.record_recording_stop_accepted();
             return true;
         }
         if self.recording_service.stop().is_err() {
-            self.metrics.record_recording_stop_rejected();
-            return false;
+            return self.reject_recording_stop();
         }
+
+        self.apply_recording_state(stopped_recording_state(), Some(StopCode::UserRequest))
+            .await;
+        self.metrics.record_recording_stop_accepted();
+        self.metrics.add_active_recording_rooms(-1);
+        self.record_stop_diagnostics(user_id, connection_id).await;
+        true
+    }
+
+    async fn recording_request(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> Option<(RecordingPermissions, RecordingState)> {
+        let request = {
+            let state = self.state.read().await;
+            state.recording_request_context(user_id, connection_id)
+        };
+        let (permissions, state) = request?;
+        Some((self.recording_permissions(permissions), state))
+    }
+
+    async fn apply_recording_state(&self, next: RecordingState, stop_code: Option<StopCode>) {
         let fanout = {
             let mut state = self.state.write().await;
-            state.apply_recording_state_update(
-                RecordingState {
-                    recording: Some(false),
-                    audio: Some(false),
-                    transcription: Some(false),
-                    video: Some(false),
-                },
-                Some(StopCode::UserRequest),
-            )
+            state.apply_recording_state_update(next, stop_code)
         };
         if let Some(fanout) = fanout {
             fanout.emit();
         }
-        self.metrics.record_recording_stop_accepted();
-        self.metrics.add_active_recording_rooms(-1);
+    }
+
+    async fn record_start_diagnostics(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        plan: &StartRecordingPlan,
+    ) {
+        let event = DiagnosticsEventData::for_user(
+            self.uuid(),
+            user_id,
+            telemetry_event::RECORDING_STARTED,
+        )
+        .with_connection_id(connection_id.as_u64())
+        .with_media_worker_id(self.media_worker_id_for_connection(connection_id).await);
+        match plan {
+            StartRecordingPlan::Start {
+                audio,
+                video,
+                transcription,
+            } => self.diagnostics.record(
+                event
+                    .insert_field("audio", *audio)
+                    .insert_field("transcription", *transcription)
+                    .insert_field("video", *video),
+            ),
+            StartRecordingPlan::UpdateTranscription(transcription) => self
+                .diagnostics
+                .record(event.insert_field("transcription", *transcription)),
+        }
+    }
+
+    async fn record_stop_diagnostics(&self, user_id: &UserId, connection_id: ConnectionId) {
         let media_worker_id = self.media_worker_id_for_connection(connection_id).await;
         self.diagnostics.record(
             DiagnosticsEventData::for_user(
@@ -188,7 +200,16 @@ impl Room {
             .with_media_worker_id(media_worker_id)
             .insert_field("stop_code", "user_request"),
         );
-        true
+    }
+
+    fn reject_recording_start(&self) -> bool {
+        self.metrics.record_recording_start_rejected();
+        false
+    }
+
+    fn reject_recording_stop(&self) -> bool {
+        self.metrics.record_recording_stop_rejected();
+        false
     }
 
     fn recording_permissions(&self, permissions: RoomUserPermissions) -> RecordingPermissions {
@@ -213,5 +234,23 @@ impl Room {
             .await
             .media_worker_id_for_connection(connection_id)
             .as_usize()
+    }
+}
+
+fn active_recording_state(audio: bool, transcription: bool, video: bool) -> RecordingState {
+    RecordingState {
+        recording: Some(true),
+        audio: Some(audio),
+        transcription: Some(transcription),
+        video: Some(video),
+    }
+}
+
+fn stopped_recording_state() -> RecordingState {
+    RecordingState {
+        recording: Some(false),
+        audio: Some(false),
+        transcription: Some(false),
+        video: Some(false),
     }
 }

@@ -1,74 +1,43 @@
-//! receiver video adaptation stability rules
-
-use super::planner::{PlannedReceiverRoute, ReceiverRouteDecision};
+use super::{
+    receiver::PlannedReceiverRoute,
+    selection::{AdaptationCounts, ReceiverRouteSelection},
+};
 use crate::engine::source_model::PolicyPauseReason;
 
 pub(super) const DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
 pub(super) const UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
 
-pub(super) fn resolve(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteDecision {
-    let current = route.input().current_selection;
+pub(super) fn resolve(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelection {
+    let current = route.route.current_selection;
     let current_pause_reason = current.policy_pause_reason();
-    match (route.decision(), current_pause_reason) {
-        (
-            ReceiverRouteDecision::Send { selector, .. },
-            Some(PolicyPauseReason::VideoDownloadLimit),
-        ) => ReceiverRouteDecision::Send {
-            selector,
-            pressure_observations: 0,
-            upgrade_observations: 0,
-            request_keyframe: true,
-        },
-        (ReceiverRouteDecision::Send { selector, .. }, Some(reason)) => {
-            let upgrade_observations = current
-                .upgrade_observations()
-                .saturating_add(1)
-                .min(UPSWITCH_STABLE_OBSERVATIONS);
-            if upgrade_observations >= UPSWITCH_STABLE_OBSERVATIONS {
-                ReceiverRouteDecision::Send {
-                    selector,
-                    pressure_observations: 0,
-                    upgrade_observations: 0,
-                    request_keyframe: true,
-                }
+    let selection = route.selection;
+    match (
+        selection.policy_pause_reason.is_none(),
+        selection.policy_pause_reason,
+        current_pause_reason,
+    ) {
+        (true, _, Some(PolicyPauseReason::VideoDownloadLimit)) => {
+            ReceiverRouteSelection::send(selection.selector, AdaptationCounts::reset(), true)
+        }
+        (true, _, Some(reason)) => {
+            let counts = AdaptationCounts::next_upgrade(current, UPSWITCH_STABLE_OBSERVATIONS);
+            if counts.upgrade >= UPSWITCH_STABLE_OBSERVATIONS {
+                ReceiverRouteSelection::send(selection.selector, AdaptationCounts::reset(), true)
             } else {
-                ReceiverRouteDecision::Hold {
-                    policy_pause_reason: Some(reason),
-                    selector: current.selector(),
-                    pressure_observations: 0,
-                    upgrade_observations,
-                }
+                ReceiverRouteSelection::hold(current, Some(reason), counts)
             }
         }
-        (ReceiverRouteDecision::Pause { reason, .. }, pause_reason)
-            if pause_reason != Some(reason) =>
-        {
+        (false, Some(reason), pause_reason) if pause_reason != Some(reason) => {
             if reason == PolicyPauseReason::VideoDownloadLimit {
-                return ReceiverRouteDecision::Pause {
-                    reason,
-                    pressure_observations: 0,
-                    upgrade_observations: 0,
-                };
+                return ReceiverRouteSelection::pause(current, reason, AdaptationCounts::reset());
             }
-            let pressure_observations = current
-                .pressure_observations()
-                .saturating_add(1)
-                .min(DOWNSWITCH_PRESSURE_OBSERVATIONS);
-            if pressure_observations >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
-                ReceiverRouteDecision::Pause {
-                    reason,
-                    pressure_observations: 0,
-                    upgrade_observations: 0,
-                }
+            let counts = AdaptationCounts::next_pressure(current, DOWNSWITCH_PRESSURE_OBSERVATIONS);
+            if counts.pressure >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
+                ReceiverRouteSelection::pause(current, reason, AdaptationCounts::reset())
             } else {
-                ReceiverRouteDecision::Hold {
-                    policy_pause_reason: None,
-                    selector: current.selector(),
-                    pressure_observations,
-                    upgrade_observations: 0,
-                }
+                ReceiverRouteSelection::hold(current, None, counts)
             }
         }
-        _ => route.decision(),
+        _ => selection,
     }
 }

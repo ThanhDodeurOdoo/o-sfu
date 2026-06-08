@@ -101,7 +101,7 @@ impl RemoteSourceRollback {
 
 /// Remove one registered transport media handle and reconcile every dependent
 /// SDP, route, and remote-source side effect that still points at it.
-pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_remove_media(
+pub fn worker_remove_media(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     session_key: &TransportSessionKey,
@@ -276,7 +276,7 @@ fn worker_stage_native_media_removal(
 /// Before the first answer lands, the RTC state can be updated directly because
 /// there is no committed negotiated description to keep in sync yet. After that
 /// point every addition must stage the next renegotiation offer first.
-pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_recv_media(
+pub fn worker_add_recv_media(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     policy: RecvMediaPolicy,
@@ -408,7 +408,7 @@ fn worker_stage_native_recv_media(
 /// form one logical edge. If the consumer user is gone or media staging
 /// fails, any provisional remote-source registration is restored before the
 /// error escapes.
-pub(in crate::engine::media_transport::rtc::worker::handlers) fn worker_add_send_media(
+pub fn worker_add_send_media(
     state: &mut PacketLoopState,
     request: AddSendMediaRequest<'_>,
     now: Instant,

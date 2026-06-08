@@ -30,7 +30,11 @@
 //!   capability projection.
 //! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
+#[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
 #[cfg(feature = "internal-benchmarks")]
+#[path = "TESTS/benchmark_support/mod.rs"]
 pub mod benchmark_support;
 mod bitrate;
 mod bootstrap;
@@ -40,6 +44,7 @@ mod forwarded_packet;
 mod forwarding_destination;
 mod forwarding_planner;
 #[cfg(any(test, feature = "fuzzing"))]
+#[path = "TESTS/fuzz_support/mod.rs"]
 pub(crate) mod fuzz_support;
 mod keyframe_tracker;
 mod local_forwarding;
@@ -56,16 +61,15 @@ mod slots;
 mod source_route;
 mod state;
 #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
+#[path = "TESTS/test_support/mod.rs"]
 pub mod test_support;
-#[cfg(test)]
-mod tests;
 mod worker;
 
-pub(in crate::engine::media_transport) use commands::{
+pub use commands::{
     ConsumerPacketGateCommand, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
     RtcWorkerResponse,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
-pub(in crate::engine) use worker::RtcWorker;
+pub use worker::RtcWorker;

@@ -3,8 +3,9 @@ use std::time::Duration;
 use futures_util::SinkExt;
 use o_sfu::config::Config;
 use o_sfu_protocol::wire::{
-    AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, RequestId,
-    ServerEnvelope, ServerMessage, ServerRequest, UserId, UserInfo, WelcomePayload,
+    AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,
+    EnvelopeBatch, RecordingOptions, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
+    UserId, UserInfo, WelcomePayload,
 };
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -129,6 +130,24 @@ impl ProtocolWebSocketClient {
 
     pub async fn send_info(&mut self, info: UserInfo) -> Option<()> {
         self.send_message(ClientMessage::Info(info)).await
+    }
+
+    pub async fn send_start_recording(&mut self, request_id: &str) -> Option<()> {
+        self.websocket
+            .send(tungstenite::Message::Text(
+                encode_client_batch(vec![ClientEnvelope::Request {
+                    request_id: RequestId::new(request_id),
+                    request: ClientRequest::StartRecording(RecordingOptions {
+                        audio: Some(true),
+                        video: None,
+                        transcription: None,
+                    }),
+                }])?
+                .into(),
+            ))
+            .await
+            .ok()?;
+        Some(())
     }
 
     pub async fn read_server_message(&mut self) -> Option<ServerMessage> {

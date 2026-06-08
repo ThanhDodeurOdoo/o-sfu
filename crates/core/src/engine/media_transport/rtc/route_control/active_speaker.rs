@@ -21,7 +21,7 @@ const AUDIO_LEVEL_PROMOTION_OBSERVATIONS: u8 = 2;
 const AUDIO_LEVEL_PROMOTION_WINDOW: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::media_transport::rtc) struct SourceAudioPolicyState {
+pub struct SourceAudioPolicyState {
     active_until: Option<Instant>,
     last_spoke_at: Option<Instant>,
     active_reason: Option<ActiveSpeakerActivityReason>,
@@ -50,7 +50,7 @@ impl Default for SourceAudioPolicyState {
 }
 
 impl SourceAudioPolicyState {
-    pub(in crate::engine::media_transport::rtc) fn observe_packet(
+    pub fn observe_packet(
         &mut self,
         voice_activity: Option<bool>,
         audio_level_dbov: Option<i8>,
@@ -64,11 +64,11 @@ impl SourceAudioPolicyState {
         }
     }
 
-    pub(in crate::engine::media_transport::rtc) fn packet_gate(&self) -> PacketLayerGate {
+    pub fn packet_gate(&self) -> PacketLayerGate {
         self.packet_gate
     }
 
-    pub(in crate::engine::media_transport::rtc) fn active_speaker_source(
+    pub fn active_speaker_source(
         &self,
         transport_media_id: TransportMediaId,
         now: Instant,
@@ -84,14 +84,11 @@ impl SourceAudioPolicyState {
             })
     }
 
-    pub(in crate::engine::media_transport::rtc) fn active_deadline_after(
-        &self,
-        now: Instant,
-    ) -> Option<Instant> {
+    pub fn active_deadline_after(&self, now: Instant) -> Option<Instant> {
         self.active_until.filter(|deadline| *deadline > now)
     }
 
-    pub(in crate::engine::media_transport::rtc) fn diagnostic(
+    pub fn diagnostic(
         &self,
         transport_media_id: TransportMediaId,
         now: Instant,

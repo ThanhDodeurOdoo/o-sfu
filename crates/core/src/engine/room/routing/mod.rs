@@ -18,7 +18,7 @@ use o_sfu_router::{
 };
 
 use super::{
-    ResolvedPlacement,
+    Room,
     placement::{LocalRoomRouterPlacements, LocalRouterRuntimeContext, RoomPlacementUsageSnapshot},
 };
 use crate::engine::{
@@ -26,16 +26,17 @@ use crate::engine::{
     router_events::RoomRouterEventSink,
 };
 
-pub(in crate::engine::room) mod router_state;
+pub mod router_state;
 mod shadow;
 #[cfg(any(test, feature = "testing-transport"))]
+#[path = "TESTS/support.rs"]
 mod test_support;
 
 use router_state::{RoomRouterState, RoomRouterStateError};
 use shadow::{ShadowSessionKey, ShadowSessionTracker};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) enum RoomRoutingError {
+pub enum RoomRoutingError {
     /// A routed operation referenced a router that is no longer attached.
     MissingRouter { router_id: RouterId },
     /// The room has a home router for the user, but the router state is absent.
@@ -50,7 +51,7 @@ pub(in crate::engine::room) enum RoomRoutingError {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::engine::room) struct RoomRoutingRepairReport {
+pub struct RoomRoutingRepairReport {
     errors: Vec<RoomRoutingError>,
 }
 
@@ -140,9 +141,9 @@ pub(super) struct RoomRoutingState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CommittedRoutingReceipt {
-    pub(super) connection_id: ConnectionId,
-    pub(super) transport_session_key: TransportSessionKey,
+pub struct CommittedRoutingReceipt {
+    pub connection_id: ConnectionId,
+    pub transport_session_key: TransportSessionKey,
 }
 
 #[derive(Debug)]
@@ -281,10 +282,9 @@ impl RoomRoutingState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        placement: ResolvedPlacement,
+        placement: LocalRouterRuntimeContext,
         affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> Result<(CommittedRoutingReceipt, Option<DisplacedRoutingSession>), RoomRoutingError> {
-        let placement = placement.into_context();
         let displaced_session =
             self.sessions
                 .active(user_id)
@@ -650,7 +650,7 @@ impl RoomRoutingState {
         }
     }
 
-    pub(in crate::engine::room) fn idle_spillover_routers(&self) -> Vec<RouterId> {
+    pub fn idle_spillover_routers(&self) -> Vec<RouterId> {
         let active_home_routers = self
             .sessions
             .by_connection
@@ -668,7 +668,7 @@ impl RoomRoutingState {
             .collect()
     }
 
-    pub(in crate::engine::room) fn detach_spillover_routers(&mut self, router_ids: &[RouterId]) {
+    pub fn detach_spillover_routers(&mut self, router_ids: &[RouterId]) {
         for router_id in router_ids {
             if *router_id == self.primary_router {
                 continue;
@@ -697,6 +697,20 @@ impl RoomRoutingState {
                 user_id: user_id.clone(),
                 router_id,
             })
+    }
+}
+
+impl Room {
+    #[must_use]
+    pub async fn transport_user_key(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> TransportSessionKey {
+        self.state
+            .read()
+            .await
+            .transport_user_key(user_id, connection_id)
     }
 }
 

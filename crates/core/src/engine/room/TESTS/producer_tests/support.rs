@@ -1,0 +1,416 @@
+pub(super) use std::{net::SocketAddr, time::Instant};
+
+pub(super) use o_sfu_router::{
+    MediaKind,
+    test_support::rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
+};
+pub(super) use str0m::{Candidate, Rtc, change::SdpOffer};
+
+pub(super) use super::super::{
+    api::{NegotiatedPublish, TestPublishIntentOutcome},
+    fixtures::*,
+};
+pub(super) use crate::{
+    Bitrate, RoomMediaLimits, RtcPortRange,
+    engine::{
+        diagnostics::{
+            DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSourceSelector,
+            DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
+        },
+        media_transport::{
+            SessionOffer, TransportMediaId, TransportSessionKey,
+            test_support::test_media_transport_builder,
+        },
+        room::Room,
+    },
+};
+
+pub(super) fn assert_track_binding_activity_update(
+    message: &UserOutbound,
+    user_id: &UserId,
+    stream_type: TestSourceKind,
+    active: Option<bool>,
+) {
+    match message {
+        UserOutbound::TrackBindingUpdate(update) => {
+            assert_eq!(&update.user_id, user_id);
+            assert_eq!(update.stream_id, stream_id_for_source(stream_type));
+            assert_eq!(update.active, active);
+        }
+        other => panic!("expected TrackBindingUpdate, got {other:?}"),
+    }
+}
+pub(super) async fn assert_transport_media_mapping_is_missing(
+    room: &Arc<Room>,
+    transport_media_id: TransportMediaId,
+) {
+    assert!(
+        room.test_api()
+            .inspect()
+            .producer_stream_type_for_transport_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
+}
+
+pub(super) async fn assert_transport_media_owner_mapping_is_missing(
+    room: &Arc<Room>,
+    transport_media_id: TransportMediaId,
+) {
+    assert!(
+        room.test_api()
+            .inspect()
+            .producer_owner_user_id_for_transport_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
+    assert!(
+        room.test_api()
+            .inspect()
+            .producer_owner_connection_id_for_transport_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
+}
+
+pub(super) async fn assert_user_has_no_producer_route_target(
+    room: &Arc<Room>,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+    stream_type: TestSourceKind,
+) {
+    assert!(
+        !room
+            .test_api()
+            .inspect()
+            .has_producer_route_target(user_id, connection_id, stream_type)
+            .await
+    );
+}
+
+pub(super) async fn assert_subscription_layout(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    consumer_user_id: &UserId,
+    stream_type: TestSourceKind,
+    expected_role: DiagnosticsVideoLayoutRole,
+    expected_priority: DiagnosticsVideoRoutePriority,
+) {
+    let diagnostics = room.diagnostics_user_views(adapter).await;
+    let Some(user) = diagnostics
+        .iter()
+        .find(|view| &view.user_id == consumer_user_id)
+    else {
+        panic!("diagnostics should include the consumer user");
+    };
+    assert!(
+        user.subscriptions.iter().any(|subscription| {
+            subscription.stream_id == stream_id_for_source(stream_type).to_string()
+                && subscription.layout_role == Some(expected_role)
+                && subscription.layout_priority == Some(expected_priority)
+        }),
+        "diagnostics should expose the subscription layout role and priority"
+    );
+}
+
+pub(super) async fn assert_subscription_selected_rid(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+    stream_type: TestSourceKind,
+    expected_rid: &str,
+) {
+    let diagnostics = room.diagnostics_user_views(adapter).await;
+    let Some(user) = diagnostics
+        .iter()
+        .find(|view| &view.user_id == consumer_user_id)
+    else {
+        panic!("diagnostics should include the consumer user");
+    };
+    assert!(
+        user.subscriptions.iter().any(|subscription| {
+            subscription.producer_user_id == *producer_user_id
+                && subscription.stream_id == stream_id_for_source(stream_type).to_string()
+                && subscription.selection.selector == DiagnosticsSourceSelector::Encoding
+                && subscription.selection.selected_rid.as_deref() == Some(expected_rid)
+                && subscription.selection.policy_allows_delivery
+        }),
+        "diagnostics should expose the selected RID for the subscription: {:?}",
+        user.subscriptions
+    );
+}
+
+pub(super) async fn assert_subscription_policy_pause_reason(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+    stream_type: TestSourceKind,
+    expected_reason: Option<DiagnosticsPolicyPauseReason>,
+) {
+    let diagnostics = room.diagnostics_user_views(adapter).await;
+    let Some(user) = diagnostics
+        .iter()
+        .find(|view| &view.user_id == consumer_user_id)
+    else {
+        panic!("diagnostics should include the consumer user");
+    };
+    assert!(
+        user.subscriptions.iter().any(|subscription| {
+            let expected_state = if expected_reason.is_some() {
+                DiagnosticsRouteState::Inactive
+            } else {
+                DiagnosticsRouteState::Active
+            };
+            subscription.producer_user_id == *producer_user_id
+                && subscription.stream_id == stream_id_for_source(stream_type).to_string()
+                && subscription.selection.policy_pause_reason == expected_reason
+                && subscription.state == expected_state
+        }),
+        "diagnostics should expose the expected policy pause route state: {:?}",
+        user.subscriptions
+    );
+}
+
+pub(super) async fn active_destination_count_for_receiver(
+    adapter: &MediaTransport,
+    source_media_ids: impl IntoIterator<Item = TransportMediaId>,
+    receiver_user_id: &UserId,
+) -> usize {
+    let mut count = 0;
+    for source_media_id in source_media_ids {
+        let Some(entry) = adapter
+            .test_api()
+            .route_entry_by_media_id(source_media_id)
+            .await
+        else {
+            continue;
+        };
+        count += entry
+            .destinations
+            .iter()
+            .filter(|destination| {
+                destination.active && destination.dest_session.user_id() == receiver_user_id
+            })
+            .count();
+    }
+    count
+}
+
+pub(super) async fn assert_receiver_bwe_target(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    receiver_user_id: &UserId,
+    expected_target: Bitrate,
+) {
+    let connection_id = user_connection_id(room, receiver_user_id).await;
+    let session_key = room
+        .transport_user_key(receiver_user_id, connection_id)
+        .await;
+    assert_eq!(
+        adapter
+            .test_api()
+            .session_receiver_bwe_target(&session_key)
+            .await,
+        Some(expected_target)
+    );
+}
+
+pub(super) struct RealRtcRefreshScenario {
+    pub(super) room: Arc<Room>,
+    pub(super) media_transport: MediaTransport,
+    pub(super) publisher_user_id: UserId,
+    pub(super) subscriber_user_id: UserId,
+    pub(super) publisher_initial_offer: SessionOffer,
+    pub(super) subscriber_session_key: TransportSessionKey,
+    pub(super) publisher_rx: UserOutboundReceiver,
+    pub(super) subscriber_rx: UserOutboundReceiver,
+    pub(super) subscriber_remote: Rtc,
+}
+
+pub(super) async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await;
+    let (publisher_tx, publisher_rx) = test_sender();
+    let (subscriber_tx, subscriber_rx) = test_sender();
+    let publisher_user_id = UserId::Integer(1);
+    let subscriber_user_id = UserId::Integer(2);
+    let publisher_connection_id = room
+        .test_api()
+        .lifecycle()
+        .join_user(
+            publisher_user_id.clone(),
+            None,
+            UserPermissions::default(),
+            publisher_tx,
+        )
+        .await
+        .expect("publisher should join");
+    let subscriber_connection_id = room
+        .test_api()
+        .lifecycle()
+        .join_user(
+            subscriber_user_id.clone(),
+            None,
+            UserPermissions::default(),
+            subscriber_tx,
+        )
+        .await
+        .expect("subscriber should join");
+    let media_transport = build_real_rtc_media_transport();
+    let publisher_session_key = room
+        .transport_user_key(&publisher_user_id, publisher_connection_id)
+        .await;
+    let subscriber_session_key = room
+        .transport_user_key(&subscriber_user_id, subscriber_connection_id)
+        .await;
+
+    let publisher_initial_offer =
+        bootstrap_real_rtc_user(&media_transport, &publisher_session_key).await;
+    let subscriber_initial_offer =
+        bootstrap_real_rtc_user(&media_transport, &subscriber_session_key).await;
+    let mut subscriber_remote = build_remote_rtc(55_100);
+    apply_offer_answer(
+        &media_transport,
+        &subscriber_session_key,
+        &mut subscriber_remote,
+        subscriber_initial_offer.into_sdp(),
+    )
+    .await;
+
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .mark_session_ready(
+                &publisher_user_id,
+                test_client_rtp_capabilities(),
+                &media_transport,
+            )
+            .await
+    );
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .mark_session_ready(
+                &subscriber_user_id,
+                test_client_rtp_capabilities(),
+                &media_transport,
+            )
+            .await
+    );
+
+    RealRtcRefreshScenario {
+        room,
+        media_transport,
+        publisher_user_id,
+        subscriber_user_id,
+        publisher_initial_offer,
+        subscriber_session_key,
+        publisher_rx,
+        subscriber_rx,
+        subscriber_remote,
+    }
+}
+
+pub(super) async fn settle_refresh_offer(
+    scenario: &mut RealRtcRefreshScenario,
+    offer: SessionOffer,
+) {
+    apply_offer_answer(
+        &scenario.media_transport,
+        &scenario.subscriber_session_key,
+        &mut scenario.subscriber_remote,
+        offer.into_sdp(),
+    )
+    .await;
+
+    assert!(
+        scenario
+            .room
+            .test_api()
+            .lifecycle()
+            .refresh_session(&scenario.subscriber_user_id, &scenario.media_transport)
+            .await
+    );
+}
+#[allow(
+    clippy::panic,
+    reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
+)]
+pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
+    match test_media_transport_builder(RtcPortRange::new(46_200, 46_299))
+        .worker_count(1)
+        .build()
+    {
+        Ok(transport) => transport,
+        Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
+    }
+}
+
+pub(super) async fn bootstrap_real_rtc_user(
+    media_transport: &MediaTransport,
+    session_key: &TransportSessionKey,
+) -> SessionOffer {
+    media_transport
+        .create_initial_session_offer(session_key)
+        .await
+        .expect("rtc user should produce an initial offer")
+}
+
+pub(super) fn assert_remote_track_setup_for_stream(
+    messages: &[UserOutbound],
+    stream_type: TestSourceKind,
+) {
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            UserOutbound::SetupRemoteTrack(payload)
+                if payload.stream == stream_id_for_source(stream_type)
+        )),
+        "expected a remote track setup request for {stream_type:?}"
+    );
+}
+
+pub(super) fn build_remote_rtc(port: u16) -> Rtc {
+    let mut remote = Rtc::new(Instant::now());
+    remote
+        .add_local_candidate(
+            Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp")
+                .expect("test host candidate should build"),
+        )
+        .expect("remote candidate should register");
+    remote
+}
+
+pub(super) async fn apply_offer_answer(
+    adapter: &MediaTransport,
+    session_key: &TransportSessionKey,
+    remote: &mut Rtc,
+    offer_sdp: String,
+) {
+    let answer_sdp = remote_answer_sdp(remote, &offer_sdp);
+    assert!(
+        adapter
+            .apply_session_answer(session_key, &answer_sdp)
+            .await
+            .is_ok()
+    );
+}
+
+pub(super) fn remote_answer_sdp(remote: &mut Rtc, offer_sdp: &str) -> String {
+    remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(offer_sdp)
+                .expect("adapter should return parseable SDP offer"),
+        )
+        .expect("remote answer should build")
+        .to_sdp_string()
+}
+
+pub(super) fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> MediaStream {
+    router_sample_video_rtp_parameters(Some(mid), ssrc)
+}

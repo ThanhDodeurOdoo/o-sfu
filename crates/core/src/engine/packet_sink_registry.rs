@@ -86,12 +86,12 @@ impl Default for RoomPacketSinkRegistry {
     }
 }
 
-pub(in crate::engine) trait PacketSinkLookup {
+pub trait PacketSinkLookup {
     fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink>;
 }
 
 #[derive(Default)]
-pub(in crate::engine) struct PacketSinkRouteCache {
+pub struct PacketSinkRouteCache {
     generation: u64,
     active_rooms: HashMap<RoomInstanceId, RegisteredPacketSink>,
 }

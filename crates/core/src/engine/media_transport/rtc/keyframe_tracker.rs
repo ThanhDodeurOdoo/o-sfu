@@ -17,16 +17,16 @@ pub(super) const KEYFRAME_REQUEST_RETRY_DELAY: Duration = Duration::from_secs(1)
 const KEYFRAME_RETRY_DRAIN_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::media_transport::rtc) enum KeyframeRequestDecision {
+pub enum KeyframeRequestDecision {
     Forward,
     Absorb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::media_transport::rtc) struct SourceKeyframeRequest {
-    pub(in crate::engine::media_transport::rtc) src_media: TransportMediaId,
-    pub(in crate::engine::media_transport::rtc) rid: Option<Rid>,
-    pub(in crate::engine::media_transport::rtc) kind: KeyframeRequestKind,
+pub struct SourceKeyframeRequest {
+    pub src_media: TransportMediaId,
+    pub rid: Option<Rid>,
+    pub kind: KeyframeRequestKind,
 }
 
 impl SourceKeyframeRequest {
@@ -36,7 +36,7 @@ impl SourceKeyframeRequest {
 }
 
 #[derive(Debug, Default)]
-pub(in crate::engine::media_transport::rtc) struct KeyframeRequestTracker {
+pub struct KeyframeRequestTracker {
     pending: Vec<KeyframeRequestState>,
     deadlines: BinaryHeap<Reverse<KeyframeRequestDeadline>>,
     next_id: u64,
@@ -48,7 +48,7 @@ struct KeyframeRequestDeadline {
     id: u64,
 }
 
-pub(in crate::engine::media_transport::rtc) fn coalesce_kf_kind(
+pub fn coalesce_kf_kind(
     current: KeyframeRequestKind,
     incoming: KeyframeRequestKind,
 ) -> KeyframeRequestKind {

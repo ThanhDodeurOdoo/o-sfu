@@ -117,7 +117,7 @@ impl RoomDefinition {
 
     #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
-    pub(in crate::engine::room) fn recording_address(&self) -> Option<&str> {
+    pub fn recording_address(&self) -> Option<&str> {
         self.config.recording_address.as_deref()
     }
 

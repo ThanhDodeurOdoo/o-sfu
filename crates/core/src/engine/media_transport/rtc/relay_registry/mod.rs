@@ -6,6 +6,7 @@ use super::{forwarded_packet::ForwardedPacket, state::PacketLoopState};
 use crate::engine::media_transport::TransportMediaId;
 
 #[cfg(any(test, feature = "testing-transport"))]
+#[path = "TESTS/support.rs"]
 mod test_support;
 
 pub(super) const RELAY_MAILBOX_CAPACITY: usize = 256;
@@ -24,7 +25,7 @@ pub(super) struct RelayEnqueueReport {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::engine::media_transport) struct RelayPacketMailbox {
+pub struct RelayPacketMailbox {
     tx: mpsc::Sender<ForwardedPacket>,
 }
 
@@ -76,7 +77,7 @@ pub(super) fn sender_backlog_depth<T>(tx: &mpsc::Sender<T>) -> usize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::engine::media_transport) struct RelayTargetId(u64);
+pub struct RelayTargetId(u64);
 
 impl RelayTargetId {
     pub(super) const fn new(raw: u64) -> Self {

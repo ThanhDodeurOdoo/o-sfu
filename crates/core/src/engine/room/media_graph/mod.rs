@@ -5,7 +5,7 @@ use o_sfu_router::MediaKind;
 use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
     ConnectionId, UserId,
-    media_transport::{RelayRouteActivity, TransportMediaId},
+    media_transport::{RelayRouteActivity, TransportConsumerRoute, TransportMediaId},
     room::routing::{RoutedConsumerId, RoutedProducerId},
     source_model::{
         ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
@@ -13,28 +13,37 @@ use crate::engine::{
     },
 };
 
+mod consumer_setup;
 mod ids;
 mod producer;
 mod route_graph;
 mod source_index;
 mod subscription;
+mod topology;
 
 #[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
+#[cfg(test)]
+#[path = "TESTS/route_graph.rs"]
 mod route_graph_tests;
-#[cfg(test)]
-mod tests;
 
+pub use self::consumer_setup::RemoteTrackSetup;
+#[cfg(any(test, feature = "testing-transport"))]
+pub use self::subscription::ConsumerRouteState;
 #[cfg(test)]
-pub(super) use self::subscription::ConsumerSetupProducerSnapshot;
-pub use self::subscription::{ConsumerRouteState, RemoteTrackSetup};
+pub(super) use self::subscription::PlannedSubscriptionChange;
 pub(super) use self::{
-    ids::{ConsumerRuntimeId, ProducerRuntimeId},
-    producer::ValidatedPublish,
-    route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
-    subscription::{
-        ConsumerRouteUpdate, ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget,
-        PendingConsumerSetup,
+    consumer_setup::{
+        ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
     },
+    ids::{ConsumerRuntimeId, ProducerRuntimeId},
+    producer::{
+        ProducerActivityCommit, PublishCommit, PublishIntentPlan, UnpublishCommit, ValidatedPublish,
+    },
+    route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
+    subscription::{ConsumerReadinessCommit, ConsumerRouteUpdate, ReceiverIntentCommit},
+    topology::{MediaTopologyEffects, SessionPlacementCommit, SessionPlacementRejection},
 };
 
 #[derive(Debug, Default)]
@@ -87,9 +96,9 @@ pub(super) struct PublishedSourceInstall {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SourceTransportMediaIndexEntry {
-    source: PublishedSourceId,
-    owner: UserId,
-    stream: UserStreamId,
+    pub source: PublishedSourceId,
+    pub owner: UserId,
+    pub stream: UserStreamId,
 }
 
 #[allow(
@@ -98,18 +107,18 @@ pub(super) struct SourceTransportMediaIndexEntry {
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProducerRouteTarget {
-    source_id: PublishedSourceId,
+    pub source_id: PublishedSourceId,
     producer_id: ProducerRuntimeId,
-    owner_connection_id: ConnectionId,
-    routed_producer_id: RoutedProducerId,
-    transport_media_id: TransportMediaId,
+    pub owner_connection_id: ConnectionId,
+    pub routed_producer_id: RoutedProducerId,
+    pub transport_media_id: TransportMediaId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TransportMediaRemoval {
-    user: UserId,
-    connection: ConnectionId,
-    transport_media: TransportMediaId,
+    pub user: UserId,
+    pub connection: ConnectionId,
+    pub transport_media: TransportMediaId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,12 +157,21 @@ impl ConsumerRouteView<'_> {
     }
 
     pub fn matches_transport_ref(&self, route: &ConsumerRouteTransportRef) -> bool {
-        self.consumer_user_id == *route.consumer_user_id()
-            && self.state.consumer_connection_id == route.consumer_connection_id()
-            && self.state.consumer_media == route.consumer_media()
-            && self.source.owner().user_id() == route.source_user_id()
-            && self.state.source_connection_id == route.source_connection_id()
-            && self.state.source_media == route.source_media()
+        self.consumer_user_id == route.consumer_user_id
+            && self.state.consumer_connection_id == route.consumer_connection_id
+            && self.state.consumer_media == route.consumer_media
+            && self.source.owner().user_id() == &route.source_user_id
+            && self.state.source_connection_id == route.source_connection_id
+            && self.state.source_media == route.source_media
+    }
+
+    pub fn target(&self, transport_route: TransportConsumerRoute) -> ConsumerRouteTarget {
+        ConsumerRouteTarget::new(
+            self.transport_ref(),
+            transport_route,
+            self.source.stream_id().clone(),
+            self.source.media_kind(),
+        )
     }
 }
 
@@ -166,12 +184,20 @@ pub(super) struct PendingConsumerRouteView<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ConsumerRouteTransportRef {
-    consumer_user_id: UserId,
-    consumer_connection_id: ConnectionId,
-    consumer_media: TransportMediaId,
-    source_user_id: UserId,
-    source_connection_id: ConnectionId,
-    source_media: TransportMediaId,
+    pub consumer_user_id: UserId,
+    pub consumer_connection_id: ConnectionId,
+    pub consumer_media: TransportMediaId,
+    pub source_user_id: UserId,
+    pub source_connection_id: ConnectionId,
+    pub source_media: TransportMediaId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerRouteTarget {
+    transport_ref: ConsumerRouteTransportRef,
+    transport_route: TransportConsumerRoute,
+    stream_id: UserStreamId,
+    kind: MediaKind,
 }
 
 impl ConsumerRouteTransportRef {
@@ -192,29 +218,45 @@ impl ConsumerRouteTransportRef {
             source_media,
         }
     }
+}
 
-    pub fn consumer_user_id(&self) -> &UserId {
-        &self.consumer_user_id
+impl ConsumerRouteTarget {
+    pub fn new(
+        transport_ref: ConsumerRouteTransportRef,
+        transport_route: TransportConsumerRoute,
+        stream_id: UserStreamId,
+        kind: MediaKind,
+    ) -> Self {
+        Self {
+            transport_ref,
+            transport_route,
+            stream_id,
+            kind,
+        }
     }
 
-    pub const fn consumer_connection_id(&self) -> ConnectionId {
-        self.consumer_connection_id
+    pub const fn transport_route(&self) -> &TransportConsumerRoute {
+        &self.transport_route
     }
 
-    pub const fn consumer_media(&self) -> TransportMediaId {
-        self.consumer_media
+    pub const fn consumer_media_id(&self) -> TransportMediaId {
+        self.transport_ref.consumer_media
     }
 
-    pub fn source_user_id(&self) -> &UserId {
-        &self.source_user_id
+    pub fn producer_user_id(&self) -> &UserId {
+        &self.transport_ref.source_user_id
     }
 
-    pub const fn source_connection_id(&self) -> ConnectionId {
-        self.source_connection_id
+    pub const fn source_media_id(&self) -> TransportMediaId {
+        self.transport_ref.source_media
     }
 
-    pub const fn source_media(&self) -> TransportMediaId {
-        self.source_media
+    pub fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
+    }
+
+    pub fn request_keyframe_after_activity(&self, active: bool) -> bool {
+        active && self.kind == MediaKind::Video
     }
 }
 
@@ -225,18 +267,6 @@ impl SourceTransportMediaIndexEntry {
             owner,
             stream,
         }
-    }
-
-    pub fn owner_user_id(&self) -> &UserId {
-        &self.owner
-    }
-
-    pub const fn source_id(&self) -> PublishedSourceId {
-        self.source
-    }
-
-    pub const fn stream_id(&self) -> &UserStreamId {
-        &self.stream
     }
 }
 
@@ -296,7 +326,7 @@ impl RoomMediaGraph {
         transport_media_id: TransportMediaId,
     ) -> Option<UserStreamId> {
         self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.stream_id().clone())
+            .map(|entry| entry.stream.clone())
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -400,7 +430,7 @@ impl RoomMediaGraph {
         source_id: PublishedSourceId,
         update: impl FnOnce(&mut ConsumerSourceSelection),
     ) -> bool {
-        let key = ConsumerKey::new(route.consumer_user_id(), source_id);
+        let key = ConsumerKey::new(&route.consumer_user_id, source_id);
         let Some(current_route) = self.committed_consumer_route_for_key(&key) else {
             return false;
         };
@@ -561,6 +591,10 @@ impl RoomMediaGraph {
         removals
     }
 
+    pub fn transport_removals_for_user(&self, user_id: &UserId) -> Vec<TransportMediaRemoval> {
+        self.transport_removals_for_users(&BTreeSet::from([user_id.clone()]))
+    }
+
     pub fn transport_removals_for_producer_target(
         &self,
         user_id: &UserId,
@@ -615,22 +649,6 @@ impl RoomMediaGraph {
 }
 
 impl ProducerRouteTarget {
-    pub const fn source_id(&self) -> PublishedSourceId {
-        self.source_id
-    }
-
-    pub const fn routed_producer_id(&self) -> RoutedProducerId {
-        self.routed_producer_id
-    }
-
-    pub const fn transport_media_id(&self) -> TransportMediaId {
-        self.transport_media_id
-    }
-
-    pub const fn owner_connection_id(&self) -> ConnectionId {
-        self.owner_connection_id
-    }
-
     fn matches_producer(&self, producer: &PublishedProducer) -> bool {
         producer.source_id == self.source_id
             && producer.owner_connection_id == self.owner_connection_id
@@ -646,18 +664,6 @@ impl TransportMediaRemoval {
             connection,
             transport_media,
         }
-    }
-
-    pub fn user(&self) -> &UserId {
-        &self.user
-    }
-
-    pub const fn connection(&self) -> ConnectionId {
-        self.connection
-    }
-
-    pub const fn transport_media(&self) -> TransportMediaId {
-        self.transport_media
     }
 }
 

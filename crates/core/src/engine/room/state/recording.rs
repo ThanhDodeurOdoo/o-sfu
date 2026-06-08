@@ -4,35 +4,14 @@ use super::{
 };
 use crate::engine::{ConnectionId, RecordingState, RecordingStateUpdate, StopCode, UserId};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::engine::room) struct RecordingRequestContext {
-    permissions: RoomUserPermissions,
-    recording_state: RecordingState,
-}
-
-impl RecordingRequestContext {
-    #[must_use]
-    pub const fn permissions(&self) -> RoomUserPermissions {
-        self.permissions
-    }
-
-    #[must_use]
-    pub const fn recording_state(&self) -> &RecordingState {
-        &self.recording_state
-    }
-}
-
 impl RoomState {
     pub fn recording_request_context(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Option<RecordingRequestContext> {
+    ) -> Option<(RoomUserPermissions, RecordingState)> {
         let user = self.user_for_connection(user_id, connection_id)?;
-        Some(RecordingRequestContext {
-            permissions: user.permissions,
-            recording_state: self.recording_state.clone(),
-        })
+        Some((user.permissions, self.recording_state.clone()))
     }
 
     pub fn apply_recording_state_update(

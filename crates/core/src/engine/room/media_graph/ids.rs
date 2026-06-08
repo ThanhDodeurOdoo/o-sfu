@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::engine::room) struct ProducerRuntimeId(u64);
+pub struct ProducerRuntimeId(u64);
 
 impl ProducerRuntimeId {
     pub fn allocate(next_producer_id: &mut u64) -> Self {
@@ -18,7 +18,7 @@ impl Display for ProducerRuntimeId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::engine::room) struct ConsumerRuntimeId(u64);
+pub struct ConsumerRuntimeId(u64);
 
 impl ConsumerRuntimeId {
     pub fn allocate(next_consumer_id: &mut u64) -> Self {

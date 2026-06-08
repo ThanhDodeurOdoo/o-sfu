@@ -726,6 +726,10 @@ impl ReceiverBweTargetUpdate {
     pub const fn target(&self) -> Bitrate {
         self.target
     }
+
+    pub const fn set_target(&mut self, target: Bitrate) {
+        self.target = target;
+    }
 }
 
 /// Packet-facing layered operating point selected for one source route.

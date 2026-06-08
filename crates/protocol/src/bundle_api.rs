@@ -267,4 +267,5 @@ impl BundleUpdate {
 }
 
 #[cfg(test)]
+#[path = "bundle_api/TESTS/mod.rs"]
 mod tests;

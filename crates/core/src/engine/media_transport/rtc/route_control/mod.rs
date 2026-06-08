@@ -8,7 +8,7 @@
 mod active_speaker;
 mod packet_gate;
 
-pub(in crate::engine::media_transport::rtc) use active_speaker::SourceAudioPolicyState;
+pub use active_speaker::SourceAudioPolicyState;
 pub(super) use packet_gate::{
     PacketLayerGate, PacketLayerMetadata, PacketOperatingPointGate, aggregate_packet_gates,
     intersect_packet_gates,

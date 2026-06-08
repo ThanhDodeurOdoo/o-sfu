@@ -1,565 +1,262 @@
-use std::{
-    collections::{BTreeMap, btree_map::Entry},
-    sync::MutexGuard,
-};
+//! publication transitions keep unnegotiated media out of the room graph
+//!
+//! ```text
+//! publish intent
+//!   |
+//!   +-- existing producer --> activity commit --> effects after lock
+//!   |
+//!   +-- offer in flight ----> queued intent ---> answer ---> stage next offer
+//!   |
+//!   +-- new producer -------> StagedPublish ---> answer-proven RTP
+//!                              |                  |
+//!                              |                  v
+//!                              |                room graph commit
+//!                              |                  |
+//!                              v                  v
+//!                         rollback cleanup    effects after lock
+//! ```
+//!
+//! only answer-proven RTP enters the room graph
+//! cleanup, worker route updates and fanout run after state mutation releases
+//! the room lock
 
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use tracing::warn;
 
 use super::super::{
-    Room, RoomMediaCounts, RoomUserOperation,
+    Room, RoomUserOperation,
     cleanup::TransportCleanupOperation,
-    effects::{
-        self,
-        batch::{
-            PublicationActivityEffect, RoomDiagnosticsContext, RoomEffectContext, RoomGaugeDelta,
-        },
-    },
-    media_graph::{ConsumerSetupTarget, ValidatedPublish},
+    effects::{self, batch::RoomEffectContext},
+    media_graph::{ProducerActivityCommit, PublishIntentPlan, ValidatedPublish},
 };
 use crate::{
-    PublicationActivity, PublicationActivityOutcome, PublishStageOutcome,
-    RollbackStagedPublishOutcome, TransportEffectOutcome, UnpublishOutcome,
+    PublishIntentOutcome, TransportEffectOutcome, UnpublishIntentOutcome,
     engine::{
         ConnectionId, UserId,
-        media_transport::{
-            AppliedSessionAnswer, SessionUploadEncoding, TransportAdapterError, TransportMediaId,
-            TransportSessionKey, TransportSourceKey,
-        },
+        media_transport::{AppliedSessionAnswer, TransportAdapterError},
         source_model::{SourcePublishIntent, UserStreamId},
-        sync::lock_unpoisoned,
     },
 };
 
+mod staging;
 #[cfg(any(test, feature = "testing-transport"))]
+#[path = "TESTS/publication_support.rs"]
 mod test_support;
 
-#[derive(Debug, Default)]
-pub struct StagedPublishRegistry {
-    staged: BTreeMap<StagedPublishKey, StagedPublish>,
-}
+pub use staging::{StagedPublish, StagedPublishes};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct StagedPublishKey {
-    user: UserId,
-    connection: ConnectionId,
-    stream: UserStreamId,
-}
-
-#[derive(Debug)]
-pub struct StagedPublish {
-    descriptor: ValidatedPublish,
-    reservation: PublishReservation,
-}
-
-#[derive(Debug)]
-#[must_use = "publish reservations must be committed or cleaned up explicitly"]
-struct PublishReservation {
-    user: UserId,
-    connection: ConnectionId,
-    session_key: TransportSessionKey,
-    media: TransportMediaId,
-    armed: bool,
-}
-
-impl StagedPublishRegistry {
-    fn contains(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        stream_id: &UserStreamId,
-    ) -> bool {
-        self.staged
-            .contains_key(&StagedPublishKey::new(user_id, connection_id, stream_id))
-    }
-
-    fn stage(&mut self, transaction: StagedPublish) -> Option<StagedPublish> {
-        let key = transaction.key();
-        match self.staged.entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(transaction);
-                None
-            }
-            Entry::Occupied(_) => Some(transaction),
-        }
-    }
-
-    fn take(
-        &mut self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        stream_id: &UserStreamId,
-    ) -> Option<StagedPublish> {
-        self.staged
-            .remove(&StagedPublishKey::new(user_id, connection_id, stream_id))
-    }
-
-    fn take_for_connection(
-        &mut self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> Vec<StagedPublish> {
-        self.staged
-            .extract_if(.., |key, _transaction| {
-                &key.user == user_id && key.connection == connection_id
-            })
-            .map(|(_key, transaction)| transaction)
-            .collect()
-    }
-}
-
-impl StagedPublishKey {
-    fn new(user_id: &UserId, connection_id: ConnectionId, stream_id: &UserStreamId) -> Self {
-        Self {
-            user: user_id.clone(),
-            connection: connection_id,
-            stream: stream_id.clone(),
-        }
-    }
-}
-
-impl StagedPublish {
-    pub fn new(
-        descriptor: ValidatedPublish,
-        session_key: TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Self {
-        Self {
-            reservation: PublishReservation::new(&descriptor, session_key, transport_media_id),
-            descriptor,
-        }
-    }
-
-    fn key(&self) -> StagedPublishKey {
-        StagedPublishKey::new(
-            self.descriptor.owner_user_id(),
-            self.descriptor.owner_connection_id(),
-            self.descriptor.stream_id(),
-        )
-    }
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishStageOutcome {
+    Staged,
+    Duplicate,
+    DuplicateAfterReservation,
     #[cfg(test)]
-    const fn transport_media_id(&self) -> TransportMediaId {
-        self.reservation.media
-    }
-
-    async fn commit_from_answer(
-        self,
-        operation: RoomUserOperation<'_>,
-        applied_answer: &AppliedSessionAnswer,
-    ) -> Option<UserStreamId> {
-        let media = self.reservation.media;
-        let Some(rtp) = applied_answer
-            .negotiated_producer_parameters(media)
-            .cloned()
-        else {
-            let user = self.descriptor.owner_user_id().clone();
-            let connection = self.descriptor.owner_connection_id();
-            let stream_id = self.descriptor.stream_id().clone();
-            self.cleanup_reserved_media(
-                operation,
-                "media transport failed to remove staged publish media after answered negotiation omitted producer parameters",
-            )
-            .await;
-            warn!(
-                user_id = ?user,
-                connection_id = ?connection,
-                stream_id = %stream_id,
-                transport_media_id = ?media,
-                "answered negotiation did not include staged publish parameters during room commit"
-            );
-            return None;
-        };
-        let encodings = applied_answer
-            .negotiated_producer_upload_encodings(media)
-            .to_vec();
-        self.commit_with_negotiated_parameters(operation, rtp, encodings)
-            .await
-    }
-
-    async fn commit_with_negotiated_parameters(
-        self,
-        operation: RoomUserOperation<'_>,
-        rtp: RouterRtpParameters,
-        upload_encodings: Vec<SessionUploadEncoding>,
-    ) -> Option<UserStreamId> {
-        let Self {
-            descriptor,
-            reservation,
-        } = self;
-        let room = operation.room();
-        let user = descriptor.owner_user_id().clone();
-        let connection = descriptor.owner_connection_id();
-        let stream_id = descriptor.stream_id().clone();
-        let media = reservation.media;
-        let media_worker_id = reservation.session_key.media_worker_id();
-        let committed = {
-            let mut state = room.state.write().await;
-            let before = state.media_counts();
-            let input = descriptor.into_commit_input_with_upload_encodings(rtp, upload_encodings);
-            let consumers = state.commit_publish_reservation(input, media);
-            let after = state.media_counts();
-            drop(state);
-            consumers.map(|(_producer_id, consumers)| (before, after, consumers))
-        };
-        let Some((before, after, consumers)) = committed else {
-            reservation
-                .cleanup(
-                    operation,
-                    "media transport failed to remove published transport media after room commit failed",
-                )
-                .await;
-            warn!(
-                user_id = ?user,
-                connection_id = ?connection,
-                stream_id = %stream_id,
-                transport_media_id = ?media,
-                "room rejected staged negotiated publish during commit"
-            );
-            return None;
-        };
-        reservation.commit();
-        let diagnostics = RoomDiagnosticsContext::new(&user, connection, media_worker_id);
-        finish_committed_publish(operation, before, after, consumers, diagnostics, media).await;
-        Some(stream_id)
-    }
-
-    async fn cleanup_reserved_media(
-        self,
-        operation: RoomUserOperation<'_>,
-        failure_message: &str,
-    ) -> TransportEffectOutcome {
-        self.reservation.cleanup(operation, failure_message).await
-    }
-
-    fn into_cleanup_operation(mut self) -> TransportCleanupOperation {
-        self.reservation.release_cleanup_operation()
-    }
-}
-
-impl PublishReservation {
-    fn new(
-        descriptor: &ValidatedPublish,
-        session_key: TransportSessionKey,
-        media: TransportMediaId,
-    ) -> Self {
-        Self {
-            user: descriptor.owner_user_id().clone(),
-            connection: descriptor.owner_connection_id(),
-            session_key,
-            media,
-            armed: true,
-        }
-    }
-
-    async fn cleanup(
-        mut self,
-        operation: RoomUserOperation<'_>,
-        failure_message: &str,
-    ) -> TransportEffectOutcome {
-        let cleanup = [self.release_cleanup_operation()];
-        let outcome = operation
-            .room()
-            .execute_transport_cleanup_operations(operation.media_transport(), &cleanup)
-            .await;
-        if outcome == TransportEffectOutcome::Failed {
-            warn!(
-                user_id = ?self.user,
-                connection_id = ?self.connection,
-                transport_media_id = ?self.media,
-                "{failure_message}"
-            );
-        }
-        outcome
-    }
-
-    fn release_cleanup_operation(&mut self) -> TransportCleanupOperation {
-        debug_assert!(self.armed);
-        self.armed = false;
-        TransportCleanupOperation::RemoveMedia {
-            session_key: self.session_key.clone(),
-            connection_id: self.connection,
-            transport_media_id: self.media,
-        }
-    }
-
-    fn commit(mut self) {
-        debug_assert!(self.armed);
-        self.armed = false;
-    }
-}
-
-impl Drop for PublishReservation {
-    fn drop(&mut self) {
-        #[cfg(test)]
-        assert!(
-            !self.armed,
-            "publish reservation dropped while still reserved"
-        );
-        #[cfg(all(debug_assertions, not(test)))]
-        debug_assert!(
-            !self.armed,
-            "publish reservation dropped while still reserved"
-        );
-    }
-}
-
-async fn finish_committed_publish(
-    operation: RoomUserOperation<'_>,
-    before: RoomMediaCounts,
-    after: RoomMediaCounts,
-    consumers: Vec<ConsumerSetupTarget>,
-    diagnostics: RoomDiagnosticsContext<'_>,
-    media: TransportMediaId,
-) {
-    let room = operation.room();
-    let batch = {
-        let mut state = room.state.write().await;
-        let setup_before = state.media_counts();
-        let worker_lookup = state.worker_lookup();
-        let setups = state.plan_consumers(consumers, worker_lookup);
-        let setup_after = state.media_counts();
-        drop(state);
-        effects::batch::build_publish_commit(
-            room,
-            RoomGaugeDelta::media(before, after),
-            RoomGaugeDelta::media(setup_before, setup_after),
-            setups,
-            diagnostics,
-            media,
-        )
-    };
-    batch
-        .execute(
-            room,
-            RoomEffectContext::runtime(operation.media_transport()),
-        )
-        .await;
+    Rejected,
 }
 
 impl RoomUserOperation<'_> {
-    #[must_use]
-    pub(crate) fn has_staged_publish(self, stream_id: &UserStreamId) -> bool {
-        self.room().staged_publish_registry().contains(
-            self.user_id(),
-            self.connection_id(),
-            stream_id,
-        )
-    }
-
-    pub(crate) async fn stage_negotiated_publish(
+    #[cfg(test)]
+    pub async fn stage_negotiated_publish(
         self,
         intent: &SourcePublishIntent,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
-        let room = self.room();
+        let room = self.room;
         let Some(validated_descriptor) = ({
             let state = room.state.read().await;
-            state.validate_publish(self.user_id(), self.connection_id(), intent)
+            state.validate_publish(self.user_id, self.connection_id, intent)
         }) else {
             return Ok(PublishStageOutcome::Rejected);
         };
-        if room.staged_publish_registry().contains(
-            self.user_id(),
-            self.connection_id(),
-            intent.stream_id(),
+        self.stage_validated_publish(validated_descriptor).await
+    }
+
+    async fn stage_validated_publish(
+        self,
+        validated_descriptor: ValidatedPublish,
+    ) -> Result<PublishStageOutcome, TransportAdapterError> {
+        let room = self.room;
+        if room.staged_publishes.contains(
+            self.user_id,
+            self.connection_id,
+            &validated_descriptor.stream_id,
         ) {
             return Ok(PublishStageOutcome::Duplicate);
         }
-        let session_key = self.transport_user_key().await;
+        let session_key = validated_descriptor.session_key.clone();
         let rtp_parameters = RouterRtpParameters::default();
         let media = match self
-            .media_transport()
-            .publish_media(&session_key, intent.media_kind(), &rtp_parameters)
+            .media_transport
+            .publish_media(
+                &session_key,
+                validated_descriptor.media_kind,
+                &rtp_parameters,
+            )
             .await
         {
             Ok(media) => media,
             Err(error) => {
                 warn!(
-                    user_id = ?self.user_id(),
-                    connection_id = ?self.connection_id(),
-                    stream_id = %intent.stream_id(),
-                    media_kind = ?intent.media_kind(),
+                    user_id = ?self.user_id,
+                    connection_id = ?self.connection_id,
+                    stream_id = %validated_descriptor.stream_id,
+                    media_kind = ?validated_descriptor.media_kind,
                     "failed to stage negotiated publish stream"
                 );
                 return Err(error);
             }
         };
         #[cfg(test)]
-        room.inject_next_duplicate_for_test(&validated_descriptor, session_key.clone(), media);
-        let reserved_publish = StagedPublish::new(validated_descriptor, session_key, media);
-        if let Some(staged_publish) = {
-            let mut staged_publish_registry = room.staged_publish_registry();
-            staged_publish_registry.stage(reserved_publish)
-        } {
-            let cleanup = staged_publish
-                .cleanup_reserved_media(
-                    self,
-                    "media transport failed to remove duplicated staged publish media",
-                )
-                .await;
-            return Ok(PublishStageOutcome::DuplicateAfterReservation { cleanup });
+        room.inject_next_duplicate_for_test(&validated_descriptor, media);
+        let reserved_publish = StagedPublish::new(validated_descriptor, media);
+        if !room
+            .staged_publishes
+            .stage(
+                reserved_publish,
+                self,
+                "media transport failed to remove duplicated staged publish media",
+            )
+            .await
+        {
+            return Ok(PublishStageOutcome::DuplicateAfterReservation);
         }
         Ok(PublishStageOutcome::Staged)
     }
 
-    pub(crate) async fn rollback_staged_publish(
+    pub(crate) async fn start_publish(
+        self,
+        intent: &SourcePublishIntent,
+        can_stage: bool,
+    ) -> Result<PublishIntentOutcome, TransportAdapterError> {
+        let stream_id = intent.stream_id();
+        if self
+            .room
+            .staged_publishes
+            .contains(self.user_id, self.connection_id, stream_id)
+        {
+            return Ok(PublishIntentOutcome::Noop);
+        }
+        let plan = {
+            let mut state = self.room.state.write().await;
+            state.apply_publish_intent(self.user_id, self.connection_id, intent, can_stage)
+        };
+        match plan {
+            PublishIntentPlan::Activate(commit) => {
+                self.execute_publication_activity(commit).await;
+                Ok(PublishIntentOutcome::Activated)
+            }
+            PublishIntentPlan::Noop => Ok(PublishIntentOutcome::Noop),
+            PublishIntentPlan::Queue => Ok(PublishIntentOutcome::Queue),
+            PublishIntentPlan::Stage(validated) => {
+                if self.stage_validated_publish(validated).await? == PublishStageOutcome::Staged {
+                    Ok(PublishIntentOutcome::Staged)
+                } else {
+                    Ok(PublishIntentOutcome::Noop)
+                }
+            }
+        }
+    }
+
+    pub async fn rollback_staged_publish(
         self,
         stream_id: &UserStreamId,
-    ) -> RollbackStagedPublishOutcome {
-        let Some(staged_publish) = self.room().staged_publish_registry().take(
-            self.user_id(),
-            self.connection_id(),
-            stream_id,
-        ) else {
-            return RollbackStagedPublishOutcome::NotStaged;
-        };
-        let cleanup = staged_publish
-            .cleanup_reserved_media(
+    ) -> Option<TransportEffectOutcome> {
+        self.room
+            .staged_publishes
+            .rollback(
+                stream_id,
                 self,
                 "media transport failed to remove staged publish media during rollback",
             )
-            .await;
-        RollbackStagedPublishOutcome::RolledBack { cleanup }
+            .await
+    }
+
+    pub(crate) async fn stop_publish(self, stream_id: &UserStreamId) -> UnpublishIntentOutcome {
+        if self.rollback_staged_publish(stream_id).await.is_some() {
+            return UnpublishIntentOutcome::RolledBack;
+        }
+        if self.unpublish(stream_id).await {
+            UnpublishIntentOutcome::Unpublished
+        } else {
+            UnpublishIntentOutcome::Noop
+        }
     }
 
     pub(crate) async fn rollback_staged_publishes_for_connection(self) {
-        let staged_publishes = {
-            self.room()
-                .staged_publish_registry()
-                .take_for_connection(self.user_id(), self.connection_id())
-        };
-        for staged_publish in staged_publishes {
-            staged_publish
-                .cleanup_reserved_media(
-                    self,
-                    "media transport failed to remove staged publish media during connection cleanup",
-                )
-                .await;
-        }
+        self.room
+            .staged_publishes
+            .cleanup_connection(
+                self,
+                "media transport failed to remove staged publish media during connection cleanup",
+            )
+            .await;
     }
 
     pub(crate) async fn commit_staged_publishes(
         self,
         applied_answer: &AppliedSessionAnswer,
     ) -> Vec<UserStreamId> {
-        let staged_publishes = {
-            self.room()
-                .staged_publish_registry()
-                .take_for_connection(self.user_id(), self.connection_id())
-        };
-        let mut committed_stream_ids = Vec::new();
-        for staged_publish in staged_publishes {
-            if let Some(stream_id) = staged_publish
-                .commit_from_answer(self, applied_answer)
-                .await
-            {
-                committed_stream_ids.push(stream_id);
-            }
-        }
-        committed_stream_ids
+        self.room
+            .staged_publishes
+            .commit_answer(self, applied_answer)
+            .await
     }
 
-    pub(crate) async fn set_publication_activity(
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(crate) async fn set_publication_active(
         self,
         stream_id: &UserStreamId,
-        activity: PublicationActivity,
-    ) -> PublicationActivityOutcome {
-        let room = self.room();
-        let active = activity.is_active();
-        let Some((producer_target, transport_user_key)) = ({
-            let state = room.state.read().await;
-            state
-                .producer_route_target(self.user_id(), self.connection_id(), stream_id)
-                .and_then(|producer_target| {
-                    let transport_user_key = state.committed_transport_user_key(
-                        self.user_id(),
-                        producer_target.owner_connection_id(),
-                    )?;
-                    Some((producer_target, transport_user_key))
-                })
-        }) else {
-            return PublicationActivityOutcome::MissingPublication;
-        };
-        let media_worker_id = transport_user_key.media_worker_id();
-        let Some(outcome) = ({
+        active: bool,
+    ) -> Option<()> {
+        let room = self.room;
+        let commit = {
             let mut state = room.state.write().await;
-            state.apply_producer_activity(self.user_id(), &producer_target, stream_id, active)
-        }) else {
-            return PublicationActivityOutcome::StalePublication;
+            state.apply_publication_activity(self.user_id, self.connection_id, stream_id, active)
         };
-        let transport_media_id = producer_target.transport_media_id();
-        let source = TransportSourceKey::new(transport_user_key, transport_media_id);
-        let (recipients, track_update) = outcome.into_track_binding_update();
-        let execution = effects::batch::build_publication_activity(
-            room,
-            PublicationActivityEffect {
-                diagnostics: RoomDiagnosticsContext::new(
-                    self.user_id(),
-                    self.connection_id(),
-                    media_worker_id,
-                ),
-                source,
-                media: transport_media_id,
-                stream: stream_id,
-                active,
-                recipients,
-                track_update,
-            },
-        )
-        .execute(room, RoomEffectContext::runtime(self.media_transport()))
-        .await;
-        PublicationActivityOutcome::Applied {
-            transport_update: execution.producer_activity(),
-        }
+        let commit = commit.ok()?;
+        self.execute_publication_activity(commit).await;
+        Some(())
     }
 
-    pub(crate) async fn unpublish(self, stream_id: &UserStreamId) -> UnpublishOutcome {
-        let room = self.room();
-        let user_id = self.user_id();
-        let connection_id = self.connection_id();
-        let media_port = self.media_transport();
-        let (before, outcome, after) = {
-            let mut state = room.state.write().await;
-            let before = state.media_counts();
-            let outcome = state.unpublish_track(user_id, connection_id, stream_id);
-            let outcome = outcome.map(|outcome| {
-                let (recipients, track_update, relays, removals) = outcome.into_parts();
-                (
-                    recipients,
-                    track_update,
-                    state.resolved_relay_route_effects(relays),
-                    state.transport_cleanup_operations(removals),
-                )
-            });
-            let after = state.media_counts();
-            drop(state);
-            (before, outcome, after)
-        };
-        let Some(outcome) = outcome else {
-            return UnpublishOutcome::MissingPublication;
-        };
-        let (recipients, track_update, relays, cleanup) = outcome;
-        let execution = effects::batch::build_unpublish(
-            RoomGaugeDelta::media(before, after),
-            relays,
-            cleanup,
-            recipients,
-            track_update,
+    async fn execute_publication_activity(self, commit: ProducerActivityCommit) {
+        effects::batch::build_publication_activity(
+            self.room,
+            self.user_id,
+            self.connection_id,
+            commit,
         )
-        .execute(room, RoomEffectContext::runtime(media_port))
+        .execute(self.room, RoomEffectContext::runtime(self.media_transport))
         .await;
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub async fn unpublish_for_test(self, stream_id: &UserStreamId) -> bool {
+        self.unpublish(stream_id).await
+    }
+
+    async fn unpublish(self, stream_id: &UserStreamId) -> bool {
+        let room = self.room;
+        let user_id = self.user_id;
+        let connection_id = self.connection_id;
+        let media_port = self.media_transport;
+        let commit = {
+            let mut state = room.state.write().await;
+            let commit = state.unpublish_track(user_id, connection_id, stream_id);
+            drop(state);
+            commit
+        };
+        let Some(commit) = commit else {
+            return false;
+        };
+        effects::batch::build_unpublish(commit)
+            .execute(room, RoomEffectContext::runtime(media_port))
+            .await;
         room.reconcile_spillover_routers().await;
-        UnpublishOutcome::Unpublished {
-            cleanup: execution.cleanup(),
-        }
+        true
     }
 }
 
 impl Room {
-    fn staged_publish_registry(&self) -> MutexGuard<'_, StagedPublishRegistry> {
-        lock_unpoisoned(&self.staged_publish_registry)
-    }
-
+    #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
     pub fn has_staged_publish(
         &self,
@@ -567,235 +264,20 @@ impl Room {
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> bool {
-        self.staged_publish_registry()
+        self.staged_publishes
             .contains(user_id, connection_id, stream_id)
     }
 
-    pub(in crate::engine::room) fn drain_staged_publish_cleanup_operations(
+    pub fn drain_staged_publish_cleanup_operations(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Vec<TransportCleanupOperation> {
-        self.staged_publish_registry()
-            .take_for_connection(user_id, connection_id)
-            .into_iter()
-            .map(StagedPublish::into_cleanup_operation)
-            .collect()
+        self.staged_publishes
+            .cleanup_operations_for_connection(user_id, connection_id)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "transition tests fail loudly when fixed room setup is invalid"
-    )]
-
-    use std::sync::Arc;
-
-    use o_sfu_router::test_support::rtp_samples::sample_simulcast_video_rtp_parameters;
-
-    use crate::{
-        PublishStageOutcome, RollbackStagedPublishOutcome, SessionNegotiationOutcome,
-        TransportEffectOutcome,
-        engine::{
-            ConnectionId, TestSourceKind, UserId, UserPermissions,
-            media_transport::{
-                AppliedSessionAnswer, MediaTransport, TransportMediaId,
-                test_support::{test_media_transport_builder, test_rtc_port_range},
-            },
-            metrics::RuntimeMetrics,
-            room::{Room, RoomConfig, RoomManager, UserOutboundSender},
-            source_model::test_support::{source_publish_intent_for_source, stream_id_for_source},
-        },
-    };
-
-    fn media_transport() -> MediaTransport {
-        let rtc_port_range = test_rtc_port_range(4).expect("test ports should be available");
-        test_media_transport_builder(rtc_port_range)
-            .worker_count(4)
-            .build()
-            .expect("test media transport config should be valid")
-    }
-
-    fn test_sender() -> UserOutboundSender {
-        UserOutboundSender::channel(1024, Arc::new(RuntimeMetrics::default())).0
-    }
-
-    async fn join_user(room: &Arc<Room>, user_id: &UserId) -> ConnectionId {
-        room.test_api()
-            .lifecycle()
-            .join_user(
-                user_id.clone(),
-                None,
-                UserPermissions::default(),
-                test_sender(),
-            )
-            .await
-            .expect("test user should join")
-    }
-
-    async fn prepare_publish_session(
-        room: &Arc<Room>,
-        media_transport: &MediaTransport,
-        user_id: &UserId,
-    ) -> ConnectionId {
-        let connection_id = join_user(room, user_id).await;
-        let session_key = room.transport_user_key(user_id, connection_id).await;
-        media_transport
-            .create_initial_session_offer(&session_key)
-            .await
-            .expect("test session should create an initial offer");
-        assert_eq!(
-            room.apply_session_negotiated(
-                user_id,
-                connection_id,
-                o_sfu_router::MediaCapabilities::default(),
-                media_transport,
-            )
-            .await,
-            SessionNegotiationOutcome::Applied
-        );
-        connection_id
-    }
-
-    async fn staged_room() -> (Arc<Room>, MediaTransport, UserId, ConnectionId) {
-        let manager = RoomManager::for_test();
-        let room = manager
-            .serve_room(
-                "issuer-transition-publication",
-                "room",
-                &RoomConfig::default(),
-                None,
-            )
-            .await;
-        let media_transport = media_transport();
-        let user_id = UserId::Integer(1);
-        let connection_id = prepare_publish_session(&room, &media_transport, &user_id).await;
-        assert_eq!(
-            room.user_operation(&user_id, connection_id, &media_transport)
-                .stage_negotiated_publish(&source_publish_intent_for_source(
-                    TestSourceKind::ScalableVideo,
-                ))
-                .await
-                .expect("stage publish should not fail"),
-            PublishStageOutcome::Staged
-        );
-        (room, media_transport, user_id, connection_id)
-    }
-
-    async fn staged_media_id(
-        room: &Room,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> TransportMediaId {
-        room.staged_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
-            .await
-            .expect("test publish should be staged")
-    }
-
-    #[tokio::test]
-    async fn staged_publish_is_not_visible_in_room_graph_before_answer() {
-        let (room, media_transport, user_id, connection_id) = staged_room().await;
-        let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
-        let session_key = room.transport_user_key(&user_id, connection_id).await;
-
-        assert_eq!(room.test_api().inspect().producer_count().await, 0);
-        assert!(
-            room.user_operation(&user_id, connection_id, &media_transport)
-                .has_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
-        );
-        assert!(
-            media_transport
-                .transport_media_mid(&session_key, transport_media_id)
-                .await
-                .is_some()
-        );
-        assert_eq!(
-            room.user_operation(&user_id, connection_id, &media_transport)
-                .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
-                .await,
-            RollbackStagedPublishOutcome::RolledBack {
-                cleanup: TransportEffectOutcome::Applied
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn missing_answered_producer_parameters_release_reserved_publish() {
-        let (room, media_transport, user_id, connection_id) = staged_room().await;
-        let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
-
-        let committed = room
-            .user_operation(&user_id, connection_id, &media_transport)
-            .commit_staged_publishes(&AppliedSessionAnswer::default())
-            .await;
-
-        assert!(committed.is_empty());
-        assert_eq!(room.test_api().inspect().producer_count().await, 0);
-        assert_eq!(room.staged_count(&user_id, connection_id).await, 0);
-        assert!(
-            media_transport
-                .test_api()
-                .route_entry_by_media_id(transport_media_id)
-                .await
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn stale_connection_commit_rejects_and_releases_reserved_publish() {
-        let (room, media_transport, user_id, stale_connection_id) = staged_room().await;
-        let transport_media_id = staged_media_id(&room, &user_id, stale_connection_id).await;
-        let _new_connection_id = prepare_publish_session(&room, &media_transport, &user_id).await;
-        let applied_answer = AppliedSessionAnswer::from_negotiated_producers([(
-            transport_media_id,
-            sample_simulcast_video_rtp_parameters(None),
-        )]);
-
-        let committed = room
-            .user_operation(&user_id, stale_connection_id, &media_transport)
-            .commit_staged_publishes(&applied_answer)
-            .await;
-
-        assert!(committed.is_empty());
-        assert_eq!(room.test_api().inspect().producer_count().await, 0);
-        assert!(
-            media_transport
-                .test_api()
-                .route_entry_by_media_id(transport_media_id)
-                .await
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn rollback_before_answer_consumes_reserved_publish_once() {
-        let (room, media_transport, user_id, connection_id) = staged_room().await;
-        let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
-
-        assert_eq!(
-            room.user_operation(&user_id, connection_id, &media_transport)
-                .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
-                .await,
-            RollbackStagedPublishOutcome::RolledBack {
-                cleanup: TransportEffectOutcome::Applied
-            }
-        );
-
-        assert_eq!(
-            room.user_operation(&user_id, connection_id, &media_transport)
-                .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
-                .await,
-            RollbackStagedPublishOutcome::NotStaged
-        );
-        assert!(
-            media_transport
-                .test_api()
-                .route_entry_by_media_id(transport_media_id)
-                .await
-                .is_none()
-        );
-    }
-}
+#[path = "TESTS/publication.rs"]
+mod tests;

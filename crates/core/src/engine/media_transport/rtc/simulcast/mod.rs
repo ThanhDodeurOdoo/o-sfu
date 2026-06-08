@@ -9,7 +9,7 @@ mod consumer;
 mod h264;
 mod vp8;
 
-pub(in crate::engine::media_transport::rtc) use common::{NegotiatedRid, SimulcastAnswerError};
+pub use common::{NegotiatedRid, SimulcastAnswerError};
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid, Simulcast as Str0mSimulcast};
 
@@ -197,4 +197,5 @@ fn publish_uses_default_profile(rtp_parameters: &RouterRtpParameters) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;

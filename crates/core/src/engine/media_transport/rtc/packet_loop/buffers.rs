@@ -67,7 +67,7 @@ pub(super) struct PendingFirstVideoKeyframe {
 /// new reusable collections should be
 /// added here only when they replace repeated hot-path allocation or preserve a
 /// bounded batch between two packet-loop phases
-pub(in crate::engine::media_transport::rtc) struct PacketLoopBuffers {
+pub struct PacketLoopBuffers {
     /// reusable UDP transmit slots produced by `str0m::Output::Transmit`
     pub(super) pending_transmits: Vec<PendingTransmit>,
     /// media packets produced by local adapter sessions or inbound relays

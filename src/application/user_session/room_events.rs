@@ -1,304 +1,72 @@
-use std::collections::BTreeMap;
-
 use o_sfu_protocol::wire::{
-    PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerMessage, StreamType,
-    TrackBinding, UserId, UserInfo,
+    PeerInfoPayload, PeerLeftPayload, ServerBroadcastPayload, ServerEnvelope, ServerMessage,
 };
 
-use super::{User, UserError, UserOutput, projection::wire_source_descriptor};
-use crate::{
-    application::stream_catalog::stream_type_for_stream_id,
-    core::server::source_model::PublishedSourceDescriptor,
-    runtime::room::{RemoteTrackSetup, RoomEventMessage, TrackBindingUpdate},
-};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::application::user_session) struct UserWireMessages {
-    pub messages: Vec<ServerMessage>,
-    pub needs_renegotiation: bool,
-}
-
-impl UserWireMessages {
-    fn from_messages(messages: Vec<ServerMessage>) -> Self {
-        Self {
-            messages,
-            needs_renegotiation: false,
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub(in crate::application::user_session) struct UserWireState {
-    bindings_by_mid: BTreeMap<String, TrackBinding>,
-}
-
-impl UserWireState {
-    pub fn apply_room_event(&mut self, message: RoomEventMessage) -> UserWireMessages {
-        match message {
-            RoomEventMessage::Broadcast { sender_id, message } => UserWireMessages::from_messages(
-                vec![ServerMessage::Broadcast(ServerBroadcastPayload {
-                    sender_id,
-                    message: message.to_json(),
-                })],
-            ),
-            RoomEventMessage::UserJoined { user_id, info } => {
-                UserWireMessages::from_messages(vec![ServerMessage::PeerJoined(PeerInfoPayload {
-                    user_id,
-                    info,
-                })])
-            }
-            RoomEventMessage::UserDeparted { user_id } => {
-                let initial_len = self.bindings_by_mid.len();
-                self.bindings_by_mid
-                    .retain(|_mid, binding| binding.user_id != user_id);
-                UserWireMessages {
-                    messages: vec![ServerMessage::PeerLeft(PeerLeftPayload { user_id })],
-                    needs_renegotiation: self.bindings_by_mid.len() != initial_len,
-                }
-            }
-            RoomEventMessage::UserInfoChanged(snapshot) => {
-                let mut messages = Vec::with_capacity(snapshot.len().saturating_add(1));
-                let mut track_snapshot_changed = false;
-                for (user_id, info) in snapshot {
-                    track_snapshot_changed |= self.apply_user_info_to_tracks(&user_id, &info);
-                    messages.push(ServerMessage::PeerInfo(PeerInfoPayload { user_id, info }));
-                }
-                if track_snapshot_changed {
-                    messages.push(ServerMessage::Tracks(self.snapshot()));
-                }
-                UserWireMessages {
-                    messages,
-                    needs_renegotiation: false,
-                }
-            }
-            RoomEventMessage::RecordingStateChanged(state) => {
-                UserWireMessages::from_messages(vec![ServerMessage::RecordingChange(state)])
-            }
-        }
-    }
-
-    pub fn apply_remote_track_setup(&mut self, track: &RemoteTrackSetup) {
-        let Some(stream_type) = stream_type_for_stream_id(track.stream_id()) else {
-            return;
-        };
-        self.apply_track_binding(
-            track.mid().to_owned(),
-            track.user_id().clone(),
-            stream_type,
-            track.active(),
-            track.source_descriptor(),
-        );
-    }
-
-    pub fn snapshot(&self) -> Vec<TrackBinding> {
-        self.bindings_by_mid.values().cloned().collect()
-    }
-
-    pub fn apply_track_binding_update(&mut self, update: &TrackBindingUpdate) -> UserWireMessages {
-        let Some(stream_type) = stream_type_for_stream_id(&update.stream_id) else {
-            return UserWireMessages::from_messages(Vec::new());
-        };
-        let changed = match update.active {
-            Some(active) => self.set_track_active(&update.user_id, stream_type, active),
-            None => self.remove_track_binding(&update.user_id, stream_type),
-        };
-        if !changed {
-            return UserWireMessages::from_messages(Vec::new());
-        }
-        UserWireMessages {
-            messages: vec![ServerMessage::Tracks(self.snapshot())],
-            needs_renegotiation: update.active.is_none(),
-        }
-    }
-
-    fn apply_track_binding(
-        &mut self,
-        mid: String,
-        user_id: UserId,
-        stream_type: StreamType,
-        active: bool,
-        source: &PublishedSourceDescriptor,
-    ) {
-        self.bindings_by_mid.insert(
-            mid.clone(),
-            TrackBinding {
-                mid,
-                user_id: user_id.clone(),
-                stream_type,
-                active,
-                source: Some(wire_source_descriptor(source, user_id, stream_type, active)),
-            },
-        );
-    }
-
-    fn apply_user_info_to_tracks(&mut self, user_id: &UserId, info: &UserInfo) -> bool {
-        let mut changed = false;
-        for binding in self.bindings_by_mid.values_mut() {
-            if &binding.user_id != user_id {
-                continue;
-            }
-            let next_active = match binding.stream_type {
-                StreamType::Camera => info.is_camera_on,
-                StreamType::Screen => info.is_screen_sharing_on,
-                StreamType::Audio => None,
-            };
-            let Some(next_active) = next_active else {
-                continue;
-            };
-            if binding.active != next_active {
-                binding.active = next_active;
-                if let Some(source) = binding.source.as_mut() {
-                    source.active = next_active;
-                }
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    fn set_track_active(
-        &mut self,
-        user_id: &UserId,
-        stream_type: StreamType,
-        active: bool,
-    ) -> bool {
-        let mut changed = false;
-        for binding in self.bindings_by_mid.values_mut() {
-            if &binding.user_id != user_id || binding.stream_type != stream_type {
-                continue;
-            }
-            if binding.active != active {
-                binding.active = active;
-                if let Some(source) = binding.source.as_mut() {
-                    source.active = active;
-                }
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    fn remove_track_binding(&mut self, user_id: &UserId, stream_type: StreamType) -> bool {
-        let binding_count = self.bindings_by_mid.len();
-        self.bindings_by_mid.retain(|_mid, binding| {
-            &binding.user_id != user_id || binding.stream_type != stream_type
-        });
-        self.bindings_by_mid.len() != binding_count
-    }
-}
+use super::{User, UserError, UserOutput};
+use crate::runtime::room::{RoomEventMessage, UserOutbound};
 
 impl User {
-    pub async fn add_remote_track(
+    pub(crate) async fn apply_room_outbound(
         &mut self,
-        track: RemoteTrackSetup,
+        outbound: UserOutbound,
     ) -> Result<UserOutput, UserError> {
-        self.state.wire_state.apply_remote_track_setup(&track);
-        let mut output = UserOutput::new()
-            .with_signal(ServerMessage::Tracks(self.state.wire_state.snapshot()).into());
-        output.extend(self.renegotiate().await?);
-        Ok(output)
-    }
-
-    pub async fn update_remote_track(
-        &mut self,
-        update: TrackBindingUpdate,
-    ) -> Result<UserOutput, UserError> {
-        let wire_messages = self.state.wire_state.apply_track_binding_update(&update);
-        self.finalize_wire_messages(wire_messages).await
-    }
-
-    pub(crate) async fn apply_room_message(
-        &mut self,
-        message: RoomEventMessage,
-    ) -> Result<UserOutput, UserError> {
-        let wire_messages = self.state.wire_state.apply_room_event(message);
-        self.finalize_wire_messages(wire_messages).await
-    }
-
-    async fn finalize_wire_messages(
-        &mut self,
-        wire_messages: UserWireMessages,
-    ) -> Result<UserOutput, UserError> {
-        let mut output = UserOutput::from_messages(wire_messages.messages);
-        if wire_messages.needs_renegotiation {
+        let mut output = UserOutput::new();
+        let mut needs_renegotiation = false;
+        match outbound {
+            UserOutbound::Close(_) => {}
+            UserOutbound::Message(message) => match message {
+                RoomEventMessage::Broadcast { sender_id, message } => {
+                    output.push(ServerEnvelope::Message(ServerMessage::Broadcast(
+                        ServerBroadcastPayload {
+                            sender_id,
+                            message: message.to_json(),
+                        },
+                    )));
+                }
+                RoomEventMessage::UserJoined { user_id, info } => {
+                    output.push(ServerEnvelope::Message(ServerMessage::PeerJoined(
+                        PeerInfoPayload { user_id, info },
+                    )));
+                }
+                RoomEventMessage::UserDeparted { user_id } => {
+                    needs_renegotiation = self.tracks.remove_user(&user_id);
+                    output.push(ServerEnvelope::Message(ServerMessage::PeerLeft(
+                        PeerLeftPayload { user_id },
+                    )));
+                }
+                RoomEventMessage::UserInfoChanged(snapshot) => {
+                    let tracks_changed = self.tracks.apply_infos(&snapshot);
+                    output.extend(snapshot.into_iter().map(|(user_id, info)| {
+                        ServerEnvelope::Message(ServerMessage::PeerInfo(PeerInfoPayload {
+                            user_id,
+                            info,
+                        }))
+                    }));
+                    if tracks_changed {
+                        output.push(ServerEnvelope::Message(self.tracks.message()));
+                    }
+                }
+                RoomEventMessage::RecordingStateChanged(state) => {
+                    output.push(ServerEnvelope::Message(ServerMessage::RecordingChange(
+                        state,
+                    )));
+                }
+            },
+            UserOutbound::SetupRemoteTrack(track) => {
+                self.tracks.add_remote(&track);
+                output.push(ServerEnvelope::Message(self.tracks.message()));
+                needs_renegotiation = true;
+            }
+            UserOutbound::TrackBindingUpdate(update) => {
+                if self.tracks.apply_update(&update) {
+                    output.push(ServerEnvelope::Message(self.tracks.message()));
+                    needs_renegotiation |= update.active.is_none();
+                }
+            }
+        }
+        if needs_renegotiation {
             output.extend(self.renegotiate().await?);
         }
         Ok(output)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "test assertions use expect for direct fixture failures"
-    )]
-
-    use o_sfu_protocol::wire::StreamType;
-    use o_sfu_router::{Mid, Rid};
-
-    use super::*;
-    use crate::{
-        application::stream_catalog::source_publish_intent_for_stream_type,
-        core::{
-            prelude::Bitrate,
-            server::source_model::{
-                PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-                SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            },
-        },
-    };
-
-    #[test]
-    fn source_descriptor_mid_uses_published_source_mid_not_consumer_binding_mid() {
-        let source = published_source("published-cam-0");
-        let mut wire_state = UserWireState::default();
-
-        wire_state.apply_track_binding(
-            "subscriber-down-0".to_owned(),
-            UserId::Integer(7),
-            StreamType::Camera,
-            true,
-            &source,
-        );
-
-        let snapshot = wire_state.snapshot();
-        let binding = snapshot
-            .first()
-            .expect("wire state should contain the inserted track binding");
-        assert_eq!(binding.mid, "subscriber-down-0");
-        let source = binding
-            .source
-            .as_ref()
-            .expect("track binding should carry a source descriptor");
-        assert_eq!(source.mid.as_deref(), Some("published-cam-0"));
-    }
-
-    fn published_source(mid: &str) -> PublishedSourceDescriptor {
-        let source_id = PublishedSourceId::from_raw(1);
-        let encoding = SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
-            encoding_id: SourceEncodingId::from_raw(2),
-            source_id,
-            rid: Some(Rid::new("hi")),
-            primary_ssrc: None,
-            repair_ssrc: None,
-            max_bitrate: Some(Bitrate::from_kbps(900)),
-            resolution_scale: None,
-            max_framerate: None,
-            policy_role: None,
-            max_temporal_layer_id: None,
-            negotiated_format: None,
-        });
-        let intent = source_publish_intent_for_stream_type(StreamType::Camera);
-        PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-            source_id,
-            owner: PublishedSourceOwner::new(UserId::Integer(7)),
-            stream_id: intent.stream_id().clone(),
-            media_kind: intent.media_kind(),
-            policy: intent.policy(),
-            mid: Some(Mid::new(mid)),
-            encodings: vec![encoding],
-        })
-        .expect("test source descriptor should satisfy source graph invariants")
     }
 }

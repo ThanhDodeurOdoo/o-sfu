@@ -1,8 +1,6 @@
-//! hard receiver video admission limit
-
 use super::{
     VideoAdmissionRank,
-    planner::{PlannedReceiverRoute, RouteOutcome},
+    receiver::{PlannedReceiverRoute, RouteOutcome},
 };
 use crate::engine::source_model::PolicyPauseReason;
 
@@ -15,7 +13,7 @@ pub(super) fn apply_video_download_limit(
     }
     let mut ranked = routes
         .iter_mut()
-        .filter(|route| route.decision().sends_media())
+        .filter(|route| route.selection.policy_pause_reason.is_none())
         .map(|route| (video_download_rank(route), route))
         .collect::<Vec<_>>();
     ranked.sort_by_key(|(rank, _)| *rank);
@@ -27,12 +25,12 @@ pub(super) fn apply_video_download_limit(
 pub(super) fn active_route_count(routes: &[PlannedReceiverRoute<'_>]) -> usize {
     routes
         .iter()
-        .filter(|route| route.decision().sends_media())
+        .filter(|route| route.selection.policy_pause_reason.is_none())
         .count()
 }
 
 fn video_download_rank(route: &PlannedReceiverRoute<'_>) -> VideoAdmissionRank {
-    let input = route.input();
+    let input = route.route;
     VideoAdmissionRank::new(
         input.layout_intent.priority(),
         input.active_speaker_rank,

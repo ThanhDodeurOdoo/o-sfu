@@ -1,5 +1,8 @@
 //! The modules in this tree define the pure routing state machine, the typed
 //! RTP/domain models used at its boundary, and narrow test-support helpers.
+#[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+mod TESTS;
 mod consumer;
 mod consumer_capability;
 #[cfg(any(test, feature = "test-support"))]
@@ -16,9 +19,8 @@ mod rtp;
 mod rtp_negotiation;
 mod session;
 #[cfg(any(test, feature = "test-support"))]
+#[path = "TESTS/test_support.rs"]
 pub mod test_support;
-#[cfg(test)]
-mod tests;
 mod transport;
 
 pub use o_sfu_rfc::webrtc::MediaKind;

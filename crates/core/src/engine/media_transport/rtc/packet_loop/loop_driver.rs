@@ -63,7 +63,7 @@ use crate::{
 /// values copied into session creation are immutable worker settings
 /// `Arc` fields are shared services that the packet loop may update or query
 /// without exposing direct access to `PacketLoopState`
-pub(in crate::engine::media_transport::rtc) struct PacketLoopConfig {
+pub struct PacketLoopConfig {
     pub public_ip: IpAddr,
     pub max_bitrate_in: Bitrate,
     pub max_bitrate_out: Bitrate,
@@ -428,7 +428,7 @@ const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 /// next external input before looping
 /// relay draining is bounded so a relay burst cannot starve commands or socket
 /// ingress indefinitely
-pub(in crate::engine::media_transport::rtc) async fn run_packet_loop(
+pub async fn run_packet_loop(
     config: PacketLoopConfig,
     bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
@@ -528,7 +528,7 @@ fn route_datagram_to_session(
 }
 
 #[cfg(feature = "internal-benchmarks")]
-pub(in crate::engine::media_transport::rtc) fn route_queued_ingress_datagrams_for_benchmark(
+pub fn route_queued_ingress_datagrams_for_benchmark(
     packet_loop_state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     demux: &mut DemuxRecoveryState,
