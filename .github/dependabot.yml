@@ -16,6 +16,7 @@ updates:
       - "cargo"
       - "AI"
       - "lang-rust"
+      - "app"
 
   - package-ecosystem: "cargo"
     directory: "/crates/router"
@@ -28,6 +29,7 @@ updates:
       - "cargo"
       - "AI"
       - "lang-rust"
+      - "router"
 
   - package-ecosystem: "cargo"
     directory: "/crates/core"
@@ -40,6 +42,7 @@ updates:
       - "cargo"
       - "AI"
       - "lang-rust"
+      - "core"
 
   - package-ecosystem: "cargo"
     directory: "/crates/telemetry"
@@ -52,6 +55,7 @@ updates:
       - "cargo"
       - "AI"
       - "lang-rust"
+      - "telemetry"
 
   - package-ecosystem: "cargo"
     directory: "/crates/protocol"
@@ -64,6 +68,7 @@ updates:
       - "cargo"
       - "AI"
       - "lang-rust"
+      - "protocol"
 
   - package-ecosystem: "cargo"
     directory: "/tests"
@@ -76,6 +81,20 @@ updates:
       - "cargo"
       - "AI"
       - "lang-rust"
+      - "tests"
+
+  - package-ecosystem: "cargo"
+    directory: "/tests/fuzz"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    labels:
+      - "dependencies"
+      - "cargo"
+      - "AI"
+      - "lang-rust"
+      - "fuzz"
 
   - package-ecosystem: "npm"
     directory: "/crates/client"
@@ -88,6 +107,7 @@ updates:
       - "npm"
       - "AI"
       - "lang-js"
+      - "client"
 
   - package-ecosystem: "github-actions"
     directory: "/"
