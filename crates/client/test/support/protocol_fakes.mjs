@@ -46,6 +46,7 @@ export class FakeProtocolCore {
         this.recordingState = {};
         this.state = "disconnected";
         this.disconnectCalls = 0;
+        this.pendingNegotiationKind = null;
         this.subscriptionUpdates = [];
         this.submittedAnswers = [];
         this.publicationUpdates = [];
@@ -82,6 +83,9 @@ export class FakeProtocolCore {
     }
 
     onTransportReady() {
+        if (this.pendingNegotiationKind === "offer") {
+            return [];
+        }
         this.transportReadyCalls += 1;
         this.state = "connected";
         return [{ kind: "emitStateChange", state: "connected" }];
@@ -108,13 +112,13 @@ export class FakeProtocolCore {
                 };
                 return [{ kind: "emitStateChange", state: "authenticated" }];
             case "offer":
-                return [
+                return this._withPendingNegotiationKind([
                     { kind: "createPeerConnection" },
                     initialOfferCommand("7"),
                     ...this._replaceTrackBindings()
-                ];
+                ]);
             case "offer-with-attach-camera":
-                return [
+                return this._withPendingNegotiationKind([
                     { kind: "createPeerConnection" },
                     initialOfferCommand("8"),
                     {
@@ -123,17 +127,17 @@ export class FakeProtocolCore {
                         streamType: "camera"
                     },
                     ...this._replaceTrackBindings()
-                ];
+                ]);
             case "renegotiate-with-unbound-camera":
-                return [
+                return this._withPendingNegotiationKind([
                     videoRenegotiationCommand({
                         mid: "2",
                         requestId: "9",
                         simulcastEncodings: []
                     })
-                ];
+                ]);
             case "renegotiate-with-pending-camera-and-screen":
-                return [
+                return this._withPendingNegotiationKind([
                     negotiationCommand({
                         negotiationKind: "renegotiate",
                         requestId: "11",
@@ -143,17 +147,17 @@ export class FakeProtocolCore {
                             videoUploadSlot("3", { simulcastEncodings: [] })
                         ]
                     })
-                ];
+                ]);
             case "renegotiate-with-pending-simulcast-camera":
-                return [
+                return this._withPendingNegotiationKind([
                     videoRenegotiationCommand({
                         mid: "2",
                         requestId: "12",
                         rtpmap: "VP8/90000"
                     })
-                ];
+                ]);
             case "renegotiate-with-pending-h264-simulcast-camera":
-                return [
+                return this._withPendingNegotiationKind([
                     videoRenegotiationCommand({
                         codecs: ["H264"],
                         mid: "2",
@@ -161,9 +165,9 @@ export class FakeProtocolCore {
                         requestId: "13",
                         rtpmap: "H264/90000"
                     })
-                ];
+                ]);
             case "renegotiate-with-invalid-simulcast-camera":
-                return [
+                return this._withPendingNegotiationKind([
                     videoRenegotiationCommand({
                         mid: "2",
                         requestId: "14",
@@ -181,9 +185,9 @@ export class FakeProtocolCore {
                             }
                         ]
                     })
-                ];
+                ]);
             case "renegotiate-with-pending-audio":
-                return [
+                return this._withPendingNegotiationKind([
                     negotiationCommand({
                         negotiationKind: "renegotiate",
                         requestId: "10",
@@ -193,7 +197,7 @@ export class FakeProtocolCore {
                         ),
                         uploadSlots: [audioUploadSlot("producer-audio")]
                     })
-                ];
+                ]);
             case "info-change-map":
                 return [
                     {
@@ -289,6 +293,7 @@ export class FakeProtocolCore {
 
     submitNegotiationAnswer(requestId, negotiationKind, sdp) {
         this.submittedAnswers.push({ negotiationKind, requestId, sdp });
+        this.pendingNegotiationKind = null;
         return [];
     }
 
@@ -316,6 +321,13 @@ export class FakeProtocolCore {
                 streamType: type
             }
         ];
+    }
+
+    _withPendingNegotiationKind(commands) {
+        this.pendingNegotiationKind =
+            commands.find((command) => command.kind === "applyNegotiation")?.negotiationKind ??
+            null;
+        return commands;
     }
 
     _replaceTrackBindings() {

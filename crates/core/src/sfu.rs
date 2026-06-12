@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    mem::{replace, take},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, mem::take, sync::Arc};
 
 use o_sfu_router::MediaCapabilities;
 
@@ -47,15 +43,120 @@ pub struct UploadEncoding {
 enum SessionPhase {
     #[default]
     BeforeInitialOffer,
-    Stable,
-    Negotiating {
-        action: PendingSessionAction,
-        queued_renegotiation: bool,
+    Stable {
+        queued_publishes: BTreeMap<UserStreamId, SourcePublishIntent>,
     },
+    WaitingForAnswer(InFlightOffer),
 }
 
 #[derive(Debug)]
-enum PendingSessionAction {
+struct InFlightOffer {
+    purpose: SessionOfferPurpose,
+    queued_publishes: BTreeMap<UserStreamId, SourcePublishIntent>,
+    follow_up_renegotiation: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenegotiationDecision {
+    CreateOfferNow,
+    QueuedAfterAnswer,
+    IgnoredBeforeInitialOffer,
+}
+
+impl SessionPhase {
+    fn can_stage_publish(&self) -> bool {
+        !matches!(self, Self::WaitingForAnswer(_))
+    }
+
+    fn has_queued_publish(&self, stream_id: &UserStreamId) -> bool {
+        match self {
+            Self::BeforeInitialOffer => false,
+            Self::Stable { queued_publishes } => queued_publishes.contains_key(stream_id),
+            Self::WaitingForAnswer(pending) => pending.queued_publishes.contains_key(stream_id),
+        }
+    }
+
+    fn queue_publish(&mut self, stream_id: UserStreamId, intent: SourcePublishIntent) {
+        match self {
+            Self::BeforeInitialOffer => {}
+            Self::Stable { queued_publishes } => {
+                queued_publishes.insert(stream_id, intent);
+            }
+            Self::WaitingForAnswer(pending) => {
+                pending.queued_publishes.insert(stream_id, intent);
+            }
+        }
+    }
+
+    fn remove_queued_publish(&mut self, stream_id: &UserStreamId) -> bool {
+        match self {
+            Self::BeforeInitialOffer => false,
+            Self::Stable { queued_publishes } => queued_publishes.remove(stream_id).is_some(),
+            Self::WaitingForAnswer(pending) => pending.queued_publishes.remove(stream_id).is_some(),
+        }
+    }
+
+    fn clear_queued_publishes(&mut self) {
+        match self {
+            Self::BeforeInitialOffer => {}
+            Self::Stable { queued_publishes } => queued_publishes.clear(),
+            Self::WaitingForAnswer(pending) => pending.queued_publishes.clear(),
+        }
+    }
+
+    fn request_renegotiation(&mut self) -> RenegotiationDecision {
+        match self {
+            Self::BeforeInitialOffer => RenegotiationDecision::IgnoredBeforeInitialOffer,
+            Self::Stable { .. } => RenegotiationDecision::CreateOfferNow,
+            Self::WaitingForAnswer(pending) => {
+                pending.follow_up_renegotiation = true;
+                RenegotiationDecision::QueuedAfterAnswer
+            }
+        }
+    }
+
+    fn mark_follow_up_renegotiation(&mut self) {
+        if let Self::WaitingForAnswer(pending) = self {
+            pending.follow_up_renegotiation = true;
+        }
+    }
+
+    fn wait_for_answer(&mut self, purpose: SessionOfferPurpose) {
+        *self = Self::WaitingForAnswer(InFlightOffer {
+            purpose,
+            queued_publishes: BTreeMap::new(),
+            follow_up_renegotiation: false,
+        });
+    }
+
+    fn pending_offer_purpose(&self) -> Option<&SessionOfferPurpose> {
+        let Self::WaitingForAnswer(pending) = self else {
+            return None;
+        };
+        Some(&pending.purpose)
+    }
+
+    fn complete_answer(&mut self) -> Option<bool> {
+        let Self::WaitingForAnswer(pending) = self else {
+            return None;
+        };
+        let queued_publishes = take(&mut pending.queued_publishes);
+        let follow_up_renegotiation = pending.follow_up_renegotiation;
+        *self = Self::Stable { queued_publishes };
+        Some(follow_up_renegotiation)
+    }
+
+    fn take_queued_publishes(&mut self) -> BTreeMap<UserStreamId, SourcePublishIntent> {
+        match self {
+            Self::BeforeInitialOffer => BTreeMap::new(),
+            Self::Stable { queued_publishes } => take(queued_publishes),
+            Self::WaitingForAnswer(pending) => take(&mut pending.queued_publishes),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum SessionOfferPurpose {
     EstablishSession { capabilities: MediaCapabilities },
     RefreshSession,
 }
@@ -129,7 +230,6 @@ pub struct MediaSession {
     connection_id: ConnectionId,
     transport_user_key: TransportSessionKey,
     phase: SessionPhase,
-    queued_publishes: BTreeMap<UserStreamId, SourcePublishIntent>,
 }
 
 impl SfuCore {
@@ -164,7 +264,6 @@ impl SfuCore {
             connection_id,
             transport_user_key,
             phase: SessionPhase::default(),
-            queued_publishes: BTreeMap::new(),
         }
     }
 }
@@ -186,10 +285,8 @@ impl MediaSession {
             .await
             .map(NegotiationOffer::from)
             .map_err(SfuCoreError::Transport)?;
-        self.phase = SessionPhase::Negotiating {
-            action: PendingSessionAction::EstablishSession { capabilities },
-            queued_renegotiation: false,
-        };
+        self.phase
+            .wait_for_answer(SessionOfferPurpose::EstablishSession { capabilities });
         Ok(Some(offer))
     }
 
@@ -198,14 +295,7 @@ impl MediaSession {
     /// returns [`SessionError::NoPendingRequest`] when no offer is pending
     /// returns [`SessionError::Core`] when answer application fails
     pub async fn answer(&mut self, sdp: &str) -> Result<Vec<SessionEvent>, SessionError> {
-        let SessionPhase::Negotiating { .. } = &self.phase else {
-            return Err(SessionError::NoPendingRequest);
-        };
-        let SessionPhase::Negotiating {
-            action,
-            queued_renegotiation,
-        } = replace(&mut self.phase, SessionPhase::Stable)
-        else {
+        let Some(purpose) = self.phase.pending_offer_purpose() else {
             return Err(SessionError::NoPendingRequest);
         };
         let applied_answer = self
@@ -214,25 +304,28 @@ impl MediaSession {
             .apply_session_answer(&self.transport_user_key, sdp)
             .await
             .map_err(SfuCoreError::Transport)?;
-        match action {
-            PendingSessionAction::EstablishSession { capabilities } => {
+        match purpose {
+            SessionOfferPurpose::EstablishSession { capabilities } => {
                 let client_capabilities = self
                     .core
                     .media_transport
-                    .negotiated_client_rtp_capabilities(sdp, &capabilities)
+                    .negotiated_client_rtp_capabilities(sdp, capabilities)
                     .map_err(SfuCoreError::CapabilityProjection)?;
                 self.room_operation()
                     .apply_session_negotiated(client_capabilities)
                     .await
                     .ok_or(SfuCoreError::SessionNegotiationRejected)?;
             }
-            PendingSessionAction::RefreshSession => {
+            SessionOfferPurpose::RefreshSession => {
                 self.room_operation()
                     .apply_session_refreshed()
                     .await
                     .ok_or(SfuCoreError::SessionRefreshRejected)?;
             }
         }
+        let Some(follow_up_renegotiation) = self.phase.complete_answer() else {
+            return Err(SessionError::NoPendingRequest);
+        };
         let committed = self
             .room_operation()
             .commit_staged_publishes(&applied_answer)
@@ -245,7 +338,7 @@ impl MediaSession {
             })
             .collect::<Vec<_>>();
         let staged = self.stage_queued_publishes().await?;
-        if staged || queued_renegotiation {
+        if staged || follow_up_renegotiation {
             events.extend(self.renegotiate().await?.map(SessionEvent::Renegotiation));
         }
         Ok(events)
@@ -260,14 +353,17 @@ impl MediaSession {
         intent: SourcePublishIntent,
     ) -> Result<Vec<SessionEvent>, SessionError> {
         let stream_id = intent.stream_id().clone();
-        if self.queued_publishes.contains_key(&stream_id) {
+        if self.phase.has_queued_publish(&stream_id) {
             return Ok(Vec::new());
         }
-        match self.start_publish(&intent, !self.awaiting_answer()).await? {
+        match self
+            .start_publish(&intent, self.phase.can_stage_publish())
+            .await?
+        {
             PublishIntentOutcome::Noop => Ok(Vec::new()),
             PublishIntentOutcome::Queue => {
-                self.queued_publishes.insert(stream_id, intent);
-                self.queue_renegotiation();
+                self.phase.queue_publish(stream_id, intent);
+                self.phase.mark_follow_up_renegotiation();
                 Ok(Vec::new())
             }
             PublishIntentOutcome::Activated => Ok(vec![SessionEvent::Publication {
@@ -286,12 +382,12 @@ impl MediaSession {
         &mut self,
         stream_id: &UserStreamId,
     ) -> Result<Vec<SessionEvent>, SessionError> {
-        if self.queued_publishes.remove(stream_id).is_some() {
+        if self.phase.remove_queued_publish(stream_id) {
             return Ok(Vec::new());
         }
         match self.room_operation().stop_publish(stream_id).await {
             UnpublishIntentOutcome::RolledBack => {
-                self.queue_renegotiation();
+                self.phase.mark_follow_up_renegotiation();
                 Ok(Vec::new())
             }
             UnpublishIntentOutcome::Unpublished => {
@@ -309,7 +405,7 @@ impl MediaSession {
     }
 
     pub async fn close(&mut self) {
-        self.queued_publishes.clear();
+        self.phase.clear_queued_publishes();
         self.room_operation()
             .rollback_staged_publishes_for_connection()
             .await;
@@ -320,8 +416,10 @@ impl MediaSession {
     /// returns [`SessionError::Core`] when the transport rejects
     /// renegotiation
     pub async fn renegotiate(&mut self) -> Result<Option<NegotiationOffer>, SessionError> {
-        if !self.queue_renegotiation() {
-            return Ok(None);
+        match self.phase.request_renegotiation() {
+            RenegotiationDecision::CreateOfferNow => {}
+            RenegotiationDecision::QueuedAfterAnswer
+            | RenegotiationDecision::IgnoredBeforeInitialOffer => return Ok(None),
         }
         let offer = match self
             .core
@@ -333,10 +431,8 @@ impl MediaSession {
             Err(TransportAdapterError::UnsupportedFeature) => return Ok(None),
             Err(error) => return Err(SfuCoreError::Transport(error).into()),
         };
-        self.phase = SessionPhase::Negotiating {
-            action: PendingSessionAction::RefreshSession,
-            queued_renegotiation: false,
-        };
+        self.phase
+            .wait_for_answer(SessionOfferPurpose::RefreshSession);
         Ok(Some(offer))
     }
 
@@ -444,31 +540,11 @@ impl MediaSession {
         Ok(self
             .renegotiate()
             .await?
-            .map(SessionEvent::Renegotiation)
-            .into_iter()
-            .collect())
-    }
-
-    fn awaiting_answer(&self) -> bool {
-        matches!(self.phase, SessionPhase::Negotiating { .. })
-    }
-
-    fn queue_renegotiation(&mut self) -> bool {
-        match &mut self.phase {
-            SessionPhase::BeforeInitialOffer => false,
-            SessionPhase::Stable => true,
-            SessionPhase::Negotiating {
-                queued_renegotiation,
-                ..
-            } => {
-                *queued_renegotiation = true;
-                false
-            }
-        }
+            .map_or_else(Vec::new, |offer| vec![SessionEvent::Renegotiation(offer)]))
     }
 
     async fn stage_queued_publishes(&mut self) -> Result<bool, SessionError> {
-        let queued = take(&mut self.queued_publishes);
+        let queued = self.phase.take_queued_publishes();
         let mut staged = false;
         for intent in queued.into_values() {
             if self.start_publish(&intent, true).await? == PublishIntentOutcome::Staged {

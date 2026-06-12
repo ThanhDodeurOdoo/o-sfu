@@ -2,17 +2,9 @@ use super::*;
 
 #[test]
 fn protocol_core_emits_negotiation_command_and_accepts_matching_answer() {
-    let mut core = ProtocolCore::new();
-    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let mut core = authenticated_core();
 
-    let offer_frame = encode_server_batch(ServerEnvelope::Request {
-        request_id: RequestId::new("offer-1"),
-        request: ServerRequest::Offer(SessionDescriptionPayload {
-            sdp: String::from("v=0\r\ns=offer\r\n"),
-            upload_slots: Vec::new(),
-        }),
-    });
+    let offer_frame = server_offer_frame("offer-1", "v=0\r\ns=offer\r\n");
     let offer_commands = core.on_ws_message(&offer_frame);
 
     assert_eq!(
@@ -33,43 +25,22 @@ fn protocol_core_emits_negotiation_command_and_accepts_matching_answer() {
         NegotiationKind::Offer,
         "v=0\r\ns=answer\r\n",
     );
-    let mut batch = decode_sent_batch(&answer_commands).into_iter();
-    let Some(envelope) = batch.next() else {
-        return;
-    };
-
-    assert_eq!(
-        ClientEnvelope::decode(envelope),
-        Ok(ClientEnvelope::Response {
-            response_to: RequestId::new("offer-1"),
-            response: ClientResponse::Offer(SessionDescriptionPayload {
-                sdp: String::from("v=0\r\ns=answer\r\n"),
-                upload_slots: Vec::new(),
-            }),
-        })
+    assert_sent_response(
+        &answer_commands,
+        "offer-1",
+        ClientResponse::Offer(SessionDescriptionPayload {
+            sdp: String::from("v=0\r\ns=answer\r\n"),
+            upload_slots: Vec::new(),
+        }),
     );
 }
 
 #[test]
 fn protocol_core_rejects_overlapping_negotiation_requests() {
-    let mut core = ProtocolCore::new();
-    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let mut core = authenticated_core();
 
-    let first_offer = encode_server_batch(ServerEnvelope::Request {
-        request_id: RequestId::new("offer-1"),
-        request: ServerRequest::Offer(SessionDescriptionPayload {
-            sdp: String::from("v=0\r\ns=offer-1\r\n"),
-            upload_slots: Vec::new(),
-        }),
-    });
-    let second_offer = encode_server_batch(ServerEnvelope::Request {
-        request_id: RequestId::new("offer-2"),
-        request: ServerRequest::Offer(SessionDescriptionPayload {
-            sdp: String::from("v=0\r\ns=offer-2\r\n"),
-            upload_slots: Vec::new(),
-        }),
-    });
+    let first_offer = server_offer_frame("offer-1", "v=0\r\ns=offer-1\r\n");
+    let second_offer = server_offer_frame("offer-2", "v=0\r\ns=offer-2\r\n");
 
     let _ = core.on_ws_message(&first_offer);
     let commands = core.on_ws_message(&second_offer);
@@ -84,18 +55,9 @@ fn protocol_core_rejects_overlapping_negotiation_requests() {
 
 #[test]
 fn protocol_core_rejects_initial_offer_after_transport_ready() {
-    let mut core = ProtocolCore::new();
-    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
-    let _ = core.on_transport_ready();
+    let mut core = connected_core();
 
-    let late_offer = encode_server_batch(ServerEnvelope::Request {
-        request_id: RequestId::new("offer-1"),
-        request: ServerRequest::Offer(SessionDescriptionPayload {
-            sdp: String::from("v=0\r\ns=late-offer\r\n"),
-            upload_slots: Vec::new(),
-        }),
-    });
+    let late_offer = server_offer_frame("offer-1", "v=0\r\ns=late-offer\r\n");
     let commands = core.on_ws_message(&late_offer);
 
     assert_eq!(
@@ -103,5 +65,162 @@ fn protocol_core_rejects_initial_offer_after_transport_ready() {
         vec![Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
+    );
+}
+
+#[test]
+fn protocol_core_rejects_renegotiation_before_transport_ready() {
+    let mut core = authenticated_core();
+
+    let renegotiation_frame =
+        server_renegotiation_frame("renegotiate-1", "v=0\r\ns=renegotiate\r\n");
+    let commands = core.on_ws_message(&renegotiation_frame);
+
+    assert_eq!(
+        commands,
+        vec![Command::CloseWebSocket {
+            code: u16::from(WebSocketCloseCode::ProtocolError),
+        }]
+    );
+}
+
+#[test]
+fn protocol_core_waits_for_initial_answer_before_transport_ready() {
+    let mut core = authenticated_core();
+
+    let offer_frame = server_offer_frame("offer-1", "v=0\r\ns=offer\r\n");
+    let _ = core.on_ws_message(&offer_frame);
+
+    assert!(core.on_transport_ready().is_empty());
+    assert_eq!(core.state(), ConnectionState::Authenticated);
+
+    let answer_commands = core.submit_negotiation_answer(
+        &RequestId::new("offer-1"),
+        NegotiationKind::Offer,
+        "v=0\r\ns=answer\r\n",
+    );
+    assert_eq!(decode_sent_batch(&answer_commands).len(), 1);
+
+    assert_eq!(
+        core.on_transport_ready(),
+        vec![Command::EmitStateChange {
+            state: ConnectionState::Connected,
+            cause: None,
+        }]
+    );
+    assert_eq!(core.state(), ConnectionState::Connected);
+}
+
+#[test]
+fn protocol_core_accepts_renegotiation_after_transport_ready() {
+    let mut core = connected_core();
+
+    let renegotiation_frame =
+        server_renegotiation_frame("renegotiate-1", "v=0\r\ns=renegotiate\r\n");
+    let commands = core.on_ws_message(&renegotiation_frame);
+
+    assert_eq!(
+        commands,
+        vec![Command::ApplyNegotiation {
+            request_id: RequestId::new("renegotiate-1"),
+            kind: NegotiationKind::Renegotiate,
+            sdp: String::from("v=0\r\ns=renegotiate\r\n"),
+            upload_slots: Vec::new(),
+        }]
+    );
+
+    let answer_commands = core.submit_negotiation_answer(
+        &RequestId::new("renegotiate-1"),
+        NegotiationKind::Renegotiate,
+        "v=0\r\ns=answer\r\n",
+    );
+    assert_sent_response(
+        &answer_commands,
+        "renegotiate-1",
+        ClientResponse::Renegotiate(SessionDescriptionPayload {
+            sdp: String::from("v=0\r\ns=answer\r\n"),
+            upload_slots: Vec::new(),
+        }),
+    );
+}
+
+#[test]
+fn protocol_core_keeps_pending_negotiation_after_mismatched_answer() {
+    let mut core = authenticated_core();
+
+    let offer_frame = server_offer_frame("offer-1", "v=0\r\ns=offer\r\n");
+    let _ = core.on_ws_message(&offer_frame);
+
+    assert!(
+        core.submit_negotiation_answer(
+            &RequestId::new("offer-1"),
+            NegotiationKind::Renegotiate,
+            "v=0\r\ns=stale-answer\r\n",
+        )
+        .is_empty()
+    );
+
+    let answer_commands = core.submit_negotiation_answer(
+        &RequestId::new("offer-1"),
+        NegotiationKind::Offer,
+        "v=0\r\ns=answer\r\n",
+    );
+    assert_sent_response(
+        &answer_commands,
+        "offer-1",
+        ClientResponse::Offer(SessionDescriptionPayload {
+            sdp: String::from("v=0\r\ns=answer\r\n"),
+            upload_slots: Vec::new(),
+        }),
+    );
+}
+
+fn authenticated_core() -> ProtocolCore {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+    core
+}
+
+fn connected_core() -> ProtocolCore {
+    let mut core = authenticated_core();
+    let _ = core.on_transport_ready();
+    core
+}
+
+fn server_offer_frame(request_id: &str, sdp: &str) -> String {
+    server_negotiation_frame(
+        request_id,
+        ServerRequest::Offer(SessionDescriptionPayload {
+            sdp: String::from(sdp),
+            upload_slots: Vec::new(),
+        }),
+    )
+}
+
+fn server_renegotiation_frame(request_id: &str, sdp: &str) -> String {
+    server_negotiation_frame(
+        request_id,
+        ServerRequest::Renegotiate(SessionDescriptionPayload {
+            sdp: String::from(sdp),
+            upload_slots: Vec::new(),
+        }),
+    )
+}
+
+fn server_negotiation_frame(request_id: &str, request: ServerRequest) -> String {
+    encode_server_batch(ServerEnvelope::Request {
+        request_id: RequestId::new(request_id),
+        request,
+    })
+}
+
+fn assert_sent_response(commands: &[Command], request_id: &str, response: ClientResponse) {
+    assert_sent_client_envelopes(
+        commands,
+        vec![ClientEnvelope::Response {
+            response_to: RequestId::new(request_id),
+            response,
+        }],
     );
 }
