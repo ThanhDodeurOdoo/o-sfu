@@ -21,7 +21,7 @@ use tracing_subscriber::{
 #[cfg(feature = "otel-tracing")]
 use {
     opentelemetry::{
-        KeyValue, global,
+        Context, KeyValue, global,
         trace::{TraceContextExt, TracerProvider as _},
     },
     opentelemetry_otlp::{Protocol, WithExportConfig},
@@ -30,7 +30,7 @@ use {
         trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
     },
     tracing::dispatcher,
-    tracing_opentelemetry::{OpenTelemetrySpanExt, OtelData, get_otel_context},
+    tracing_opentelemetry::{OpenTelemetrySpanExt, get_otel_context},
     tracing_subscriber::registry::SpanRef,
 };
 
@@ -369,18 +369,14 @@ fn trace_id_for_span<S>(span: &SpanRef<'_, S>, dispatch: &tracing::Dispatch) -> 
 where
     S: for<'lookup> LookupSpan<'lookup>,
 {
-    let mut extensions = span.extensions_mut();
-    if let Some(trace_id) = extensions
-        .get_mut::<OtelData>()
-        .and_then(|otel_data| otel_data.trace_id())
-    {
-        return Some(trace_id.to_string());
-    }
-    let span_context = get_otel_context(&mut extensions, dispatch)?
-        .span()
-        .span_context()
-        .clone();
-    drop(extensions);
+    get_otel_context(&span.id(), dispatch)
+        .and_then(|context| trace_id_from_context(&context))
+        .or_else(|| trace_id_from_context(&Context::current()))
+}
+
+#[cfg(feature = "otel-tracing")]
+fn trace_id_from_context(context: &Context) -> Option<String> {
+    let span_context = context.span().span_context().clone();
     span_context
         .is_valid()
         .then(|| span_context.trace_id().to_string())
