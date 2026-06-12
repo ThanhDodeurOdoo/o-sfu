@@ -9,6 +9,7 @@ mod consumer_capability;
 mod diagnostic;
 mod error;
 mod ids;
+mod mutation;
 mod observer;
 mod producer;
 mod proof_storage;
@@ -29,13 +30,15 @@ pub use o_sfu_rfc::webrtc::MediaKind;
 pub use self::diagnostic::{
     ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference,
 };
+use self::{consumer::Consumer, producer::Producer, transport::Transport};
 pub use self::{
-    consumer::Consumer,
     consumer_capability::ConsumerCapability,
     error::RouterError,
     ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId},
+    mutation::{
+        ConsumerSpec, ProducerSpec, ReceiveTransportHandle, SendTransportHandle, SessionHandle,
+    },
     observer::{NoopRouterObserver, RouterEvent, RouterObserver},
-    producer::Producer,
     route_state::{ConsumerRouteState, ProducerRouteState},
     router::Router,
     rtp::{
@@ -48,5 +51,5 @@ pub use self::{
         negotiate_consumer_rtp_parameters,
     },
     session::{Session, SessionState},
-    transport::{Transport, TransportDirection},
+    transport::TransportDirection,
 };

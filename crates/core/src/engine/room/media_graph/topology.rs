@@ -177,7 +177,6 @@ impl RoomState {
             .add_consumer_with_route_state(
                 &target.user,
                 target.routed,
-                target.kind,
                 ConsumerCapability::Compatible,
                 route_state,
             )

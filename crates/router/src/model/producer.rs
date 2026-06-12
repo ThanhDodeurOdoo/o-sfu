@@ -19,12 +19,8 @@ pub struct Producer {
 }
 
 impl Producer {
-    /// build an active producer for a receive transport
-    ///
-    /// callers that restore paused state from a snapshot should apply it before
-    /// inserting the producer
     #[must_use]
-    pub fn new(id: ProducerId, transport_id: TransportId, media_kind: MediaKind) -> Self {
+    pub(super) fn new(id: ProducerId, transport_id: TransportId, media_kind: MediaKind) -> Self {
         Self {
             id,
             transport_id,
@@ -33,6 +29,7 @@ impl Producer {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn id(&self) -> ProducerId {
         self.id
@@ -48,27 +45,9 @@ impl Producer {
         self.media_kind
     }
 
-    /// producer route state as a compatibility paused flag
-    ///
-    /// router mutation APIs use [`ProducerRouteState`] directly
-    #[must_use]
-    pub fn paused(&self) -> bool {
-        self.route_state.is_paused()
-    }
-
     #[must_use]
     pub fn route_state(&self) -> ProducerRouteState {
         self.route_state
-    }
-
-    /// staged copy with a different source route state
-    ///
-    /// consumer shadowing is a router transition and must go through
-    /// [`Router::set_producer_route_state`](super::Router::set_producer_route_state)
-    #[must_use]
-    pub fn with_route_state(mut self, route_state: ProducerRouteState) -> Self {
-        self.route_state = route_state;
-        self
     }
 
     pub(super) fn set_route_state(&mut self, route_state: ProducerRouteState) {

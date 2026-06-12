@@ -7,10 +7,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
-    Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
-    ProducerRouteState, Router, RouterError, RouterEvent, RouterId, RouterObserver, Session,
-    SessionId, SessionState, Transport, TransportDirection, TransportId,
-    model::test_support::router_state_snapshot,
+    ConsumerCapability, ConsumerId, ConsumerRouteState, ConsumerSpec, MediaKind, ProducerId,
+    ProducerRouteState, ProducerSpec, Router, RouterError, RouterEvent, RouterId, RouterObserver,
+    Session, SessionId, SessionState, TransportId, model::test_support::router_state_snapshot,
 };
 
 const ROUTER: RouterId = RouterId(1);
@@ -25,127 +24,127 @@ const PRODUCER: ProducerId = ProducerId(300);
 const CONSUMER: ConsumerId = ConsumerId(400);
 const SECOND_CONSUMER: ConsumerId = ConsumerId(401);
 
-fn session(id: SessionId) -> Session {
-    Session::new(id)
+fn join<O: RouterObserver>(router: &mut Router<O>, session_id: SessionId) {
+    assert_eq!(router.join(Session::new(session_id)), Ok(()));
 }
 
-fn join_session<O: RouterObserver>(router: &mut Router<O>, session_id: SessionId) {
-    assert_eq!(router.join_session(session(session_id)), Ok(()));
-}
-
-fn open_transport<O: RouterObserver>(
+fn open_receive<O: RouterObserver>(
     router: &mut Router<O>,
-    transport_id: TransportId,
     session_id: SessionId,
-    direction: TransportDirection,
+    transport_id: TransportId,
 ) {
     assert_eq!(
-        router.open_transport(Transport::new(transport_id, session_id, direction)),
+        router
+            .session(session_id)
+            .and_then(|session| session.open_receive_transport(transport_id))
+            .map(|_| ()),
         Ok(())
     );
 }
 
-fn add_producer<O: RouterObserver>(
+fn open_send<O: RouterObserver>(
+    router: &mut Router<O>,
+    session_id: SessionId,
+    transport_id: TransportId,
+) {
+    assert_eq!(
+        router
+            .session(session_id)
+            .and_then(|session| session.open_send_transport(transport_id))
+            .map(|_| ()),
+        Ok(())
+    );
+}
+
+fn publish<O: RouterObserver>(
     router: &mut Router<O>,
     producer_id: ProducerId,
     transport_id: TransportId,
     media_kind: MediaKind,
 ) {
     assert_eq!(
-        router.add_producer(Producer::new(producer_id, transport_id, media_kind)),
-        Ok(())
+        router
+            .receive_transport(transport_id)
+            .and_then(|transport| transport.publish(ProducerSpec::new(producer_id, media_kind))),
+        Ok(producer_id)
     );
 }
 
-fn add_consumer<O: RouterObserver>(
+fn consume<O: RouterObserver>(
     router: &mut Router<O>,
     consumer_id: ConsumerId,
     producer_id: ProducerId,
     transport_id: TransportId,
-    media_kind: MediaKind,
     capability: ConsumerCapability,
 ) {
     assert_eq!(
-        router.add_consumer(
-            Consumer::new(consumer_id, producer_id, transport_id, media_kind),
-            capability,
-        ),
-        Ok(())
+        router.send_transport(transport_id).and_then(|transport| {
+            transport.consume(ConsumerSpec::new(consumer_id, producer_id, capability))
+        }),
+        Ok(consumer_id)
     );
 }
 
-fn add_compatible_consumer<O: RouterObserver>(
+fn consume_compatible<O: RouterObserver>(
     router: &mut Router<O>,
     consumer_id: ConsumerId,
     transport_id: TransportId,
-    media_kind: MediaKind,
 ) {
-    add_consumer(
+    consume(
         router,
         consumer_id,
         PRODUCER,
         transport_id,
-        media_kind,
         ConsumerCapability::Compatible,
     );
 }
 
+fn try_publish<O: RouterObserver>(
+    router: &mut Router<O>,
+    transport_id: TransportId,
+    spec: ProducerSpec,
+) -> Result<ProducerId, RouterError> {
+    router
+        .receive_transport(transport_id)
+        .and_then(|transport| transport.publish(spec))
+}
+
+fn try_consume<O: RouterObserver>(
+    router: &mut Router<O>,
+    transport_id: TransportId,
+    spec: ConsumerSpec,
+) -> Result<ConsumerId, RouterError> {
+    router
+        .send_transport(transport_id)
+        .and_then(|transport| transport.consume(spec))
+}
+
 fn prepare_publisher_topology(media_kind: MediaKind) -> Router {
     let mut router = Router::new(ROUTER);
-    join_session(&mut router, PUBLISHER_SESSION);
-    join_session(&mut router, SUBSCRIBER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Receive,
-    );
-    open_transport(
-        &mut router,
-        SUBSCRIBER_SEND_TRANSPORT,
-        SUBSCRIBER_SESSION,
-        TransportDirection::Send,
-    );
-    add_producer(&mut router, PRODUCER, PUBLISHER_RECV_TRANSPORT, media_kind);
+    join(&mut router, PUBLISHER_SESSION);
+    join(&mut router, SUBSCRIBER_SESSION);
+    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
+    open_send(&mut router, SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT);
+    publish(&mut router, PRODUCER, PUBLISHER_RECV_TRANSPORT, media_kind);
     router
 }
 
 fn prepare_publish_subscribe_pair(media_kind: MediaKind) -> Router {
     let mut router = prepare_publisher_topology(media_kind);
-    add_compatible_consumer(&mut router, CONSUMER, SUBSCRIBER_SEND_TRANSPORT, media_kind);
+    consume_compatible(&mut router, CONSUMER, SUBSCRIBER_SEND_TRANSPORT);
     router
 }
 
 fn prepare_two_consumer_flow(media_kind: MediaKind) -> Router {
     let mut router = Router::new(ROUTER);
-    join_session(&mut router, PUBLISHER_SESSION);
-    join_session(&mut router, SUBSCRIBER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Receive,
-    );
-    open_transport(
-        &mut router,
-        PUBLISHER_SEND_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Send,
-    );
-    open_transport(
-        &mut router,
-        SUBSCRIBER_SEND_TRANSPORT,
-        SUBSCRIBER_SESSION,
-        TransportDirection::Send,
-    );
-    add_producer(&mut router, PRODUCER, PUBLISHER_RECV_TRANSPORT, media_kind);
-    add_compatible_consumer(&mut router, CONSUMER, PUBLISHER_SEND_TRANSPORT, media_kind);
-    add_compatible_consumer(
-        &mut router,
-        SECOND_CONSUMER,
-        SUBSCRIBER_SEND_TRANSPORT,
-        media_kind,
-    );
+    join(&mut router, PUBLISHER_SESSION);
+    join(&mut router, SUBSCRIBER_SESSION);
+    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
+    open_send(&mut router, PUBLISHER_SESSION, PUBLISHER_SEND_TRANSPORT);
+    open_send(&mut router, SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT);
+    publish(&mut router, PRODUCER, PUBLISHER_RECV_TRANSPORT, media_kind);
+    consume_compatible(&mut router, CONSUMER, PUBLISHER_SEND_TRANSPORT);
+    consume_compatible(&mut router, SECOND_CONSUMER, SUBSCRIBER_SEND_TRANSPORT);
     router
 }
 
@@ -161,19 +160,18 @@ fn router_rejects_orphan_resources() {
     let mut router = Router::new(ROUTER);
 
     assert_eq!(
-        router.open_transport(Transport::new(
-            PUBLISHER_RECV_TRANSPORT,
-            PUBLISHER_SESSION,
-            TransportDirection::Receive,
-        )),
+        router
+            .session(PUBLISHER_SESSION)
+            .and_then(|session| session.open_receive_transport(PUBLISHER_RECV_TRANSPORT))
+            .map(|_| ()),
         Err(RouterError::MissingSession(PUBLISHER_SESSION))
     );
     assert_eq!(
-        router.add_producer(Producer::new(
-            PRODUCER,
+        try_publish(
+            &mut router,
             PUBLISHER_RECV_TRANSPORT,
-            MediaKind::Audio
-        )),
+            ProducerSpec::new(PRODUCER, MediaKind::Audio),
+        ),
         Err(RouterError::MissingTransport(PUBLISHER_RECV_TRANSPORT))
     );
     assert_router_is_consistent(&router);
@@ -229,14 +227,9 @@ fn removing_a_producer_rejects_missing_owning_transport() {
     let event_log = observer.clone();
     let mut router = Router::new_with_observer(ROUTER, observer);
 
-    join_session(&mut router, PUBLISHER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Receive,
-    );
-    add_producer(
+    join(&mut router, PUBLISHER_SESSION);
+    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
+    publish(
         &mut router,
         PRODUCER,
         PUBLISHER_RECV_TRANSPORT,
@@ -332,20 +325,15 @@ fn removing_a_session_clears_cross_session_reverse_indices() {
 fn producers_must_use_receive_transports() {
     let mut router = Router::new(ROUTER);
 
-    join_session(&mut router, PUBLISHER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Send,
-    );
+    join(&mut router, PUBLISHER_SESSION);
+    open_send(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
 
     assert_eq!(
-        router.add_producer(Producer::new(
-            PRODUCER,
+        try_publish(
+            &mut router,
             PUBLISHER_RECV_TRANSPORT,
-            MediaKind::Audio
-        )),
+            ProducerSpec::new(PRODUCER, MediaKind::Audio),
+        ),
         Err(RouterError::ProducerRequiresReceiveTransport(
             PUBLISHER_RECV_TRANSPORT
         ))
@@ -356,21 +344,11 @@ fn producers_must_use_receive_transports() {
 #[test]
 fn consumers_must_use_send_transports() {
     let mut router = Router::new(ROUTER);
-    join_session(&mut router, PUBLISHER_SESSION);
-    join_session(&mut router, SUBSCRIBER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Receive,
-    );
-    open_transport(
-        &mut router,
-        SUBSCRIBER_SEND_TRANSPORT,
-        SUBSCRIBER_SESSION,
-        TransportDirection::Receive,
-    );
-    add_producer(
+    join(&mut router, PUBLISHER_SESSION);
+    join(&mut router, SUBSCRIBER_SESSION);
+    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
+    open_receive(&mut router, SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT);
+    publish(
         &mut router,
         PRODUCER,
         PUBLISHER_RECV_TRANSPORT,
@@ -378,14 +356,10 @@ fn consumers_must_use_send_transports() {
     );
 
     assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Video,
-            ),
-            ConsumerCapability::Compatible,
+        try_consume(
+            &mut router,
+            SUBSCRIBER_SEND_TRANSPORT,
+            ConsumerSpec::new(CONSUMER, PRODUCER, ConsumerCapability::Compatible),
         ),
         Err(RouterError::ConsumerRequiresSendTransport(
             SUBSCRIBER_SEND_TRANSPORT
@@ -398,65 +372,36 @@ fn consumers_must_use_send_transports() {
 fn failed_consumer_additions_do_not_mutate_router_state() {
     let mut router = prepare_publisher_topology(MediaKind::Audio);
 
-    let add_consumer_rejections = [
+    let consume_rejections = [
         (
-            Consumer::new(CONSUMER, PRODUCER, TransportId(999), MediaKind::Audio),
-            ConsumerCapability::Compatible,
+            TransportId(999),
+            ConsumerSpec::new(CONSUMER, PRODUCER, ConsumerCapability::Compatible),
             RouterError::MissingTransport(TransportId(999)),
         ),
         (
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                PUBLISHER_RECV_TRANSPORT,
-                MediaKind::Audio,
-            ),
-            ConsumerCapability::Compatible,
+            PUBLISHER_RECV_TRANSPORT,
+            ConsumerSpec::new(CONSUMER, PRODUCER, ConsumerCapability::Compatible),
             RouterError::ConsumerRequiresSendTransport(PUBLISHER_RECV_TRANSPORT),
         ),
         (
-            Consumer::new(
-                CONSUMER,
-                ProducerId(999),
-                SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Audio,
-            ),
-            ConsumerCapability::Compatible,
+            SUBSCRIBER_SEND_TRANSPORT,
+            ConsumerSpec::new(CONSUMER, ProducerId(999), ConsumerCapability::Compatible),
             RouterError::MissingProducer(ProducerId(999)),
         ),
         (
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Audio,
-            ),
-            ConsumerCapability::Incompatible,
+            SUBSCRIBER_SEND_TRANSPORT,
+            ConsumerSpec::new(CONSUMER, PRODUCER, ConsumerCapability::Incompatible),
             RouterError::IncompatibleCapabilities {
                 producer_id: PRODUCER,
             },
         ),
-        (
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Video,
-            ),
-            ConsumerCapability::Compatible,
-            RouterError::ConsumerMediaKindMismatch {
-                producer_id: PRODUCER,
-                expected: MediaKind::Audio,
-                actual: MediaKind::Video,
-            },
-        ),
     ];
 
-    for (consumer, capability, expected_error) in add_consumer_rejections {
+    for (transport_id, spec, expected_error) in consume_rejections {
         let before = router_state_snapshot(&router);
 
         assert_eq!(
-            router.add_consumer(consumer, capability),
+            try_consume(&mut router, transport_id, spec),
             Err(expected_error)
         );
         assert_eq!(router_state_snapshot(&router), before);
@@ -465,83 +410,33 @@ fn failed_consumer_additions_do_not_mutate_router_state() {
 }
 
 #[test]
-fn consumers_must_match_their_producer_media_kind() {
-    let mut router = prepare_publisher_topology(MediaKind::Audio);
-
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Video,
-            ),
-            ConsumerCapability::Compatible,
-        ),
-        Err(RouterError::ConsumerMediaKindMismatch {
-            producer_id: PRODUCER,
-            expected: MediaKind::Audio,
-            actual: MediaKind::Video,
-        })
-    );
-    assert_router_is_consistent(&router);
-}
-
-#[test]
-fn consumers_are_rejected_when_capabilities_are_incompatible() {
-    let mut router = prepare_publisher_topology(MediaKind::Audio);
-
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Audio,
-            ),
-            ConsumerCapability::Incompatible,
-        ),
-        Err(RouterError::IncompatibleCapabilities {
-            producer_id: PRODUCER,
-        })
-    );
-    assert_router_is_consistent(&router);
-}
-
-#[test]
 fn duplicate_ids_do_not_replace_existing_router_state() {
     let mut router = Router::new(ROUTER);
-    join_session(&mut router, PUBLISHER_SESSION);
+    join(&mut router, PUBLISHER_SESSION);
 
     let before = router_state_snapshot(&router);
     assert_eq!(
-        router.join_session(Session::new(PUBLISHER_SESSION)),
+        router.join(Session::new(PUBLISHER_SESSION)),
         Err(RouterError::DuplicateSession(PUBLISHER_SESSION))
     );
     assert_eq!(router_state_snapshot(&router), before);
     assert_router_is_consistent(&router);
 
-    join_session(&mut router, SUBSCRIBER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Receive,
-    );
+    join(&mut router, SUBSCRIBER_SESSION);
+    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
 
     let before = router_state_snapshot(&router);
     assert_eq!(
-        router.open_transport(Transport::new(
-            PUBLISHER_RECV_TRANSPORT,
-            SUBSCRIBER_SESSION,
-            TransportDirection::Send,
-        )),
+        router
+            .session(SUBSCRIBER_SESSION)
+            .and_then(|session| session.open_send_transport(PUBLISHER_RECV_TRANSPORT))
+            .map(|_| ()),
         Err(RouterError::DuplicateTransport(PUBLISHER_RECV_TRANSPORT))
     );
     assert_eq!(router_state_snapshot(&router), before);
     assert_router_is_consistent(&router);
 
-    add_producer(
+    publish(
         &mut router,
         PRODUCER,
         PUBLISHER_RECV_TRANSPORT,
@@ -550,45 +445,30 @@ fn duplicate_ids_do_not_replace_existing_router_state() {
 
     let before = router_state_snapshot(&router);
     assert_eq!(
-        router.add_producer(Producer::new(
-            PRODUCER,
+        try_publish(
+            &mut router,
             PUBLISHER_RECV_TRANSPORT,
-            MediaKind::Video,
-        )),
+            ProducerSpec::new(PRODUCER, MediaKind::Video),
+        ),
         Err(RouterError::DuplicateProducer(PRODUCER))
     );
     assert_eq!(router_state_snapshot(&router), before);
     assert_router_is_consistent(&router);
 
-    open_transport(
+    open_send(&mut router, SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT);
+    consume_compatible(&mut router, CONSUMER, SUBSCRIBER_SEND_TRANSPORT);
+    open_send(
         &mut router,
-        SUBSCRIBER_SEND_TRANSPORT,
         SUBSCRIBER_SESSION,
-        TransportDirection::Send,
-    );
-    add_compatible_consumer(
-        &mut router,
-        CONSUMER,
-        SUBSCRIBER_SEND_TRANSPORT,
-        MediaKind::Audio,
-    );
-    open_transport(
-        &mut router,
         SECOND_SUBSCRIBER_SEND_TRANSPORT,
-        SUBSCRIBER_SESSION,
-        TransportDirection::Send,
     );
 
     let before = router_state_snapshot(&router);
     assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                SECOND_SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Audio,
-            ),
-            ConsumerCapability::Compatible,
+        try_consume(
+            &mut router,
+            SECOND_SUBSCRIBER_SEND_TRANSPORT,
+            ConsumerSpec::new(CONSUMER, PRODUCER, ConsumerCapability::Compatible),
         ),
         Err(RouterError::DuplicateConsumer(CONSUMER))
     );
@@ -604,18 +484,7 @@ fn new_consumers_inherit_their_producer_pause_state() {
         Ok(())
     );
 
-    assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                CONSUMER,
-                PRODUCER,
-                SUBSCRIBER_SEND_TRANSPORT,
-                MediaKind::Audio,
-            ),
-            ConsumerCapability::Compatible,
-        ),
-        Ok(())
-    );
+    consume_compatible(&mut router, CONSUMER, SUBSCRIBER_SEND_TRANSPORT);
 
     let snapshot = router_state_snapshot(&router);
     assert!(snapshot.consumer_route_matches(
@@ -629,24 +498,17 @@ fn new_consumers_inherit_their_producer_pause_state() {
 #[test]
 fn pausing_a_producer_updates_all_dependent_consumers() {
     let mut router = prepare_publisher_topology(MediaKind::Video);
-    join_session(&mut router, SECOND_SUBSCRIBER_SESSION);
-    open_transport(
+    join(&mut router, SECOND_SUBSCRIBER_SESSION);
+    open_send(
         &mut router,
-        SECOND_SUBSCRIBER_SEND_TRANSPORT,
         SECOND_SUBSCRIBER_SESSION,
-        TransportDirection::Send,
+        SECOND_SUBSCRIBER_SEND_TRANSPORT,
     );
-    add_compatible_consumer(
-        &mut router,
-        CONSUMER,
-        SUBSCRIBER_SEND_TRANSPORT,
-        MediaKind::Video,
-    );
-    add_compatible_consumer(
+    consume_compatible(&mut router, CONSUMER, SUBSCRIBER_SEND_TRANSPORT);
+    consume_compatible(
         &mut router,
         SECOND_CONSUMER,
         SECOND_SUBSCRIBER_SEND_TRANSPORT,
-        MediaKind::Video,
     );
 
     assert_eq!(
@@ -722,11 +584,9 @@ fn pausing_a_consumer_only_changes_its_local_pause_flag() {
 fn joined_sessions_store_only_router_lifecycle_state() {
     let mut router = Router::new(ROUTER);
 
-    assert_eq!(router.join_session(Session::new(PUBLISHER_SESSION)), Ok(()));
+    assert_eq!(router.join(Session::new(PUBLISHER_SESSION)), Ok(()));
 
-    let session = router.sessions().next();
-    assert!(session.is_some());
-    let Some(session) = session else {
+    let Some(session) = router.sessions().next() else {
         panic!("joined session should be visible through the public iterator");
     };
     assert_eq!(session.state(), SessionState::Active);
@@ -739,14 +599,9 @@ fn explicit_producer_removal_emits_one_removal_event() {
     let event_log = observer.clone();
     let mut router = Router::new_with_observer(ROUTER, observer);
 
-    join_session(&mut router, PUBLISHER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Receive,
-    );
-    add_producer(
+    join(&mut router, PUBLISHER_SESSION);
+    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
+    publish(
         &mut router,
         PRODUCER,
         PUBLISHER_RECV_TRANSPORT,
@@ -815,21 +670,11 @@ fn router_emits_session_and_producer_lifecycle_events() {
     let event_log = observer.clone();
     let mut router = Router::new_with_observer(ROUTER, observer);
 
-    join_session(&mut router, PUBLISHER_SESSION);
-    join_session(&mut router, SUBSCRIBER_SESSION);
-    open_transport(
-        &mut router,
-        PUBLISHER_RECV_TRANSPORT,
-        PUBLISHER_SESSION,
-        TransportDirection::Receive,
-    );
-    open_transport(
-        &mut router,
-        SUBSCRIBER_SEND_TRANSPORT,
-        SUBSCRIBER_SESSION,
-        TransportDirection::Send,
-    );
-    add_producer(
+    join(&mut router, PUBLISHER_SESSION);
+    join(&mut router, SUBSCRIBER_SESSION);
+    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
+    open_send(&mut router, SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT);
+    publish(
         &mut router,
         PRODUCER,
         PUBLISHER_RECV_TRANSPORT,

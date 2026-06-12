@@ -6,10 +6,10 @@
 //! then uses reverse indexes to keep teardown proportional to the affected topology
 
 use super::{
-    Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, NoopRouterObserver, Producer,
-    ProducerId, ProducerRouteState, RouterError, RouterEvent, RouterId, RouterObserver, Session,
-    SessionId, Transport, TransportDirection, TransportId, proof_storage::BTreeMap,
-    relation_index::RouterIndexes,
+    Consumer, ConsumerId, ConsumerRouteState, ConsumerSpec, NoopRouterObserver, Producer,
+    ProducerId, ProducerRouteState, ProducerSpec, ReceiveTransportHandle, RouterError, RouterEvent,
+    RouterId, RouterObserver, SendTransportHandle, Session, SessionHandle, SessionId, Transport,
+    TransportDirection, TransportId, proof_storage::BTreeMap, relation_index::RouterIndexes,
 };
 
 /// pure routing state for one router instance
@@ -28,7 +28,7 @@ use super::{
 pub struct Router<O: RouterObserver = NoopRouterObserver> {
     /// stable identity for this pure router instance
     pub(super) id: RouterId,
-    /// live sessions admitted through [`Router::join_session`]
+    /// live sessions admitted through [`Router::join`]
     pub(super) sessions: BTreeMap<SessionId, Session>,
     /// live transports grouped by id in the primary topology map
     pub(super) transports: BTreeMap<TransportId, Transport>,
@@ -106,7 +106,7 @@ impl<O: RouterObserver> Router<O> {
     /// # Errors
     ///
     /// returns [`RouterError::DuplicateSession`] when the session already exists
-    pub fn join_session(&mut self, session: Session) -> Result<(), RouterError> {
+    pub fn join(&mut self, session: Session) -> Result<(), RouterError> {
         let session_id = session.id();
         if self.sessions.contains_key(&session_id) {
             return Err(RouterError::DuplicateSession(session_id));
@@ -117,55 +117,88 @@ impl<O: RouterObserver> Router<O> {
         Ok(())
     }
 
-    /// register a transport under an existing session
-    ///
-    /// the router only records ownership and direction here
-    /// transport-specific protocol or WebRTC state stays outside the router core
+    /// start a scoped mutation flow for an existing session
     ///
     /// # Errors
     ///
-    /// returns [`RouterError::MissingSession`] when the owning session does not exist
-    /// or [`RouterError::DuplicateTransport`] when the transport already exists
-    pub fn open_transport(&mut self, transport: Transport) -> Result<(), RouterError> {
-        let transport_id = transport.id();
-        let session_id = transport.session_id();
+    /// returns [`RouterError::MissingSession`] when the session does not exist
+    pub fn session(&mut self, session_id: SessionId) -> Result<SessionHandle<'_, O>, RouterError> {
         if !self.sessions.contains_key(&session_id) {
             return Err(RouterError::MissingSession(session_id));
         }
+        Ok(SessionHandle::new(self, session_id))
+    }
+
+    /// start a scoped mutation flow for an existing receive transport
+    ///
+    /// receive handles can publish producers but cannot consume sources
+    ///
+    /// # Errors
+    ///
+    /// returns [`RouterError::MissingTransport`] when the transport does not exist
+    /// or [`RouterError::ProducerRequiresReceiveTransport`] when the transport is
+    /// not a receive transport
+    pub fn receive_transport(
+        &mut self,
+        transport_id: TransportId,
+    ) -> Result<ReceiveTransportHandle<'_, O>, RouterError> {
+        let transport = self.transport_with_direction(transport_id, TransportDirection::Receive)?;
+        Ok(ReceiveTransportHandle::new(
+            self,
+            transport_id,
+            transport.session_id(),
+        ))
+    }
+
+    /// start a scoped mutation flow for an existing send transport
+    ///
+    /// send handles can consume producers but cannot publish sources
+    ///
+    /// # Errors
+    ///
+    /// returns [`RouterError::MissingTransport`] when the transport does not exist
+    /// or [`RouterError::ConsumerRequiresSendTransport`] when the transport is
+    /// not a send transport
+    pub fn send_transport(
+        &mut self,
+        transport_id: TransportId,
+    ) -> Result<SendTransportHandle<'_, O>, RouterError> {
+        self.transport_with_direction(transport_id, TransportDirection::Send)?;
+        Ok(SendTransportHandle::new(self, transport_id))
+    }
+
+    pub(super) fn insert_transport(
+        &mut self,
+        transport_id: TransportId,
+        session_id: SessionId,
+        direction: TransportDirection,
+    ) -> Result<(), RouterError> {
         if self.transports.contains_key(&transport_id) {
             return Err(RouterError::DuplicateTransport(transport_id));
         }
-        self.transports.insert(transport_id, transport);
+        self.transports.insert(
+            transport_id,
+            Transport::new(transport_id, session_id, direction),
+        );
         self.indexes.add_transport(session_id, transport_id);
         Ok(())
     }
 
-    /// register a producer on a receive transport
-    ///
-    /// producers are source-side entities
-    /// the router enforces that they only
-    /// live on receive transports so downstream state stays structurally valid
-    ///
-    /// # Errors
-    ///
-    /// returns [`RouterError::MissingTransport`] when the owning transport does not exist
-    /// [`RouterError::ProducerRequiresReceiveTransport`] when the transport does not accept
-    /// producers or [`RouterError::DuplicateProducer`] when the producer already exists
-    pub fn add_producer(&mut self, producer: Producer) -> Result<(), RouterError> {
-        let producer_id = producer.id();
-        let transport_id = producer.transport_id();
-        let media_kind = producer.media_kind();
-        let Some(transport) = self.transports.get(&transport_id) else {
-            return Err(RouterError::MissingTransport(transport_id));
-        };
-        let session_id = transport.session_id();
-        if transport.direction() != TransportDirection::Receive {
-            return Err(RouterError::ProducerRequiresReceiveTransport(transport_id));
-        }
+    pub(super) fn insert_producer(
+        &mut self,
+        session_id: SessionId,
+        transport_id: TransportId,
+        spec: ProducerSpec,
+    ) -> Result<ProducerId, RouterError> {
+        let producer_id = spec.id();
         if self.producers.contains_key(&producer_id) {
             return Err(RouterError::DuplicateProducer(producer_id));
         }
-        self.producers.insert(producer_id, producer);
+        let media_kind = spec.media_kind();
+        self.producers.insert(
+            producer_id,
+            Producer::new(producer_id, transport_id, media_kind),
+        );
         self.indexes.add_producer(transport_id, producer_id);
         self.observer.on_event(RouterEvent::ProducerAdded {
             session_id,
@@ -173,71 +206,58 @@ impl<O: RouterObserver> Router<O> {
             producer_id,
             media_kind,
         });
-        Ok(())
+        Ok(producer_id)
     }
 
-    /// register a consumer on a send transport
-    ///
-    /// the capability parameter is the result of external capability
-    /// negotiation such as [`crate::can_consume`]
-    /// the router treats it as an opaque compatibility gate
-    /// a [`ConsumerCapability::Incompatible`] result rejects the consumer
-    /// without inspecting RTP parameters
-    /// this keeps the full RTP capability matching
-    /// logic outside the router while still letting the router enforce the
-    /// structural gate
-    ///
-    /// the consumer's producer shadow is copied from the current producer route
-    /// state before insertion
-    /// after this transition, source-side route changes
-    /// must go through [`Router::set_producer_route_state`] so the shadow stays
-    /// coherent on every dependent consumer
-    ///
-    /// # Errors
-    ///
-    /// returns [`RouterError::MissingTransport`] when the consumer transport does not exist,
-    /// [`RouterError::MissingProducer`] when the target producer does not exist,
-    /// [`RouterError::ConsumerRequiresSendTransport`] when the transport does not accept
-    /// consumers, [`RouterError::IncompatibleCapabilities`] when the external capability
-    /// negotiation determined that the consumer cannot consume the producer,
-    /// [`RouterError::ConsumerMediaKindMismatch`] when the consumer metadata does not
-    /// match its source producer,
-    /// or [`RouterError::DuplicateConsumer`] when the consumer already exists
-    pub fn add_consumer(
+    pub(super) fn insert_consumer(
         &mut self,
-        mut consumer: Consumer,
-        capability: ConsumerCapability,
-    ) -> Result<(), RouterError> {
-        let consumer_id = consumer.id();
-        let transport_id = consumer.transport_id();
-        let producer_id = consumer.producer_id();
-        let Some(transport) = self.transports.get(&transport_id) else {
-            return Err(RouterError::MissingTransport(transport_id));
-        };
-        if transport.direction() != TransportDirection::Send {
-            return Err(RouterError::ConsumerRequiresSendTransport(transport_id));
-        }
+        transport_id: TransportId,
+        spec: ConsumerSpec,
+    ) -> Result<ConsumerId, RouterError> {
+        let producer_id = spec.producer_id();
         let Some(producer) = self.producers.get(&producer_id) else {
             return Err(RouterError::MissingProducer(producer_id));
         };
-        if !capability.is_compatible() {
+        if !spec.capability().is_compatible() {
             return Err(RouterError::IncompatibleCapabilities { producer_id });
         }
-        if consumer.media_kind() != producer.media_kind() {
-            return Err(RouterError::ConsumerMediaKindMismatch {
-                producer_id,
-                expected: producer.media_kind(),
-                actual: consumer.media_kind(),
-            });
-        }
+        let consumer_id = spec.id();
         if self.consumers.contains_key(&consumer_id) {
             return Err(RouterError::DuplicateConsumer(consumer_id));
         }
-        consumer.set_producer_route_state(producer.route_state());
+        let consumer = Consumer::new(
+            consumer_id,
+            producer_id,
+            transport_id,
+            producer.media_kind(),
+            spec.route_state(),
+            producer.route_state(),
+        );
         self.consumers.insert(consumer_id, consumer);
         self.indexes
             .add_consumer(transport_id, producer_id, consumer_id);
-        Ok(())
+        Ok(consumer_id)
+    }
+
+    fn transport_with_direction(
+        &self,
+        transport_id: TransportId,
+        direction: TransportDirection,
+    ) -> Result<Transport, RouterError> {
+        let Some(&transport) = self.transports.get(&transport_id) else {
+            return Err(RouterError::MissingTransport(transport_id));
+        };
+        if transport.direction() == direction {
+            return Ok(transport);
+        }
+        match direction {
+            TransportDirection::Send => {
+                Err(RouterError::ConsumerRequiresSendTransport(transport_id))
+            }
+            TransportDirection::Receive => {
+                Err(RouterError::ProducerRequiresReceiveTransport(transport_id))
+            }
+        }
     }
 
     /// set the source-side route state for a producer

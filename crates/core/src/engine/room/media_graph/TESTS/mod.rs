@@ -182,7 +182,6 @@ fn install_test_consumer_route(
         .add_consumer(
             consumer_user_id,
             routed_producer_id,
-            RouterMediaKind::Video,
             ConsumerCapability::Compatible,
         )
         .unwrap_or_else(|error| panic!("failed to create test consumer route: {error:?}"));

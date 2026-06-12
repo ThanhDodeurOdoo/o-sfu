@@ -22,27 +22,26 @@ pub struct Consumer {
 }
 
 impl Consumer {
-    /// build an active consumer edge for an existing producer and send transport
-    ///
-    /// only [`Router::add_consumer`](super::Router::add_consumer) may make the
-    /// edge visible because it has the current producer shadow
     #[must_use]
-    pub fn new(
+    pub(super) fn new(
         id: ConsumerId,
         producer_id: ProducerId,
         transport_id: TransportId,
         media_kind: MediaKind,
+        route_state: ConsumerRouteState,
+        producer_route_state: ProducerRouteState,
     ) -> Self {
         Self {
             id,
             producer_id,
             transport_id,
             media_kind,
-            route_state: ConsumerRouteState::Active,
-            producer_route_state: ProducerRouteState::Active,
+            route_state,
+            producer_route_state,
         }
     }
 
+    #[cfg(any(test, feature = "test-support", kani))]
     #[must_use]
     pub fn id(&self) -> ConsumerId {
         self.id
@@ -58,57 +57,22 @@ impl Consumer {
         self.transport_id
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn media_kind(&self) -> MediaKind {
         self.media_kind
     }
 
-    /// receiver-local route state as a compatibility paused flag
-    ///
-    /// this does not include producer-side pause
-    #[must_use]
-    pub fn paused(&self) -> bool {
-        self.route_state.is_paused()
-    }
-
-    /// producer shadow as a compatibility paused flag
-    ///
-    /// this does not describe the consumer's own subscription choice
-    #[must_use]
-    pub fn producer_paused(&self) -> bool {
-        self.producer_route_state.is_paused()
-    }
-
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn route_state(&self) -> ConsumerRouteState {
         self.route_state
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn producer_route_state(&self) -> ProducerRouteState {
         self.producer_route_state
-    }
-
-    /// staged copy with a different receiver-local route state
-    ///
-    /// live router mutation must go through
-    /// [`Router::set_consumer_route_state`](super::Router::set_consumer_route_state)
-    #[must_use]
-    pub fn with_route_state(mut self, route_state: ConsumerRouteState) -> Self {
-        self.route_state = route_state;
-        self
-    }
-
-    /// staged copy with a different producer shadow
-    ///
-    /// production code should let
-    /// [`Router::add_consumer`](super::Router::add_consumer) and
-    /// [`Router::set_producer_route_state`](super::Router::set_producer_route_state)
-    /// manage producer shadowing
-    #[must_use]
-    pub fn with_producer_route_state(mut self, producer_route_state: ProducerRouteState) -> Self {
-        self.producer_route_state = producer_route_state;
-        self
     }
 
     pub(super) fn set_route_state(&mut self, route_state: ConsumerRouteState) {
