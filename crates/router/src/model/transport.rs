@@ -18,9 +18,12 @@ pub struct Transport {
 }
 
 impl Transport {
-    /// create a transport for `session_id` with a fixed router direction
     #[must_use]
-    pub fn new(id: TransportId, session_id: SessionId, direction: TransportDirection) -> Self {
+    pub(super) fn new(
+        id: TransportId,
+        session_id: SessionId,
+        direction: TransportDirection,
+    ) -> Self {
         Self {
             id,
             session_id,
@@ -28,6 +31,7 @@ impl Transport {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn id(&self) -> TransportId {
         self.id

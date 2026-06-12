@@ -1,7 +1,7 @@
 use o_sfu_protocol::wire::{ClientEnvelope, ClientMessage, StreamIntentPayload, StreamType};
 use o_sfu_router::{
-    Consumer, ConsumerCapability, ConsumerId, MediaKind, Producer, ProducerId, Router, RouterId,
-    Session, SessionId as RouterSessionId, Transport, TransportDirection, TransportId,
+    ConsumerCapability, ConsumerId, ConsumerSpec, MediaKind, ProducerId, ProducerSpec, Router,
+    RouterId, Session, SessionId as RouterSessionId, TransportId,
 };
 
 fn user(id: RouterSessionId) -> Session {
@@ -12,54 +12,51 @@ fn user(id: RouterSessionId) -> Session {
 fn router_session_teardown_keeps_remaining_routing_consistent() {
     let mut router = Router::new(RouterId(1));
 
-    assert_eq!(router.join_session(user(RouterSessionId(10))), Ok(()));
-    assert_eq!(router.join_session(user(RouterSessionId(20))), Ok(()));
+    assert_eq!(router.join(user(RouterSessionId(10))), Ok(()));
+    assert_eq!(router.join(user(RouterSessionId(20))), Ok(()));
     assert_eq!(
-        router.open_transport(Transport::new(
-            TransportId(100),
-            RouterSessionId(10),
-            TransportDirection::Receive,
-        )),
-        Ok(())
+        router
+            .session(RouterSessionId(10))
+            .and_then(|session| session.open_receive_transport(TransportId(100)))
+            .map(|_| ()),
+        Ok(()),
     );
     assert_eq!(
-        router.open_transport(Transport::new(
-            TransportId(200),
-            RouterSessionId(20),
-            TransportDirection::Send,
-        )),
-        Ok(())
+        router
+            .session(RouterSessionId(20))
+            .and_then(|session| session.open_send_transport(TransportId(200)))
+            .map(|_| ()),
+        Ok(()),
     );
     assert_eq!(
-        router.add_producer(Producer::new(
-            ProducerId(300),
-            TransportId(100),
-            MediaKind::Audio,
-        )),
-        Ok(())
+        router
+            .receive_transport(TransportId(100))
+            .and_then(|transport| {
+                transport.publish(ProducerSpec::new(ProducerId(300), MediaKind::Audio))
+            }),
+        Ok(ProducerId(300))
     );
     assert_eq!(
-        router.add_consumer(
-            Consumer::new(
-                ConsumerId(400),
-                ProducerId(300),
-                TransportId(200),
-                MediaKind::Audio,
-            ),
-            ConsumerCapability::Compatible,
-        ),
-        Ok(())
+        router
+            .send_transport(TransportId(200))
+            .and_then(|transport| {
+                transport.consume(ConsumerSpec::new(
+                    ConsumerId(400),
+                    ProducerId(300),
+                    ConsumerCapability::Compatible,
+                ))
+            }),
+        Ok(ConsumerId(400)),
     );
 
     assert_eq!(router.remove_session(RouterSessionId(10)), Ok(()));
     assert_eq!(router.session_count(), 1);
     assert_eq!(router.sessions().count(), 1);
     assert_eq!(
-        router.open_transport(Transport::new(
-            TransportId(200),
-            RouterSessionId(20),
-            TransportDirection::Send,
-        )),
+        router
+            .session(RouterSessionId(20))
+            .and_then(|session| session.open_send_transport(TransportId(200)))
+            .map(|_| ()),
         Err(o_sfu_router::RouterError::DuplicateTransport(TransportId(
             200
         )))

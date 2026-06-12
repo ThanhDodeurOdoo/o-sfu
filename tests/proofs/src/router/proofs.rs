@@ -7,18 +7,59 @@
 //! changes cannot silently leave stale dependency edges
 
 use o_sfu_router::{
-    Consumer, ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, Producer, ProducerId,
-    ProducerRouteState, Router, RouterId, Session, SessionId, Transport, TransportDirection,
-    TransportId,
+    ConsumerCapability, ConsumerId, ConsumerRouteState, ConsumerSpec, MediaKind, ProducerId,
+    ProducerRouteState, ProducerSpec, Router, RouterError, RouterId, Session, SessionId,
+    TransportDirection, TransportId,
     test_support::{proof::RouterProofView, router_satisfies_invariants},
 };
 
 const SYMBOLIC_ROUTE_COMMAND_VARIANTS: u8 = 9;
 const SYMBOLIC_CLEANUP_COMMAND_VARIANTS: u8 = 7;
 
-/// build a session entity for the symbolic topology fixtures
-fn user(id: SessionId) -> Session {
+fn session(id: SessionId) -> Session {
     Session::new(id)
+}
+
+fn join(router: &mut Router, session_id: SessionId) -> bool {
+    router.join(session(session_id)).is_ok()
+}
+
+fn open_receive(router: &mut Router, session_id: SessionId, transport_id: TransportId) -> bool {
+    router
+        .session(session_id)
+        .and_then(|session| session.open_receive_transport(transport_id))
+        .is_ok()
+}
+
+fn open_send(router: &mut Router, session_id: SessionId, transport_id: TransportId) -> bool {
+    router
+        .session(session_id)
+        .and_then(|session| session.open_send_transport(transport_id))
+        .is_ok()
+}
+
+fn publish(
+    router: &mut Router,
+    transport_id: TransportId,
+    producer_id: ProducerId,
+    media_kind: MediaKind,
+) -> bool {
+    router
+        .receive_transport(transport_id)
+        .and_then(|transport| transport.publish(ProducerSpec::new(producer_id, media_kind)))
+        .is_ok()
+}
+
+fn try_consume(
+    router: &mut Router,
+    transport_id: TransportId,
+    consumer_id: ConsumerId,
+    producer_id: ProducerId,
+    capability: ConsumerCapability,
+) -> Result<ConsumerId, RouterError> {
+    router.send_transport(transport_id).and_then(|transport| {
+        transport.consume(ConsumerSpec::new(consumer_id, producer_id, capability))
+    })
 }
 
 /// prove that all bounded add paths preserve the complete router invariant
@@ -94,43 +135,45 @@ fn symbolic_cleanup_command() -> u8 {
 
 /// add consumers whose capability result remains symbolic
 fn add_symbolic_trace_consumers(router: &mut Router) {
-    let _ = router.add_consumer(trace_audio_consumer(), symbolic_capability());
-    let _ = router.add_consumer(trace_video_consumer(), symbolic_capability());
+    let _ = try_consume(
+        router,
+        TransportId(21),
+        ConsumerId(40),
+        ProducerId(30),
+        symbolic_capability(),
+    );
+    let _ = try_consume(
+        router,
+        TransportId(11),
+        ConsumerId(41),
+        ProducerId(31),
+        symbolic_capability(),
+    );
 }
 
 /// add consumers that must exist before cleanup is explored
 fn add_compatible_trace_consumers(router: &mut Router) {
     assert!(
-        router
-            .add_consumer(trace_audio_consumer(), ConsumerCapability::Compatible)
-            .is_ok()
+        try_consume(
+            router,
+            TransportId(21),
+            ConsumerId(40),
+            ProducerId(30),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
 
     assert!(
-        router
-            .add_consumer(trace_video_consumer(), ConsumerCapability::Compatible)
-            .is_ok()
+        try_consume(
+            router,
+            TransportId(11),
+            ConsumerId(41),
+            ProducerId(31),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
-}
-
-/// build the audio consumer used by the bounded trace topology
-fn trace_audio_consumer() -> Consumer {
-    Consumer::new(
-        ConsumerId(40),
-        ProducerId(30),
-        TransportId(21),
-        MediaKind::Audio,
-    )
-}
-
-/// build the video consumer used by the bounded trace topology
-fn trace_video_consumer() -> Consumer {
-    Consumer::new(
-        ConsumerId(41),
-        ProducerId(31),
-        TransportId(11),
-        MediaKind::Video,
-    )
 }
 
 /// place the cleanup trace in a mixed route-state configuration
@@ -535,62 +578,24 @@ fn present(value: bool) -> usize {
 /// producers live on the
 /// receive transports so consumers can later target the opposite send transport
 fn build_symbolic_trace_topology(router: &mut Router) {
-    assert!(router.join_session(user(SessionId(1))).is_ok());
-    assert!(router.join_session(user(SessionId(2))).is_ok());
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(10),
-                SessionId(1),
-                TransportDirection::Receive,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(11),
-                SessionId(1),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(20),
-                SessionId(2),
-                TransportDirection::Receive,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(21),
-                SessionId(2),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                ProducerId(30),
-                TransportId(10),
-                MediaKind::Audio,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                ProducerId(31),
-                TransportId(20),
-                MediaKind::Video,
-            ))
-            .is_ok()
-    );
+    assert!(join(router, SessionId(1)));
+    assert!(join(router, SessionId(2)));
+    assert!(open_receive(router, SessionId(1), TransportId(10)));
+    assert!(open_send(router, SessionId(1), TransportId(11)));
+    assert!(open_receive(router, SessionId(2), TransportId(20)));
+    assert!(open_send(router, SessionId(2), TransportId(21)));
+    assert!(publish(
+        router,
+        TransportId(10),
+        ProducerId(30),
+        MediaKind::Audio,
+    ));
+    assert!(publish(
+        router,
+        TransportId(20),
+        ProducerId(31),
+        MediaKind::Video,
+    ));
 }
 
 /// prove session teardown drains all owned transports and dependent media
@@ -613,69 +618,36 @@ fn session_teardown_clears_reverse_indices_and_dependents() {
     let removed_consumer_id = ConsumerId(40);
     let surviving_consumer_id = ConsumerId(41);
 
-    assert!(router.join_session(user(session_a)).is_ok());
-    assert!(router.join_session(user(session_b)).is_ok());
+    assert!(join(&mut router, session_a));
+    assert!(join(&mut router, session_b));
+    assert!(open_receive(&mut router, session_a, receive_transport));
+    assert!(open_send(&mut router, session_a, shared_send_transport));
+    assert!(open_send(&mut router, session_b, survivor_send_transport));
+    assert!(publish(
+        &mut router,
+        receive_transport,
+        producer_id,
+        MediaKind::Audio,
+    ));
     assert!(
-        router
-            .open_transport(Transport::new(
-                receive_transport,
-                session_a,
-                TransportDirection::Receive,
-            ))
-            .is_ok()
+        try_consume(
+            &mut router,
+            shared_send_transport,
+            removed_consumer_id,
+            producer_id,
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
     assert!(
-        router
-            .open_transport(Transport::new(
-                shared_send_transport,
-                session_a,
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                survivor_send_transport,
-                session_b,
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                producer_id,
-                receive_transport,
-                MediaKind::Audio,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    removed_consumer_id,
-                    producer_id,
-                    shared_send_transport,
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    surviving_consumer_id,
-                    producer_id,
-                    survivor_send_transport,
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
+        try_consume(
+            &mut router,
+            survivor_send_transport,
+            surviving_consumer_id,
+            producer_id,
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
 
     assert!(router.remove_session(session_a).is_ok());
@@ -726,69 +698,40 @@ fn removing_a_producer_clears_dependents_but_keeps_live_transports() {
     let same_session_consumer = ConsumerId(40);
     let remote_consumer = ConsumerId(41);
 
-    assert!(router.join_session(user(session_a)).is_ok());
-    assert!(router.join_session(user(session_b)).is_ok());
+    assert!(join(&mut router, session_a));
+    assert!(join(&mut router, session_b));
+    assert!(open_receive(&mut router, session_a, receive_transport));
+    assert!(open_send(
+        &mut router,
+        session_a,
+        same_session_send_transport,
+    ));
+    assert!(open_send(&mut router, session_b, remote_send_transport));
+    assert!(publish(
+        &mut router,
+        receive_transport,
+        producer_id,
+        MediaKind::Audio,
+    ));
     assert!(
-        router
-            .open_transport(Transport::new(
-                receive_transport,
-                session_a,
-                TransportDirection::Receive,
-            ))
-            .is_ok()
+        try_consume(
+            &mut router,
+            same_session_send_transport,
+            same_session_consumer,
+            producer_id,
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
     assert!(
-        router
-            .open_transport(Transport::new(
-                same_session_send_transport,
-                session_a,
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                remote_send_transport,
-                session_b,
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                producer_id,
-                receive_transport,
-                MediaKind::Audio,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    same_session_consumer,
-                    producer_id,
-                    same_session_send_transport,
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    remote_consumer,
-                    producer_id,
-                    remote_send_transport,
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
+        try_consume(
+            &mut router,
+            remote_send_transport,
+            remote_consumer,
+            producer_id,
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
 
     assert!(router.remove_producer(producer_id).is_ok());
@@ -833,69 +776,44 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
     let removed_consumer_id = ConsumerId(40);
     let surviving_consumer_id = ConsumerId(41);
 
-    assert!(router.join_session(user(session_a)).is_ok());
-    assert!(router.join_session(user(session_b)).is_ok());
+    assert!(join(&mut router, session_a));
+    assert!(join(&mut router, session_b));
+    assert!(open_receive(&mut router, session_a, receive_transport));
+    assert!(open_send(
+        &mut router,
+        session_a,
+        removed_consumer_transport
+    ));
+    assert!(open_send(
+        &mut router,
+        session_b,
+        surviving_consumer_transport,
+    ));
+    assert!(publish(
+        &mut router,
+        receive_transport,
+        producer_id,
+        MediaKind::Audio,
+    ));
     assert!(
-        router
-            .open_transport(Transport::new(
-                receive_transport,
-                session_a,
-                TransportDirection::Receive,
-            ))
-            .is_ok()
+        try_consume(
+            &mut router,
+            removed_consumer_transport,
+            removed_consumer_id,
+            producer_id,
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
     assert!(
-        router
-            .open_transport(Transport::new(
-                removed_consumer_transport,
-                session_a,
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                surviving_consumer_transport,
-                session_b,
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                producer_id,
-                receive_transport,
-                MediaKind::Audio,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    removed_consumer_id,
-                    producer_id,
-                    removed_consumer_transport,
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    surviving_consumer_id,
-                    producer_id,
-                    surviving_consumer_transport,
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
+        try_consume(
+            &mut router,
+            surviving_consumer_transport,
+            surviving_consumer_id,
+            producer_id,
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
 
     assert!(router.remove_consumer(removed_consumer_id).is_ok());
@@ -935,52 +853,30 @@ fn removing_a_consumer_preserves_other_routes_and_indices() {
 fn new_consumers_inherit_their_producer_pause_shadow() {
     let mut router = Router::new(RouterId(0));
 
-    assert!(router.join_session(user(SessionId(1))).is_ok());
-    assert!(router.join_session(user(SessionId(2))).is_ok());
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(10),
-                SessionId(1),
-                TransportDirection::Receive,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(20),
-                SessionId(2),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                ProducerId(30),
-                TransportId(10),
-                MediaKind::Audio,
-            ))
-            .is_ok()
-    );
+    assert!(join(&mut router, SessionId(1)));
+    assert!(join(&mut router, SessionId(2)));
+    assert!(open_receive(&mut router, SessionId(1), TransportId(10)));
+    assert!(open_send(&mut router, SessionId(2), TransportId(20)));
+    assert!(publish(
+        &mut router,
+        TransportId(10),
+        ProducerId(30),
+        MediaKind::Audio,
+    ));
     assert!(
         router
             .set_producer_route_state(ProducerId(30), ProducerRouteState::Paused)
             .is_ok()
     );
     assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    ConsumerId(40),
-                    ProducerId(30),
-                    TransportId(20),
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
+        try_consume(
+            &mut router,
+            TransportId(20),
+            ConsumerId(40),
+            ProducerId(30),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
 
     let view = RouterProofView::new(&router);
@@ -999,70 +895,37 @@ fn new_consumers_inherit_their_producer_pause_shadow() {
 fn pausing_a_producer_updates_all_dependent_consumers() {
     let mut router = Router::new(RouterId(0));
 
-    assert!(router.join_session(user(SessionId(1))).is_ok());
-    assert!(router.join_session(user(SessionId(2))).is_ok());
-    assert!(router.join_session(user(SessionId(3))).is_ok());
+    assert!(join(&mut router, SessionId(1)));
+    assert!(join(&mut router, SessionId(2)));
+    assert!(join(&mut router, SessionId(3)));
+    assert!(open_receive(&mut router, SessionId(1), TransportId(10)));
+    assert!(open_send(&mut router, SessionId(2), TransportId(20)));
+    assert!(open_send(&mut router, SessionId(3), TransportId(21)));
+    assert!(publish(
+        &mut router,
+        TransportId(10),
+        ProducerId(30),
+        MediaKind::Video,
+    ));
     assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(10),
-                SessionId(1),
-                TransportDirection::Receive,
-            ))
-            .is_ok()
+        try_consume(
+            &mut router,
+            TransportId(20),
+            ConsumerId(40),
+            ProducerId(30),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
     assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(20),
-                SessionId(2),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(21),
-                SessionId(3),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                ProducerId(30),
-                TransportId(10),
-                MediaKind::Video,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    ConsumerId(40),
-                    ProducerId(30),
-                    TransportId(20),
-                    MediaKind::Video,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    ConsumerId(41),
-                    ProducerId(30),
-                    TransportId(21),
-                    MediaKind::Video,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
+        try_consume(
+            &mut router,
+            TransportId(21),
+            ConsumerId(41),
+            ProducerId(30),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
 
     assert!(
@@ -1092,70 +955,37 @@ fn pausing_a_producer_updates_all_dependent_consumers() {
 fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
     let mut router = Router::new(RouterId(0));
 
-    assert!(router.join_session(user(SessionId(1))).is_ok());
-    assert!(router.join_session(user(SessionId(2))).is_ok());
-    assert!(router.join_session(user(SessionId(3))).is_ok());
+    assert!(join(&mut router, SessionId(1)));
+    assert!(join(&mut router, SessionId(2)));
+    assert!(join(&mut router, SessionId(3)));
+    assert!(open_receive(&mut router, SessionId(1), TransportId(10)));
+    assert!(open_send(&mut router, SessionId(2), TransportId(20)));
+    assert!(open_send(&mut router, SessionId(3), TransportId(21)));
+    assert!(publish(
+        &mut router,
+        TransportId(10),
+        ProducerId(30),
+        MediaKind::Video,
+    ));
     assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(10),
-                SessionId(1),
-                TransportDirection::Receive,
-            ))
-            .is_ok()
+        try_consume(
+            &mut router,
+            TransportId(20),
+            ConsumerId(40),
+            ProducerId(30),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
     assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(20),
-                SessionId(2),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(21),
-                SessionId(3),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                ProducerId(30),
-                TransportId(10),
-                MediaKind::Video,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    ConsumerId(40),
-                    ProducerId(30),
-                    TransportId(20),
-                    MediaKind::Video,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    ConsumerId(41),
-                    ProducerId(30),
-                    TransportId(21),
-                    MediaKind::Video,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
+        try_consume(
+            &mut router,
+            TransportId(21),
+            ConsumerId(41),
+            ProducerId(30),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
     assert!(
         router
@@ -1190,47 +1020,25 @@ fn resuming_a_producer_clears_dependent_consumer_pause_shadows() {
 fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     let mut router = Router::new(RouterId(0));
 
-    assert!(router.join_session(user(SessionId(1))).is_ok());
-    assert!(router.join_session(user(SessionId(2))).is_ok());
+    assert!(join(&mut router, SessionId(1)));
+    assert!(join(&mut router, SessionId(2)));
+    assert!(open_receive(&mut router, SessionId(1), TransportId(10)));
+    assert!(open_send(&mut router, SessionId(2), TransportId(20)));
+    assert!(publish(
+        &mut router,
+        TransportId(10),
+        ProducerId(30),
+        MediaKind::Audio,
+    ));
     assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(10),
-                SessionId(1),
-                TransportDirection::Receive,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .open_transport(Transport::new(
-                TransportId(20),
-                SessionId(2),
-                TransportDirection::Send,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_producer(Producer::new(
-                ProducerId(30),
-                TransportId(10),
-                MediaKind::Audio,
-            ))
-            .is_ok()
-    );
-    assert!(
-        router
-            .add_consumer(
-                Consumer::new(
-                    ConsumerId(40),
-                    ProducerId(30),
-                    TransportId(20),
-                    MediaKind::Audio,
-                ),
-                ConsumerCapability::Compatible,
-            )
-            .is_ok()
+        try_consume(
+            &mut router,
+            TransportId(20),
+            ConsumerId(40),
+            ProducerId(30),
+            ConsumerCapability::Compatible,
+        )
+        .is_ok()
     );
 
     assert!(

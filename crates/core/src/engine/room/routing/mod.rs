@@ -424,13 +424,11 @@ impl RoomRoutingState {
         &mut self,
         consumer_user_id: &UserId,
         producer_id: RoutedProducerId,
-        media_kind: RouterMediaKind,
         capability: ConsumerCapability,
     ) -> Result<RoutedConsumerId, RoomRoutingError> {
         self.add_consumer_with_route_state(
             consumer_user_id,
             producer_id,
-            media_kind,
             capability,
             ConsumerRouteState::Active,
         )
@@ -440,7 +438,6 @@ impl RoomRoutingState {
         &mut self,
         consumer_user_id: &UserId,
         producer_id: RoutedProducerId,
-        media_kind: RouterMediaKind,
         capability: ConsumerCapability,
         route_state: ConsumerRouteState,
     ) -> Result<RoutedConsumerId, RoomRoutingError> {
@@ -451,7 +448,6 @@ impl RoomRoutingState {
             .add_consumer_with_route_state(
                 consumer_user_id,
                 producer_id.producer_id(),
-                media_kind,
                 capability,
                 route_state,
             );

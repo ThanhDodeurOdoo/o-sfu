@@ -1,12 +1,10 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use o_sfu_router::{
-    Consumer as RouterConsumer, ConsumerCapability, ConsumerId as RouterConsumerId,
-    ConsumerRouteState, MediaCapabilities, MediaKind as RouterMediaKind,
-    Producer as RouterProducer, ProducerId as RouterProducerId, ProducerRouteState, Router,
-    RouterError, RouterId, Session as RouterSession, SessionId as RouterSessionId,
-    Transport as RouterTransport, TransportDirection as RouterTransportDirection,
-    TransportId as RouterTransportId,
+    ConsumerCapability, ConsumerId as RouterConsumerId, ConsumerRouteState, ConsumerSpec,
+    MediaCapabilities, MediaKind as RouterMediaKind, ProducerId as RouterProducerId,
+    ProducerRouteState, ProducerSpec, Router, RouterError, RouterId, Session as RouterSession,
+    SessionId as RouterSessionId, TransportId as RouterTransportId,
 };
 
 use crate::engine::{
@@ -102,7 +100,7 @@ impl RoomRouterState {
         }
         let session_id = RouterSessionId(router_session_seed);
         self.router
-            .join_session(RouterSession::new(session_id))
+            .join(RouterSession::new(session_id))
             .map_err(RoomRouterStateError::from)?;
         self.sessions_by_user.insert(user_id.clone(), session_id);
         Ok(())
@@ -130,18 +128,12 @@ impl RoomRouterState {
         let upload_id = self.allocate_transport_id();
         let download_id = self.allocate_transport_id();
         self.router
-            .open_transport(RouterTransport::new(
-                upload_id,
-                session_id,
-                RouterTransportDirection::Receive,
-            ))
+            .session(session_id)
+            .and_then(|session| session.open_receive_transport(upload_id))
             .map_err(RoomRouterStateError::from)?;
         self.router
-            .open_transport(RouterTransport::new(
-                download_id,
-                session_id,
-                RouterTransportDirection::Send,
-            ))
+            .session(session_id)
+            .and_then(|session| session.open_send_transport(download_id))
             .map_err(RoomRouterStateError::from)?;
         let transport_ids = SessionTransportIds {
             upload_id,
@@ -164,11 +156,8 @@ impl RoomRouterState {
         let transport_ids = self.ensure_transport_ids(user_id)?;
         let producer_id = self.allocate_producer_id();
         self.router
-            .add_producer(RouterProducer::new(
-                producer_id,
-                transport_ids.upload_id,
-                media_kind,
-            ))
+            .receive_transport(transport_ids.upload_id)
+            .and_then(|transport| transport.publish(ProducerSpec::new(producer_id, media_kind)))
             .map_err(RoomRouterStateError::from)?;
         Ok(producer_id)
     }
@@ -177,23 +166,19 @@ impl RoomRouterState {
         &mut self,
         consumer_user_id: &UserId,
         producer_id: RouterProducerId,
-        media_kind: RouterMediaKind,
         capability: ConsumerCapability,
         route_state: ConsumerRouteState,
     ) -> Result<RouterConsumerId, RoomRouterStateError> {
         let transport_ids = self.ensure_transport_ids(consumer_user_id)?;
         let consumer_id = self.allocate_consumer_id();
         self.router
-            .add_consumer(
-                RouterConsumer::new(
-                    consumer_id,
-                    producer_id,
-                    transport_ids.download_id,
-                    media_kind,
+            .send_transport(transport_ids.download_id)
+            .and_then(|transport| {
+                transport.consume(
+                    ConsumerSpec::new(consumer_id, producer_id, capability)
+                        .with_route_state(route_state),
                 )
-                .with_route_state(route_state),
-                capability,
-            )
+            })
             .map_err(RoomRouterStateError::from)?;
         Ok(consumer_id)
     }
