@@ -68,6 +68,14 @@ pub(super) fn decode_sent_client_envelopes(commands: &[Command]) -> Vec<ClientEn
         .collect()
 }
 
+pub(super) fn assert_sent_client_envelopes(commands: &[Command], expected: Vec<ClientEnvelope>) {
+    let decoded = decode_sent_batch(commands)
+        .into_iter()
+        .map(ClientEnvelope::decode)
+        .collect::<Result<Vec<_>, _>>();
+    assert_eq!(decoded, Ok(expected));
+}
+
 pub(super) fn encode_server_batch(envelope: ServerEnvelope) -> String {
     let Ok(envelope) = envelope.into_envelope() else {
         return String::new();

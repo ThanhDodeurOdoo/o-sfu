@@ -486,7 +486,7 @@ pub(super) fn handle_recovery_timer_model(model: &mut LifecycleModel) -> Lifecyc
 /// extracts the proof-friendly lifecycle model from the live core
 fn lifecycle_model(core: &ProtocolCore) -> LifecycleModel {
     LifecycleModel {
-        state: core.state,
+        state: core.state(),
         has_connect_context: core.connect_context.is_some(),
         recovery_delay_ms: core.recovery_delay_ms,
     }
@@ -505,7 +505,7 @@ fn apply_plan(
     fresh_connect_context: Option<ConnectContext>,
 ) -> Commands {
     let url = connect_url(core, &plan, fresh_connect_context.as_ref());
-    core.state = model.state;
+    core.phase.apply_lifecycle_state(model.state);
     core.recovery_delay_ms = model.recovery_delay_ms;
     if plan.reset_session_state {
         core.features = empty_features();

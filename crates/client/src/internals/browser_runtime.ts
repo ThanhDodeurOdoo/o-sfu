@@ -589,16 +589,21 @@ export class BrowserRuntime {
             CLIENT_LOG_LEVEL.DEBUG,
             `answered ${negotiationKind} negotiation request ${requestId}`
         );
-        if (
-            negotiationKind === "offer" &&
-            (this.lacksConnectionStateApi() || localDescriptionHasOnlyInactiveMedia(answerSdp))
-        ) {
-            emitRuntimeLog(
-                hooks,
-                CLIENT_LOG_LEVEL.WARN,
-                "falling back to immediate transport-ready because the initial answer stayed inactive"
-            );
-            commands.push(...protocolCore.onTransportReady());
+        if (negotiationKind === "offer") {
+            const isPeerConnectionConnected = this._peerConnection.connectionState === "connected";
+            const needsImmediateTransportReadyFallback =
+                !isPeerConnectionConnected &&
+                (this.lacksConnectionStateApi() || localDescriptionHasOnlyInactiveMedia(answerSdp));
+            if (needsImmediateTransportReadyFallback) {
+                emitRuntimeLog(
+                    hooks,
+                    CLIENT_LOG_LEVEL.WARN,
+                    "falling back to immediate transport-ready because the initial answer stayed inactive"
+                );
+            }
+            if (isPeerConnectionConnected || needsImmediateTransportReadyFallback) {
+                commands.push(...protocolCore.onTransportReady());
+            }
         }
         return commands;
     }

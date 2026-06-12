@@ -1,13 +1,10 @@
 use super::{
-    CommandBatch, Commands, FlushMode, NegotiationKind, PendingNegotiation, PendingRequestKind,
+    CommandBatch, Commands, FlushMode, NegotiationKind, NegotiationRejection, PendingRequestKind,
     ProtocolCore,
 };
-use crate::{
-    bundle_api::BundleConnectionState,
-    signaling::{
-        ClientEnvelope, ClientRequest, ClientResponse, RecordingOptions, RequestId, ServerRequest,
-        ServerResponse, SessionDescriptionPayload,
-    },
+use crate::signaling::{
+    ClientEnvelope, ClientRequest, ClientResponse, RecordingOptions, RequestId, ServerRequest,
+    ServerResponse, SessionDescriptionPayload,
 };
 
 pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions) -> Commands {
@@ -30,18 +27,15 @@ pub(super) fn submit_negotiation_answer(
     core: &mut ProtocolCore,
     request_id: &RequestId,
     kind: NegotiationKind,
-    sdp: String,
+    sdp: impl Into<String>,
 ) -> Commands {
     if !core.can_send_client_messages() {
         return Vec::new();
     }
-    let Some(pending_negotiation) = core.pending_negotiation.as_ref() else {
-        return Vec::new();
-    };
-    if pending_negotiation.request_id != *request_id || pending_negotiation.kind != kind {
+    if !core.phase.resolve_negotiation(request_id, kind) {
         return Vec::new();
     }
-    core.pending_negotiation = None;
+    let sdp = sdp.into();
     let response = match kind {
         NegotiationKind::Offer => ClientResponse::Offer(SessionDescriptionPayload {
             sdp,
@@ -105,26 +99,18 @@ fn handle_negotiation_request(
     kind: NegotiationKind,
     payload: SessionDescriptionPayload,
 ) -> Commands {
-    match (core.state, kind) {
-        (BundleConnectionState::Authenticated, _)
-        | (BundleConnectionState::Connected, NegotiationKind::Renegotiate) => {}
-        (BundleConnectionState::Connected, NegotiationKind::Offer) => {
+    match core.phase.accept_negotiation(&request_id, kind) {
+        Ok(()) => {}
+        Err(NegotiationRejection::Ignored) => return Vec::new(),
+        Err(NegotiationRejection::ProtocolError) => {
             return CommandBatch::close_for_protocol_error().into_vec();
         }
-        _ => return Vec::new(),
     }
-    if core.pending_negotiation.is_some() {
-        return CommandBatch::close_for_protocol_error().into_vec();
-    }
-    core.pending_negotiation = Some(PendingNegotiation {
-        request_id: request_id.clone(),
-        kind,
-    });
-    let batch = match kind {
+    match kind {
         NegotiationKind::Offer => CommandBatch::initial_offer(request_id, payload),
         NegotiationKind::Renegotiate => CommandBatch::renegotiation(request_id, payload),
-    };
-    batch.into_vec()
+    }
+    .into_vec()
 }
 
 fn begin_request(

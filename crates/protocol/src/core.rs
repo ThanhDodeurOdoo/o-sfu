@@ -23,7 +23,7 @@
 //! should consume the commands as [`CommandBatch`] values. Rust exposes checked
 //! construction externally while core transitions use semantic constructors.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, mem::replace};
 
 mod command_batch;
 mod connection_lifecycle;
@@ -188,19 +188,131 @@ struct PendingNegotiation {
     kind: NegotiationKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProtocolPhase {
+    Disconnected,
+    Connecting,
+    Authenticated(NegotiationSlot),
+    Connected(NegotiationSlot),
+    Recovering,
+    Closed,
+}
+
+impl ProtocolPhase {
+    const fn connection_state(&self) -> ConnectionState {
+        match self {
+            Self::Disconnected => BundleConnectionState::Disconnected,
+            Self::Connecting => BundleConnectionState::Connecting,
+            Self::Authenticated(_) => BundleConnectionState::Authenticated,
+            Self::Connected(_) => BundleConnectionState::Connected,
+            Self::Recovering => BundleConnectionState::Recovering,
+            Self::Closed => BundleConnectionState::Closed,
+        }
+    }
+
+    fn apply_lifecycle_state(&mut self, state: ConnectionState) {
+        if self.connection_state() == state {
+            return;
+        }
+        let current = replace(self, Self::Disconnected);
+        *self = match (current, state) {
+            (Self::Authenticated(slot), BundleConnectionState::Connected) => Self::Connected(slot),
+            (_, BundleConnectionState::Disconnected) => Self::Disconnected,
+            (_, BundleConnectionState::Connecting) => Self::Connecting,
+            (_, BundleConnectionState::Authenticated) => Self::Authenticated(NegotiationSlot::Idle),
+            (_, BundleConnectionState::Connected) => Self::Connected(NegotiationSlot::Idle),
+            (_, BundleConnectionState::Recovering) => Self::Recovering,
+            (_, BundleConnectionState::Closed) => Self::Closed,
+        };
+    }
+
+    const fn can_send_client_messages(&self) -> bool {
+        matches!(self, Self::Authenticated(_) | Self::Connected(_))
+    }
+
+    const fn can_enter_connected(&self) -> bool {
+        matches!(self, Self::Authenticated(NegotiationSlot::Idle))
+    }
+
+    fn accept_negotiation(
+        &mut self,
+        request_id: &RequestId,
+        kind: NegotiationKind,
+    ) -> Result<(), NegotiationRejection> {
+        match (self, kind) {
+            (Self::Authenticated(slot), NegotiationKind::Offer)
+            | (Self::Connected(slot), NegotiationKind::Renegotiate) => {
+                slot.accept(request_id, kind)
+            }
+            (Self::Authenticated(_), NegotiationKind::Renegotiate)
+            | (Self::Connected(_), NegotiationKind::Offer) => {
+                Err(NegotiationRejection::ProtocolError)
+            }
+            (
+                Self::Disconnected | Self::Connecting | Self::Recovering | Self::Closed,
+                NegotiationKind::Offer | NegotiationKind::Renegotiate,
+            ) => Err(NegotiationRejection::Ignored),
+        }
+    }
+
+    fn resolve_negotiation(&mut self, request_id: &RequestId, kind: NegotiationKind) -> bool {
+        match self {
+            Self::Authenticated(slot) | Self::Connected(slot) => slot.resolve(request_id, kind),
+            Self::Disconnected | Self::Connecting | Self::Recovering | Self::Closed => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NegotiationSlot {
+    Idle,
+    WaitingForAnswer(PendingNegotiation),
+}
+
+impl NegotiationSlot {
+    fn accept(
+        &mut self,
+        request_id: &RequestId,
+        kind: NegotiationKind,
+    ) -> Result<(), NegotiationRejection> {
+        match self {
+            Self::Idle => {
+                *self = Self::WaitingForAnswer(PendingNegotiation {
+                    request_id: request_id.clone(),
+                    kind,
+                });
+                Ok(())
+            }
+            Self::WaitingForAnswer(_) => Err(NegotiationRejection::ProtocolError),
+        }
+    }
+
+    fn resolve(&mut self, request_id: &RequestId, kind: NegotiationKind) -> bool {
+        let Self::WaitingForAnswer(pending) = self else {
+            return false;
+        };
+        if pending.request_id != *request_id || pending.kind != kind {
+            return false;
+        }
+        *self = Self::Idle;
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NegotiationRejection {
+    Ignored,
+    ProtocolError,
+}
+
 /// The stored state falls into three groups:
 ///   - session snapshots accepted from the server
 ///   - remembered client intent that should survive reconnects
 ///   - in-flight host work that must be cancelled or resolved during cleanup
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolCore {
-    /// Public lifecycle state exported to the host projection.
-    ///
-    /// This is the gate for all protocol transitions. Client messages are only
-    /// sent once authentication has completed, transport readiness only advances
-    /// from [`BundleConnectionState::Authenticated`] and stale timer callbacks become no-ops when the
-    /// state no longer matches the timer role.
-    state: ConnectionState,
+    /// Lifecycle and server-driven negotiation state.
+    phase: ProtocolPhase,
     /// Feature snapshot from the last accepted welcome payload.
     ///
     /// Until a welcome is accepted this remains empty. It is reset on fresh
@@ -252,12 +364,6 @@ pub struct ProtocolCore {
     /// callbacks both flow through this tracker so stale, mismatched or racing
     /// events cannot resolve the wrong host promise.
     request_tracker: RequestTracker,
-    /// Server-driven SDP negotiation currently waiting for a host answer.
-    ///
-    /// Only one negotiation may be staged at a time. The stored request id and
-    /// kind must match the host answer exactly before the core sends a response,
-    /// which prevents reordered or stale SDP answers from crossing sessions.
-    pending_negotiation: Option<PendingNegotiation>,
 }
 
 impl Default for ProtocolCore {
@@ -275,7 +381,7 @@ impl ProtocolCore {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: BundleConnectionState::Disconnected,
+            phase: ProtocolPhase::Disconnected,
             features: empty_features(),
             recording_state: RecordingState::default(),
             track_bindings: BTreeMap::new(),
@@ -284,13 +390,12 @@ impl ProtocolCore {
             recovery_delay_ms: INITIAL_RECOVERY_DELAY_MS,
             outbound_batch: OutboundBatcher::new(),
             request_tracker: RequestTracker::new(),
-            pending_negotiation: None,
         }
     }
 
     #[must_use]
     pub const fn state(&self) -> ConnectionState {
-        self.state
+        self.phase.connection_state()
     }
 
     #[must_use]
@@ -333,7 +438,7 @@ impl ProtocolCore {
     /// which keeps every socket attempt tied to one explicit admission context.
     pub fn on_ws_open(&mut self) -> CommandBatch {
         if !matches!(
-            self.state,
+            self.phase.connection_state(),
             BundleConnectionState::Connecting | BundleConnectionState::Recovering
         ) {
             return CommandBatch::default();
@@ -385,7 +490,7 @@ impl ProtocolCore {
 
     fn accept_welcome(&mut self, payload: WelcomePayload) -> Commands {
         if !matches!(
-            self.state,
+            self.phase.connection_state(),
             BundleConnectionState::Connecting | BundleConnectionState::Recovering
         ) {
             return Vec::new();
@@ -393,10 +498,11 @@ impl ProtocolCore {
         self.features = payload.features;
         self.recording_state = payload.recording;
         self.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
-        self.state = BundleConnectionState::Authenticated;
+        self.phase
+            .apply_lifecycle_state(BundleConnectionState::Authenticated);
 
         let mut commands = vec![Command::EmitStateChange {
-            state: self.state,
+            state: self.phase.connection_state(),
             cause: None,
         }];
         if !payload.peers.is_empty() {
@@ -416,11 +522,11 @@ impl ProtocolCore {
     /// media, because it is what upgrades the core from authenticated signaling
     /// state to a fully connected user.
     pub fn on_transport_ready(&mut self) -> CommandBatch {
-        let was_authenticated = self.state == BundleConnectionState::Authenticated;
-        let mut commands = connection_lifecycle::on_transport_ready(self);
-        if was_authenticated && self.state == BundleConnectionState::Connected {
-            commands.extend(self.replay_publication_state());
+        if !self.phase.can_enter_connected() {
+            return CommandBatch::default();
         }
+        let mut commands = connection_lifecycle::on_transport_ready(self);
+        commands.extend(self.replay_publication_state());
         command_batch(commands)
     }
 
@@ -510,10 +616,7 @@ impl ProtocolCore {
         sdp: impl Into<String>,
     ) -> CommandBatch {
         command_batch(request_flow::submit_negotiation_answer(
-            self,
-            request_id,
-            kind,
-            sdp.into(),
+            self, request_id, kind, sdp,
         ))
     }
 
@@ -596,7 +699,6 @@ impl ProtocolCore {
         self.track_bindings.clear();
         self.outbound_batch.clear();
         self.request_tracker.clear();
-        self.pending_negotiation = None;
     }
 
     /// Tears down runtime state while emitting the cleanup commands the host still owes.
@@ -626,7 +728,6 @@ impl ProtocolCore {
                 },
             });
         }
-        self.pending_negotiation = None;
         commands
     }
 
@@ -681,10 +782,7 @@ impl ProtocolCore {
     }
 
     fn can_send_client_messages(&self) -> bool {
-        matches!(
-            self.state,
-            BundleConnectionState::Authenticated | BundleConnectionState::Connected
-        )
+        self.phase.can_send_client_messages()
     }
 }
 
