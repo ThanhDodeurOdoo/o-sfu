@@ -75,15 +75,15 @@ pub(crate) async fn serve_http_on(
 pub(crate) fn app(state: RuntimeState) -> Router {
     Router::new()
         .route("/", get(websocket_server::upgrade))
-        .route(METRICS_PATH, get(metrics))
         .route(NOOP_PATH, get(noop))
         .route(STATS_PATH, get(stats))
         .route(CHANNEL_PATH, get(room))
-        .merge(diagnostics_router(state.clone()))
         .route(
             DISCONNECT_PATH,
             post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
         )
+        .route(METRICS_PATH, get(metrics))
+        .merge(diagnostics_router(state.clone()))
         .with_state(state)
 }
 
