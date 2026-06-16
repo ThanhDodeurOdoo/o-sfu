@@ -20,14 +20,14 @@ pub(super) fn apply_overload_policy(
         return;
     }
     for route in routes.iter_mut().filter(|route| route_can_downgrade(route)) {
-        let Some((selector, bitrate)) = cheapest_useful_selector(route.route.encodings()) else {
+        let Some((selector, bitrate)) = cheapest_useful_selector(route.route) else {
             let selected_bitrate = route.selected_bitrate;
             route.pause(PolicyPauseReason::MissingUsableLayer, RouteOutcome::Neutral);
             total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
             continue;
         };
-        let selected_bitrate = route.selected_bitrate;
-        if bitrate < selected_bitrate {
+        if bitrate < route.selected_bitrate {
+            let selected_bitrate = route.selected_bitrate;
             total_bitrate = total_bitrate
                 .saturating_sub(selected_bitrate)
                 .saturating_add(bitrate);
@@ -37,9 +37,9 @@ pub(super) fn apply_overload_policy(
     if total_bitrate <= receiver_bandwidth {
         return;
     }
-    let mut pause_order = Vec::new();
+    let mut pause_order = Vec::with_capacity(routes.len());
     for route in routes.iter_mut() {
-        if !route_is_protected(route) {
+        if route.selection.policy_pause_reason.is_none() && !route_is_protected(route) {
             pause_order.push((pause_rank(route), route));
         }
     }
@@ -83,7 +83,8 @@ fn selected_receiver_bitrate(routes: &[PlannedReceiverRoute<'_>]) -> Bitrate {
 
 fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
     let input = route.route;
-    input.adaptation_policy() == SourceAdaptationPolicy::ScalableVideo
+    route.selection.policy_pause_reason.is_none()
+        && input.adaptation_policy() == SourceAdaptationPolicy::ScalableVideo
         && matches!(
             input.layout_intent.priority(),
             SourceRoutePriority::VisibleThumbnail | SourceRoutePriority::HiddenOrOverflow

@@ -1,4 +1,4 @@
-use crate::engine::VideoLayoutIntent;
+use crate::{Bitrate, engine::VideoLayoutIntent};
 
 /// room policy applied to one published source
 ///
@@ -12,6 +12,7 @@ pub struct SourcePolicy {
     layout: Option<SourceLayoutPolicy>,
     adaptation: SourceAdaptationPolicy,
     active_speaker: Option<ActiveSpeakerPolicy>,
+    video_bitrate_cap: Option<Bitrate>,
 }
 
 impl SourcePolicy {
@@ -25,6 +26,15 @@ impl SourcePolicy {
             layout,
             adaptation,
             active_speaker,
+            video_bitrate_cap: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_video_bitrate_cap(self, max_bitrate: Bitrate) -> Self {
+        Self {
+            video_bitrate_cap: Some(max_bitrate),
+            ..self
         }
     }
 
@@ -46,6 +56,11 @@ impl SourcePolicy {
     #[must_use]
     pub const fn active_speaker(self) -> Option<ActiveSpeakerPolicy> {
         self.active_speaker
+    }
+
+    #[must_use]
+    pub const fn video_bitrate_cap(self) -> Option<Bitrate> {
+        self.video_bitrate_cap
     }
 }
 
@@ -286,6 +301,8 @@ pub enum PolicyPauseReason {
     AudioSpeakerLimit,
     /// the per-receiver live-video cap withheld this route
     VideoDownloadLimit,
+    /// the source bitrate cap withheld this route
+    SourceBitrateLimit,
 }
 
 /// server-defined role for one published source encoding

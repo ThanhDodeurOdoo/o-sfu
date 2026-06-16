@@ -115,6 +115,7 @@ impl RoomState {
                     source_id: source.source_id().as_u64(),
                     stream_id: source.stream_id().to_string(),
                     transport_media_id: transport_media_id.map(TransportMediaId::as_u64),
+                    video_bitrate_cap_bps: source.policy().video_bitrate_cap().map(Bitrate::as_bps),
                 }
             })
             .collect()
@@ -449,6 +450,7 @@ impl From<PolicyPauseReason> for DiagnosticsPolicyPauseReason {
             PolicyPauseReason::MissingUsableLayer => Self::MissingUsableLayer,
             PolicyPauseReason::AudioSpeakerLimit => Self::AudioSpeakerLimit,
             PolicyPauseReason::VideoDownloadLimit => Self::VideoDownloadLimit,
+            PolicyPauseReason::SourceBitrateLimit => Self::SourceBitrateLimit,
         }
     }
 }

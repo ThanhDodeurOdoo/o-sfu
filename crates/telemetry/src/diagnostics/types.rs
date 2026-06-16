@@ -62,6 +62,7 @@ pub enum DiagnosticsPolicyPauseReason {
     MissingUsableLayer,
     AudioSpeakerLimit,
     VideoDownloadLimit,
+    SourceBitrateLimit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,6 +255,8 @@ pub struct DiagnosticsSource {
     pub stream_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport_media_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_bitrate_cap_bps: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -28,7 +28,10 @@ pub(super) fn resolve(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelectio
             }
         }
         (false, Some(reason), pause_reason) if pause_reason != Some(reason) => {
-            if reason == PolicyPauseReason::VideoDownloadLimit {
+            if matches!(
+                reason,
+                PolicyPauseReason::VideoDownloadLimit | PolicyPauseReason::SourceBitrateLimit
+            ) {
                 return ReceiverRouteSelection::pause(current, reason, AdaptationCounts::reset());
             }
             let counts = AdaptationCounts::next_pressure(current, DOWNSWITCH_PRESSURE_OBSERVATIONS);
