@@ -10,7 +10,7 @@ use crate::{
         UserId,
         media_transport::{
             ActiveSpeakerSource, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
-            TransportMediaId,
+            TransportConsumerRoute, TransportMediaId,
         },
         room::state::RoomState,
         source_model::{
@@ -39,6 +39,7 @@ pub struct SourcePolicyInput<'a> {
 pub struct SourcePolicyRouteInput<'a> {
     pub(super) source: &'a PublishedSourceDescriptor,
     pub(super) route: super::super::media_graph::ConsumerRouteTransportRef,
+    pub(super) transport_route: TransportConsumerRoute,
     pub(super) current_selection: ConsumerSourceSelection,
 }
 
@@ -79,9 +80,12 @@ impl<'a> SourcePolicyInput<'a> {
                 if !current_selection.active() {
                     return None;
                 }
+                let route = route.transport_ref();
+                let transport_route = state.transport_consumer_route(&route);
                 Some(SourcePolicyRouteInput {
                     source,
-                    route: route.transport_ref(),
+                    route,
+                    transport_route,
                     current_selection,
                 })
             })

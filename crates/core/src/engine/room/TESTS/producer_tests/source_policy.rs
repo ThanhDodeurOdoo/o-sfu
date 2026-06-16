@@ -439,6 +439,46 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
 }
 
 #[tokio::test]
+async fn source_policy_effect_plan_captures_transport_route_before_execution() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3],
+        RoomMediaLimits::try_new(4, 1).unwrap(),
+    )
+    .await;
+    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
+    let third_audio_media_id = scenario.audio_media_id(3).await;
+
+    scenario.mark_active_speaker(third_audio_media_id).await;
+    let third_camera_source_id = scenario
+        .room
+        .test_api()
+        .inspect()
+        .source_id_for_owner_stream(&UserId::Integer(3), TestSourceKind::ScalableVideo)
+        .await
+        .expect("third camera should have a source id before source policy planning");
+    let expected_route = {
+        let state = scenario.room.state.read().await;
+        let route = state
+            .current_live_consumer_routes()
+            .find(|route| {
+                route.consumer_user_id == UserId::Integer(2)
+                    && route.source.source_id() == third_camera_source_id
+            })
+            .expect("third camera should have a live consumer route");
+        state.transport_consumer_route(&route.transport_ref())
+    };
+    let effect_plan = source_policy_effect_plan_from_transport_snapshot(&scenario).await;
+
+    assert!(
+        effect_plan.uses_transport_route_for_consumer_source_for_test(
+            &UserId::Integer(2),
+            third_camera_source_id,
+            &expected_route
+        )
+    );
+}
+
+#[tokio::test]
 async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],
