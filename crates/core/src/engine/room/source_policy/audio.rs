@@ -29,6 +29,7 @@ pub(super) fn audio_route_activity_updates(
             }
             ConsumerPacketSelectionUpdate::route_activity(
                 route.route.clone(),
+                route.transport_route.clone(),
                 route.source.source_id(),
                 route.current_selection,
                 next_reason,

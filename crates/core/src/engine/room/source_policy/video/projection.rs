@@ -86,6 +86,7 @@ pub(super) fn consumer_packet_selection_update(
     }
     Some(ConsumerPacketSelectionUpdate {
         route: input.route.clone(),
+        transport_route: input.transport_route.clone(),
         source_id: input.source.source_id(),
         selector: selection.selector,
         policy_pause_reason: selection.policy_pause_reason,

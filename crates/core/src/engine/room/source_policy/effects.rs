@@ -12,7 +12,7 @@ use super::{
 use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, ConsumerPacketGateUpdate, MediaTransport, ReceiverBandwidthSnapshot,
-        ReceiverBweTargetUpdate, TransportConsumerRoute,
+        ReceiverBweTargetUpdate,
     },
     metrics::{self, BudgetSolverOutcome},
 };
@@ -65,7 +65,7 @@ impl SourcePolicyEffectPlan {
         media_port
             .set_receiver_bwe_targets(&receiver_bwe_targets)
             .await;
-        let applied_packet_updates = apply_packet_updates(room, media_port, packet_updates).await;
+        let applied_packet_updates = apply_packet_updates(media_port, packet_updates).await;
         if applied_packet_updates.is_empty() && featured_users.is_empty() {
             return;
         }
@@ -110,20 +110,9 @@ impl SourcePolicyEffectPlan {
 }
 
 async fn apply_packet_updates(
-    room: &Room,
     media_port: &MediaTransport,
     updates: Vec<ConsumerPacketSelectionUpdate>,
 ) -> Vec<ConsumerPacketSelectionUpdate> {
-    let updates = {
-        let state = room.state.read().await;
-        updates
-            .into_iter()
-            .map(|update| {
-                let route = state.transport_consumer_route(&update.route);
-                (update, route)
-            })
-            .collect::<Vec<_>>()
-    };
     let mut packet_gate_results = media_port
         .set_consumer_packet_gates(&packet_gate_updates(&updates))
         .await
@@ -141,10 +130,9 @@ async fn apply_packet_updates(
 
 async fn accepted_packet_update<E>(
     media_port: &MediaTransport,
-    prepared: (ConsumerPacketSelectionUpdate, TransportConsumerRoute),
+    update: ConsumerPacketSelectionUpdate,
     packet_gate_results: &mut impl Iterator<Item = Result<(), E>>,
 ) -> Option<ConsumerPacketSelectionUpdate> {
-    let (update, route) = prepared;
     if update.packet_gate.is_some() && !matches!(packet_gate_results.next(), Some(Ok(()))) {
         warn!(
             route = ?update.route,
@@ -152,7 +140,7 @@ async fn accepted_packet_update<E>(
         );
         return None;
     }
-    let outcome = ConsumerRouteEffect::new(&route)
+    let outcome = ConsumerRouteEffect::new(&update.transport_route)
         .with_activity_if(update.route_activity_update, update.route_active())
         .with_keyframe(update.request_keyframe)
         .execute(media_port)
@@ -191,12 +179,10 @@ fn log_keyframe_outcome(update: &ConsumerPacketSelectionUpdate, failed: bool) {
     }
 }
 
-fn packet_gate_updates(
-    updates: &[(ConsumerPacketSelectionUpdate, TransportConsumerRoute)],
-) -> Vec<ConsumerPacketGateUpdate> {
+fn packet_gate_updates(updates: &[ConsumerPacketSelectionUpdate]) -> Vec<ConsumerPacketGateUpdate> {
     updates
         .iter()
-        .filter_map(|(update, route)| {
+        .filter_map(|update| {
             debug!(
                 route = ?update.route,
                 selector = ?update.selector,
@@ -206,7 +192,7 @@ fn packet_gate_updates(
                 "prepared receiver-driven packet selection update"
             );
             update.packet_gate.as_ref().map(|packet_gate| {
-                ConsumerPacketGateUpdate::new(route.clone(), packet_gate.clone())
+                ConsumerPacketGateUpdate::new(update.transport_route.clone(), packet_gate.clone())
             })
         })
         .collect()
