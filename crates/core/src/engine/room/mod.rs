@@ -60,4 +60,4 @@ pub use read_model::{IncomingBitrateSnapshot, RoomUserStatsSnapshot};
 pub use source_policy::SourcePolicyEvent;
 
 #[cfg(any(test, feature = "testing-transport"))]
-pub use self::{effects::batch::RoomEffectContext, placement::JoinPlacementPlan};
+pub use self::effects::batch::RoomEffectContext;
