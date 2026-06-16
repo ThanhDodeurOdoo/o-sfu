@@ -154,6 +154,7 @@ impl RoomState {
         self.recording_state.clone()
     }
 
+    #[cfg(any(test, feature = "testing-transport"))]
     pub fn router_rtp_capabilities(&self) -> MediaCapabilities {
         self.routing.rtp_capabilities().clone()
     }

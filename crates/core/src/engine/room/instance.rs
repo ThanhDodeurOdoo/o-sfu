@@ -154,10 +154,6 @@ impl Room {
             .user_snapshots_except(excluded_user_id)
     }
 
-    pub(crate) async fn router_rtp_capabilities(&self) -> o_sfu_router::MediaCapabilities {
-        self.state.read().await.router_rtp_capabilities()
-    }
-
     #[must_use]
     pub fn web_rtc_enabled(&self) -> bool {
         self.definition.web_rtc_enabled()

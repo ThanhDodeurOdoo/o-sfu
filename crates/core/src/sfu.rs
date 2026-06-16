@@ -1,7 +1,5 @@
 use std::{collections::BTreeMap, mem::take, sync::Arc};
 
-use o_sfu_router::MediaCapabilities;
-
 use crate::{
     Bitrate, ConnectionId, PublishIntentOutcome, UnpublishIntentOutcome,
     engine::{
@@ -157,7 +155,7 @@ impl SessionPhase {
 
 #[derive(Debug, Clone)]
 enum SessionOfferPurpose {
-    EstablishSession { capabilities: MediaCapabilities },
+    EstablishSession,
     RefreshSession,
 }
 
@@ -277,7 +275,6 @@ impl MediaSession {
         if !matches!(self.phase, SessionPhase::BeforeInitialOffer) {
             return Ok(None);
         }
-        let capabilities = self.room.router_rtp_capabilities().await;
         let offer = self
             .core
             .media_transport
@@ -286,7 +283,7 @@ impl MediaSession {
             .map(NegotiationOffer::from)
             .map_err(SfuCoreError::Transport)?;
         self.phase
-            .wait_for_answer(SessionOfferPurpose::EstablishSession { capabilities });
+            .wait_for_answer(SessionOfferPurpose::EstablishSession);
         Ok(Some(offer))
     }
 
@@ -305,12 +302,10 @@ impl MediaSession {
             .await
             .map_err(SfuCoreError::Transport)?;
         match purpose {
-            SessionOfferPurpose::EstablishSession { capabilities } => {
-                let client_capabilities = self
-                    .core
-                    .media_transport
-                    .negotiated_client_rtp_capabilities(sdp, capabilities)
-                    .map_err(SfuCoreError::CapabilityProjection)?;
+            SessionOfferPurpose::EstablishSession => {
+                let client_capabilities = applied_answer.client_capabilities().cloned().ok_or(
+                    SfuCoreError::CapabilityProjection(TransportAdapterError::InvalidInput),
+                )?;
                 self.room_operation()
                     .apply_session_negotiated(client_capabilities)
                     .await

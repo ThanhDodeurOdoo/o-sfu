@@ -24,10 +24,10 @@ use tracing::debug;
 use super::{
     super::super::{
         bitrate::BitrateRegistry,
-        bootstrap, simulcast,
+        bootstrap, negotiated_capabilities, simulcast,
         state::{PacketLoopState, RtcSnapshotState},
     },
-    publication::refresh_negotiated_producer_parameters,
+    publication::{answer_producer_projection, refresh_negotiated_producer_parameters},
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
@@ -130,7 +130,10 @@ pub(super) fn worker_create_session_renegotiation_offer(
         }
         return Err(TransportAdapterError::UnsupportedFeature);
     };
-    let upload_slots = mem::take(&mut session_state.sdp_negotiation.staged_offer_upload_slots);
+    let upload_slots = session_state
+        .sdp_negotiation
+        .staged_offer_upload_slots
+        .clone();
     Ok(SessionOffer::new(offer_sdp).with_upload_slots(upload_slots))
 }
 
@@ -155,14 +158,21 @@ pub(super) fn worker_apply_session_answer(
     let answer = SdpAnswer::from_sdp_string(answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
+    let client_capabilities =
+        negotiated_capabilities::client_rtp_capabilities_from_sdp_answer(&answer);
+    let producer_answer_projection = answer_producer_projection(&answer, &producer_mids);
+    let rids_by_mid = producer_mids
+        .iter()
+        .map(|producer_mid| {
+            simulcast::send_rids_for_mid(answer_sdp, *producer_mid)
+                .map(|rids| (*producer_mid, rids))
+                .map_err(|_error| TransportAdapterError::InvalidInput)
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let staged_upload_slots = {
         let Some(session_state) = state.users.get_mut(session_key) else {
             return Err(TransportAdapterError::TransportUnavailable);
         };
-        for producer_mid in &producer_mids {
-            simulcast::send_rids_for_mid(answer_sdp, *producer_mid)
-                .map_err(|_error| TransportAdapterError::InvalidInput)?;
-        }
         let Some(pending_offer) = session_state.sdp_negotiation.pending_offer.take() else {
             return Err(TransportAdapterError::InvalidInput);
         };
@@ -183,9 +193,10 @@ pub(super) fn worker_apply_session_answer(
         state,
         session_key,
         &producer_mids,
-        answer_sdp,
+        producer_answer_projection,
+        &rids_by_mid,
         max_bitrate_in,
-    )?;
+    );
     let refreshed_by_mid = refreshed_parameters.into_iter().collect::<BTreeMap<_, _>>();
     if let Some(session_state) = state.users.get_mut(session_key) {
         stage_queued_removal_offer(session_state);
@@ -199,27 +210,44 @@ pub(super) fn worker_apply_session_answer(
             .into_iter()
             .filter_map(|(transport_media_id, mid)| {
                 refreshed_by_mid.get(&mid).cloned().map(|parameters| {
+                    let rids = rids_by_mid.get(&mid).map(Vec::as_slice).unwrap_or_default();
                     (
                         transport_media_id,
                         AppliedProducer::new(
                             parameters,
-                            upload_encodings_for_mid(&staged_upload_slots, mid),
+                            upload_encodings_for_mid(&staged_upload_slots, mid, rids),
                         ),
                     )
                 })
             }),
-    ))
+    )
+    .with_client_capabilities(client_capabilities))
 }
 
 fn upload_encodings_for_mid(
     upload_slots: &[SessionUploadSlot],
     mid: Mid,
+    accepted_rids: &[simulcast::NegotiatedRid],
 ) -> Vec<SessionUploadEncoding> {
     let mid = mid.to_string();
-    upload_slots
+    let Some(slot) = upload_slots.iter().find(|slot| slot.mid == mid) else {
+        return Vec::new();
+    };
+    accepted_rids
         .iter()
-        .find(|slot| slot.mid == mid)
-        .map_or_else(Vec::new, |slot| slot.simulcast_encodings.clone())
+        .filter_map(|rid| {
+            let rid_name = rid.rid.to_string();
+            let mut encoding = slot
+                .simulcast_encodings
+                .iter()
+                .find(|encoding| encoding.rid == rid_name)?
+                .clone();
+            if let Some(max_bitrate) = rid.max_bitrate {
+                encoding.max_bitrate = Some(max_bitrate);
+            }
+            Some(encoding)
+        })
+        .collect()
 }
 
 fn answer_remote_candidate_addrs(answer: &SdpAnswer) -> Vec<SocketAddr> {

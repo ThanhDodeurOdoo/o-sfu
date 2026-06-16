@@ -5,7 +5,7 @@
 //! into router-native RTP parameters and keeps the producer SSRC indexes aligned
 //! with those negotiated bindings.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
@@ -32,40 +32,71 @@ use super::{
     },
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
-use crate::{
-    Bitrate,
-    engine::media_transport::{TransportAdapterError, TransportSessionKey},
-};
+#[cfg(test)]
+use crate::engine::media_transport::TransportAdapterError;
+use crate::{Bitrate, engine::media_transport::TransportSessionKey};
+
+pub(super) struct AnswerProducerProjection {
+    mid: Mid,
+    direction: Direction,
+    payload_params: Vec<PayloadParams>,
+    header_extensions: Vec<RouterHeaderExtension>,
+    primary_ssrcs: Vec<u32>,
+}
+
+pub(super) fn answer_producer_projection(
+    answer: &SdpAnswer,
+    producer_mids: &[Mid],
+) -> Vec<AnswerProducerProjection> {
+    answer
+        .media_lines
+        .iter()
+        .filter(|media_line| producer_mids.contains(&media_line.mid()))
+        .map(|media_line| AnswerProducerProjection {
+            mid: media_line.mid(),
+            direction: media_line.direction(),
+            payload_params: media_line.rtp_params(),
+            header_extensions: media_line
+                .extmaps()
+                .into_iter()
+                .map(project_header_extension)
+                .collect(),
+            primary_ssrcs: media_line
+                .ssrc_info()
+                .into_iter()
+                .filter(|info| info.repairs.is_none())
+                .map(|info| *info.ssrc)
+                .collect(),
+        })
+        .collect()
+}
 
 pub(super) fn refresh_negotiated_producer_parameters(
     state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
     producer_mids: &[Mid],
-    answer_sdp: &str,
+    answer_projection: Vec<AnswerProducerProjection>,
+    rids_by_mid: &BTreeMap<Mid, Vec<simulcast::NegotiatedRid>>,
     max_bitrate_in: Bitrate,
-) -> Result<Vec<(Mid, RouterRtpParameters)>, TransportAdapterError> {
+) -> Vec<(Mid, RouterRtpParameters)> {
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
     {
         let Some(session_state) = state.users.get_mut(session_key) else {
-            return Ok(refreshed_parameters);
+            return refreshed_parameters;
         };
-        let Some(answer) = answer_for_projection(session_state, &producer_mid_set, answer_sdp)
-        else {
-            return Ok(refreshed_parameters);
-        };
-        for media_line in answer
-            .media_lines
-            .iter()
-            .filter(|media_line| producer_mid_set.contains(&media_line.mid()))
-        {
+        session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .retain(|mid, _parameters| !producer_mid_set.contains(mid));
+        for media_line in answer_projection {
             if !matches!(
-                media_line.direction(),
+                media_line.direction,
                 Direction::SendOnly | Direction::SendRecv
             ) {
                 continue;
             }
-            let mid = media_line.mid();
+            let mid = media_line.mid;
             let Some(media_kind) = session_state
                 .rtc
                 .media(mid)
@@ -73,35 +104,22 @@ pub(super) fn refresh_negotiated_producer_parameters(
             else {
                 continue;
             };
-            let payload_params = media_line.rtp_params();
-            if payload_params.is_empty() {
+            if media_line.payload_params.is_empty() {
                 continue;
             }
-            let primary_payload_type = payload_params.first().map(|params| *params.pt());
-            let formats = project_media_formats(media_kind, &payload_params);
-            let header_extensions = media_line
-                .extmaps()
-                .into_iter()
-                .map(project_header_extension)
-                .collect::<Vec<_>>();
-            let rids = simulcast::send_rids_for_mid(answer_sdp, mid)
-                .map_err(|_error| TransportAdapterError::InvalidInput)?;
-            let primary_ssrcs = media_line
-                .ssrc_info()
-                .into_iter()
-                .filter(|info| info.repairs.is_none())
-                .map(|info| *info.ssrc)
-                .collect::<Vec<_>>();
+            let primary_payload_type = media_line.payload_params.first().map(|params| *params.pt());
+            let formats = project_media_formats(media_kind, &media_line.payload_params);
+            let rids = rids_by_mid.get(&mid).map(Vec::as_slice).unwrap_or_default();
             let bindings = project_bindings(
                 session_state,
                 mid,
                 primary_payload_type,
                 rids,
-                primary_ssrcs,
+                &media_line.primary_ssrcs,
             );
             apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in);
             let Some(parameters) =
-                build_projected_parameters(mid, formats, header_extensions, bindings)
+                build_projected_parameters(mid, formats, media_line.header_extensions, bindings)
             else {
                 continue;
             };
@@ -118,19 +136,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
     for (mid, parameters) in &refreshed_parameters {
         state.refresh_producer_ssrcs(session_key, *mid, parameters);
     }
-    Ok(refreshed_parameters)
-}
-
-fn answer_for_projection(
-    session_state: &mut RtcSessionState,
-    producer_mid_set: &BTreeSet<Mid>,
-    answer_sdp: &str,
-) -> Option<SdpAnswer> {
-    session_state
-        .sdp_negotiation
-        .negotiated_producer_parameters
-        .retain(|mid, _parameters| !producer_mid_set.contains(mid));
-    SdpAnswer::from_sdp_string(answer_sdp).ok()
+    refreshed_parameters
 }
 
 fn build_projected_parameters(
@@ -309,12 +315,12 @@ fn project_bindings(
     session_state: &mut RtcSessionState,
     mid: Mid,
     primary_payload_type: Option<u8>,
-    rids: Vec<simulcast::NegotiatedRid>,
-    primary_ssrcs: Vec<u32>,
+    rids: &[simulcast::NegotiatedRid],
+    primary_ssrcs: &[u32],
 ) -> Vec<StreamBinding> {
     if !rids.is_empty() {
         let mut bindings = rids
-            .into_iter()
+            .iter()
             .map(|rid| {
                 let mut binding = StreamBinding::new().with_rid(rid.rid.to_string());
                 if let Some(payload_type) = primary_payload_type {
@@ -344,7 +350,8 @@ fn project_bindings(
     }
 
     let mut bindings = primary_ssrcs
-        .into_iter()
+        .iter()
+        .copied()
         .map(|ssrc| {
             let mut binding = StreamBinding::new().with_ssrc(ssrc);
             if let Some(payload_type) = primary_payload_type {

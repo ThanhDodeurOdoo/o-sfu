@@ -9,8 +9,16 @@ use str0m::{
 };
 
 #[must_use]
+#[cfg(any(test, feature = "fuzzing"))]
 pub fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<MediaCapabilities> {
     let answer = SdpAnswer::from_sdp_string(answer_sdp).ok()?;
+    client_rtp_capabilities_from_sdp_answer(&answer)
+}
+
+#[must_use]
+pub(super) fn client_rtp_capabilities_from_sdp_answer(
+    answer: &SdpAnswer,
+) -> Option<MediaCapabilities> {
     let mut codecs = Vec::new();
     let mut header_extensions = Vec::new();
 
