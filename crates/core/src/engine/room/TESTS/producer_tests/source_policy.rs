@@ -1,5 +1,9 @@
 use super::support::*;
-use crate::engine::room::source_policy::SourcePolicyEffectPlan;
+use crate::engine::{
+    media_transport::ReceiverBandwidthSnapshot,
+    room::source_policy::SourcePolicyEffectPlan,
+    source_model::{SourcePolicy, SourcePublishIntent},
+};
 
 #[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
@@ -31,6 +35,115 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
 }
 
 #[tokio::test]
+async fn source_bitrate_cap_limits_or_pauses_consumer_layers() {
+    let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
+    publish_capped_camera(&room, &adapter, Bitrate::from_kbps(200)).await;
+    assert_subscription_selected_rid(
+        &room,
+        &adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        "lo",
+    )
+    .await;
+    assert_receiver_bwe_target(
+        &room,
+        &adapter,
+        &UserId::Integer(2),
+        Bitrate::from_kbps(150),
+    )
+    .await;
+    let sources = room.diagnostics_sources(&adapter).await;
+    let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
+    assert!(sources.iter().any(|source| {
+        source.owner_user_id == UserId::Integer(1)
+            && source.stream_id == stream_id.as_str()
+            && source.video_bitrate_cap_bps == Some(200_000)
+    }));
+
+    let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
+    publish_capped_camera(&room, &adapter, Bitrate::from_kbps(100)).await;
+    assert_subscription_policy_pause_reason(
+        &room,
+        &adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::SourceBitrateLimit),
+    )
+    .await;
+    assert_receiver_bwe_target(&room, &adapter, &UserId::Integer(2), Bitrate::zero()).await;
+}
+
+#[tokio::test]
+async fn video_bitrate_cap_admits_video_sources_without_adaptation() {
+    let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
+    let intent = SourcePublishIntent::new(
+        stream_id_for_source(TestSourceKind::ScalableVideo),
+        MediaKind::Video,
+        SourcePolicy::hidden().with_video_bitrate_cap(Bitrate::from_kbps(200)),
+    );
+    room.test_api()
+        .media()
+        .publish_intent(
+            &UserId::Integer(1),
+            &intent,
+            MediaKind::Video,
+            test_simulcast_video_rtp_parameters(),
+            &adapter,
+        )
+        .await
+        .expect("capped camera publication should succeed");
+    assert_subscription_selected_rid(
+        &room,
+        &adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        "lo",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn source_bitrate_cap_pause_survives_receiver_overload() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2, 3]).await;
+    publish_capped_camera(&scenario.room, &scenario.adapter, Bitrate::from_kbps(100)).await;
+    publish_simulcast_camera(&scenario.room, &UserId::Integer(3), &scenario.adapter).await;
+
+    let effect_plan = {
+        let receiver_user_id = UserId::Integer(2);
+        let active_speaker_sources = scenario.adapter.active_speaker_source_snapshot().await;
+        let receiver_connection_id = user_connection_id(&scenario.room, &receiver_user_id).await;
+        let receiver_session_key = scenario
+            .room
+            .transport_user_key(&receiver_user_id, receiver_connection_id)
+            .await;
+        let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
+            per_session: vec![(receiver_session_key, Bitrate::from_kbps(100))],
+        };
+        let state = scenario.room.state.read().await;
+        SourcePolicyEffectPlan::from_state(
+            &state,
+            &active_speaker_sources,
+            &receiver_bandwidth_snapshot,
+        )
+    };
+    effect_plan.execute(&scenario.room, &scenario.adapter).await;
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::SourceBitrateLimit),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn multiparty_camera_publish_marks_thumbnail_routes_in_diagnostics() {
     let (room, adapter) = setup_three_ready_users_with_transport().await;
 
@@ -47,6 +160,27 @@ async fn multiparty_camera_publish_marks_thumbnail_routes_in_diagnostics() {
         )
         .await;
     }
+}
+
+async fn publish_capped_camera(room: &Arc<Room>, adapter: &MediaTransport, cap: Bitrate) {
+    let intent = SourcePublishIntent::new(
+        stream_id_for_source(TestSourceKind::ScalableVideo),
+        MediaKind::Video,
+        source_publish_intent_for_source(TestSourceKind::ScalableVideo)
+            .policy()
+            .with_video_bitrate_cap(cap),
+    );
+    room.test_api()
+        .media()
+        .publish_intent(
+            &UserId::Integer(1),
+            &intent,
+            MediaKind::Video,
+            test_simulcast_video_rtp_parameters(),
+            adapter,
+        )
+        .await
+        .expect("capped camera publication should succeed");
 }
 
 #[tokio::test]

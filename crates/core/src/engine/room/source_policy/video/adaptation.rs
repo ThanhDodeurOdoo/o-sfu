@@ -5,8 +5,8 @@ use super::{
 use crate::{
     Bitrate,
     engine::source_model::{
-        ConsumerSourceSelection, SourceAdaptationPolicy, SourceEncodingDescriptor, SourceSelector,
-        UploadLayerPolicyRole,
+        ConsumerSourceSelection, PolicyPauseReason, SourceAdaptationPolicy,
+        SourceEncodingDescriptor, SourceSelector, UploadLayerPolicyRole,
     },
 };
 
@@ -14,20 +14,28 @@ const MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD: usize = 3;
 const THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
 
 pub(super) fn route_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
-    match route.adaptation_policy() {
-        SourceAdaptationPolicy::ReadableDetail => {
-            readable_detail_plan(route.encodings(), route.current_selection)
+    let policy = route.adaptation_policy();
+    let cap = route.source.policy().video_bitrate_cap();
+    match policy {
+        SourceAdaptationPolicy::ReadableDetail if route.encodings().len() < 2 && cap.is_none() => {
+            None
         }
+        SourceAdaptationPolicy::ReadableDetail => highest_allowed_plan(route),
         SourceAdaptationPolicy::ScalableVideo => scalable_plan(route),
+        SourceAdaptationPolicy::None if cap.is_some() => highest_allowed_plan(route),
         SourceAdaptationPolicy::None => None,
     }
-    .or_else(|| {
-        (route.adaptation_policy() != SourceAdaptationPolicy::None).then(|| {
-            adaptation_hold(
-                route.current_selection,
-                AdaptationCounts::from_current(route.current_selection),
-            )
-        })
+    .or_else(|| match policy {
+        SourceAdaptationPolicy::None if cap.is_none() => None,
+        _ if cap.is_some() => Some(ReceiverRouteSelection::pause(
+            route.current_selection,
+            PolicyPauseReason::SourceBitrateLimit,
+            AdaptationCounts::reset(),
+        )),
+        _ => Some(adaptation_hold(
+            route.current_selection,
+            AdaptationCounts::from_current(route.current_selection),
+        )),
     })
 }
 
@@ -53,8 +61,10 @@ pub(super) fn selector_bitrate(
 }
 
 pub(super) fn cheapest_useful_selector(
-    encodings: SelectableRouteEncodings<'_>,
+    route: &ReceiverVideoRouteInput<'_>,
 ) -> Option<(SourceSelector, Bitrate)> {
+    let encodings = route.encodings();
+    let cap = route.source.policy().video_bitrate_cap();
     encodings
         .iter()
         .filter(|encoding| {
@@ -65,34 +75,42 @@ pub(super) fn cheapest_useful_selector(
         })
         .chain(encodings.iter())
         .find_map(|encoding| {
-            Some((
-                SourceSelector::Encoding(encoding.encoding_id()),
-                encoding.max_bitrate()?,
-            ))
+            let bitrate = encoding.max_bitrate()?;
+            cap.is_none_or(|cap| bitrate <= cap)
+                .then_some((SourceSelector::Encoding(encoding.encoding_id()), bitrate))
         })
+}
+
+fn highest_allowed_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
+    let encodings = route.encodings();
+    let target_index =
+        allowed_encoding_indices(encodings, route.source.policy().video_bitrate_cap())
+            .next_back()?;
+    let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
+    Some(adaptation_send(
+        target_selector,
+        target_selector != route.current_selection.selector(),
+    ))
 }
 
 fn scalable_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
     let encodings = route.encodings();
-    if encodings.len() < 2 {
+    let source_cap = route.source.policy().video_bitrate_cap();
+    if encodings.len() < 2 && source_cap.is_none() {
         return None;
     }
     let current = route.current_selection;
     let current_index = selector_index(current.selector(), encodings);
-    let target_index = desired_encoding_index(
-        route.user_count,
-        route.layout_intent.uses_featured_quality(),
-        route.visible_scalable_route_count,
-        route.receiver_bandwidth,
-        encodings,
-    );
+    let target_index = desired_encoding_index(route, source_cap, encodings)?;
     let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
-    let selector_changed = target_selector != current.selector();
-    let request_keyframe = selector_changed;
+    let request_keyframe = target_selector != current.selector();
     if target_index == current_index || route.receiver_bandwidth.is_none() {
         return Some(adaptation_send(target_selector, request_keyframe));
     }
     if target_index < current_index {
+        if source_cap.is_some_and(|cap| selector_bitrate(encodings, current.selector()) > cap) {
+            return Some(adaptation_send(target_selector, request_keyframe));
+        }
         let counts = AdaptationCounts::next_pressure(
             current,
             super::hysteresis::DOWNSWITCH_PRESSURE_OBSERVATIONS,
@@ -110,21 +128,6 @@ fn scalable_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSel
     Some(adaptation_hold(current, counts))
 }
 
-fn readable_detail_plan(
-    encodings: SelectableRouteEncodings<'_>,
-    current: ConsumerSourceSelection,
-) -> Option<ReceiverRouteSelection> {
-    if encodings.len() < 2 {
-        return None;
-    }
-    let target_index = encodings.len().saturating_sub(1);
-    let target_selector = SourceSelector::Encoding(encodings.get(target_index)?.encoding_id());
-    Some(adaptation_send(
-        target_selector,
-        target_selector != current.selector(),
-    ))
-}
-
 const fn adaptation_send(
     selector: SourceSelector,
     request_keyframe: bool,
@@ -140,56 +143,60 @@ const fn adaptation_hold(
 }
 
 fn desired_encoding_index(
-    user_count: usize,
-    featured: bool,
-    visible_scalable_route_count: usize,
-    receiver_bandwidth: Option<Bitrate>,
+    route: &ReceiverVideoRouteInput<'_>,
+    source_cap: Option<Bitrate>,
     encodings: SelectableRouteEncodings<'_>,
-) -> usize {
-    let highest_index = encodings.len().saturating_sub(1);
-    if user_count < MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD {
-        return highest_index;
+) -> Option<usize> {
+    if route.user_count < MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD {
+        return allowed_encoding_indices(encodings, source_cap).next_back();
     }
-    let Some(receiver_bandwidth) = receiver_bandwidth else {
-        return if featured { highest_index } else { 0 };
+    let featured = route.layout_intent.uses_featured_quality();
+    let Some(receiver_bandwidth) = route.receiver_bandwidth else {
+        return if featured {
+            allowed_encoding_indices(encodings, source_cap).next_back()
+        } else {
+            allowed_encoding_indices(encodings, source_cap).next()
+        };
     };
     let budget = if featured {
         receiver_bandwidth
     } else {
-        let divisor = u64::try_from(visible_scalable_route_count)
+        let divisor = u64::try_from(route.visible_scalable_route_count)
             .unwrap_or(u64::MAX)
             .saturating_mul(THUMBNAIL_BUDGET_DIVISOR)
             .max(1);
         receiver_bandwidth.divided_by(divisor)
     };
-    highest_affordable_encoding_index(encodings, budget, featured)
+    highest_affordable_encoding_index(encodings, budget, featured, source_cap)
 }
 
 fn highest_affordable_encoding_index(
     encodings: SelectableRouteEncodings<'_>,
     budget: Bitrate,
     featured: bool,
-) -> usize {
+    source_cap: Option<Bitrate>,
+) -> Option<usize> {
     if encodings
         .iter()
         .all(|encoding| encoding.max_bitrate().is_none())
     {
-        return if featured {
+        return source_cap.is_none().then_some(if featured {
             encodings.len().saturating_sub(1)
         } else {
             0
-        };
+        });
     }
     encodings
         .iter()
         .enumerate()
         .filter(|(_index, encoding)| {
-            encoding
-                .max_bitrate()
-                .is_some_and(|bitrate| bitrate <= budget)
+            encoding.max_bitrate().is_some_and(|bitrate| {
+                bitrate <= budget && source_cap.is_none_or(|cap| bitrate <= cap)
+            })
         })
         .last()
-        .map_or(0, |(index, _encoding)| index)
+        .map(|(index, _encoding)| index)
+        .or_else(|| allowed_encoding_indices(encodings, source_cap).next())
 }
 
 fn selector_index(selector: SourceSelector, encodings: SelectableRouteEncodings<'_>) -> usize {
@@ -201,4 +208,18 @@ fn selector_index(selector: SourceSelector, encodings: SelectableRouteEncodings<
                 .position(|encoding| encoding.encoding_id() == encoding_id)
         })
         .unwrap_or_else(|| encodings.len().saturating_sub(1))
+}
+
+fn allowed_encoding_indices(
+    encodings: SelectableRouteEncodings<'_>,
+    cap: Option<Bitrate>,
+) -> impl DoubleEndedIterator<Item = usize> + '_ {
+    (0..encodings.len()).filter(move |index| {
+        cap.is_none_or(|cap| {
+            encodings
+                .get(*index)
+                .and_then(SourceEncodingDescriptor::max_bitrate)
+                .is_some_and(|bitrate| bitrate <= cap)
+        })
+    })
 }

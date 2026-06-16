@@ -33,7 +33,8 @@ pub(super) fn receiver_video_routes<'a>(
         .filter_map(|route| {
             let source = route.source;
             if source.media_kind() != MediaKind::Video
-                || source.policy().adaptation() == SourceAdaptationPolicy::None
+                || (source.policy().adaptation() == SourceAdaptationPolicy::None
+                    && source.policy().video_bitrate_cap().is_none())
             {
                 return None;
             }
