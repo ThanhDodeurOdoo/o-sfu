@@ -12,7 +12,7 @@ use super::{
         self,
         batch::{RoomEffectContext, RoomGaugeDelta},
     },
-    placement::JoinPlacementPlan,
+    placement::PendingJoinPlacement,
     routing::CommittedRoutingReceipt,
     state::RoomState,
 };
@@ -68,22 +68,18 @@ impl Room {
         &self,
         request: JoinUserRequest,
         emit_joined_fanout: bool,
-        placement: JoinPlacementPlan,
+        placement: PendingJoinPlacement,
         context: RoomEffectContext<'_>,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> Result<CommittedRoutingReceipt, RoomJoinError> {
         let (outcome, counts) = {
             let mut state = self.state.write().await;
             let before = MembershipCountSnapshot::from_state(&state);
-            let placement = placement
-                .resolve_for_commit(&state.placement_usage_snapshot(), allocate_spillover_router);
-            let outcome = state.apply_join_on_placement(
-                &request.user_id,
-                request.label,
-                request.permissions,
-                request.sender,
+            let outcome = placement.commit_join(
+                &mut state,
+                request,
                 emit_joined_fanout,
-                placement,
+                allocate_spillover_router,
             )?;
             let counts = before.delta_to(MembershipCountSnapshot::from_state(&state));
             drop(state);

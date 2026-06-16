@@ -235,13 +235,13 @@ fn stale_spillover_allocation_reuses_existing_placement_at_cap()
     let second_decision = planner.choose(&stale_room, &hot_loads([0]));
     let mut allocation_count = 0;
 
-    let first_placement = JoinPlacementPlan::planned(first_decision, hot_loads([0]), policy)
-        .resolve_for_commit(&stale_room, || {
+    let first_placement = PendingJoinPlacement::new(first_decision, hot_loads([0]), policy)
+        .resolve(&stale_room, || {
             allocation_count += 1;
             RouterId(8)
         });
-    let second_placement = JoinPlacementPlan::planned(second_decision, hot_loads([0]), policy)
-        .resolve_for_commit(
+    let second_placement = PendingJoinPlacement::new(second_decision, hot_loads([0]), policy)
+        .resolve(
             &room_with(vec![primary_placement(), placement(8, 1)]),
             || {
                 allocation_count += 1;
@@ -262,12 +262,12 @@ fn stale_primary_assignment_keeps_committed_primary_worker() {
     };
     let mut allocation_count = 0;
 
-    let placement = JoinPlacementPlan::planned(
+    let placement = PendingJoinPlacement::new(
         stale_decision,
         WorkerLoadIndex::new(2, Vec::new()),
         RoomWorkerPolicy::strict_single_router(),
     )
-    .resolve_for_commit(&primary_room(), || {
+    .resolve(&primary_room(), || {
         allocation_count += 1;
         RouterId(8)
     });
@@ -281,12 +281,12 @@ fn stale_existing_placement_keeps_committed_worker() {
     let stale_decision = RoomPlacementDecision::UseExisting(placement(7, 1));
     let mut allocation_count = 0;
 
-    let placement = JoinPlacementPlan::planned(
+    let placement = PendingJoinPlacement::new(
         stale_decision,
         WorkerLoadIndex::new(2, Vec::new()),
         RoomWorkerPolicy::strict_single_router(),
     )
-    .resolve_for_commit(&primary_room(), || {
+    .resolve(&primary_room(), || {
         allocation_count += 1;
         RouterId(8)
     });

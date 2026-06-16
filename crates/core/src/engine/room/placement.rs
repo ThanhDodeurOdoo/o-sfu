@@ -2,7 +2,11 @@ use std::{collections::BTreeMap, iter};
 
 use o_sfu_router::RouterId;
 
-use super::Room;
+use super::{
+    Room, RoomJoinError,
+    membership::JoinUserRequest,
+    state::{JoinUserOutcome, RoomState},
+};
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
     engine::{
@@ -197,14 +201,10 @@ pub enum RoomPlacementDecision {
 }
 
 #[derive(Debug)]
-pub enum JoinPlacementPlan {
-    #[cfg(any(test, feature = "testing-transport"))]
-    Resolved(LocalRouterRuntimeContext),
-    Planned {
-        decision: RoomPlacementDecision,
-        worker_loads: WorkerLoadIndex,
-        policy: RoomWorkerPolicy,
-    },
+pub(super) struct PendingJoinPlacement {
+    decision: RoomPlacementDecision,
+    loads: WorkerLoadIndex,
+    policy: RoomWorkerPolicy,
 }
 
 #[derive(Debug, Default)]
@@ -275,7 +275,10 @@ impl Room {
         }
     }
 
-    pub async fn plan_join_placement(&self, worker_loads: WorkerLoadIndex) -> JoinPlacementPlan {
+    pub(super) async fn plan_join_placement(
+        &self,
+        worker_loads: WorkerLoadIndex,
+    ) -> PendingJoinPlacement {
         let room_snapshot = self.placement_usage_snapshot().await;
         let policy = self.room_worker_policy();
         let planner = RoomPlacementPlanner::new(policy);
@@ -289,7 +292,7 @@ impl Room {
                 planner.choose(&room_snapshot, &worker_loads)
             }
         };
-        JoinPlacementPlan::planned(decision, worker_loads, policy)
+        PendingJoinPlacement::new(decision, worker_loads, policy)
     }
 
     pub async fn observe_source_fanout_pressure(&self) {
@@ -309,33 +312,47 @@ impl Room {
     }
 }
 
-impl JoinPlacementPlan {
-    pub(super) fn planned(
+impl PendingJoinPlacement {
+    fn new(
         decision: RoomPlacementDecision,
-        worker_loads: WorkerLoadIndex,
+        loads: WorkerLoadIndex,
         policy: RoomWorkerPolicy,
     ) -> Self {
-        Self::Planned {
+        Self {
             decision,
-            worker_loads,
+            loads,
             policy,
         }
     }
 
-    pub(super) fn resolve_for_commit(
+    pub(super) fn commit_join(
+        self,
+        state: &mut RoomState,
+        request: JoinUserRequest,
+        emit_joined_fanout: bool,
+        allocate_spillover_router: impl FnOnce() -> RouterId,
+    ) -> Result<JoinUserOutcome, RoomJoinError> {
+        let placement = self.resolve(&state.placement_usage_snapshot(), allocate_spillover_router);
+        state.apply_join_on_placement(
+            &request.user_id,
+            request.label,
+            request.permissions,
+            request.sender,
+            emit_joined_fanout,
+            placement,
+        )
+    }
+
+    fn resolve(
         self,
         room: &RoomPlacementUsageSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> LocalRouterRuntimeContext {
-        let (decision, worker_loads, policy) = match self {
-            #[cfg(any(test, feature = "testing-transport"))]
-            Self::Resolved(placement) => return placement,
-            Self::Planned {
-                decision,
-                worker_loads,
-                policy,
-            } => (decision, worker_loads, policy),
-        };
+        let Self {
+            decision,
+            loads,
+            policy,
+        } = self;
         let assigned_placements = room.assigned_placements();
         let score_policy = score_policy(policy);
         let Some(first_assigned) = assigned_placements.first().copied() else {
@@ -354,11 +371,9 @@ impl JoinPlacementPlan {
             };
         };
         match decision {
-            RoomPlacementDecision::AssignPrimary { .. } => worker_loads.least_loaded_placement(
-                assigned_placements,
-                first_assigned,
-                score_policy,
-            ),
+            RoomPlacementDecision::AssignPrimary { .. } => {
+                loads.least_loaded_placement(assigned_placements, first_assigned, score_policy)
+            }
             RoomPlacementDecision::UseExisting(placement) => {
                 if let Some(assigned) = assigned_placements
                     .iter()
@@ -366,19 +381,12 @@ impl JoinPlacementPlan {
                 {
                     return *assigned;
                 }
-                worker_loads.least_loaded_placement(
-                    assigned_placements,
-                    first_assigned,
-                    score_policy,
-                )
+                loads.least_loaded_placement(assigned_placements, first_assigned, score_policy)
             }
             RoomPlacementDecision::AllocateSpillover { .. } => {
-                let placement_cap = policy
-                    .max_local_routers()
-                    .min(worker_loads.worker_count())
-                    .max(1);
+                let placement_cap = policy.max_local_routers().min(loads.worker_count()).max(1);
                 if assigned_placements.len() >= placement_cap {
-                    return worker_loads.least_loaded_placement(
+                    return loads.least_loaded_placement(
                         assigned_placements,
                         first_assigned,
                         score_policy,
@@ -388,8 +396,7 @@ impl JoinPlacementPlan {
                 // not reserve spillover the room no longer needs
                 LocalRouterRuntimeContext {
                     router: allocate_spillover_router(),
-                    media_worker: worker_loads
-                        .least_loaded_worker(assigned_placements, score_policy),
+                    media_worker: loads.least_loaded_worker(assigned_placements, score_policy),
                 }
             }
         }

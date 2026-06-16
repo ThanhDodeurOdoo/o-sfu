@@ -3,8 +3,8 @@ use o_sfu_router::{
 };
 
 use super::super::super::{
-    JoinPlacementPlan, JoinUserRequest, Room, RoomEffectContext, RoomJoinError, UserOutboundSender,
-    placement::WorkerLoadIndex,
+    JoinUserRequest, Room, RoomEffectContext, RoomJoinError, UserOutboundSender,
+    placement::{PendingJoinPlacement, WorkerLoadIndex},
 };
 use crate::engine::{
     ConnectionId, UserId, UserPermissions,
@@ -27,7 +27,7 @@ impl RoomTestLifecycle<'_> {
         permissions: UserPermissions,
         sender: UserOutboundSender,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let placement = state_only_join_plan(self.room, Vec::new()).await;
+        let (placement, router_id) = join_inputs(self.room, Vec::new()).await;
         self.room
             .join_session_with_cleanup(
                 JoinUserRequest {
@@ -39,7 +39,7 @@ impl RoomTestLifecycle<'_> {
                 false,
                 placement,
                 RoomEffectContext::state_only(None),
-                || RouterId(0),
+                || router_id,
             )
             .await
             .map(|receipt| receipt.connection_id)
@@ -56,8 +56,8 @@ impl RoomTestLifecycle<'_> {
         sender: UserOutboundSender,
         media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let placement =
-            state_only_join_plan(self.room, media_transport.worker_pressure_snapshots()).await;
+        let (placement, router_id) =
+            join_inputs(self.room, media_transport.worker_pressure_snapshots()).await;
         self.room
             .join_session_with_cleanup(
                 JoinUserRequest {
@@ -69,7 +69,7 @@ impl RoomTestLifecycle<'_> {
                 false,
                 placement,
                 RoomEffectContext::state_only(Some(media_transport)),
-                || RouterId(0),
+                || router_id,
             )
             .await
             .map(|receipt| receipt.connection_id)
@@ -145,15 +145,13 @@ impl RoomTestLifecycle<'_> {
     }
 }
 
-async fn state_only_join_plan(
+async fn join_inputs(
     room: &Room,
     pressure: Vec<TransportWorkerPressureSnapshot>,
-) -> JoinPlacementPlan {
+) -> (PendingJoinPlacement, RouterId) {
     let mut loads = WorkerLoadIndex::new(room.room_worker_policy().max_local_routers(), pressure);
     room.record_worker_load(&mut loads).await;
-    let plan = room.plan_join_placement(loads).await;
+    let placement = room.plan_join_placement(loads).await;
     let snapshot = room.placement_usage_snapshot().await;
-    JoinPlacementPlan::Resolved(
-        plan.resolve_for_commit(&snapshot, || snapshot.next_local_router_id()),
-    )
+    (placement, snapshot.next_local_router_id())
 }
