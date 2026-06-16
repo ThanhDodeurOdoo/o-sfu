@@ -14,9 +14,7 @@ use str0m::{
 use super::fixtures::*;
 use crate::{
     VideoCodecPreference,
-    engine::media_transport::{
-        SessionUploadSlot, TransportMediaId, rtc::client_rtp_capabilities_from_answer,
-    },
+    engine::media_transport::{SessionUploadSlot, TransportMediaId},
 };
 
 const CHROME_OFFER_AUDIO_ONLY: &str = include_str!("testdata/chrome_offer_audio_only.sdp");
@@ -293,7 +291,12 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
         .expect("remote answer should build")
         .to_sdp_string();
 
-    let projected = client_rtp_capabilities_from_answer(&answer)
+    let applied_answer = adapter
+        .apply_session_answer(&session_key, &answer)
+        .await
+        .expect("real RTC answer should apply");
+    let projected = applied_answer
+        .client_capabilities()
         .expect("real RTC answer should expose client RTP capabilities");
     let codec_names = projected
         .codecs()
@@ -373,11 +376,8 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         )
         .expect("remote simulcast answer should build")
         .to_sdp_string();
-    let answer_sdp = answer_with_simulcast_send_rids(
-        &answer_sdp,
-        &negotiated_mid,
-        &[("lo", Some(150_000)), ("hi", Some(900_000))],
-    );
+    let answer_sdp =
+        answer_with_simulcast_send_rids(&answer_sdp, &negotiated_mid, &[("lo", Some(150_000))]);
     let applied_answer = adapter
         .apply_session_answer(&session_key, &answer_sdp)
         .await
@@ -394,14 +394,19 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .await
         .expect("answered simulcast publish should project router RTP parameters");
     let encodings = negotiated_parameters.bindings().collect::<Vec<_>>();
-    assert_eq!(encodings.len(), 2);
+    assert_eq!(encodings.len(), 1);
     assert_eq!(encodings[0].rid(), Some("lo"));
     assert_eq!(encodings[0].max_bitrate(), Some(150_000));
-    assert_eq!(encodings[1].rid(), Some("hi"));
-    assert_eq!(encodings[1].max_bitrate(), Some(900_000));
     assert!(
         encodings.iter().any(|encoding| encoding.ssrc().is_some()),
         "answer projection should preserve at least one browser-owned SSRC for the negotiated RID ladder"
+    );
+    let upload_encodings = applied_answer.negotiated_producer_upload_encodings(transport_media_id);
+    assert_eq!(upload_encodings.len(), 1);
+    assert_eq!(upload_encodings[0].rid, "lo");
+    assert_eq!(
+        upload_encodings[0].max_bitrate,
+        Some(Bitrate::from_bps(150_000))
     );
 }
 

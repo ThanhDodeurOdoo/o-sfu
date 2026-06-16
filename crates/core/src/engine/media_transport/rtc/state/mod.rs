@@ -151,7 +151,6 @@ pub(super) struct SessionSdpNegotiationState {
     pub(super) pending_offer: Option<SdpPendingOffer>,
     /// follow-up local offer prepared by media lifecycle and not yet delivered
     pub(super) staged_offer_sdp: Option<String>,
-    /// upload slots that belong to the currently staged local offer
     pub(super) staged_offer_upload_slots: Vec<SessionUploadSlot>,
     /// whether the remote side has answered the initial transport offer
     pub(super) initial_offer_applied: bool,

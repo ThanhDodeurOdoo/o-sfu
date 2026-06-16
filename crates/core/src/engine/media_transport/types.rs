@@ -7,7 +7,7 @@ use std::{
 };
 
 use o_sfu_rfc::webrtc::MediaKind;
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::{MediaCapabilities, MediaStream as RouterRtpParameters};
 use thiserror::Error;
 
 use crate::{Bitrate, ConnectionId, MediaWorkerId, RoomInstanceId, engine::UserId};
@@ -130,11 +130,12 @@ impl ConsumerActivity {
 /// Transport facts materialized while applying one negotiated SDP answer.
 ///
 /// Producer RTP parameters are answer-derived because the browser owns the
-/// final SSRC and RID acceptance details. Returning them with the accepted
-/// answer lets room state commit staged publishes from the same projection
-/// pass instead of issuing a second transport lookup.
+/// final RTP capability, SSRC and RID acceptance details. Returning them with
+/// the accepted answer lets room state commit negotiated session and producer
+/// facts from the same projection pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppliedSessionAnswer {
+    client_capabilities: Option<MediaCapabilities>,
     negotiated_producers: BTreeMap<TransportMediaId, AppliedProducer>,
 }
 
@@ -175,6 +176,7 @@ impl AppliedSessionAnswer {
         >,
     ) -> Self {
         Self {
+            client_capabilities: None,
             negotiated_producers: negotiated_producer_parameters
                 .into_iter()
                 .map(|(transport_media_id, rtp_parameters)| {
@@ -192,8 +194,21 @@ impl AppliedSessionAnswer {
         negotiated_producers: impl IntoIterator<Item = (TransportMediaId, AppliedProducer)>,
     ) -> Self {
         Self {
+            client_capabilities: None,
             negotiated_producers: negotiated_producers.into_iter().collect(),
         }
+    }
+
+    pub(crate) fn with_client_capabilities(
+        mut self,
+        capabilities: Option<MediaCapabilities>,
+    ) -> Self {
+        self.client_capabilities = capabilities;
+        self
+    }
+
+    pub(crate) const fn client_capabilities(&self) -> Option<&MediaCapabilities> {
+        self.client_capabilities.as_ref()
     }
 
     #[must_use]

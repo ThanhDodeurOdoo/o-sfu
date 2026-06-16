@@ -12,13 +12,9 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_router::MediaCapabilities;
 use str0m::media::MediaKind as Str0mMediaKind;
 
-use super::rtc::{
-    ConsumerPacketGateCommand, RtcMediaControlCommand, RtcWorker, RtcWorkerCommand,
-    client_rtp_capabilities_from_answer,
-};
+use super::rtc::{ConsumerPacketGateCommand, RtcMediaControlCommand, RtcWorker, RtcWorkerCommand};
 use crate::engine::{
     MediaWorkerId, RoomInstanceId,
     media_transport::{
@@ -377,17 +373,6 @@ impl MediaTransport {
 
     pub(super) fn source_policy_subscription_from_workers(&self) -> SourcePolicyUpdateSubscription {
         self.source_policy_signal.subscribe()
-    }
-
-    /// Projects answered client RTP capabilities from an SDP answer.
-    ///
-    /// This is a pure parsing/projection helper. It does not depend on worker
-    /// state and returns `InvalidInput` when the answer cannot be projected.
-    pub(super) fn project_client_rtp_capabilities(
-        answer_sdp: &str,
-        _offered_capabilities: &MediaCapabilities,
-    ) -> Result<MediaCapabilities, TransportAdapterError> {
-        client_rtp_capabilities_from_answer(answer_sdp).ok_or(TransportAdapterError::InvalidInput)
     }
 
     /// Applies one cross-worker relay-route effect.

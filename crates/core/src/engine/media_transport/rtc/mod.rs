@@ -71,5 +71,6 @@ pub use commands::{
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;
+#[cfg(any(test, feature = "fuzzing"))]
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
 pub use worker::RtcWorker;

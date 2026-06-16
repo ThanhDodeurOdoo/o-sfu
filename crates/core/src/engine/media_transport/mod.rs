@@ -31,7 +31,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 pub use builder::{MediaTransportBuildError, MediaTransportBuilder};
 pub use config::{MediaTransportConfig, MediaTransportDeps};
-use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream as RouterRtpParameters};
+use o_sfu_router::{MediaKind, MediaStream as RouterRtpParameters};
 pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
@@ -245,31 +245,6 @@ impl MediaTransport {
         .await
     }
 
-    /// Projects the client's negotiated RTP capabilities from an SDP answer.
-    ///
-    /// This method does not mutate transport state. It validates the answer
-    /// against the router capabilities offered to the browser and returns the
-    /// capability set room policy may use for later consumer creation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportAdapterError`] when the answer cannot be parsed or
-    /// cannot be projected onto the offered capabilities.
-    pub fn negotiated_client_rtp_capabilities(
-        &self,
-        answer_sdp: &str,
-        offered_capabilities: &MediaCapabilities,
-    ) -> Result<MediaCapabilities, TransportAdapterError> {
-        Self::project_client_rtp_capabilities(answer_sdp, offered_capabilities).inspect_err(
-            |error| {
-                warn!(
-                    answer_len = answer_sdp.len(),
-                    ?error,
-                    "media transport failed to derive client RTP capabilities from answer SDP"
-                );
-            },
-        )
-    }
     /// Closes all backend state for a transport session.
     ///
     /// Backends should release producer, consumer and relay state tied to the

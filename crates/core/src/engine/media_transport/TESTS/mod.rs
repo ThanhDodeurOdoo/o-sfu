@@ -5,10 +5,7 @@
 
 use std::sync::Arc;
 
-use o_sfu_router::{
-    MediaCapabilities as RouterRtpCapabilities, MediaCodecCapability, MediaKind,
-    MediaKind as RouterMediaKind, MediaStream, StreamBinding,
-};
+use o_sfu_router::{MediaKind, MediaStream, StreamBinding};
 use str0m::media::Mid;
 
 use super::{MediaTransport, MediaTransportBuildError};
@@ -46,17 +43,6 @@ fn test_session_key(
         MediaWorkerId::from_raw(media_worker_id),
         ConnectionId::from_raw(connection_id),
         user_id,
-    )
-}
-
-fn sample_capabilities() -> RouterRtpCapabilities {
-    RouterRtpCapabilities::new(
-        vec![
-            MediaCodecCapability::new(RouterMediaKind::Audio, "opus", 48_000)
-                .with_channels(2)
-                .with_payload_type(111),
-        ],
-        vec![],
     )
 }
 
@@ -399,12 +385,10 @@ fn media_transport_builder_rejects_non_linux_io_uring_backend() {
 
 #[test]
 fn rtc_rejects_answers_without_projectable_client_capabilities() {
-    let adapter = test_media_transport(1, test_rtc_range(1));
+    let projected =
+        super::fuzz_support::client_rtp_capabilities_from_answer("v=0\r\ns=invalid-answer\r\n");
 
-    let projected = adapter
-        .negotiated_client_rtp_capabilities("v=0\r\ns=invalid-answer\r\n", &sample_capabilities());
-
-    assert_eq!(projected, Err(TransportAdapterError::InvalidInput));
+    assert_eq!(projected, None);
 }
 
 #[test]
