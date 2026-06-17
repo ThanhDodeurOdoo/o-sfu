@@ -7,13 +7,8 @@ use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities
 
 use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
-    cleanup::TransportCleanupOperation,
-    media_graph::{
-        ConsumerRouteTransportRef, ConsumerRouteView, RelayRouteEffect, ResolvedRelayRouteEffect,
-        RoomMediaGraph, TransportMediaRemoval,
-    },
+    media_graph::{ConsumerRouteTransportRef, ConsumerRouteView, RoomTopology},
     outbound::OutboundSender,
-    routing::{DisplacedRoutingSession, RoomRouterStateFactory, RoomRoutingState},
     user_negotiation::UserNegotiation,
 };
 use crate::{
@@ -21,7 +16,7 @@ use crate::{
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
         VideoLayoutIntent,
-        media_transport::{TransportConsumerRoute, TransportSessionKey, TransportSourceKey},
+        media_transport::{TransportConsumerRoute, TransportSessionKey},
         room::placement::{LoadTriggeredPlacementState, RoomPlacementUsageSnapshot},
         router_events::RoomRouterEventSink,
         source_model::{
@@ -43,8 +38,7 @@ pub struct RoomState {
     pub next_producer_id: u64,
     pub next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
-    pub media: RoomMediaGraph,
-    pub routing: RoomRoutingState,
+    pub(in crate::engine::room) topology: RoomTopology,
 }
 
 #[derive(Debug)]
@@ -115,13 +109,10 @@ impl RoomState {
                 transcription: Some(false),
                 video: Some(false),
             },
-            media: RoomMediaGraph::default(),
-            routing: RoomRoutingState::new_with_router_state_factory(
-                runtime_context.instance(),
-                runtime_context.primary_router(),
-                runtime_context.initial_local_router_placements().cloned(),
+            topology: RoomTopology::new(
+                runtime_context,
                 router_rtp_capabilities,
-                &RoomRouterStateFactory::new(router_event_sink),
+                router_event_sink,
             ),
         }
     }
@@ -156,7 +147,7 @@ impl RoomState {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn router_rtp_capabilities(&self) -> MediaCapabilities {
-        self.routing.rtp_capabilities().clone()
+        self.topology.routing().rtp_capabilities().clone()
     }
 
     pub fn transport_user_entries(&self) -> Vec<(UserId, ConnectionId)> {
@@ -171,7 +162,9 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        self.routing.transport_user_key(user_id, connection_id)
+        self.topology
+            .routing()
+            .transport_user_key(user_id, connection_id)
     }
 
     pub fn committed_transport_user_key(
@@ -179,7 +172,8 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<TransportSessionKey> {
-        self.routing
+        self.topology
+            .routing()
             .committed_transport_user_key(user_id, connection_id)
     }
 
@@ -187,106 +181,37 @@ impl RoomState {
         &self,
         route: &ConsumerRouteTransportRef,
     ) -> TransportConsumerRoute {
-        TransportConsumerRoute::new(
-            self.transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
-            route.consumer_media,
-            TransportSourceKey::new(
-                self.transport_user_key(&route.source_user_id, route.source_connection_id),
-                route.source_media,
-            ),
-        )
-    }
-
-    pub fn transport_cleanup_operations(
-        &self,
-        removals: impl IntoIterator<Item = TransportMediaRemoval>,
-    ) -> Vec<TransportCleanupOperation> {
-        removals
-            .into_iter()
-            .map(|removal| {
-                let connection_id = removal.connection;
-                TransportCleanupOperation::RemoveMedia {
-                    session_key: self.transport_user_key(&removal.user, connection_id),
-                    connection_id,
-                    transport_media_id: removal.transport_media,
-                }
-            })
-            .collect()
-    }
-
-    pub fn resolved_relay_route_effects(
-        &self,
-        effects: impl IntoIterator<Item = RelayRouteEffect>,
-    ) -> Vec<ResolvedRelayRouteEffect> {
-        effects
-            .into_iter()
-            .map(|effect| ResolvedRelayRouteEffect {
-                source_session_key: self
-                    .transport_user_key(&effect.route.source_user, effect.route.source_connection),
-                route: effect.route,
-                action: effect.action,
-            })
-            .collect()
-    }
-
-    pub fn resolved_relay_route_effects_with_displaced(
-        &self,
-        effects: impl IntoIterator<Item = RelayRouteEffect>,
-        user_id: &UserId,
-        session: &DisplacedRoutingSession,
-    ) -> Vec<ResolvedRelayRouteEffect> {
-        effects
-            .into_iter()
-            .map(|effect| {
-                let source_session_key = if effect.route.source_user == *user_id
-                    && effect.route.source_connection == session.connection_id
-                {
-                    session.transport_session_key.clone()
-                } else {
-                    self.transport_user_key(
-                        &effect.route.source_user,
-                        effect.route.source_connection,
-                    )
-                };
-                ResolvedRelayRouteEffect {
-                    source_session_key,
-                    route: effect.route,
-                    action: effect.action,
-                }
-            })
-            .collect()
+        self.topology.transport_consumer_route(route)
     }
 
     pub fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
-        self.routing.usage_snapshot()
+        self.topology.routing().usage_snapshot()
     }
 
     pub fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> MediaWorkerId {
-        self.routing.media_worker_id_for_connection(connection_id)
+        self.topology
+            .routing()
+            .media_worker_id_for_connection(connection_id)
     }
 
     pub fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
-        self.routing.assigned_primary_media_worker_id()
+        self.topology.routing().assigned_primary_media_worker_id()
     }
 
     pub fn worker_lookup(&self) -> impl Fn(ConnectionId) -> MediaWorkerId + use<> {
-        self.routing.worker_lookup()
+        self.topology.routing().worker_lookup()
     }
 
     pub fn transport_consumer_entries(&self) -> Vec<(UserId, ConnectionId)> {
-        let mut entries = self
-            .media
+        let media = self.topology.media();
+        let mut entries = media
             .committed_consumer_transport_entries()
             .collect::<Vec<_>>();
-        entries.extend(
-            self.media
-                .pending_consumer_user_ids()
-                .filter_map(|consumer_user_id| {
-                    self.users
-                        .get(consumer_user_id)
-                        .map(|user| (consumer_user_id.clone(), user.connection_id))
-                }),
-        );
+        entries.extend(media.pending_consumer_user_ids().filter_map(|user_id| {
+            self.users
+                .get(user_id)
+                .map(|user| (user_id.clone(), user.connection_id))
+        }));
         entries
     }
 
@@ -298,21 +223,20 @@ impl RoomState {
         if max_fanout_per_source == 0 {
             return false;
         }
-        self.media.sources().any(|source| {
-            if !self
-                .media
+        let media = self.topology.media();
+        media.sources().any(|source| {
+            if !media
                 .producer_for_source(source.source_id())
                 .is_some_and(|producer| producer.active)
             {
                 return false;
             }
             let mut deliveries_by_worker = BTreeMap::new();
-            for key in self.media.consumer_keys_for_source(source.source_id()) {
-                if !self.media.has_consumer_setup_or_route(&key) {
+            for key in media.consumer_keys_for_source(source.source_id()) {
+                if !media.has_consumer_setup_or_route(&key) {
                     continue;
                 }
-                if self
-                    .media
+                if media
                     .consumer_source_selection(&key)
                     .is_some_and(|selection| !selection.delivery_active())
                 {
@@ -339,21 +263,8 @@ impl RoomState {
         spillover: RoomSpilloverMode,
         placement: &mut LoadTriggeredPlacementState,
     ) {
-        match spillover {
-            RoomSpilloverMode::StrictSingleRouter => {}
-            RoomSpilloverMode::BoundedLocalSpillover => {
-                let idle_router_ids = self.routing.idle_spillover_routers();
-                self.routing.detach_spillover_routers(&idle_router_ids);
-                placement.clear_cooldowns(&idle_router_ids);
-            }
-            RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
-                let idle_router_ids = self.routing.idle_spillover_routers();
-                let policy = policy.parts();
-                let detachments =
-                    placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window);
-                self.routing.detach_spillover_routers(&detachments);
-            }
-        }
+        self.topology
+            .reconcile_spillover_routers(spillover, placement);
     }
 
     pub fn user_connection_id(&self, user_id: &UserId) -> Option<ConnectionId> {
@@ -389,7 +300,7 @@ impl RoomState {
 
     pub fn user_stats_counts(&self) -> (u64, BTreeMap<UserStreamId, u64>) {
         let mut active_users_by_stream: BTreeMap<UserStreamId, BTreeSet<UserId>> = BTreeMap::new();
-        for (stream_id, owner_user_id) in self.media.active_producer_stream_owners() {
+        for (stream_id, owner_user_id) in self.topology.media().active_producer_stream_owners() {
             active_users_by_stream
                 .entry(stream_id.clone())
                 .or_default()
@@ -406,10 +317,13 @@ impl RoomState {
     }
 
     pub fn current_live_consumer_routes(&self) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.media.live_consumer_routes().filter(|route| {
-            self.user_connection_id(&route.consumer_user_id)
-                .is_some_and(|connection_id| connection_id == route.state.consumer_connection_id)
-        })
+        self.topology
+            .media()
+            .live_consumer_routes()
+            .filter(|route| {
+                self.user_connection_id(&route.consumer_user_id)
+                    == Some(route.state.consumer_connection_id)
+            })
     }
 
     pub fn source_policy_media_limits(&self) -> RoomMediaLimits {
@@ -420,7 +334,7 @@ impl RoomState {
         &self,
         source_id: PublishedSourceId,
     ) -> Option<&PublishedSourceDescriptor> {
-        self.media.source(source_id)
+        self.topology.media().source(source_id)
     }
 
     pub fn source_policy_owner_has_promotable_source_in_group(
@@ -428,7 +342,8 @@ impl RoomState {
         owner_user_id: &UserId,
         group: ActiveSpeakerGroup,
     ) -> bool {
-        self.media
+        self.topology
+            .media()
             .owner_has_promotable_source_in_group(owner_user_id, group)
     }
 
@@ -459,7 +374,7 @@ impl RoomState {
         source_id: PublishedSourceId,
         update_selection: impl FnOnce(&mut ConsumerSourceSelection),
     ) {
-        self.media
+        self.topology
             .update_consumer_source_selection(route, source_id, update_selection);
     }
 
@@ -478,19 +393,8 @@ impl RoomState {
         true
     }
 
-    pub fn publication_count(&self) -> usize {
-        self.media.publication_count()
-    }
-
-    pub fn subscription_count(&self) -> usize {
-        self.media.subscription_count()
-    }
-
     pub fn media_counts(&self) -> RoomMediaCounts {
-        RoomMediaCounts {
-            publications: self.publication_count(),
-            subscriptions: self.subscription_count(),
-        }
+        self.topology.media_counts()
     }
 
     pub fn is_empty(&self) -> bool {

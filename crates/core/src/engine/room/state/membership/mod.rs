@@ -99,7 +99,7 @@ impl RoomState {
             };
             Some(previous_connection)
         };
-        let commit = self
+        self.topology
             .commit_session_placement(user_id, connection_id, previous_connection, home_placement)
             .map_err(|rejection| {
                 match rejection {
@@ -121,14 +121,13 @@ impl RoomState {
                     }
                 }
                 RoomJoinError::RouterState
-            })?;
-        Ok(commit)
+            })
     }
 
     #[cfg(test)]
     fn fallback_join_placement(&self) -> LocalRouterRuntimeContext {
         LocalRouterRuntimeContext {
-            router: self.routing.primary_router_id(),
+            router: self.topology.routing().primary_router_id(),
             media_worker: MediaWorkerId::from_raw(0),
         }
     }
@@ -250,7 +249,7 @@ impl RoomState {
 
     fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
         let user = self.users.remove(user_id)?;
-        let teardown = self.remove_user(user_id);
+        let teardown = self.topology.remove_user(user_id);
         if !teardown.routing_repair.is_clean() {
             error!(
                 ?user_id,

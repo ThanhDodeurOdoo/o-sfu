@@ -1,12 +1,11 @@
 use o_sfu_router::{
-    MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid,
-    ProducerRouteState, Rid, Ssrc,
+    MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc,
 };
 use tracing::{error, warn};
 
 use super::{
     super::{RoomMediaCounts, TrackBindingUpdate, outbound::OutboundSender, state::RoomState},
-    ConsumerKey, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
+    ConsumerKey, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer,
     SourceTransportMediaIndexEntry,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
     topology::MediaTopologyEffects,
@@ -201,11 +200,15 @@ impl RoomState {
             })
             .ok()?;
         let publish_before = self.media_counts();
-        let routed_producer_id = match self
-            .routing
-            .add_producer(&publish.owner_user_id, publish.media_kind)
-        {
-            Ok(routed_producer_id) => routed_producer_id,
+        let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
+        let producer = match self.topology.commit_published_source(
+            publish,
+            producer_id,
+            source_descriptor,
+            consumable_rtp_parameters,
+            transport_media_id,
+        ) {
+            Ok(producer) => producer,
             Err(error) => {
                 error!(
                     user_id = ?owner_user_id,
@@ -218,26 +221,7 @@ impl RoomState {
                 return None;
             }
         };
-        let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
-        let source_id = source_descriptor.source_id();
-        let producer = PublishedProducer {
-            source_id,
-            owner_user_id: publish.owner_user_id,
-            owner_connection_id: publish.owner_connection_id,
-            stream_id: publish.stream_id,
-            media_kind: publish.media_kind,
-            consumable_rtp_parameters,
-            routed_producer_id,
-            transport_media_id: Some(transport_media_id),
-            active: true,
-        };
         let consumers = self.publish_consumer_targets(producer_id, &producer, transport_media_id);
-        self.media.install_source(PublishedSourceInstall {
-            source_descriptor,
-            producer_id,
-            producer,
-            transport_media_id,
-        });
         let publish_after = self.media_counts();
         let setup_before = self.media_counts();
         let worker_lookup = self.worker_lookup();
@@ -284,8 +268,10 @@ impl RoomState {
             return None;
         }
         if self
-            .media
-            .has_source_for_owner_stream(&publish.owner_user_id, &publish.stream_id)
+            .topology
+            .media()
+            .source_id_for_owner_stream(&publish.owner_user_id, &publish.stream_id)
+            .is_some()
         {
             warn!(
                 user_id = ?publish.owner_user_id,
@@ -365,10 +351,14 @@ impl RoomState {
                 {
                     return None;
                 }
-                if self.media.has_consumer_setup_or_route(&ConsumerKey::new(
-                    remote_user_id,
-                    producer.source_id,
-                )) {
+                if self
+                    .topology
+                    .media()
+                    .has_consumer_setup_or_route(&ConsumerKey::new(
+                        remote_user_id,
+                        producer.source_id,
+                    ))
+                {
                     return None;
                 }
                 let consumer_session =
@@ -391,7 +381,8 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<UserStreamId> {
-        self.media
+        self.topology
+            .media()
             .producer_stream_id_for_transport_media_id(transport_media_id)
     }
 
@@ -400,7 +391,9 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<&SourceTransportMediaIndexEntry> {
-        self.media.source_transport_media_entry(transport_media_id)
+        self.topology
+            .media()
+            .source_transport_media_entry(transport_media_id)
     }
 
     #[must_use]
@@ -410,7 +403,8 @@ impl RoomState {
         owner_connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> Option<ProducerRouteTarget> {
-        self.media
+        self.topology
+            .media()
             .producer_route_target(owner_user_id, owner_connection_id, stream_id)
     }
 
@@ -432,17 +426,10 @@ impl RoomState {
     ) -> Option<UnpublishCommit> {
         let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
         let before = self.media_counts();
-        let transport_removals = self
-            .media
-            .transport_removals_for_producer_target(user_id, &producer_target);
-        let transport_cleanup = self.transport_cleanup_operations(transport_removals);
-        let affected_consumers = self
-            .media
-            .routed_consumer_ids_for_source(producer_target.source_id);
-        if let Err(error) = self
-            .routing
-            .remove_producer(producer_target.routed_producer_id, affected_consumers)
-        {
+        let removal = self
+            .topology
+            .remove_published_source(user_id, &producer_target)?;
+        if let Some(error) = removal.router_teardown_error {
             error!(
                 ?user_id,
                 stream_id = %stream_id,
@@ -450,8 +437,6 @@ impl RoomState {
                 "repaired published track room state after router producer teardown failed"
             );
         }
-        let (_producer, relay_effects) = self.media.remove_source(producer_target.source_id)?;
-        let relay_effects = self.resolved_relay_route_effects(relay_effects);
         let after = self.media_counts();
         Some(UnpublishCommit {
             before,
@@ -466,7 +451,7 @@ impl RoomState {
                 stream_id: stream_id.clone(),
                 active: None,
             },
-            media_effects: MediaTopologyEffects::new(relay_effects, transport_cleanup),
+            media_effects: removal.effects,
         })
     }
 
@@ -478,30 +463,25 @@ impl RoomState {
         active: bool,
     ) -> Option<TrackBindingUpdate> {
         let current_connection_id = self.user_connection_id(user_id);
-        let producer = self
-            .media
-            .producer_for_route_target(producer_target, current_connection_id)?;
-        if producer.active == active {
-            return None;
-        }
-        let route_state = if active {
-            ProducerRouteState::Active
-        } else {
-            ProducerRouteState::Paused
+        let changed = match self.topology.set_published_source_activity(
+            producer_target,
+            current_connection_id,
+            active,
+        ) {
+            Ok(changed) => changed,
+            Err(error) => {
+                error!(
+                    ?user_id,
+                    stream_id = %stream_id,
+                    ?error,
+                    "failed to set producer pause state in room router"
+                );
+                return None;
+            }
         };
-        if let Err(error) = self
-            .routing
-            .set_producer_route_state(producer_target.routed_producer_id, route_state)
-        {
-            error!(
-                ?user_id,
-                stream_id = %stream_id,
-                ?error,
-                "failed to set producer pause state in room router"
-            );
+        if !changed {
             return None;
         }
-        self.media.set_producer_active(producer_target, active);
         Some(TrackBindingUpdate {
             user_id: user_id.clone(),
             stream_id: stream_id.clone(),

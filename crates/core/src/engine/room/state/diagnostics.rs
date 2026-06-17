@@ -81,10 +81,11 @@ impl RoomState {
         >,
         source_activity_by_media: &BTreeMap<TransportMediaId, TransportSourceActivity>,
     ) -> Vec<DiagnosticsSource> {
-        self.media
+        let media = self.topology.media();
+        media
             .sources()
             .map(|source| {
-                let producer = self.media.producer_for_source(source.source_id());
+                let producer = media.producer_for_source(source.source_id());
                 let transport_media_id = producer.and_then(|producer| producer.transport_media_id);
                 let source_activity =
                     transport_media_id.and_then(|media_id| source_activity_by_media.get(&media_id));
@@ -122,15 +123,17 @@ impl RoomState {
     }
 
     pub fn diagnostics_source_media(&self) -> Vec<DiagnosticsSourceMedia> {
-        self.media
-            .sources()
-            .filter_map(|source| {
-                let producer = self.media.producer_for_source(source.source_id())?;
-                Some(DiagnosticsSourceMedia {
-                    owner: producer.owner_user_id.clone(),
-                    connection: producer.owner_connection_id,
-                    media: producer.transport_media_id?,
-                })
+        self.topology
+            .media()
+            .producers()
+            .filter_map(|(_producer_id, producer)| {
+                producer
+                    .transport_media_id
+                    .map(|media| DiagnosticsSourceMedia {
+                        owner: producer.owner_user_id.clone(),
+                        connection: producer.owner_connection_id,
+                        media,
+                    })
             })
             .collect()
     }
@@ -178,7 +181,8 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Vec<DiagnosticsPublication> {
-        self.media
+        self.topology
+            .media()
             .publications_for_user_connection(user_id, connection_id)
             .map(|(source, producer)| DiagnosticsPublication {
                 active: producer.active,
@@ -200,7 +204,8 @@ impl RoomState {
         connection_id: ConnectionId,
     ) -> Vec<DiagnosticsSubscription> {
         let mut subscriptions = self
-            .media
+            .topology
+            .media()
             .live_consumer_routes()
             .filter_map(|route| {
                 if route.consumer_user_id != *user_id
@@ -234,7 +239,8 @@ impl RoomState {
             .collect::<Vec<_>>();
 
         subscriptions.extend(
-            self.media
+            self.topology
+                .media()
                 .pending_consumer_routes_for_user(user_id)
                 .map(|route| {
                     let source = route.source;

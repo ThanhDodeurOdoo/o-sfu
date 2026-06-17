@@ -1,21 +1,45 @@
-use o_sfu_router::{ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState};
+use std::sync::Arc;
+
+use o_sfu_router::{
+    ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, MediaCapabilities,
+    MediaStream as RouterRtpParameters, ProducerRouteState,
+};
 use tracing::warn;
 
 use super::{
-    ConsumerRouteUpdate, ConsumerSetupTarget, ResolvedRelayRouteEffect,
+    ConsumerKey, ConsumerRouteTransportRef, ConsumerRouteUpdate, ConsumerSetupTarget,
+    ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
+    ResolvedRelayRouteEffect, RoomMediaGraph, TransportMediaRemoval, ValidatedPublish,
     route_graph::{ConsumerRouteReservation, RelayRouteEffect},
 };
-use crate::engine::{
-    ConnectionId, MediaWorkerId, UserId,
-    media_transport::{RelayRouteActivity, TransportMediaId},
-    room::{
-        LocalRouterRuntimeContext,
-        cleanup::TransportCleanupOperation,
-        routing::{CommittedRoutingReceipt, RoomRoutingError, RoomRoutingRepairReport},
-        state::RoomState,
+use crate::{
+    RoomSpilloverMode,
+    engine::{
+        ConnectionId, MediaWorkerId, UserId,
+        media_transport::{
+            RelayRouteActivity, TransportConsumerRoute, TransportMediaId, TransportSourceKey,
+        },
+        room::{
+            LocalRouterRuntimeContext, RoomMediaCounts, RoomRuntimeContext,
+            cleanup::TransportCleanupOperation,
+            placement::LoadTriggeredPlacementState,
+            routing::{
+                CommittedRoutingReceipt, DisplacedRoutingSession, RoomRouterStateFactory,
+                RoomRoutingError, RoomRoutingRepairReport, RoomRoutingState,
+            },
+        },
+        router_events::RoomRouterEventSink,
+        source_model::{
+            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, UserStreamId,
+        },
     },
-    source_model::{ConsumerSourceSelection, UserStreamId},
 };
+
+#[derive(Debug)]
+pub struct RoomTopology {
+    media: RoomMediaGraph,
+    routing: RoomRoutingState,
+}
 
 #[derive(Debug)]
 pub struct UserTopologyTeardown {
@@ -38,6 +62,12 @@ pub(super) struct ConsumerActivityCommit {
 
 #[derive(Debug)]
 pub(super) struct ConsumerTopologyRejected;
+
+#[derive(Debug)]
+pub(in crate::engine::room::media_graph) struct PublishedSourceTeardown {
+    pub(in crate::engine::room::media_graph) effects: MediaTopologyEffects,
+    pub(in crate::engine::room::media_graph) router_teardown_error: Option<RoomRoutingError>,
+}
 
 #[derive(Debug)]
 pub enum SessionPlacementRejection {
@@ -89,7 +119,240 @@ impl MediaTopologyEffects {
     }
 }
 
-impl RoomState {
+impl RoomTopology {
+    pub fn new(
+        runtime_context: &RoomRuntimeContext,
+        router_rtp_capabilities: MediaCapabilities,
+        router_event_sink: Arc<dyn RoomRouterEventSink>,
+    ) -> Self {
+        Self {
+            media: RoomMediaGraph::default(),
+            routing: RoomRoutingState::new_with_router_state_factory(
+                runtime_context.instance(),
+                runtime_context.primary_router(),
+                runtime_context.initial_local_router_placements().cloned(),
+                router_rtp_capabilities,
+                &RoomRouterStateFactory::new(router_event_sink),
+            ),
+        }
+    }
+
+    pub(in crate::engine::room) fn media(&self) -> &RoomMediaGraph {
+        &self.media
+    }
+
+    pub(in crate::engine::room) fn routing(&self) -> &RoomRoutingState {
+        &self.routing
+    }
+
+    pub fn unregister_committed_placement(
+        &mut self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) {
+        self.routing
+            .unregister_committed_placement(user_id, connection_id);
+    }
+
+    pub fn reconcile_spillover_routers(
+        &mut self,
+        spillover: RoomSpilloverMode,
+        placement: &mut LoadTriggeredPlacementState,
+    ) {
+        match spillover {
+            RoomSpilloverMode::StrictSingleRouter => {}
+            RoomSpilloverMode::BoundedLocalSpillover => {
+                let idle_router_ids = self.routing.idle_spillover_routers();
+                self.routing.detach_spillover_routers(&idle_router_ids);
+                placement.clear_cooldowns(&idle_router_ids);
+            }
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
+                let idle_router_ids = self.routing.idle_spillover_routers();
+                let policy = policy.parts();
+                let detachments =
+                    placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window);
+                self.routing.detach_spillover_routers(&detachments);
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn media_counts(&self) -> RoomMediaCounts {
+        RoomMediaCounts {
+            publications: self.media.publication_count(),
+            subscriptions: self.media.subscription_count(),
+        }
+    }
+
+    pub fn update_consumer_source_selection(
+        &mut self,
+        route: &ConsumerRouteTransportRef,
+        source_id: PublishedSourceId,
+        update: impl FnOnce(&mut ConsumerSourceSelection),
+    ) -> bool {
+        self.media
+            .update_consumer_source_selection(route, source_id, update)
+    }
+
+    pub fn commit_published_source(
+        &mut self,
+        publish: ValidatedPublish,
+        producer_id: ProducerRuntimeId,
+        source_descriptor: PublishedSourceDescriptor,
+        consumable_rtp_parameters: RouterRtpParameters,
+        transport_media_id: TransportMediaId,
+    ) -> Result<PublishedProducer, RoomRoutingError> {
+        let routed_producer_id = self
+            .routing
+            .add_producer(&publish.owner_user_id, publish.media_kind)?;
+        let source_id = source_descriptor.source_id();
+        let producer = PublishedProducer {
+            source_id,
+            owner_user_id: publish.owner_user_id,
+            owner_connection_id: publish.owner_connection_id,
+            stream_id: publish.stream_id,
+            media_kind: publish.media_kind,
+            consumable_rtp_parameters,
+            routed_producer_id,
+            transport_media_id: Some(transport_media_id),
+            active: true,
+        };
+        self.media.install_source(PublishedSourceInstall {
+            source_descriptor,
+            producer_id,
+            producer: producer.clone(),
+            transport_media_id,
+        });
+        Ok(producer)
+    }
+
+    pub fn transport_consumer_route(
+        &self,
+        route: &ConsumerRouteTransportRef,
+    ) -> TransportConsumerRoute {
+        TransportConsumerRoute::new(
+            self.routing
+                .transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
+            route.consumer_media,
+            TransportSourceKey::new(
+                self.routing
+                    .transport_user_key(&route.source_user_id, route.source_connection_id),
+                route.source_media,
+            ),
+        )
+    }
+
+    fn transport_cleanup_operations(
+        &self,
+        removals: impl IntoIterator<Item = TransportMediaRemoval>,
+    ) -> Vec<TransportCleanupOperation> {
+        removals
+            .into_iter()
+            .map(|removal| {
+                let connection_id = removal.connection;
+                TransportCleanupOperation::RemoveMedia {
+                    session_key: self
+                        .routing
+                        .transport_user_key(&removal.user, connection_id),
+                    connection_id,
+                    transport_media_id: removal.transport_media,
+                }
+            })
+            .collect()
+    }
+
+    fn resolved_relay_route_effects(
+        &self,
+        effects: impl IntoIterator<Item = RelayRouteEffect>,
+    ) -> Vec<ResolvedRelayRouteEffect> {
+        effects
+            .into_iter()
+            .map(|effect| ResolvedRelayRouteEffect {
+                source_session_key: self
+                    .routing
+                    .transport_user_key(&effect.route.source_user, effect.route.source_connection),
+                route: effect.route,
+                action: effect.action,
+            })
+            .collect()
+    }
+
+    fn resolved_relay_route_effects_with_displaced(
+        &self,
+        effects: impl IntoIterator<Item = RelayRouteEffect>,
+        user_id: &UserId,
+        session: &DisplacedRoutingSession,
+    ) -> Vec<ResolvedRelayRouteEffect> {
+        effects
+            .into_iter()
+            .map(|effect| {
+                let source_session_key = if effect.route.source_user == *user_id
+                    && effect.route.source_connection == session.connection_id
+                {
+                    session.transport_session_key.clone()
+                } else {
+                    self.routing.transport_user_key(
+                        &effect.route.source_user,
+                        effect.route.source_connection,
+                    )
+                };
+                ResolvedRelayRouteEffect {
+                    source_session_key,
+                    route: effect.route,
+                    action: effect.action,
+                }
+            })
+            .collect()
+    }
+
+    pub(in crate::engine::room::media_graph) fn remove_published_source(
+        &mut self,
+        user_id: &UserId,
+        target: &ProducerRouteTarget,
+    ) -> Option<PublishedSourceTeardown> {
+        let transport_removals = self
+            .media
+            .transport_removals_for_producer_target(user_id, target);
+        let transport_cleanup = self.transport_cleanup_operations(transport_removals);
+        let affected_consumers = self.media.routed_consumer_ids_for_source(target.source_id);
+        let router_teardown_error = self
+            .routing
+            .remove_producer(target.routed_producer_id, affected_consumers)
+            .err();
+        let (_producer, relay_effects) = self.media.remove_source(target.source_id)?;
+        let relay_effects = self.resolved_relay_route_effects(relay_effects);
+        Some(PublishedSourceTeardown {
+            effects: MediaTopologyEffects::new(relay_effects, transport_cleanup),
+            router_teardown_error,
+        })
+    }
+
+    pub fn set_published_source_activity(
+        &mut self,
+        target: &ProducerRouteTarget,
+        current_connection_id: Option<ConnectionId>,
+        active: bool,
+    ) -> Result<bool, RoomRoutingError> {
+        let Some(producer) = self
+            .media
+            .producer_for_route_target(target, current_connection_id)
+        else {
+            return Ok(false);
+        };
+        if producer.active == active {
+            return Ok(false);
+        }
+        let route_state = if active {
+            ProducerRouteState::Active
+        } else {
+            ProducerRouteState::Paused
+        };
+        self.routing
+            .set_producer_route_state(target.routed_producer_id, route_state)?;
+        self.media.set_producer_active(target, active);
+        Ok(true)
+    }
+
     pub fn commit_session_placement(
         &mut self,
         user_id: &UserId,
@@ -124,7 +387,7 @@ impl RoomState {
                     connection_id: session.connection_id,
                 }]
             });
-            let relay_effects = self.purge_user_media(user_id);
+            let relay_effects = self.media.remove_user_media(user_id);
             let relay_effects = if let Some(session) = displaced.as_ref() {
                 self.resolved_relay_route_effects_with_displaced(relay_effects, user_id, session)
             } else {
@@ -140,15 +403,11 @@ impl RoomState {
         })
     }
 
-    pub fn purge_user_media(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
-        self.media.remove_user_media(user_id)
-    }
-
     pub fn remove_user(&mut self, user_id: &UserId) -> UserTopologyTeardown {
         let transport_removals = self.media.transport_removals_for_user(user_id);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         let affected_consumers = self.media.routed_consumer_ids_affected_by_user(user_id);
-        let relay_effects = self.purge_user_media(user_id);
+        let relay_effects = self.media.remove_user_media(user_id);
         let relay_effects = self.resolved_relay_route_effects(relay_effects);
         let routing_repair = self
             .routing
@@ -187,8 +446,8 @@ impl RoomState {
                     ?error,
                     "router rejected consumer creation"
                 );
-            })
-            .map_err(|()| ConsumerTopologyRejected)?;
+                ConsumerTopologyRejected
+            })?;
         if self.media.routes.commit(
             reservation,
             target.consumer_state(routed_consumer_id, media),
@@ -196,8 +455,7 @@ impl RoomState {
         ) {
             return Ok((active != reservation.selection().delivery_active()).then_some(active));
         }
-        let rollback_error = self.routing.remove_consumer(routed_consumer_id).err();
-        if let Some(error) = rollback_error {
+        if let Some(error) = self.routing.remove_consumer(routed_consumer_id).err() {
             warn!(
                 consumer_user_id = ?target.user,
                 ?routed_consumer_id,
@@ -227,11 +485,12 @@ impl RoomState {
         let relays = if source_worker == target_worker {
             Vec::new()
         } else {
-            self.media
-                .routes
-                .reserve_relay(&reservation, target, target_worker, active)
+            let relays =
+                self.media
+                    .routes
+                    .reserve_relay(&reservation, target, target_worker, active);
+            self.resolved_relay_route_effects(relays)
         };
-        let relays = self.resolved_relay_route_effects(relays);
         Some((reservation, relays))
     }
 
@@ -254,7 +513,7 @@ impl RoomState {
         let source_id = self
             .media
             .source_id_for_owner_stream(target_user_id, stream_id)?;
-        let key = super::ConsumerKey::new(user_id, source_id);
+        let key = ConsumerKey::new(user_id, source_id);
         self.media.set_consumer_source_selection(&key, active);
         let relay_effects = self.media.set_relay_consumer_active(
             user_id,
@@ -300,5 +559,15 @@ impl RoomState {
             relay_effects,
             routing_error,
         })
+    }
+
+    #[cfg(test)]
+    pub(in crate::engine::room) fn media_mut_for_test(&mut self) -> &mut RoomMediaGraph {
+        &mut self.media
+    }
+
+    #[cfg(test)]
+    pub(in crate::engine::room) fn routing_mut_for_test(&mut self) -> &mut RoomRoutingState {
+        &mut self.routing
     }
 }

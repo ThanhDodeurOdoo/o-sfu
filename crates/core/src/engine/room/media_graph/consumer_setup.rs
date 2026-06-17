@@ -101,19 +101,25 @@ impl PendingConsumerSetup {
         if user.connection_id != self.target.connection || !user.negotiation.can_consume() {
             return self.release_into_outcome(state);
         }
-        let Some(producer) = state.media.producer(self.target.producer_id) else {
+        let Some(producer) = state.topology.media().producer(self.target.producer_id) else {
             return self.release_into_outcome(state);
         };
         if !self.target.matches_identity(producer) {
             return self.release_into_outcome(state);
         }
         let producer_active = producer.active;
-        if state.media.contains_consumer(self.reservation.key()) {
+        if state
+            .topology
+            .media()
+            .contains_consumer(self.reservation.key())
+        {
             return self.release_into_outcome(state);
         }
         let selection = state.setup_selection(&self.target, producer_active);
         let Ok(topology_commit) =
-            state.commit_consumer_setup(&self.reservation, &self.target, selection, media)
+            state
+                .topology
+                .commit_consumer_setup(&self.reservation, &self.target, selection, media)
         else {
             return self.release_into_outcome(state);
         };
@@ -129,7 +135,7 @@ impl PendingConsumerSetup {
     }
 
     fn release(self, state: &mut RoomState) -> Vec<ResolvedRelayRouteEffect> {
-        state.release_consumer_setup(self.reservation)
+        state.topology.release_consumer_setup(self.reservation)
     }
 
     fn release_into_outcome(self, state: &mut RoomState) -> ConsumerSetupOutcome {

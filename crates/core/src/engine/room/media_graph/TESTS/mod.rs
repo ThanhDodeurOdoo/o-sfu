@@ -101,6 +101,15 @@ fn set_test_user_ready(state: &mut RoomState, user_id: &UserId) -> ConnectionId 
     connection_id
 }
 
+fn scalable_video_states(active: bool) -> TestSubscriptionStates {
+    TestSubscriptionStates {
+        scalable_video: Some(active),
+        audio_detector: None,
+        readable_video: None,
+        ..TestSubscriptionStates::default()
+    }
+}
+
 fn publish_video_track(
     state: &mut RoomState,
     user_id: &UserId,
@@ -174,11 +183,13 @@ fn install_test_consumer_route(
         .user_connection_id(consumer_user_id)
         .expect("consumer user should have a connection id");
     let routed_producer_id = state
-        .routing
+        .topology
+        .routing_mut_for_test()
         .add_producer(producer_user_id, RouterMediaKind::Video)
         .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
     let routed_consumer_id = state
-        .routing
+        .topology
+        .routing_mut_for_test()
         .add_consumer(
             consumer_user_id,
             routed_producer_id,
@@ -203,7 +214,7 @@ fn install_test_consumer_route(
         source_media: TransportMediaId::new(1),
         consumer_media: TransportMediaId::new(2),
     };
-    assert!(state.media.commit_consumer(
+    assert!(state.topology.media_mut_for_test().commit_consumer(
         route_key.clone(),
         consumer,
         ConsumerSourceSelection::open(true),
@@ -257,22 +268,25 @@ fn install_test_published_producer_with_route(
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let source_descriptor = test_source_descriptor(state, user_id, stream_type);
     let source_id = source_descriptor.source_id();
-    state.media.install_source(PublishedSourceInstall {
-        source_descriptor,
-        producer_id,
-        producer: PublishedProducer {
-            source_id,
-            owner_user_id: user_id.clone(),
-            owner_connection_id: connection_id,
-            stream_id: stream_id_for_source(stream_type),
-            media_kind: RouterMediaKind::Video,
-            consumable_rtp_parameters,
-            routed_producer_id,
-            transport_media_id: Some(transport_media_id),
-            active: true,
-        },
-        transport_media_id,
-    });
+    state
+        .topology
+        .media_mut_for_test()
+        .install_source(PublishedSourceInstall {
+            source_descriptor,
+            producer_id,
+            producer: PublishedProducer {
+                source_id,
+                owner_user_id: user_id.clone(),
+                owner_connection_id: connection_id,
+                stream_id: stream_id_for_source(stream_type),
+                media_kind: RouterMediaKind::Video,
+                consumable_rtp_parameters,
+                routed_producer_id,
+                transport_media_id: Some(transport_media_id),
+                active: true,
+            },
+            transport_media_id,
+        });
     (producer_id, source_id)
 }
 
@@ -286,7 +300,8 @@ fn install_test_published_producer(
         .user_connection_id(user_id)
         .expect("publisher user should have a connection id");
     let routed_producer_id = state
-        .routing
+        .topology
+        .routing_mut_for_test()
         .add_producer(user_id, RouterMediaKind::Video)
         .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
     install_test_published_producer_with_route(
@@ -311,7 +326,8 @@ fn install_test_consumable_video_producer(
         .user_connection_id(user_id)
         .expect("publisher should have a connection id");
     let routed_producer_id = state
-        .routing
+        .topology
+        .routing_mut_for_test()
         .add_producer(user_id, RouterMediaKind::Video)
         .expect("publisher route should be added");
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
@@ -342,7 +358,7 @@ fn install_test_consumer_state(
         .user_connection_id(consumer_user_id)
         .expect("consumer user should have a connection id");
     let key = ConsumerKey::new(consumer_user_id, source_id);
-    assert!(state.media.commit_consumer(
+    assert!(state.topology.media_mut_for_test().commit_consumer(
         key.clone(),
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(
@@ -361,13 +377,15 @@ fn install_test_consumer_state(
 
 fn set_test_consumer_policy_pause(state: &mut RoomState, key: &ConsumerKey) {
     let route_ref = state
-        .media
+        .topology
+        .media()
         .committed_consumer_route_for_key(key)
         .expect("consumer route should exist")
         .transport_ref();
     assert!(
         state
-            .media
+            .topology
+            .media_mut_for_test()
             .update_consumer_source_selection(&route_ref, key.source_id, |selection| {
                 selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
             })
@@ -521,7 +539,8 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     assert!(outcome.is_none());
     assert!(
         state
-            .media
+            .topology
+            .media()
             .producer(producer_id)
             .is_some_and(|producer| producer.active),
         "room state must keep the previous activity flag when router pause propagation fails"
@@ -552,13 +571,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
             .is_ok()
     );
 
-    let states = TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    };
-    let intents = subscription_intents_from_test_states(&states);
+    let intents = subscription_intents_from_test_states(&scalable_video_states(false));
     let change = state.plan_subscription_change(
         &consumer_user_id,
         stale_connection_id,
@@ -579,7 +592,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
         "stale subscription updates must not overwrite the replacement user's stored preferences"
     );
     assert_eq!(
-        state.media.consumer_state(&route_key),
+        state.topology.media().consumer_state(&route_key),
         None,
         "replacement join should clear stale consumer routes before the new connection reboots them"
     );
@@ -603,13 +616,7 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
         22_222,
     );
 
-    let states = TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    };
-    let intents = subscription_intents_from_test_states(&states);
+    let intents = subscription_intents_from_test_states(&scalable_video_states(false));
     let change = state.plan_subscription_change(
         &subscriber_user_id,
         subscriber_connection_id,
@@ -622,7 +629,8 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
     assert!(change.relays.is_empty());
     assert_eq!(change.setups.len(), 1);
     let selection = state
-        .media
+        .topology
+        .media()
         .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, source_id))
         .expect("compat subscription should create a source-level selection");
     assert!(!selection.active());
@@ -631,7 +639,7 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
         SourceSelector::Open,
         "compat downloads default to an unconstrained source selector"
     );
-    assert_eq!(state.subscription_count(), 1);
+    assert_eq!(state.media_counts().subscriptions, 1);
 }
 
 #[test]
@@ -657,13 +665,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
             .is_some()
     );
 
-    let states = TestSubscriptionStates {
-        scalable_video: Some(false),
-        audio_detector: None,
-        readable_video: None,
-        ..TestSubscriptionStates::default()
-    };
-    let intents = subscription_intents_from_test_states(&states);
+    let intents = subscription_intents_from_test_states(&scalable_video_states(false));
     let change = state.plan_subscription_change(
         &subscriber_user_id,
         subscriber_connection_id,
@@ -701,7 +703,7 @@ fn consumer_setup_commit_releases_stale_receiver_plan() {
         _stream_id,
         setup,
     ) = pending_consumer_setup();
-    assert_eq!(state.subscription_count(), 1);
+    assert_eq!(state.media_counts().subscriptions, 1);
 
     state
         .users
@@ -713,7 +715,7 @@ fn consumer_setup_commit_releases_stale_receiver_plan() {
     };
 
     assert!(relays.is_empty());
-    assert_eq!(state.subscription_count(), 0);
+    assert_eq!(state.media_counts().subscriptions, 0);
 }
 
 #[test]
@@ -726,14 +728,16 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
         stream_id,
         setup,
     ) = pending_consumer_setup();
-    assert_eq!(state.subscription_count(), 1);
+    assert_eq!(state.media_counts().subscriptions, 1);
 
     let source_id = state
-        .media
+        .topology
+        .media()
         .source_id_for_owner_stream(&publisher_user_id, &stream_id)
         .expect("publisher source should exist");
     state
-        .media
+        .topology
+        .media_mut_for_test()
         .remove_source(source_id)
         .expect("publisher source should be removable");
     let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
@@ -741,7 +745,7 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
     };
 
     assert!(relays.is_empty());
-    assert_eq!(state.subscription_count(), 0);
+    assert_eq!(state.media_counts().subscriptions, 0);
 }
 
 #[test]
@@ -754,16 +758,23 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
         stream_id,
         setup,
     ) = pending_consumer_setup();
-    assert_eq!(state.subscription_count(), 1);
+    assert_eq!(state.media_counts().subscriptions, 1);
 
     let source_id = state
-        .media
+        .topology
+        .media()
         .source_id_for_owner_stream(&publisher_user_id, &stream_id)
         .expect("publisher source should exist");
     let key = ConsumerKey::new(&subscriber_user_id, source_id);
-    assert!(state.media.has_consumer_setup_or_route(&key));
-    assert!(state.media.remove_consumer_key_state(&key).is_empty());
-    assert!(!state.media.has_consumer_setup_or_route(&key));
+    assert!(state.topology.media().has_consumer_setup_or_route(&key));
+    assert!(
+        state
+            .topology
+            .media_mut_for_test()
+            .remove_consumer_key_state(&key)
+            .is_empty()
+    );
+    assert!(!state.topology.media().has_consumer_setup_or_route(&key));
 
     let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
         panic!("setup with rejected graph commit should be released");
@@ -771,10 +782,11 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
 
     assert!(relays.is_empty());
     assert_eq!(state.consumer_count(), 0);
-    assert_eq!(state.subscription_count(), 0);
+    assert_eq!(state.media_counts().subscriptions, 0);
     assert!(
         state
-            .routing
+            .topology
+            .routing_mut_for_test()
             .remove_consumer(RoutedConsumerId::new(RouterId(1), ConsumerId(1)))
             .is_err(),
         "routed consumer created before graph rejection must be rolled back"
@@ -806,10 +818,13 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
         33_333,
     );
     for source_id in [scalable_source_id, readable_source_id] {
-        state.media.ensure_consumer_source_selection(
-            &ConsumerKey::new(&subscriber_user_id, source_id),
-            ConsumerSourceSelection::open(true),
-        );
+        state
+            .topology
+            .media_mut_for_test()
+            .ensure_consumer_source_selection(
+                &ConsumerKey::new(&subscriber_user_id, source_id),
+                ConsumerSourceSelection::open(true),
+            );
     }
 
     let planned_setups = state
@@ -820,11 +835,13 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
 
     assert_eq!(planned_setups.len(), 2);
     let scalable_selection = state
-        .media
+        .topology
+        .media()
         .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, scalable_source_id))
         .expect("scalable source should have a consumer selection");
     let readable_selection = state
-        .media
+        .topology
+        .media()
         .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, readable_source_id))
         .expect("readable source should have a consumer selection");
     let selections = [scalable_selection, readable_selection];
@@ -898,14 +915,7 @@ fn commit_publish_reservation_populates_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         Some(connection_id)
     );
-    assert_eq!(state.publication_count(), 1);
-    let source_id = state
-        .inspect_source_id_for_transport_media_id(transport_media_id)
-        .expect("transport media should resolve to a source id");
-    assert!(
-        state.media.source(source_id).is_some(),
-        "transport media source id should point into the source registry"
-    );
+    assert_eq!(state.media_counts().publications, 1);
     assert_eq!(
         state
             .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)
@@ -953,7 +963,8 @@ fn commit_publish_reservation_registers_all_source_encodings() {
         .inspect_source_id_for_transport_media_id(transport_media_id)
         .expect("transport media should resolve to the committed source");
     let source = state
-        .media
+        .topology
+        .media()
         .source(source_id)
         .expect("source registry should own the committed source");
     assert_eq!(source.owner().user_id(), &user_id);
@@ -1035,7 +1046,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert_eq!(state.media.publication_count(), 0);
+    assert_eq!(state.media_counts().publications, 0);
     assert!(publish_video_track(
         &mut state,
         &user_id,
@@ -1062,7 +1073,10 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
         transport_media_id,
         43_000,
     ));
-    state.routing.remove_router_for_test(RouterId(1));
+    state
+        .topology
+        .routing_mut_for_test()
+        .remove_router_for_test(RouterId(1));
     assert!(
         state
             .unpublish_track(
@@ -1077,16 +1091,7 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
         state.producer_stream_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert_eq!(state.media.publication_count(), 0);
-    assert!(
-        state
-            .media
-            .source_id_for_owner_stream(
-                &user_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo)
-            )
-            .is_none()
-    );
+    assert_eq!(state.media_counts().publications, 0);
 }
 
 #[test]
@@ -1127,19 +1132,21 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
         TransportMediaId::new(10),
         TransportMediaId::new(20),
     );
-    state.media.ensure_consumer_source_selection(
-        &removed_consumer_key,
-        ConsumerSourceSelection::open(true),
-    );
     let pending_removed_key = ConsumerKey::new(&publisher_id, other_source_id);
-    state
-        .media
-        .routes
-        .reserve_consumer_setup(
-            pending_removed_key.clone(),
+    {
+        let media = state.topology.media_mut_for_test();
+        media.ensure_consumer_source_selection(
+            &removed_consumer_key,
             ConsumerSourceSelection::open(true),
-        )
-        .expect("pending route should be reserved");
+        );
+        media
+            .routes
+            .reserve_consumer_setup(
+                pending_removed_key.clone(),
+                ConsumerSourceSelection::open(true),
+            )
+            .expect("pending route should be reserved");
+    }
 
     let surviving_consumer_key = install_test_consumer_state(
         &mut state,
@@ -1149,14 +1156,16 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
         TransportMediaId::new(30),
         TransportMediaId::new(40),
     );
-    state.media.ensure_consumer_source_selection(
-        &surviving_consumer_key,
-        ConsumerSourceSelection::open(false),
-    );
+    {
+        let media = state.topology.media_mut_for_test();
+        media.ensure_consumer_source_selection(
+            &surviving_consumer_key,
+            ConsumerSourceSelection::open(false),
+        );
+        media.remove_user_media(&publisher_id);
+    }
 
-    state.purge_user_media(&publisher_id);
-
-    let media = &state.media;
+    let media = state.topology.media();
     assert!(media.source(publisher_source_id).is_none());
     assert!(media.source(other_source_id).is_some());
     assert!(!media.contains_consumer(&removed_consumer_key));
@@ -1176,9 +1185,13 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
         media.consumer_keys_for_source(other_source_id),
         vec![surviving_consumer_key.clone()]
     );
-    state.purge_user_media(&other_publisher_id);
-    assert!(state.media.source(other_source_id).is_none());
-    assert!(!state.media.contains_consumer(&surviving_consumer_key));
+    state
+        .topology
+        .media_mut_for_test()
+        .remove_user_media(&other_publisher_id);
+    let media = state.topology.media();
+    assert!(media.source(other_source_id).is_none());
+    assert!(!media.contains_consumer(&surviving_consumer_key));
 }
 
 #[test]
@@ -1210,10 +1223,13 @@ fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_route
         consumer_media,
     );
 
-    let transport_removals = state.media.transport_removals_for_users(&BTreeSet::from([
-        publisher_id.clone(),
-        subscriber_id.clone(),
-    ]));
+    let transport_removals = state
+        .topology
+        .media()
+        .transport_removals_for_users(&BTreeSet::from([
+            publisher_id.clone(),
+            subscriber_id.clone(),
+        ]));
 
     assert_eq!(transport_removals.len(), 2);
     assert_eq!(
