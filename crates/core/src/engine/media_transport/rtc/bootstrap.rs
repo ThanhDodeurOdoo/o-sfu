@@ -65,29 +65,27 @@ pub(super) fn bind_shared_rtc_socket(
     let bind_ip = bind_ip_for_public_ip(public_ip);
     for port in rtc_port_range.ports() {
         let bind_addr = SocketAddr::new(bind_ip, port);
-        match StdUdpSocket::bind(bind_addr) {
-            Ok(socket) => {
-                if socket.set_nonblocking(true).is_err() {
-                    continue;
-                }
-                let Ok(socket) = RtcUdpSocket::from_std(socket, rtc_udp_io_backend) else {
-                    continue;
-                };
-                let candidate_addr = SocketAddr::new(public_ip, port);
-                let ingress = UdpIngress::new(socket.clone(), bind_addr, candidate_addr);
-                info!(
-                    %bind_addr,
-                    %candidate_addr,
-                    "booted shared rtc UDP socket"
-                );
-                return Ok(SharedRtcSocket {
-                    socket,
-                    ingress,
-                    candidate_addr,
-                });
-            }
-            Err(_error) => {}
+        let Ok(socket) = StdUdpSocket::bind(bind_addr) else {
+            continue;
+        };
+        if socket.set_nonblocking(true).is_err() {
+            continue;
         }
+        let Ok(socket) = RtcUdpSocket::from_std(socket, rtc_udp_io_backend) else {
+            continue;
+        };
+        let candidate_addr = SocketAddr::new(public_ip, port);
+        let ingress = UdpIngress::new(socket.clone(), bind_addr, candidate_addr);
+        info!(
+            %bind_addr,
+            %candidate_addr,
+            "booted shared rtc UDP socket"
+        );
+        return Ok(SharedRtcSocket {
+            socket,
+            ingress,
+            candidate_addr,
+        });
     }
     Err(TransportAdapterError::TransportUnavailable)
 }

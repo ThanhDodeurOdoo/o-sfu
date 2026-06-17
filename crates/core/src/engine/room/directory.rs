@@ -140,17 +140,13 @@ impl RoomLifecycleLease {
         if remove_if_empty && room_can_be_removed {
             state.remove_when_idle = true;
         }
-        let should_remove = if state.active_mutations == 0 && state.remove_when_idle {
-            if room_can_be_removed {
-                state.closing = true;
-                true
-            } else {
-                state.remove_when_idle = false;
-                false
-            }
-        } else {
-            false
-        };
+        let idle_pending_removal = state.active_mutations == 0 && state.remove_when_idle;
+        let should_remove = idle_pending_removal && room_can_be_removed;
+        if should_remove {
+            state.closing = true;
+        } else if idle_pending_removal {
+            state.remove_when_idle = false;
+        }
         drop(state);
         should_remove
     }

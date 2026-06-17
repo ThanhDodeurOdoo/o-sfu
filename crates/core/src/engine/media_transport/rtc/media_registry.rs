@@ -617,8 +617,9 @@ impl PacketLoopState {
         let accepted_ssrcs = parameters
             .bindings()
             .filter_map(|binding| {
-                let ssrc = binding.ssrc().map(Ssrc::from)?;
-                Some((ssrc, binding.rid().map(Rid::from)))
+                binding
+                    .ssrc()
+                    .map(|ssrc| (Ssrc::from(ssrc), binding.rid().map(Rid::from)))
             })
             .filter_map(|(ssrc, rid)| {
                 bind_producer_ssrc(

@@ -191,7 +191,7 @@ impl RouteGraph {
     pub(super) fn committed_entries(&self) -> impl Iterator<Item = (&ConsumerKey, ConsumerState)> {
         self.entries
             .iter()
-            .filter_map(|(key, entry)| Some((key, entry.consumer()?)))
+            .filter_map(|(key, entry)| entry.consumer().map(|state| (key, state)))
     }
 
     pub(super) fn pending_keys_for_user(

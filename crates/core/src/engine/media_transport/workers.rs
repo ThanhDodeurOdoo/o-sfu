@@ -416,8 +416,7 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) -> Option<String> {
-        let worker = self.worker_for_user(session_key)?;
-        worker
+        self.worker_for_user(session_key)?
             .request_worker(|response| RtcWorkerCommand::ResolveMediaMid {
                 transport_media_id,
                 response,

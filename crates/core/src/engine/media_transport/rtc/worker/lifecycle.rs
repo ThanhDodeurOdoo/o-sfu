@@ -653,7 +653,7 @@ fn backlog_pressure_score(backlog_depth: usize, capacity: usize) -> u8 {
         return 0;
     }
     let score = backlog_depth.saturating_mul(100) / capacity;
-    u8::try_from(score.min(100)).map_or(100, |value| value)
+    u8::try_from(score.min(100)).unwrap_or(100)
 }
 
 #[cfg(test)]

@@ -92,7 +92,7 @@ fn session_media_index_drives_bulk_session_removal() {
         .iter()
         .map(|(transport_media_id, _handle)| *transport_media_id)
         .collect::<Vec<_>>();
-    removed_ids.sort();
+    removed_ids.sort_unstable();
     assert_eq!(removed_ids, vec![producer_media_id, consumer_media_id]);
     assert!(!state.session_has_registered_media(&removed_session));
     assert_eq!(

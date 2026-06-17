@@ -89,13 +89,13 @@ impl DirtyRoomRegistry {
 
     fn insert_many(&self, room_instance_ids: impl IntoIterator<Item = RoomInstanceId>) -> bool {
         let mut dirty_rooms = lock_unpoisoned(&self.room_instance_ids);
-        let mut inserted_any = false;
+        let mut saw_room = false;
         for room_instance_id in room_instance_ids {
             dirty_rooms.insert(room_instance_id);
-            inserted_any = true;
+            saw_room = true;
         }
         drop(dirty_rooms);
-        inserted_any
+        saw_room
     }
 
     fn drain(&self) -> BTreeSet<RoomInstanceId> {

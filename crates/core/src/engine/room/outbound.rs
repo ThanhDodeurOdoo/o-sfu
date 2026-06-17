@@ -294,7 +294,7 @@ impl UserOutboundSender {
             message_bytes,
         );
         self.metrics.record_ws_outbound_queue_overflow();
-        let _sent = self.overflow.send(Some(overflow));
+        let _ = self.overflow.send(Some(overflow));
         overflow
     }
 }
@@ -385,7 +385,7 @@ pub(super) struct MessageFanout {
 impl MessageFanout {
     pub(super) fn emit(self) {
         for recipient in self.recipients {
-            let _result = recipient.send(UserOutbound::Message(self.message.clone()));
+            let _ = recipient.send(UserOutbound::Message(self.message.clone()));
         }
     }
 }

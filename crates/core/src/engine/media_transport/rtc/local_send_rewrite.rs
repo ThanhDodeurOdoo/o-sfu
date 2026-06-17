@@ -229,7 +229,7 @@ pub(super) fn forget_transport_media_stream(
     streams: &mut ConsumerStreamStore,
     stream_handle: ConsumerStreamHandle,
 ) {
-    let _removed = streams.release(stream_handle);
+    let _ = streams.release(stream_handle);
 }
 
 #[cfg(test)]

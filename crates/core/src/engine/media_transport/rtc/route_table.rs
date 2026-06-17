@@ -384,8 +384,9 @@ impl RouteTable {
     ) {
         let source_ids = self.sources.keys().copied().collect::<Vec<_>>();
         for source_id in source_ids {
-            let keep_registered = keep_local(&source_id) || self.remote_source(source_id).is_some();
-            if self.remote_source(source_id).is_some() && self.local_route(source_id).is_none() {
+            let has_remote_source = self.remote_source(source_id).is_some();
+            let keep_registered = keep_local(&source_id) || has_remote_source;
+            if has_remote_source && self.local_route(source_id).is_none() {
                 self.remove_remote_source(source_id);
                 continue;
             }

@@ -117,7 +117,7 @@ impl Room {
 
     pub async fn reconcile_spillover_routers(&self) {
         let spillover = self.room_worker_policy().spillover();
-        if matches!(&spillover, RoomSpilloverMode::StrictSingleRouter) {
+        if matches!(spillover, RoomSpilloverMode::StrictSingleRouter) {
             return;
         }
         let mut state = self.state.write().await;

@@ -197,30 +197,30 @@ fn featured_source_owner_for_active_speaker_source(
     if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
         return None;
     }
-    let owner_user_id = entry.owner.clone();
     state
-        .source_policy_owner_has_promotable_source_in_group(&owner_user_id, detector_policy.group())
-        .then_some(owner_user_id)
+        .source_policy_owner_has_promotable_source_in_group(&entry.owner, detector_policy.group())
+        .then(|| entry.owner.clone())
 }
 
 fn featured_user_updates(
     state: &RoomState,
     desired_featured_user_id: Option<&UserId>,
 ) -> Vec<FeaturedUserUpdate> {
-    let should_clear_featured_state = desired_featured_user_id.is_none()
-        && state
+    if desired_featured_user_id.is_none()
+        && !state
             .source_policy_user_featured_states()
-            .any(|(_user_id, featured)| featured.is_some());
-    if desired_featured_user_id.is_none() && !should_clear_featured_state {
+            .any(|(_user_id, featured)| featured.is_some())
+    {
         return Vec::new();
     }
     state
         .source_policy_user_featured_states()
         .filter_map(|(user_id, current_featured)| {
-            let desired_featured = desired_featured_user_id.map_or_else(
-                || current_featured.is_some().then_some(false),
-                |featured_user_id| Some(featured_user_id == user_id),
-            );
+            let desired_featured = match desired_featured_user_id {
+                Some(featured_user_id) => Some(featured_user_id == user_id),
+                None if current_featured.is_some() => Some(false),
+                None => None,
+            };
             (desired_featured != current_featured)
                 .then(|| FeaturedUserUpdate::new(user_id.clone(), desired_featured))
         })

@@ -457,7 +457,6 @@ pub fn worker_add_send_media(
         match declare_consumer_stream(session_state, media_kind, consumer_rtp_parameters) {
             Ok(consumer_stream) => consumer_stream,
             Err(error) => {
-                let _ = session_state;
                 remote_source_rollback.rollback(state);
                 return Err(error);
             }
@@ -591,8 +590,9 @@ fn recv_encoding_identities(rtp_parameters: &RouterRtpParameters) -> Vec<(Ssrc, 
     rtp_parameters
         .bindings()
         .filter_map(|encoding| {
-            let ssrc = encoding.ssrc().map(Ssrc::from)?;
-            Some((ssrc, encoding.rid().map(Into::into)))
+            encoding
+                .ssrc()
+                .map(|ssrc| (Ssrc::from(ssrc), encoding.rid().map(Into::into)))
         })
         .collect()
 }

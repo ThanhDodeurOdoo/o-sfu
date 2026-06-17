@@ -64,9 +64,9 @@ pub(super) struct ConsumerActivityCommit {
 pub(super) struct ConsumerTopologyRejected;
 
 #[derive(Debug)]
-pub(in crate::engine::room::media_graph) struct PublishedSourceTeardown {
-    pub(in crate::engine::room::media_graph) effects: MediaTopologyEffects,
-    pub(in crate::engine::room::media_graph) router_teardown_error: Option<RoomRoutingError>,
+pub(super) struct PublishedSourceTeardown {
+    pub effects: MediaTopologyEffects,
+    pub router_teardown_error: Option<RoomRoutingError>,
 }
 
 #[derive(Debug)]
@@ -305,7 +305,7 @@ impl RoomTopology {
             .collect()
     }
 
-    pub(in crate::engine::room::media_graph) fn remove_published_source(
+    pub(super) fn remove_published_source(
         &mut self,
         user_id: &UserId,
         target: &ProducerRouteTarget,

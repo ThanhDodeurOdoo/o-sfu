@@ -236,19 +236,14 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
 #[tokio::test]
 async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() {
     let adapter = Arc::new(RtcWorker::default());
-    let session_keys: Vec<_> = (0_u32..8)
-        .map(|offset| {
-            transport_key(
+    let results = timeout(
+        Duration::from_secs(1),
+        join_all((0_u32..8).map(|offset| {
+            let session_key = transport_key(
                 3,
                 200_u64 + u64::from(offset),
                 UserId::Integer(200_i64 + i64::from(offset)),
-            )
-        })
-        .collect();
-
-    let results = timeout(
-        Duration::from_secs(1),
-        join_all(session_keys.into_iter().map(|session_key| {
+            );
             let adapter = Arc::clone(&adapter);
             async move { adapter.create_initial_session_offer(&session_key).await }
         })),

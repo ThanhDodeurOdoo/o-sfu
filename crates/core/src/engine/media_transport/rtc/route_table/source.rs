@@ -121,11 +121,10 @@ impl RouteSource {
     }
 
     pub(super) fn active_relay_targets(&self) -> Option<&[ActiveRelayTarget]> {
-        self.relay.as_ref().and_then(|registration| {
-            registration
-                .has_active_targets()
-                .then(|| registration.active_targets())
-        })
+        self.relay
+            .as_ref()
+            .filter(|registration| registration.has_active_targets())
+            .map(RelaySourceRegistration::active_targets)
     }
 
     pub(super) fn add_consumer_route(
@@ -800,7 +799,7 @@ fn remote_pkt_gate_for_route(
         {
             PacketLayerGate::Open
         }
-        (_route_entry, Some(packet_gate)) => packet_gate,
-        (None | Some(_), None) => PacketLayerGate::Block,
+        (_, Some(packet_gate)) => packet_gate,
+        (_, None) => PacketLayerGate::Block,
     }
 }

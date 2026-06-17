@@ -24,8 +24,8 @@ fn packet_index_probe_extracts_the_local_ice_ufrag_from_binding_requests() {
     assert!(matches!(
         packet
             .as_deref()
-            .map(|packet| packet_index_probe(test_source_addr(), packet)),
-        Some(Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag)))
+            .and_then(|packet| packet_index_probe(test_source_addr(), packet)),
+        Some(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag))
             if local_ice_ufrag == "local-ufrag"
     ));
 }
@@ -41,8 +41,8 @@ fn packet_index_probe_uses_the_source_addr_when_stun_has_no_username() {
     assert!(matches!(
         packet
             .as_deref()
-            .map(|packet| packet_index_probe(source_addr, packet)),
-        Some(Ok(PacketIndexProbe::RemoteCandidateAddr(probed_source_addr)))
+            .and_then(|packet| packet_index_probe(source_addr, packet)),
+        Some(PacketIndexProbe::RemoteCandidateAddr(probed_source_addr))
             if probed_source_addr == source_addr
     ));
 }

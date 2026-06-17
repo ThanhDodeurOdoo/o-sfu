@@ -249,7 +249,6 @@ fn route_cached_pkt(
     // cached source-address pins are hints because ICE state can change
     let accepts_input = session_state.rtc.accepts(&input);
     if !accepts_input {
-        let _ = session_state;
         debug!(
             source_addr = %source_addr,
             candidate_addr = %candidate_addr,
@@ -272,14 +271,12 @@ fn route_cached_pkt(
             media_worker_id = session_key.media_worker_id().as_usize(),
             "failed to feed indexed UDP datagram into rtc user state"
         );
-        let _ = session_state;
     } else {
         let dirty_session_key = if session_state.packet_loop_dirty {
             None
         } else {
             Some(session_key.clone())
         };
-        let _ = session_state;
         if let Some(dirty_session_key) = dirty_session_key {
             state.mark_session_dirty(&dirty_session_key);
         }
@@ -294,15 +291,8 @@ fn indexed_session_for_pkt(
     packet: &[u8],
     input: &Input<'_>,
 ) -> IndexedSessionRecoveryOutcome {
-    let packet_index_probe = match packet_index_probe(source_addr, packet) {
-        Ok(packet_index_probe) => packet_index_probe,
-        Err(
-            IndexedSessionRecoveryOutcome::Malformed
-            | IndexedSessionRecoveryOutcome::Matched { .. }
-            | IndexedSessionRecoveryOutcome::NoMatch { .. },
-        ) => {
-            return IndexedSessionRecoveryOutcome::Malformed;
-        }
+    let Some(packet_index_probe) = packet_index_probe(source_addr, packet) else {
+        return IndexedSessionRecoveryOutcome::Malformed;
     };
     // the probe only narrows candidates before `Rtc::accepts()` decides ownership
     let candidate_session_keys = match &packet_index_probe {
@@ -384,37 +374,31 @@ fn indexed_session_for_pkt(
 ///
 /// STUN username recovery is the strongest signal because it names a local ICE
 /// fragment. DTLS and RTP can only fall back to source-address recovery
-fn packet_index_probe(
-    source_addr: SocketAddr,
-    packet: &[u8],
-) -> Result<PacketIndexProbe<'_>, IndexedSessionRecoveryOutcome> {
-    let Some(byte0) = packet.first().copied() else {
-        return Err(IndexedSessionRecoveryOutcome::Malformed);
-    };
+fn packet_index_probe(source_addr: SocketAddr, packet: &[u8]) -> Option<PacketIndexProbe<'_>> {
+    let byte0 = packet.first().copied()?;
     let packet_len = packet.len();
     // stay within str0m's RFC 5764 style STUN rule, not the wider RFC 7983 range
     if byte0 < 2 && packet_len >= 20 {
-        let message = StunMessage::parse(packet)
-            .map_err(|_error| IndexedSessionRecoveryOutcome::Malformed)?;
+        let message = StunMessage::parse(packet).ok()?;
         if let Some(local_ice_ufrag) = message
             .username()
             .and_then(|username| username.split_once(':'))
             .map(|(local_ice_ufrag, _remote_ice_ufrag)| local_ice_ufrag)
         {
             // the demux index is keyed by the local USERNAME fragment
-            return Ok(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag));
+            return Some(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag));
         }
         // STUN responses may omit USERNAME, so source address is the only hint
-        return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
+        return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     if (20..64).contains(&byte0) {
-        return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
+        return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     if (128..192).contains(&byte0) && packet_len > 2 {
         // RTP and RTCP packets depend on a source tuple learned by ICE
-        return Ok(PacketIndexProbe::RemoteCandidateAddr(source_addr));
+        return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
-    Err(IndexedSessionRecoveryOutcome::Malformed)
+    None
 }
 
 fn receive_input(
@@ -471,7 +455,6 @@ fn route_packet_to_session(
         return false;
     };
     let handle_result = session_state.rtc.handle_input(input);
-    let _ = session_state;
     if handle_result.is_err() {
         warn!(
             user_id = ?session_key.user_id(),
