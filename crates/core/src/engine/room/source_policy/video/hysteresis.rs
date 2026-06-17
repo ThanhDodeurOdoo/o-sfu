@@ -11,15 +11,11 @@ pub(super) fn resolve(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelectio
     let current = route.route.current_selection;
     let current_pause_reason = current.policy_pause_reason();
     let selection = route.selection;
-    match (
-        selection.policy_pause_reason.is_none(),
-        selection.policy_pause_reason,
-        current_pause_reason,
-    ) {
-        (true, _, Some(PolicyPauseReason::VideoDownloadLimit)) => {
+    match (selection.policy_pause_reason, current_pause_reason) {
+        (None, Some(PolicyPauseReason::VideoDownloadLimit)) => {
             ReceiverRouteSelection::send(selection.selector, AdaptationCounts::reset(), true)
         }
-        (true, _, Some(reason)) => {
+        (None, Some(reason)) => {
             let counts = AdaptationCounts::next_upgrade(current, UPSWITCH_STABLE_OBSERVATIONS);
             if counts.upgrade >= UPSWITCH_STABLE_OBSERVATIONS {
                 ReceiverRouteSelection::send(selection.selector, AdaptationCounts::reset(), true)
@@ -27,7 +23,7 @@ pub(super) fn resolve(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelectio
                 ReceiverRouteSelection::hold(current, Some(reason), counts)
             }
         }
-        (false, Some(reason), pause_reason) if pause_reason != Some(reason) => {
+        (Some(reason), pause_reason) if pause_reason != Some(reason) => {
             if matches!(
                 reason,
                 PolicyPauseReason::VideoDownloadLimit | PolicyPauseReason::SourceBitrateLimit
