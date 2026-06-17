@@ -140,8 +140,8 @@ impl RoomTestLifecycle<'_> {
     }
 
     #[must_use]
-    pub fn pending_cleanup_retry_count(self) -> usize {
-        self.room.pending_cleanup_retry_count_for_test()
+    pub fn has_pending_cleanup_retries(self) -> bool {
+        self.room.has_pending_cleanup_retries()
     }
 }
 

@@ -164,10 +164,10 @@ impl CleanupReconciler {
         if cleanup_error_is_terminal(error) {
             return CleanupFailureAction::Terminal;
         }
-        if self.pending.len() >= CLEANUP_RETRY_CAPACITY && !self.pending.contains_key(&operation) {
-            return CleanupFailureAction::QueueFull;
-        }
+        let pending_is_full = self.pending.len() >= CLEANUP_RETRY_CAPACITY;
         match self.pending.entry(operation) {
+            Entry::Occupied(_) => CleanupFailureAction::RetryAlreadyQueued,
+            Entry::Vacant(_) if pending_is_full => CleanupFailureAction::QueueFull,
             Entry::Vacant(entry) => {
                 entry.insert(PendingCleanupRetry {
                     attempts: 0,
@@ -175,7 +175,6 @@ impl CleanupReconciler {
                 });
                 CleanupFailureAction::RetryQueued
             }
-            Entry::Occupied(_) => CleanupFailureAction::RetryAlreadyQueued,
         }
     }
 
@@ -236,11 +235,6 @@ impl CleanupReconciler {
         for retry in self.pending.values_mut() {
             retry.wait_cycles = 0;
         }
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn pending_count(&self) -> usize {
-        self.pending.len()
     }
 }
 
@@ -444,11 +438,6 @@ impl Room {
         self.cleanup_reconciler().force_due_for_test();
         self.reconcile_transport_cleanup_retries(media_transport)
             .await;
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn pending_cleanup_retry_count_for_test(&self) -> usize {
-        self.cleanup_reconciler().pending_count()
     }
 
     fn cleanup_reconciler(&self) -> MutexGuard<'_, CleanupReconciler> {

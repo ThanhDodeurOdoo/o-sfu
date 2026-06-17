@@ -24,7 +24,7 @@
 mod fingerprint;
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     net::SocketAddr,
     time::{Duration, Instant},
 };
@@ -276,12 +276,13 @@ impl UnknownSourceRateLimiter {
     /// a best-effort eviction hint and removes from `entries` only when a key is
     /// still live
     fn entry_mut(&mut self, source_addr: SocketAddr) -> &mut UnknownSourceRateLimitEntry {
-        if !self.entries.contains_key(&source_addr) {
-            self.insertion_order.push_back(source_addr);
+        match self.entries.entry(source_addr) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                self.insertion_order.push_back(source_addr);
+                entry.insert(UnknownSourceRateLimitEntry::new())
+            }
         }
-        self.entries
-            .entry(source_addr)
-            .or_insert_with(UnknownSourceRateLimitEntry::new)
     }
 
     fn enforce_capacity(&mut self) {
@@ -291,11 +292,6 @@ impl UnknownSourceRateLimiter {
             };
             self.entries.remove(&evicted_source_addr);
         }
-    }
-
-    #[cfg(test)]
-    fn contains_source(&self, source_addr: SocketAddr) -> bool {
-        self.entries.contains_key(&source_addr)
     }
 }
 
@@ -316,8 +312,6 @@ impl UnknownSourceRateLimiter {
 pub(super) struct DemuxRecoveryState {
     miss_cache: PacketLoopRoutingMissCache,
     source_rate_limiter: UnknownSourceRateLimiter,
-    #[cfg(test)]
-    fallback_attempts: usize,
 }
 
 impl DemuxRecoveryState {
@@ -325,8 +319,6 @@ impl DemuxRecoveryState {
         Self {
             miss_cache: PacketLoopRoutingMissCache::default(),
             source_rate_limiter: UnknownSourceRateLimiter::default(),
-            #[cfg(test)]
-            fallback_attempts: 0,
         }
     }
 
@@ -396,21 +388,6 @@ impl DemuxRecoveryState {
     ) {
         self.miss_cache.forget(miss_key, packet);
         self.source_rate_limiter.forget_source(source_addr);
-    }
-
-    #[cfg(test)]
-    pub(super) fn record_fallback_attempt(&mut self) {
-        self.fallback_attempts = self.fallback_attempts.saturating_add(1);
-    }
-
-    #[cfg(test)]
-    pub(super) fn fallback_attempts(&self) -> usize {
-        self.fallback_attempts
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_tracking_source(&self, source_addr: SocketAddr) -> bool {
-        self.source_rate_limiter.contains_source(source_addr)
     }
 }
 

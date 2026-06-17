@@ -519,8 +519,6 @@ fn route_pkt_by_session(
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
 ) {
-    #[cfg(test)]
-    demux.record_fallback_attempt();
     let Some(session_key) = state.users.keys().next().cloned() else {
         return;
     };
@@ -557,8 +555,6 @@ fn route_pkt_by_recovery(
     miss_key: PacketLoopRoutingMissKey,
     route: &PacketRouteContext<'_>,
 ) {
-    #[cfg(test)]
-    demux.record_fallback_attempt();
     let Some(input) = receive_input(
         route.now,
         route.source_addr,

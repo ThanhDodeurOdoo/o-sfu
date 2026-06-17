@@ -49,7 +49,18 @@ impl User {
         response_to: RequestId,
         answer: SessionDescriptionPayload,
     ) -> Result<UserOutput, UserError> {
-        self.run_answer(response_to, answer).await
+        self.validate_negotiation_answer(&response_to, &answer)?;
+        let Some(kind) = self.requests.resolve(&response_to) else {
+            self.log_unknown_answer(&response_to);
+            return Err(UserError::ProtocolViolation);
+        };
+        let events = match self.session.answer(&answer.sdp).await {
+            Ok(events) => events,
+            Err(error) => {
+                return Err(self.negotiation_error(kind, Some(&response_to), error));
+            }
+        };
+        Ok(self.project_media_events(events).await)
     }
 
     #[instrument(
@@ -147,30 +158,9 @@ impl User {
                 return Err(self.negotiation_error(NegotiationKind::InitialOffer, None, error));
             }
         };
-        let output = offer.map_or_else(UserOutput::new, |offer| {
+        Ok(offer.map_or_else(UserOutput::new, |offer| {
             vec![self.requests.issue(NegotiationKind::InitialOffer, offer)]
-        });
-        Ok(output)
-    }
-
-    async fn run_answer(
-        &mut self,
-        response_to: RequestId,
-        answer: SessionDescriptionPayload,
-    ) -> Result<UserOutput, UserError> {
-        self.validate_negotiation_answer(&response_to, &answer)?;
-        let Some(kind) = self.requests.resolve(&response_to) else {
-            self.log_unknown_answer(&response_to);
-            return Err(UserError::ProtocolViolation);
-        };
-        let events = match self.session.answer(&answer.sdp).await {
-            Ok(events) => events,
-            Err(error) => {
-                return Err(self.negotiation_error(kind, Some(&response_to), error));
-            }
-        };
-        let output = self.project_media_events(events).await;
-        Ok(output)
+        }))
     }
 }
 

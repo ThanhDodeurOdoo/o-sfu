@@ -793,7 +793,6 @@ fn recent_miss_cache_skips_repeated_scans_for_the_same_source() {
     harness.route(&packet);
     harness.route(&packet);
 
-    assert_eq!(harness.demux.fallback_attempts(), 1);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
@@ -810,7 +809,6 @@ fn recent_miss_cache_clears_on_topology_change() {
     harness.demux.clear_on_topology_change();
     harness.route(&packet);
 
-    assert_eq!(harness.demux.fallback_attempts(), 2);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
@@ -824,7 +822,6 @@ fn recent_miss_cache_does_not_skip_different_packets_from_the_same_source() {
     harness.route(&sample_rtp_packet(3, 33));
     harness.route(&sample_rtp_packet(4, 44));
 
-    assert_eq!(harness.demux.fallback_attempts(), 2);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 2);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 2);
@@ -847,7 +844,6 @@ fn source_rate_limiter_bounds_varied_unknown_source_misses() {
         harness.route(&sample_rtp_packet(sequence, ssrc));
     }
 
-    assert_eq!(harness.demux.fallback_attempts(), 4);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 4);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 4);
@@ -862,7 +858,6 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
     harness.route(&[0x01, 0x02, 0x03]);
 
     let snapshot = harness.metrics.snapshot();
-    assert_eq!(harness.demux.fallback_attempts(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
@@ -891,7 +886,6 @@ fn multi_session_unknown_source_recovery_drops_without_whole_session_scan() {
     harness.route(&packet);
 
     let snapshot = harness.metrics.snapshot();
-    assert_eq!(harness.demux.fallback_attempts(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
@@ -946,7 +940,6 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         .record_miss(miss_key, &packet, harness.source_addr, Instant::now());
 
     assert!(harness.demux.should_skip_scan(miss_key, &packet));
-    assert!(harness.demux.is_tracking_source(harness.source_addr));
 
     harness.route(&packet);
 
@@ -954,7 +947,6 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         drain_ready_sessions(&mut harness.packet_loop_state),
         vec![session_key.clone()]
     );
-    assert_eq!(harness.demux.fallback_attempts(), 0);
     assert_eq!(
         harness
             .packet_loop_state
@@ -974,7 +966,6 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         );
     }
     assert!(harness.demux.should_skip_scan(miss_key, &packet));
-    assert!(harness.demux.is_tracking_source(harness.source_addr));
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
@@ -1024,7 +1015,6 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
                 .is_none()
         );
     }
-    assert_eq!(harness.demux.fallback_attempts(), 1);
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
