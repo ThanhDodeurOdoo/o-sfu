@@ -27,27 +27,6 @@ pub struct NegotiatedPublish {
     pub consumable_rtp_parameters: o_sfu_router::MediaStream,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TestPublishIntentOutcome {
-    Noop,
-    Queue,
-    Activated,
-    Staged,
-}
-
-#[cfg(test)]
-impl From<crate::PublishIntentOutcome> for TestPublishIntentOutcome {
-    fn from(outcome: crate::PublishIntentOutcome) -> Self {
-        match outcome {
-            crate::PublishIntentOutcome::Noop => Self::Noop,
-            crate::PublishIntentOutcome::Queue => Self::Queue,
-            crate::PublishIntentOutcome::Activated => Self::Activated,
-            crate::PublishIntentOutcome::Staged => Self::Staged,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct RoomTestMedia<'a> {
     pub(super) room: &'a Room,

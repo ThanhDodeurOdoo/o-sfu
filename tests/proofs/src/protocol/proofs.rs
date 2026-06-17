@@ -1,8 +1,5 @@
 use o_sfu_protocol::{
-    host::{
-        ConnectionState, RECOVERY_TIMER_ID,
-        verification::{VerificationConnectionLifecycle, VerificationLifecycleEffects},
-    },
+    host::{ConnectionState, RECOVERY_TIMER_ID, verification::VerificationConnectionLifecycle},
     wire::WebSocketCloseCode,
 };
 
@@ -20,12 +17,12 @@ fn protocol_core_terminal_close_codes_never_schedule_recovery() {
 
     let commands = core.on_ws_close(close_code);
     assert_eq!(core.state(), ConnectionState::Closed);
-    assert_eq!(scheduled_timer_count(&commands, RECOVERY_TIMER_ID), 0);
+    assert_eq!(commands.recovery_timer_count(RECOVERY_TIMER_ID), 0);
     assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
     assert!(!core.has_connect_context());
 
     let reconnect_commands = core.connect();
-    assert!(has_connect_effect(&reconnect_commands));
+    assert!(reconnect_commands.has_connect());
 
     std::mem::forget(commands);
     std::mem::forget(reconnect_commands);
@@ -43,8 +40,8 @@ fn protocol_core_non_terminal_close_with_context_recovers_once() {
 
     let commands = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
     assert_eq!(core.state(), ConnectionState::Recovering);
-    assert_eq!(scheduled_timer_count(&commands, RECOVERY_TIMER_ID), 1);
-    assert!(has_close_peer_connection(&commands));
+    assert_eq!(commands.recovery_timer_count(RECOVERY_TIMER_ID), 1);
+    assert!(commands.has_close_peer_connection());
     assert!(core.has_connect_context());
 
     std::mem::forget(commands);
@@ -62,7 +59,7 @@ fn protocol_core_recovery_timer_reconnects_only_from_recovering() {
 
     let commands = core.on_timer(RECOVERY_TIMER_ID);
     let expect_reconnect = stage == 4;
-    assert_eq!(has_connect_effect(&commands), expect_reconnect);
+    assert_eq!(commands.has_connect(), expect_reconnect);
     if expect_reconnect {
         assert_eq!(core.state(), ConnectionState::Connecting);
     }
@@ -80,11 +77,15 @@ fn protocol_core_welcome_resets_recovery_backoff() {
     let mut core = lifecycle_at_stage(2);
 
     let first_close = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
-    let first_delay = scheduled_delay(&first_close, RECOVERY_TIMER_ID).unwrap_or_default();
+    let first_delay = first_close
+        .recovery_timer_delay(RECOVERY_TIMER_ID)
+        .unwrap_or_default();
     let _ = core.on_timer(RECOVERY_TIMER_ID);
     let _ = core.on_welcome();
     let second_close = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
-    let second_delay = scheduled_delay(&second_close, RECOVERY_TIMER_ID).unwrap_or_default();
+    let second_delay = second_close
+        .recovery_timer_delay(RECOVERY_TIMER_ID)
+        .unwrap_or_default();
 
     assert_eq!(first_delay, second_delay);
 
@@ -110,12 +111,12 @@ fn protocol_core_disconnect_suppresses_recovery_and_allows_fresh_connect() {
     assert!(!core.has_connect_context());
     assert!(!core.sticky_state_present());
     assert!(!core.runtime_state_present());
-    assert!(has_close_peer_connection(&disconnect_commands));
+    assert!(disconnect_commands.has_close_peer_connection());
     assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
     assert!(core.on_ws_close(NON_TERMINAL_CLOSE_CODE).is_empty());
 
     let reconnect_commands = core.connect();
-    assert!(has_connect_effect(&reconnect_commands));
+    assert!(reconnect_commands.has_connect());
 
     std::mem::forget(disconnect_commands);
     std::mem::forget(reconnect_commands);
@@ -165,20 +166,4 @@ fn terminal_close_code(selector: u8) -> u16 {
         1 => u16::from(WebSocketCloseCode::Kicked),
         _ => u16::from(WebSocketCloseCode::RoomFull),
     }
-}
-
-fn scheduled_timer_count(effects: &VerificationLifecycleEffects, timer_id: u32) -> usize {
-    effects.recovery_timer_count(timer_id)
-}
-
-fn scheduled_delay(effects: &VerificationLifecycleEffects, timer_id: u32) -> Option<u32> {
-    effects.recovery_timer_delay(timer_id)
-}
-
-fn has_connect_effect(effects: &VerificationLifecycleEffects) -> bool {
-    effects.has_connect()
-}
-
-fn has_close_peer_connection(effects: &VerificationLifecycleEffects) -> bool {
-    effects.has_close_peer_connection()
 }

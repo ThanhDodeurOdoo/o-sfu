@@ -33,15 +33,6 @@ where
         self.entries.len()
     }
 
-    /// count dependents indexed under one owner key
-    #[must_use]
-    pub fn dependent_count(&self, key: K) -> usize {
-        self.entries
-            .iter()
-            .find_map(|(relation_key, values)| (*relation_key == key).then_some(values.len()))
-            .unwrap_or(0)
-    }
-
     /// report whether one owner key has any indexed dependents
     #[must_use]
     pub fn contains_key(&self, key: K) -> bool {
@@ -95,12 +86,6 @@ pub struct RouterStateSnapshot {
 }
 
 impl RouterStateSnapshot {
-    /// return the router id observed by this detached snapshot
-    #[must_use]
-    pub fn id(&self) -> RouterId {
-        self.id
-    }
-
     /// count live sessions captured in the primary session map
     #[must_use]
     pub fn session_count(&self) -> usize {
@@ -128,7 +113,7 @@ impl RouterStateSnapshot {
     /// report whether the primary session map contained the session
     #[must_use]
     pub fn contains_session(&self, session_id: SessionId) -> bool {
-        self.session_state(session_id).is_some()
+        self.sessions.iter().any(|(id, _)| *id == session_id)
     }
 
     /// report whether the primary transport map contained the transport
@@ -149,47 +134,6 @@ impl RouterStateSnapshot {
         self.consumer(consumer_id).is_some()
     }
 
-    /// return the captured lifecycle state for one session
-    ///
-    /// this is based on the primary session map, not the reverse index
-    /// tests that need relation facts should use the relation accessors
-    /// separately
-    #[must_use]
-    pub fn session_state(&self, session_id: SessionId) -> Option<SessionState> {
-        self.sessions
-            .iter()
-            .find_map(|(id, state)| (*id == session_id).then_some(*state))
-    }
-
-    /// assert the captured transport owner and direction in one predicate
-    ///
-    /// this keeps tests focused on the domain relation they care about instead
-    /// of unpacking the snapshot tuple shape
-    #[must_use]
-    pub fn transport_matches(
-        &self,
-        transport_id: TransportId,
-        session_id: SessionId,
-        direction: TransportDirection,
-    ) -> bool {
-        self.transport(transport_id)
-            .is_some_and(|(_, owner, transport_direction)| {
-                owner == session_id && transport_direction == direction
-            })
-    }
-
-    /// assert the captured producer transport owner and media kind
-    #[must_use]
-    pub fn producer_origin_matches(
-        &self,
-        producer_id: ProducerId,
-        transport_id: TransportId,
-        media_kind: MediaKind,
-    ) -> bool {
-        self.producer(producer_id)
-            .is_some_and(|(_, owner, kind, _)| owner == transport_id && kind == media_kind)
-    }
-
     /// assert the captured source-side route state for a producer
     #[must_use]
     pub fn producer_route_state_matches(
@@ -199,21 +143,6 @@ impl RouterStateSnapshot {
     ) -> bool {
         self.producer(producer_id)
             .is_some_and(|(_, _, _, producer_route_state)| producer_route_state == route_state)
-    }
-
-    /// assert the captured consumer source, owner transport and media kind
-    #[must_use]
-    pub fn consumer_origin_matches(
-        &self,
-        consumer_id: ConsumerId,
-        producer_id: ProducerId,
-        transport_id: TransportId,
-        media_kind: MediaKind,
-    ) -> bool {
-        self.consumer(consumer_id)
-            .is_some_and(|(_, source, owner, kind, _, _)| {
-                source == producer_id && owner == transport_id && kind == media_kind
-            })
     }
 
     /// assert both route-state axes stored on a consumer
@@ -232,21 +161,6 @@ impl RouterStateSnapshot {
             .is_some_and(|(_, _, _, _, route, producer_route)| {
                 route == route_state && producer_route == producer_route_state
             })
-    }
-
-    /// verify that a consumer's producer shadow still mirrors its source producer
-    ///
-    /// this checks one consumer at snapshot time
-    /// use `router_satisfies_invariants`
-    /// when the whole router must be checked
-    #[must_use]
-    pub fn consumer_shadows_producer(&self, consumer_id: ConsumerId) -> bool {
-        let Some((_, producer_id, _, _, _, producer_route_state)) = self.consumer(consumer_id)
-        else {
-            return false;
-        };
-        self.producer(producer_id)
-            .is_some_and(|(_, _, _, route_state)| producer_route_state == route_state)
     }
 
     /// return the session-to-transport relation snapshot

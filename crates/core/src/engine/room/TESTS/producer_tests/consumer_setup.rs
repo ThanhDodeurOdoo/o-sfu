@@ -34,7 +34,7 @@ async fn initial_answer_sets_up_pending_consumers_once() {
 
 #[tokio::test]
 async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
-    let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
+    let mut scenario = setup_real_rtc_refresh_scenario().await;
 
     assert!(
         scenario
@@ -117,7 +117,7 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
 
 #[tokio::test]
 async fn negotiated_publish_commit_sets_up_consumers_on_real_rtc() {
-    let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
+    let mut scenario = setup_real_rtc_refresh_scenario().await;
     let publisher_connection_id =
         user_connection_id(&scenario.room, &scenario.publisher_user_id).await;
     let publisher_session_key = scenario

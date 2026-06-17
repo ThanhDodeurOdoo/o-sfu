@@ -73,12 +73,12 @@ fn local_destination_session<'a>(
     state: &'a PacketLoopState,
     destination: &ForwardingDestination,
 ) -> Option<&'a TransportSessionKey> {
-    let local_route = destination.local_route()?;
+    let (src_media, dst_idx) = destination.local_route()?;
     state
         .routes
-        .local_route(local_route.src_media())?
+        .local_route(src_media)?
         .destinations
-        .get(local_route.dst_idx())
+        .get(dst_idx)
         .map(|destination| &destination.dest_session)
 }
 
@@ -112,18 +112,18 @@ fn assert_forward_plan(
 ) {
     assert_eq!(forwards.len(), expected.len());
     for (forward, (pkt_idx, destination)) in forwards.iter().zip(expected) {
-        assert_eq!(forward.pkt_idx(), *pkt_idx);
+        assert_eq!(forward.pkt_idx, *pkt_idx);
         match destination {
             ExpectedForward::Local(session) => assert!(matches!(
-                forward.destination(),
+                &forward.destination,
                 destination if local_destination_session(state, destination) == Some(*session)
             )),
             ExpectedForward::PacketSink => assert!(matches!(
-                forward.destination(),
+                &forward.destination,
                 ForwardingDestination::PacketSink(_)
             )),
             ExpectedForward::Kind(kind) => {
-                assert_eq!(forward.destination().metrics_kind(), *kind);
+                assert_eq!(forward.destination.metrics_kind(), *kind);
             }
         }
     }

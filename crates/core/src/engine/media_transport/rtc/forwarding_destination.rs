@@ -25,10 +25,10 @@ use crate::engine::{
 /// `pkt_idx` points into the turn-local pending packet buffer
 /// the value is only valid until the current flush completes, which keeps the
 /// hot path from cloning packet payloads while destinations are being planned
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct PacketForward {
-    pkt_idx: usize,
-    destination: ForwardingDestination,
+    pub(super) pkt_idx: usize,
+    pub(super) destination: ForwardingDestination,
 }
 
 /// concrete side effect performed for one planned packet
@@ -36,7 +36,7 @@ pub(super) struct PacketForward {
 /// local rtc destinations may rewrite and enqueue RTP into str0m
 /// packet sinks and relay destinations observe or enqueue source packets
 /// without taking mutable session state
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) enum ForwardingDestination {
     /// local browser consumer reached through a worker-local [`str0m::Rtc`]
     LocalRtc(LocalRtcPacketDestination),
@@ -47,7 +47,7 @@ pub(super) enum ForwardingDestination {
 }
 
 /// flush result used for destination metrics and overload accounting
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) enum ForwardSendOutcome {
     /// local rtc send path, with payload bytes only when str0m queued a write
     LocalRtc { payload_bytes: Option<usize> },
@@ -67,7 +67,7 @@ pub(super) enum ForwardSendOutcome {
 ///
 /// callers must not persist this value beyond the flush that owns the matching
 /// `PacketForward`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub(super) struct LocalRtcPacketDestination {
     /// source route that owned the destination when planning ran
     src_media: TransportMediaId,
@@ -76,14 +76,12 @@ pub(super) struct LocalRtcPacketDestination {
 }
 
 /// packet sink destination tied to the source transport media id
-#[derive(Clone)]
 pub(super) struct PacketSinkDestination {
     transport_media_id: TransportMediaId,
     sink: RegisteredPacketSink,
 }
 
 /// relay destination tied to the source transport media id
-#[derive(Clone)]
 pub(super) struct RelayPacketDestination {
     transport_media_id: TransportMediaId,
     target: RelayPacketMailbox,
@@ -137,24 +135,14 @@ impl PacketForward {
             }),
         }
     }
-
-    /// returns the pending packet buffer index for this planned destination
-    pub(super) const fn pkt_idx(&self) -> usize {
-        self.pkt_idx
-    }
-
-    /// returns the executable destination for the flush step
-    pub(super) fn destination(&self) -> &ForwardingDestination {
-        &self.destination
-    }
 }
 
 impl ForwardingDestination {
     /// exposes the local rtc route handle for route-planner assertions
     #[cfg(test)]
-    pub(super) fn local_route(&self) -> Option<LocalRtcPacketDestination> {
+    pub(super) const fn local_route(&self) -> Option<(TransportMediaId, usize)> {
         match self {
-            Self::LocalRtc(destination) => Some(*destination),
+            Self::LocalRtc(destination) => Some((destination.src_media, destination.dst_idx)),
             Self::PacketSink(_) | Self::Relay(_) => None,
         }
     }
@@ -205,16 +193,6 @@ impl LocalRtcPacketDestination {
         Self { src_media, dst_idx }
     }
 
-    #[cfg(test)]
-    pub(super) const fn src_media(self) -> TransportMediaId {
-        self.src_media
-    }
-
-    #[cfg(test)]
-    pub(super) const fn dst_idx(self) -> usize {
-        self.dst_idx
-    }
-
     /// writes one packet to the destination session when the route is still live
     ///
     /// the compact handle is best-effort within the current flush
@@ -249,7 +227,8 @@ impl LocalRtcPacketDestination {
                 route_destination.nackable,
             );
             let vp8_payload = packet.local_vp8_payload();
-            let payload_bytes = sender.send(session_state, packet.local_send_packet(), vp8_payload);
+            let payload_bytes =
+                sender.send(session_state, &packet.local_send_packet(), vp8_payload);
             let dirty_session_key = payload_bytes.is_some().then(|| session_key.clone());
             (payload_bytes, dirty_session_key)
         };
@@ -323,7 +302,3 @@ impl fmt::Debug for RelayPacketDestination {
             .finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-#[path = "TESTS/forwarding_destination.rs"]
-mod tests;

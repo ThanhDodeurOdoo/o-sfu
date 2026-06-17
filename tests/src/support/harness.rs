@@ -5,10 +5,8 @@
 
 use std::{
     collections::BTreeMap,
-    fmt::Display,
     future::Future,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    result::Result as StdResult,
     time::Duration,
 };
 
@@ -49,7 +47,7 @@ use tokio::{
 };
 use tokio_tungstenite::{
     connect_async,
-    tungstenite::{Message, Result as WebSocketResult, protocol::frame::coding::CloseCode},
+    tungstenite::{Message, protocol::frame::coding::CloseCode},
 };
 
 pub type TestWebSocket =
@@ -69,29 +67,11 @@ pub fn require_some<T>(value: Option<T>, context: &'static str) -> Result<T> {
     value.ok_or_else(|| anyhow!(context))
 }
 
-/// Convert a required fallible test fixture value into a contextual test error.
-///
-/// # Errors
-///
-/// Returns an error when the wrapped result is an error.
-pub fn require_ok<T, E>(value: StdResult<T, E>, context: &'static str) -> Result<T>
-where
-    E: Display,
-{
-    value.map_err(|error| anyhow!("{context}: {error}"))
-}
-
 /// Test-only server handle used by integration tests to exercise the real HTTP and WS entry points.
 #[derive(Debug)]
 pub struct TestServer {
     addr: SocketAddr,
     handle: JoinHandle<()>,
-}
-
-#[derive(Debug)]
-pub struct TestRoomServer {
-    server: TestServer,
-    room_id: String,
 }
 
 const TEST_POLL_DEADLINE: Duration = Duration::from_secs(5);
@@ -324,13 +304,6 @@ fn policy_role_for_layout_role(layout_role: DiagnosticsVideoLayoutRole) -> Optio
     }
 }
 
-impl TestRoomServer {
-    #[must_use]
-    pub fn into_parts(self) -> (TestServer, String) {
-        (self.server, self.room_id)
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 enum ExpectedRouteState {
     Active,
@@ -408,18 +381,14 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     Ok(TestServer { addr, handle })
 }
 
-pub async fn spawn_room_server(issuer: &str) -> Option<TestRoomServer> {
-    spawn_room_server_with_config(test_config(1_000, 10), issuer, TEST_ROOM_KEY).await
-}
-
 pub async fn spawn_room_server_with_config(
     config: Config,
     issuer: &str,
     key: &str,
-) -> Option<TestRoomServer> {
+) -> Option<(TestServer, String)> {
     let server = spawn_test_server(config).await.ok()?;
     let room_id = create_room(&server, issuer, key).await?;
-    Some(TestRoomServer { server, room_id })
+    Some((server, room_id))
 }
 
 #[must_use]
@@ -574,13 +543,9 @@ pub async fn connect_websocket(server: &TestServer) -> Option<TestWebSocket> {
     Some(websocket.0)
 }
 
-pub async fn read_message(websocket: &mut TestWebSocket) -> Option<WebSocketResult<Message>> {
-    websocket.next().await
-}
-
 pub async fn read_text_message(websocket: &mut TestWebSocket) -> Option<String> {
     loop {
-        let message = read_message(websocket).await?;
+        let message = websocket.next().await?;
         match message.ok()? {
             Message::Text(payload) => return Some(payload.to_string()),
             Message::Ping(payload) => {
@@ -594,7 +559,7 @@ pub async fn read_text_message(websocket: &mut TestWebSocket) -> Option<String> 
 
 pub async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
     loop {
-        let message = read_message(websocket).await?;
+        let message = websocket.next().await?;
         match message.ok()? {
             Message::Close(frame) => {
                 let code = frame.map(|frame| frame.code);

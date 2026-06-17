@@ -77,7 +77,10 @@ pub(crate) async fn large_room_spillover_fake_peers(
         .enumerate()
     {
         let peer = require_some(
-            connect_large_room_spillover_peer(&server, &room, user_id, peer_index).await,
+            Box::pin(connect_large_room_spillover_peer(
+                &server, &room, user_id, peer_index,
+            ))
+            .await,
             "large-room spillover peer should connect",
         )?;
         peers.push(peer);
@@ -149,15 +152,21 @@ async fn connect_load_triggered_spillover_rtc_peers(
     spillover_subscriber_user_id: UserId,
 ) -> Option<(ProtocolFakePeer, ProtocolFakePeer, ProtocolFakePeer)> {
     let activation_user_id = load_triggered_activation_user_id(&spillover_subscriber_user_id);
-    let mut publisher =
-        connect_load_triggered_peer_on_worker(server, room, &publisher_user_id, 0, []).await?;
-    let mut local_subscriber = connect_load_triggered_peer_on_worker(
+    let mut publisher = Box::pin(connect_load_triggered_peer_on_worker(
+        server,
+        room,
+        &publisher_user_id,
+        0,
+        [],
+    ))
+    .await?;
+    let mut local_subscriber = Box::pin(connect_load_triggered_peer_on_worker(
         server,
         room,
         &local_subscriber_user_id,
         0,
         [&mut publisher],
-    )
+    ))
     .await?;
     let mut activation_peer =
         connect_fake_peer(server, room, activation_user_id.clone(), TEST_ROOM_KEY).await?;
@@ -166,13 +175,13 @@ async fn connect_load_triggered_spillover_rtc_peers(
         .await?;
     assert_peer_joined_message_protocol(&mut publisher, activation_user_id.clone()).await;
     assert_peer_joined_message_protocol(&mut local_subscriber, activation_user_id.clone()).await;
-    let mut spillover_subscriber = connect_load_triggered_peer_on_worker(
+    let mut spillover_subscriber = Box::pin(connect_load_triggered_peer_on_worker(
         server,
         room,
         &spillover_subscriber_user_id,
         1,
         [&mut publisher, &mut local_subscriber],
-    )
+    ))
     .await?;
     for (user_id, worker_id) in [
         (&publisher_user_id, 0),
@@ -380,13 +389,13 @@ pub(crate) async fn assert_load_triggered_spillover_replacement_mute_flow(
     assert_packet_dropped(publisher, spillover_subscriber, &mut source, &mut clock).await;
 
     let mut replacement = require_some(
-        connect_load_triggered_spillover_replacement(
+        Box::pin(connect_load_triggered_spillover_replacement(
             server,
             room,
             spillover_subscriber,
             &spillover_subscriber_user_id,
             1,
-        )
+        ))
         .await,
         "spillover replacement should connect",
     )?;

@@ -43,6 +43,12 @@ pub struct SourcePolicyDirtyState {
 }
 
 impl SourcePolicyDirtyState {
+    /// inspect the dirty state without consuming it
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::Acquire)
+    }
+
     /// consume the current dirty edge
     ///
     /// callers that receive `true` must drain the room-id registry before
@@ -60,14 +66,6 @@ impl SourcePolicyDirtyState {
     /// packet-loop observation
     pub fn mark_dirty(&self) -> bool {
         !self.dirty.swap(true, Ordering::AcqRel)
-    }
-
-    /// inspect the dirty state without consuming it
-    ///
-    /// this is useful for tests and diagnostics that need to observe the bridge
-    /// state without changing waiter behavior
-    pub fn is_dirty(&self) -> bool {
-        self.dirty.load(Ordering::Acquire)
     }
 }
 

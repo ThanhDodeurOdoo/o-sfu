@@ -36,13 +36,13 @@ async fn recovery_peers(alice_user_id: UserId, bob_user_id: UserId) -> TestResul
 
 #[tokio::test]
 async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() -> TestResult {
-    let (server, room, mut alice, mut bob) = real_rtc_peers(
+    let (server, room, mut alice, mut bob) = Box::pin(real_rtc_peers(
         "issuer-protocol-rtc-subscribe",
         UserId::Integer(91),
         UserId::Integer(92),
         56_311,
         56_312,
-    )
+    ))
     .await?;
 
     require_some(
@@ -116,13 +116,13 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() -> TestRes
 async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery() -> TestResult {
     let alice_user_id = UserId::Integer(93);
     let bob_user_id = UserId::Integer(94);
-    let (server, room, mut alice, mut bob) = real_rtc_peers(
+    let (server, room, mut alice, mut bob) = Box::pin(real_rtc_peers(
         "issuer-protocol-rtc-subscribe-recovery",
         alice_user_id.clone(),
         bob_user_id.clone(),
         56_391,
         56_392,
-    )
+    ))
     .await?;
 
     let published_track = require_some(
@@ -240,7 +240,7 @@ async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend
 #[tokio::test]
 async fn protocol_core_replays_latest_info_after_real_server_recovery() -> TestResult {
     let (_server, _channel, mut alice, mut bob) =
-        recovery_peers(UserId::Integer(71), UserId::Integer(72)).await?;
+        Box::pin(recovery_peers(UserId::Integer(71), UserId::Integer(72))).await?;
 
     require_some(
         update_info_and_deliver_to_peer(
@@ -300,7 +300,7 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() -> TestR
 #[tokio::test]
 async fn protocol_core_propagates_raise_hand_info_over_real_server_user_flow() -> TestResult {
     let (_server, _channel, mut alice, mut bob) =
-        recovery_peers(UserId::Integer(91), UserId::Integer(92)).await?;
+        Box::pin(recovery_peers(UserId::Integer(91), UserId::Integer(92))).await?;
 
     let latest_info = ProtocolSessionInfo {
         is_raising_hand: Some(true),
@@ -326,7 +326,7 @@ async fn protocol_core_propagates_raise_hand_info_over_real_server_user_flow() -
 #[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_server_recovery() -> TestResult {
     let (_server, _channel, mut alice, mut bob) =
-        recovery_peers(UserId::Integer(81), UserId::Integer(82)).await?;
+        Box::pin(recovery_peers(UserId::Integer(81), UserId::Integer(82))).await?;
 
     require_some(
         publish_camera_and_setup_subscriber(
@@ -355,13 +355,13 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() -> Te
 
 #[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() -> TestResult {
-    let (_server, _channel, mut alice, mut bob) = real_rtc_peers(
+    let (_server, _channel, mut alice, mut bob) = Box::pin(real_rtc_peers(
         "issuer-protocol-rtc-recovery",
         UserId::Integer(91),
         UserId::Integer(92),
         55_091,
         55_092,
-    )
+    ))
     .await?;
 
     require_some(

@@ -68,7 +68,7 @@ pub fn optional<T>(
 where
     T: EnvParse,
 {
-    get_var(key).map_or_else(|| Ok(None), |value| Ok(Some(T::parse(key, value)?)))
+    get_var(key).map(|value| T::parse(key, value)).transpose()
 }
 
 pub fn positive<T>(key: &'static str, value: T) -> Result<T>

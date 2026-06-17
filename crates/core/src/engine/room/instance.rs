@@ -45,10 +45,6 @@ pub struct Room {
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) definition: RoomDefinition,
     pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
-    #[allow(
-        dead_code,
-        reason = "recording control-plane wiring is deferred until the replacement baseline is validated"
-    )]
     pub(super) recording_service: Arc<RecordingService>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) cleanup_reconciler: Mutex<CleanupReconciler>,

@@ -342,11 +342,10 @@ pub fn flush_forward_routes(
 ) {
     let (forwards, pending_packets) = (&buffers.forwards, &buffers.pending_packets);
     for forward in forwards {
-        let pkt_idx = forward.pkt_idx();
-        let Some(packet) = pending_packets.get(pkt_idx) else {
+        let Some(packet) = pending_packets.get(forward.pkt_idx) else {
             continue;
         };
-        let destination = forward.destination();
+        let destination = &forward.destination;
         let destination_kind = destination.metrics_kind();
         let payload_len = packet.payload_len();
         match destination.send(state, packet) {

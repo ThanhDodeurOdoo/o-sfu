@@ -1,3 +1,5 @@
+use std::{future::Future, pin::Pin};
+
 use super::support::{self as s, media as m, setup as st};
 
 #[tokio::test]
@@ -233,24 +235,36 @@ async fn assert_selected_rid_requires_refresh(
     Ok(())
 }
 
-async fn video_room(
+type VideoRoomFuture<'a> =
+    Pin<Box<dyn Future<Output = s::TestResult<st::ReadyRoomFakePeers>> + 'a>>;
+
+fn video_room(
     config: Option<s::Config>,
     issuer: &str,
     publisher_user_id: s::UserId,
     subscriber_user_id: s::UserId,
-) -> s::TestResult<st::ReadyRoomFakePeers> {
-    match config {
-        Some(config) => {
-            st::ready_room_fake_peers_with_config(
-                config,
-                issuer,
-                publisher_user_id,
-                subscriber_user_id,
-            )
-            .await
+) -> VideoRoomFuture<'_> {
+    Box::pin(async move {
+        match config {
+            Some(config) => {
+                Box::pin(st::ready_room_fake_peers_with_config(
+                    config,
+                    issuer,
+                    publisher_user_id,
+                    subscriber_user_id,
+                ))
+                .await
+            }
+            None => {
+                Box::pin(st::ready_room_fake_peers(
+                    issuer,
+                    publisher_user_id,
+                    subscriber_user_id,
+                ))
+                .await
+            }
         }
-        None => st::ready_room_fake_peers(issuer, publisher_user_id, subscriber_user_id).await,
-    }
+    })
 }
 
 fn h264_config() -> s::Config {

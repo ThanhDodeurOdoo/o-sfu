@@ -31,7 +31,7 @@ use crate::engine::media_transport::TransportMediaId;
 /// publisher-facing RTP identity before packets cross into str0m
 /// `nackable` is cached route state, so local egress does not consult `str0m`
 /// media metadata for every packet
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct LocalPacketDestination {
     transport_media_id: TransportMediaId,
     stream_handle: ConsumerStreamHandle,
@@ -115,10 +115,9 @@ impl LocalPacketDestination {
     pub(super) fn send(
         &self,
         session_state: &mut RtcSessionState,
-        packet: LocalForwardedRtp<'_>,
+        rtp: &LocalForwardedRtp<'_>,
         vp8_payload: Option<PacketVp8Payload>,
     ) -> Option<usize> {
-        let rtp = packet;
         let payload_len = rtp.payload.len();
         let vp8_identity = vp8_payload
             .map(|vp8_payload| vp8_payload.identity)
@@ -155,7 +154,7 @@ impl LocalPacketDestination {
                 payload_type: self.payload_type,
                 vp8_payload,
             };
-            write_rtp(stream_tx, &rtp, write_context);
+            write_rtp(stream_tx, rtp, write_context);
         }
         Some(payload_len)
     }

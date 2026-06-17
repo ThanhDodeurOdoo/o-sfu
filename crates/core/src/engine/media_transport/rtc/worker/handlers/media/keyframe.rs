@@ -15,7 +15,7 @@ use super::{
         media_registry::RegisteredMediaHandle,
         route_control::PacketLayerGate,
         source_route::{MediaRouteDestination, RemoteSourceRegistration},
-        state::PacketLoopState,
+        state::{PacketLoopState, RtcSessionState},
     },
     control::{ensure_existing_route_src, ensure_local_producer_mid},
     types::RouteSourceKind,
@@ -276,7 +276,6 @@ fn producer_kf_target_rids(
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
 ) -> Vec<Option<Rid>> {
-    let candidate_rids = producer_kf_candidate_rids(state, src_key, mid, rid);
     let Some(session_state) = state.users.get_mut(src_key) else {
         log_ignored_kf_req(
             src_key,
@@ -288,13 +287,29 @@ fn producer_kf_target_rids(
         );
         return Vec::new();
     };
+    let candidate_rids = if rid.is_none() {
+        producer_kf_candidate_rids(session_state, mid)
+    } else {
+        Vec::new()
+    };
     let mut direct_api = session_state.rtc.direct_api();
-    let mut target_rids = candidate_rids
-        .into_iter()
-        .filter(|candidate_rid| direct_api.stream_rx_by_mid(mid, *candidate_rid).is_some())
-        .collect::<Vec<_>>();
-    if target_rids.is_empty() && rid.is_none() && direct_api.stream_rx_by_mid(mid, None).is_some() {
-        target_rids.push(None);
+    let mut target_rids = Vec::new();
+    if let Some(rid) = rid {
+        if direct_api.stream_rx_by_mid(mid, Some(rid)).is_some() {
+            target_rids.push(Some(rid));
+        }
+    } else {
+        for candidate_rid in candidate_rids {
+            if direct_api
+                .stream_rx_by_mid(mid, Some(candidate_rid))
+                .is_some()
+            {
+                target_rids.push(Some(candidate_rid));
+            }
+        }
+        if target_rids.is_empty() && direct_api.stream_rx_by_mid(mid, None).is_some() {
+            target_rids.push(None);
+        }
     }
     if target_rids.is_empty() {
         log_ignored_kf_req(
@@ -309,18 +324,7 @@ fn producer_kf_target_rids(
     target_rids
 }
 
-fn producer_kf_candidate_rids(
-    state: &PacketLoopState,
-    src_key: &TransportSessionKey,
-    mid: Mid,
-    rid: Option<Rid>,
-) -> Vec<Option<Rid>> {
-    if rid.is_some() {
-        return vec![rid];
-    }
-    let Some(session_state) = state.users.get(src_key) else {
-        return vec![None];
-    };
+fn producer_kf_candidate_rids(session_state: &RtcSessionState, mid: Mid) -> Vec<Rid> {
     let mut rids = Vec::new();
     if let Some(parameters) = session_state
         .sdp_negotiation
@@ -339,11 +343,7 @@ fn producer_kf_candidate_rids(
             push_unique_rid(&mut rids, rid);
         }
     }
-    if rids.is_empty() {
-        vec![None]
-    } else {
-        rids.into_iter().map(Some).collect()
-    }
+    rids
 }
 
 fn push_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
