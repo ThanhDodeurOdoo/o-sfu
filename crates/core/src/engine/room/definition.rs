@@ -122,11 +122,6 @@ impl RoomDefinition {
     }
 
     #[must_use]
-    pub(crate) const fn feature_flags(&self) -> RuntimeFeatureFlags {
-        self.feature_flags
-    }
-
-    #[must_use]
     pub(crate) fn room_worker_policy(&self) -> RoomWorkerPolicy {
         self.room_worker_policy
     }

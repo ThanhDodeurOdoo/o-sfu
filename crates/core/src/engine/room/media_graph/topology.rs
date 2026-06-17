@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use o_sfu_router::{
     ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, MediaCapabilities,
     MediaStream as RouterRtpParameters, ProducerRouteState,
@@ -24,11 +22,10 @@ use crate::{
             cleanup::TransportCleanupOperation,
             placement::LoadTriggeredPlacementState,
             routing::{
-                CommittedRoutingReceipt, DisplacedRoutingSession, RoomRouterStateFactory,
-                RoomRoutingError, RoomRoutingRepairReport, RoomRoutingState,
+                CommittedRoutingReceipt, DisplacedRoutingSession, RoomRoutingError,
+                RoomRoutingRepairReport, RoomRoutingState,
             },
         },
-        router_events::RoomRouterEventSink,
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, UserStreamId,
         },
@@ -123,16 +120,14 @@ impl RoomTopology {
     pub fn new(
         runtime_context: &RoomRuntimeContext,
         router_rtp_capabilities: MediaCapabilities,
-        router_event_sink: Arc<dyn RoomRouterEventSink>,
     ) -> Self {
         Self {
             media: RoomMediaGraph::default(),
-            routing: RoomRoutingState::new_with_router_state_factory(
+            routing: RoomRoutingState::new_with_runtime(
                 runtime_context.instance(),
                 runtime_context.primary_router(),
                 runtime_context.initial_local_router_placements().cloned(),
                 router_rtp_capabilities,
-                &RoomRouterStateFactory::new(router_event_sink),
             ),
         }
     }
@@ -254,7 +249,6 @@ impl RoomTopology {
                     session_key: self
                         .routing
                         .transport_user_key(&removal.user, connection_id),
-                    connection_id,
                     transport_media_id: removal.transport_media,
                 }
             })
@@ -384,7 +378,6 @@ impl RoomTopology {
             let transport_cleanup = displaced.as_ref().map_or_else(Vec::new, |session| {
                 vec![TransportCleanupOperation::CloseUser {
                     session_key: session.transport_session_key.clone(),
-                    connection_id: session.connection_id,
                 }]
             });
             let relay_effects = self.media.remove_user_media(user_id);

@@ -104,10 +104,12 @@ pub(super) fn observe_rtc_event(
     let Some(health) = transport_health_from_event(event) else {
         return;
     };
-    let Ok(mut snapshot_state) = snapshot_state.lock() else {
-        return;
+    let previous = {
+        let Ok(mut snapshot_state) = snapshot_state.lock() else {
+            return;
+        };
+        snapshot_state.set_transport_health(session_key, health)
     };
-    let previous = snapshot_state.set_transport_health(session_key, health);
     metrics.record_transport_health_transition(
         previous.map(metrics::transport_health_state),
         Some(metrics::transport_health_state(health)),
@@ -254,16 +256,18 @@ fn observe_receiver_bandwidth(
     session_key: &TransportSessionKey,
     kind: &BweKind,
 ) {
-    match kind {
-        BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate)
-            if let Ok(mut snapshot_state) = snapshot_state.lock() =>
-        {
-            let estimate = Bitrate::from_bps(bitrate.as_u64());
-            if snapshot_state.set_receiver_bandwidth(session_key, estimate) != Some(estimate) {
-                source_policy_signal.mark_dirty(session_key.room_instance_id());
-            }
-        }
-        _ => {}
+    let (BweKind::Twcc(bitrate) | BweKind::Remb(_, bitrate)) = kind else {
+        return;
+    };
+    let estimate = Bitrate::from_bps(bitrate.as_u64());
+    let changed = {
+        let Ok(mut snapshot_state) = snapshot_state.lock() else {
+            return;
+        };
+        snapshot_state.set_receiver_bandwidth(session_key, estimate) != Some(estimate)
+    };
+    if changed {
+        source_policy_signal.mark_dirty(session_key.room_instance_id());
     }
 }
 

@@ -108,18 +108,14 @@ pub(super) async fn send_message_bounded(
     .await
 }
 
-async fn close_writer(writer: &mut WsWriter, close_code: WebSocketCloseCode) {
-    let _result = writer
-        .send(Message::Close(Some(CloseFrame {
-            code: u16::from(close_code),
-            reason: "".into(),
-        })))
-        .await;
-}
-
 pub(super) async fn close_writer_bounded(writer: &mut WsWriter, code: WebSocketCloseCode) {
     let _closed = with_outbound_write_timeout(async {
-        close_writer(writer, code).await;
+        let _result = writer
+            .send(Message::Close(Some(CloseFrame {
+                code: u16::from(code),
+                reason: "".into(),
+            })))
+            .await;
         Ok(())
     })
     .await;

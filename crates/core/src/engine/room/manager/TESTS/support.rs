@@ -9,10 +9,7 @@ use super::{
 };
 use crate::{
     MediaCodecFlags, RoomMediaLimits, RuntimeFeatureFlags,
-    engine::{
-        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-    },
+    engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
 };
 
 const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
@@ -48,7 +45,6 @@ impl RoomManager {
         Self::new(
             config,
             RoomManagerDeps {
-                packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
                 diagnostics: Arc::new(DiagnosticsStore::default()),
                 metrics: Arc::new(RuntimeMetrics::default()),
             },

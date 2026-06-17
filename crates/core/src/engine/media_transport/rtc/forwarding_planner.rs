@@ -34,7 +34,7 @@ use super::{
     state::PacketLoopState,
 };
 use crate::engine::{
-    media_transport::TransportMediaId as RouteTransportMediaId,
+    media_transport::TransportMediaId,
     metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
     packet_sink_registry::{PacketSinkLookup, RegisteredPacketSink},
 };
@@ -155,7 +155,7 @@ fn populate_relay_forwards(
     state: &PacketLoopState,
     relay_targets: &[ActiveRelayTarget],
     pkt_idx: usize,
-    src_media: RouteTransportMediaId,
+    src_media: TransportMediaId,
     metadata: PacketLayerMetadata,
     forwards: &mut Vec<PacketForward>,
 ) {
@@ -185,7 +185,7 @@ fn populate_relay_forwards(
 fn populate_local_forwards(
     route_entry: &MediaRouteEntry,
     pkt_idx: usize,
-    src_media: RouteTransportMediaId,
+    src_media: TransportMediaId,
     metadata: PacketLayerMetadata,
     forwards: &mut Vec<PacketForward>,
 ) {
@@ -222,7 +222,7 @@ fn populate_local_forwards(
 /// room or transport policy installs a narrower packet gate.
 fn relay_target_gate_permits(
     state: &PacketLoopState,
-    src_media: RouteTransportMediaId,
+    src_media: TransportMediaId,
     target_id: RelayTargetId,
     metadata: PacketLayerMetadata,
 ) -> bool {

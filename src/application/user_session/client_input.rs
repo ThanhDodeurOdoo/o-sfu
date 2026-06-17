@@ -36,11 +36,11 @@ impl User {
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StartRecording(payload),
-            } => self.start_recording(request_id, payload).await,
+            } => Ok(self.start_recording(request_id, payload).await),
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StopRecording,
-            } => self.stop_recording(request_id).await,
+            } => Ok(self.stop_recording(request_id).await),
             ClientEnvelope::Message(ClientMessage::Auth(_)) => Err(UserError::ProtocolViolation),
         }
     }
@@ -62,19 +62,19 @@ impl User {
         &self,
         request_id: RequestId,
         options: RecordingOptions,
-    ) -> Result<UserOutput, UserError> {
+    ) -> UserOutput {
         let ok = self.session.start_recording(options).await;
-        Ok(vec![ServerEnvelope::Response {
+        vec![ServerEnvelope::Response {
             response_to: request_id,
             response: ServerResponse::StartRecording(RecordingActionResult { ok }),
-        }])
+        }]
     }
 
-    async fn stop_recording(&self, request_id: RequestId) -> Result<UserOutput, UserError> {
+    async fn stop_recording(&self, request_id: RequestId) -> UserOutput {
         let ok = self.session.stop_recording().await;
-        Ok(vec![ServerEnvelope::Response {
+        vec![ServerEnvelope::Response {
             response_to: request_id,
             response: ServerResponse::StopRecording(RecordingActionResult { ok }),
-        }])
+        }]
     }
 }

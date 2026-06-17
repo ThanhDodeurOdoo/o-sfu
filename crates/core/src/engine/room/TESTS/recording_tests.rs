@@ -5,7 +5,6 @@ use crate::{
         AvailableFeatures, RecordingOptions, RecordingState,
         diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
         room::{RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy, rtp_capabilities},
     },
 };
@@ -55,7 +54,6 @@ async fn build_recording_room_with(
             ),
         ),
         RoomManagerDeps {
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: Arc::clone(&metrics),
         },
@@ -148,15 +146,11 @@ async fn recording_start_rejects_until_persistent_backend_exists() {
     let (room, metrics, mut publisher_rx, mut observer_rx) = build_recording_room().await;
 
     let publisher_id = UserId::Integer(1);
-    assert!(
-        !room
-            .apply_recording_start(
-                &publisher_id,
-                user_connection_id(&room, &publisher_id).await,
-                audio_recording_options(),
-            )
-            .await
-    );
+    assert!(!room.apply_recording_start(
+        &publisher_id,
+        user_connection_id(&room, &publisher_id).await,
+        audio_recording_options(),
+    ));
     assert_eq!(room.recording_state().await, inactive_recording_state());
     assert_no_recording_message(
         &mut publisher_rx,
@@ -203,24 +197,16 @@ async fn stale_and_current_connections_cannot_bypass_recording_backend_gate() {
     drain_outbound(&mut replacement_rx);
     drain_outbound(&mut observer_rx);
 
-    assert!(
-        !room
-            .apply_recording_start(
-                &UserId::Integer(1),
-                stale_connection_id,
-                audio_recording_options(),
-            )
-            .await
-    );
-    assert!(
-        !room
-            .apply_recording_start(
-                &UserId::Integer(1),
-                replacement_connection_id,
-                audio_recording_options(),
-            )
-            .await
-    );
+    assert!(!room.apply_recording_start(
+        &UserId::Integer(1),
+        stale_connection_id,
+        audio_recording_options(),
+    ));
+    assert!(!room.apply_recording_start(
+        &UserId::Integer(1),
+        replacement_connection_id,
+        audio_recording_options(),
+    ));
     assert_eq!(room.recording_state().await, inactive_recording_state());
     assert!(
         replacement_rx.try_recv().is_err(),
@@ -255,15 +241,11 @@ async fn recording_start_rejects_rooms_without_recording_address() {
     .await;
 
     let publisher_id = UserId::Integer(1);
-    assert!(
-        !room
-            .apply_recording_start(
-                &publisher_id,
-                user_connection_id(&room, &publisher_id).await,
-                audio_recording_options(),
-            )
-            .await
-    );
+    assert!(!room.apply_recording_start(
+        &publisher_id,
+        user_connection_id(&room, &publisher_id).await,
+        audio_recording_options(),
+    ));
     assert_eq!(room.recording_state().await, inactive_recording_state());
     assert_no_recording_message(
         &mut publisher_rx,
@@ -287,14 +269,10 @@ async fn recording_stop_rejects_when_recording_is_unavailable() {
     let (room, metrics, mut publisher_rx, mut observer_rx) = build_recording_room().await;
 
     let publisher_id = UserId::Integer(1);
-    assert!(
-        !room
-            .apply_recording_stop(
-                &publisher_id,
-                user_connection_id(&room, &publisher_id).await
-            )
-            .await
-    );
+    assert!(!room.apply_recording_stop(
+        &publisher_id,
+        user_connection_id(&room, &publisher_id).await
+    ));
     assert_eq!(room.recording_state().await, inactive_recording_state());
     assert_no_recording_message(
         &mut publisher_rx,

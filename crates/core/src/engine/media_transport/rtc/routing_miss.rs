@@ -260,14 +260,11 @@ impl UnknownSourceRateLimiter {
 
     fn forget_source(&mut self, source_addr: SocketAddr) {
         self.entries.remove(&source_addr);
+        self.insertion_order
+            .retain(|candidate| *candidate != source_addr);
     }
 
     /// return the mutable cooldown entry for one source
-    ///
-    /// `insertion_order` is allowed to contain duplicates after a source was
-    /// forgotten and later seen again. Capacity enforcement treats that queue as
-    /// a best-effort eviction hint and removes from `entries` only when a key is
-    /// still live
     fn entry_mut(&mut self, source_addr: SocketAddr) -> &mut UnknownSourceRateLimitEntry {
         match self.entries.entry(source_addr) {
             Entry::Occupied(entry) => entry.into_mut(),

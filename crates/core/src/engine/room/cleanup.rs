@@ -62,12 +62,10 @@ pub(super) const CLEANUP_MAX_RETRIES: u8 = 3;
 pub enum TransportCleanupOperation {
     RemoveMedia {
         session_key: TransportSessionKey,
-        connection_id: ConnectionId,
         transport_media_id: TransportMediaId,
     },
     CloseUser {
         session_key: TransportSessionKey,
-        connection_id: ConnectionId,
     },
     ReleaseRelayRoute {
         source_session_key: TransportSessionKey,
@@ -79,7 +77,7 @@ impl TransportCleanupOperation {
     #[must_use]
     pub(super) fn user_id(&self) -> &UserId {
         match self {
-            Self::RemoveMedia { session_key, .. } | Self::CloseUser { session_key, .. } => {
+            Self::RemoveMedia { session_key, .. } | Self::CloseUser { session_key } => {
                 session_key.user_id()
             }
             Self::ReleaseRelayRoute { route, .. } => &route.source_user,
@@ -89,8 +87,8 @@ impl TransportCleanupOperation {
     #[must_use]
     pub(super) const fn connection_id(&self) -> ConnectionId {
         match self {
-            Self::RemoveMedia { connection_id, .. } | Self::CloseUser { connection_id, .. } => {
-                *connection_id
+            Self::RemoveMedia { session_key, .. } | Self::CloseUser { session_key } => {
+                session_key.connection_id()
             }
             Self::ReleaseRelayRoute { route, .. } => route.source_connection,
         }
@@ -111,7 +109,7 @@ impl TransportCleanupOperation {
     pub(super) const fn session_key(&self) -> &TransportSessionKey {
         match self {
             Self::RemoveMedia { session_key, .. }
-            | Self::CloseUser { session_key, .. }
+            | Self::CloseUser { session_key }
             | Self::ReleaseRelayRoute {
                 source_session_key: session_key,
                 ..
@@ -270,7 +268,7 @@ impl Room {
                     .remove_media(session_key, *transport_media_id)
                     .await
             }
-            TransportCleanupOperation::CloseUser { session_key, .. } => {
+            TransportCleanupOperation::CloseUser { session_key } => {
                 media_transport.close_session(session_key).await
             }
             TransportCleanupOperation::ReleaseRelayRoute {

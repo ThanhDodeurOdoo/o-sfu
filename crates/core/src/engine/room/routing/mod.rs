@@ -8,8 +8,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt,
-    sync::{Arc, OnceLock},
+    sync::OnceLock,
 };
 
 use o_sfu_router::{
@@ -23,7 +22,6 @@ use super::{
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, RoomInstanceId, UserId, media_transport::TransportSessionKey,
-    router_events::RoomRouterEventSink,
 };
 
 pub mod router_state;
@@ -134,7 +132,6 @@ pub(super) struct RoomRoutingState {
     instance_id: RoomInstanceId,
     primary_router: RouterId,
     local_routers: Option<LocalRoomRouterPlacements>,
-    router_state_factory: RoomRouterStateFactory,
     routers: BTreeMap<RouterId, RoomRouterState>,
     sessions: CommittedSessionPlacements,
     shadow_sessions: ShadowSessionTracker,
@@ -166,38 +163,6 @@ struct CommittedSessionPlacements {
     active_connection_by_user: BTreeMap<UserId, ConnectionId>,
 }
 
-#[derive(Clone)]
-pub(super) struct RoomRouterStateFactory {
-    event_sink: Arc<dyn RoomRouterEventSink>,
-}
-
-impl fmt::Debug for RoomRouterStateFactory {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RoomRouterStateFactory")
-            .finish_non_exhaustive()
-    }
-}
-
-impl RoomRouterStateFactory {
-    #[must_use]
-    pub(super) fn new(event_sink: Arc<dyn RoomRouterEventSink>) -> Self {
-        Self { event_sink }
-    }
-
-    fn build_router_state(
-        &self,
-        router_id: RouterId,
-        router_rtp_capabilities: MediaCapabilities,
-    ) -> RoomRouterState {
-        RoomRouterState::new(
-            router_id,
-            router_rtp_capabilities,
-            Arc::clone(&self.event_sink),
-        )
-    }
-}
-
 impl CommittedSessionPlacements {
     fn active(&self, user_id: &UserId) -> Option<&CommittedSessionPlacement> {
         let connection_id = self.active_connection_by_user.get(user_id)?;
@@ -222,23 +187,21 @@ impl CommittedSessionPlacements {
 }
 
 impl RoomRoutingState {
-    pub(super) fn new_with_router_state_factory(
+    pub(super) fn new_with_runtime(
         instance_id: RoomInstanceId,
         primary_router_id: RouterId,
         local_routers: Option<LocalRoomRouterPlacements>,
         router_rtp_capabilities: MediaCapabilities,
-        router_state_factory: &RoomRouterStateFactory,
     ) -> Self {
         let mut routers = BTreeMap::new();
         routers.insert(
             primary_router_id,
-            router_state_factory.build_router_state(primary_router_id, router_rtp_capabilities),
+            RoomRouterState::new(primary_router_id, router_rtp_capabilities),
         );
         Self {
             instance_id,
             primary_router: primary_router_id,
             local_routers,
-            router_state_factory: router_state_factory.clone(),
             routers,
             sessions: CommittedSessionPlacements::default(),
             shadow_sessions: ShadowSessionTracker::default(),
@@ -402,8 +365,7 @@ impl RoomRoutingState {
         let router_rtp_capabilities = self.rtp_capabilities().clone();
         self.routers.insert(
             router_id,
-            self.router_state_factory
-                .build_router_state(router_id, router_rtp_capabilities),
+            RoomRouterState::new(router_id, router_rtp_capabilities),
         );
     }
 

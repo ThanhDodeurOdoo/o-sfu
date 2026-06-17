@@ -156,7 +156,6 @@ async fn finish_setup(
             execute_relay_route_effects(room, media_transport, &relays).await;
             let cleanup = TransportCleanupOperation::RemoveMedia {
                 session_key: route.consumer_session_key().clone(),
-                connection_id: target.connection,
                 transport_media_id: route.consumer_transport_media_id(),
             };
             room.execute_transport_cleanup_operations(media_transport, slice::from_ref(&cleanup))

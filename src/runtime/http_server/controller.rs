@@ -3,9 +3,9 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, Path, Request, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{StatusCode, header},
-    middleware::{self, Next},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -112,10 +112,7 @@ fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
             "/internal/diagnostics/users/{id}",
             get(diagnostics_user_detail),
         )
-        .route_layer(middleware::from_fn_with_state(
-            state,
-            require_diagnostics_access,
-        ))
+        .route_layer(middleware::from_extractor_with_state::<DiagnosticsAccess, _>(state))
 }
 
 #[o_sfu_telemetry::measure_http_request(
@@ -350,14 +347,6 @@ async fn diagnostics_user_detail(
             (StatusCode::CONFLICT, axum::Json(payload)).into_response()
         }
     }
-}
-
-async fn require_diagnostics_access(
-    _access: DiagnosticsAccess,
-    request: Request,
-    next: Next,
-) -> Response {
-    next.run(request).await
 }
 
 fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStatsResponse {

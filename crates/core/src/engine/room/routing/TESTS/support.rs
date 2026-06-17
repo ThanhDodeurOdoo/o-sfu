@@ -1,37 +1,23 @@
 #[cfg(test)]
 use o_sfu_router::RouterId;
-#[cfg(test)]
-use {
-    super::RoomRouterStateFactory,
-    crate::{
-        MediaCodecFlags,
-        engine::{
-            RoomInstanceId, metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
-            recording::RecordingService, room::rtp_capabilities::router_rtp_capabilities,
-        },
-    },
-    std::sync::Arc,
-};
 
 use super::RoomRoutingState;
 #[cfg(test)]
 use crate::engine::UserId;
+#[cfg(test)]
+use crate::{
+    MediaCodecFlags,
+    engine::{RoomInstanceId, room::rtp_capabilities::router_rtp_capabilities},
+};
 
 impl RoomRoutingState {
     #[cfg(test)]
     pub fn new(primary_router_id: RouterId) -> Self {
-        let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
-        let event_sink = Arc::new(RecordingService::new(
-            RoomInstanceId::from_raw(0),
-            packet_sink_registry,
-            Arc::new(RuntimeMetrics::default()),
-        ));
-        Self::new_with_router_state_factory(
+        Self::new_with_runtime(
             RoomInstanceId::from_raw(0),
             primary_router_id,
             None,
             router_rtp_capabilities(MediaCodecFlags::default()),
-            &RoomRouterStateFactory::new(event_sink),
         )
     }
 

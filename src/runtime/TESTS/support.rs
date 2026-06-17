@@ -154,7 +154,6 @@ impl RuntimeTestBuilder {
                 .with_room_worker_policy(self.config.transport.room_worker_policy),
             ),
             RoomManagerDeps {
-                packet_sink_registry,
                 diagnostics: Arc::clone(&diagnostics),
                 metrics: Arc::clone(&metrics),
             },

@@ -519,16 +519,24 @@ impl MediaSession {
             .await
     }
 
+    #[must_use]
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the public MediaSession recording facade async while disabled recording is synchronous"
+    )]
     pub async fn start_recording(&self, options: RecordingOptions) -> bool {
         self.room
             .apply_recording_start(&self.user_id, self.connection_id, options)
-            .await
     }
 
+    #[must_use]
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the public MediaSession recording facade async while disabled recording is synchronous"
+    )]
     pub async fn stop_recording(&self) -> bool {
         self.room
             .apply_recording_stop(&self.user_id, self.connection_id)
-            .await
     }
 
     async fn renegotiation_event(&mut self) -> Result<Vec<SessionEvent>, SessionError> {

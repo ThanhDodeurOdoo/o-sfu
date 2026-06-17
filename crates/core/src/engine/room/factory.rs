@@ -23,8 +23,7 @@ use super::{
     init::{RoomInit, RoomServices},
 };
 use crate::engine::{
-    RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-    packet_sink_registry::RoomPacketSinkRegistry, sync::lock_unpoisoned,
+    RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics, sync::lock_unpoisoned,
 };
 
 /// Monotonic placement counters assigned by the current process.
@@ -71,13 +70,12 @@ impl RoomFactory {
     #[must_use]
     pub(crate) fn new(
         runtime_policy: RoomRuntimePolicy,
-        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
         diagnostics: Arc<DiagnosticsStore>,
         metrics: Arc<RuntimeMetrics>,
     ) -> Self {
         Self {
             runtime_policy,
-            services: RoomServices::new(diagnostics, packet_sink_registry, metrics),
+            services: RoomServices::new(diagnostics, metrics),
             allocator: Mutex::new(RoomRuntimeAllocator {
                 next_room_instance_id: 0,
                 next_router_id: 0,

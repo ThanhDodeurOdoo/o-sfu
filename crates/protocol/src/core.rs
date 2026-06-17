@@ -50,8 +50,8 @@ use crate::{
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
         EnvelopeBatch, NegotiationUploadSlot, PeerSnapshot, RecordingOptions, RequestId,
-        ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, SourceDescriptor,
-        StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
+        ServerEnvelope, SourceDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
+        WelcomePayload,
     },
 };
 
@@ -473,7 +473,19 @@ impl ProtocolCore {
         };
         let mut commands = Vec::new();
         for envelope in envelopes {
-            commands.extend(self.handle_server_envelope(envelope));
+            commands.extend(match envelope {
+                ServerEnvelope::Message(message) => {
+                    server_events::handle_server_message(self, message)
+                }
+                ServerEnvelope::Request {
+                    request_id,
+                    request,
+                } => request_flow::handle_server_request(self, request_id, request),
+                ServerEnvelope::Response {
+                    response_to,
+                    response,
+                } => request_flow::handle_server_response(self, &response_to, response),
+            });
         }
         command_batch(commands)
     }
@@ -635,7 +647,7 @@ impl ProtocolCore {
     /// routed back here by the host in the order they fire.
     pub fn on_timer(&mut self, timer_id: u32) -> CommandBatch {
         if timer_id == RECOVERY_TIMER_ID {
-            return command_batch(self.handle_recovery_timer());
+            return command_batch(connection_lifecycle::handle_recovery_timer(self));
         }
         if timer_id == BATCH_FLUSH_TIMER_ID {
             return command_batch(self.flush_pending_batch(false));
@@ -644,40 +656,6 @@ impl ProtocolCore {
             return command_batch(commands);
         }
         CommandBatch::default()
-    }
-
-    fn handle_recovery_timer(&mut self) -> Commands {
-        connection_lifecycle::handle_recovery_timer(self)
-    }
-
-    fn handle_server_envelope(&mut self, envelope: ServerEnvelope) -> Commands {
-        match envelope {
-            ServerEnvelope::Message(message) => self.handle_server_message(message),
-            ServerEnvelope::Request {
-                request_id,
-                request,
-            } => self.handle_server_request(request_id, request),
-            ServerEnvelope::Response {
-                response_to,
-                response,
-            } => self.handle_server_response(&response_to, response),
-        }
-    }
-
-    fn handle_server_message(&mut self, message: ServerMessage) -> Commands {
-        server_events::handle_server_message(self, message)
-    }
-
-    fn handle_server_request(&mut self, request_id: RequestId, request: ServerRequest) -> Commands {
-        request_flow::handle_server_request(self, request_id, request)
-    }
-
-    fn handle_server_response(
-        &mut self,
-        response_to: &RequestId,
-        response: ServerResponse,
-    ) -> Commands {
-        request_flow::handle_server_response(self, response_to, response)
     }
 
     fn enqueue_envelope(&mut self, envelope: Envelope, mode: FlushMode) -> Commands {

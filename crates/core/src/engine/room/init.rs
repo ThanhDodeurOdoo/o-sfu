@@ -7,10 +7,7 @@ use o_sfu_router::MediaCapabilities;
 use super::placement::RoomRuntimeContext;
 use crate::{
     RoomMediaLimits, RoomWorkerPolicy, RuntimeFeatureFlags,
-    engine::{
-        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-    },
+    engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
 };
 
 /// admission limits that stay fixed for one room lifetime
@@ -115,19 +112,13 @@ impl Default for RoomConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct RoomServices {
     pub(crate) diagnostics: Arc<DiagnosticsStore>,
-    pub(crate) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub(crate) metrics: Arc<RuntimeMetrics>,
 }
 
 impl RoomServices {
-    pub(crate) fn new(
-        diagnostics: Arc<DiagnosticsStore>,
-        packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-        metrics: Arc<RuntimeMetrics>,
-    ) -> Self {
+    pub(crate) fn new(diagnostics: Arc<DiagnosticsStore>, metrics: Arc<RuntimeMetrics>) -> Self {
         Self {
             diagnostics,
-            packet_sink_registry,
             metrics,
         }
     }

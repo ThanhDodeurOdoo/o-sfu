@@ -27,8 +27,6 @@ use crate::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
         media_transport::{SessionUploadEncoding, TransportMediaId},
         metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-        recording::RecordingService,
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             routing::{RoutedConsumerId, RoutedProducerId},
@@ -54,7 +52,6 @@ fn test_state() -> RoomState {
 }
 
 fn test_state_with_media_limits(media_limits: RoomMediaLimits) -> RoomState {
-    let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
     let runtime_context = RoomRuntimeContext::new(
         RoomInstanceId::from_raw(0),
         LocalRouterRuntimeContext {
@@ -68,11 +65,6 @@ fn test_state_with_media_limits(media_limits: RoomMediaLimits) -> RoomState {
         RoomAdmissionPolicy::new(4),
         media_limits,
         router_rtp_capabilities(MediaCodecFlags::default()),
-        Arc::new(RecordingService::new(
-            RoomInstanceId::from_raw(0),
-            packet_sink_registry,
-            Arc::new(RuntimeMetrics::default()),
-        )),
     )
 }
 

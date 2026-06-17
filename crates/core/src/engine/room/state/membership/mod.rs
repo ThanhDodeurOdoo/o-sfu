@@ -348,7 +348,6 @@ impl RoomState {
             };
             let close_operation = TransportCleanupOperation::CloseUser {
                 session_key: self.transport_user_key(user_id, connection_id),
-                connection_id,
             };
             let Some((user, user_media_effects)) = self.remove_runtime_user(user_id) else {
                 continue;

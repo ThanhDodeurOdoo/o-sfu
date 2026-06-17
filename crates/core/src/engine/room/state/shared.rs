@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities};
 
@@ -18,7 +15,6 @@ use crate::{
         VideoLayoutIntent,
         media_transport::{TransportConsumerRoute, TransportSessionKey},
         room::placement::{LoadTriggeredPlacementState, RoomPlacementUsageSnapshot},
-        router_events::RoomRouterEventSink,
         source_model::{
             ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor,
             PublishedSourceId, SourceSubscriptionIntent, UserStreamId,
@@ -86,7 +82,6 @@ impl RoomState {
         admission_policy: RoomAdmissionPolicy,
         media_limits: RoomMediaLimits,
         router_rtp_capabilities: MediaCapabilities,
-        router_event_sink: Arc<dyn RoomRouterEventSink>,
     ) -> Self {
         Self {
             admission_policy,
@@ -103,11 +98,7 @@ impl RoomState {
                 transcription: Some(false),
                 video: Some(false),
             },
-            topology: RoomTopology::new(
-                runtime_context,
-                router_rtp_capabilities,
-                router_event_sink,
-            ),
+            topology: RoomTopology::new(runtime_context, router_rtp_capabilities),
         }
     }
 
