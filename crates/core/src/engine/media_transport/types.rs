@@ -53,6 +53,11 @@ impl TransportSessionKey {
     }
 
     #[must_use]
+    pub const fn connection_id(&self) -> ConnectionId {
+        self.connection
+    }
+
+    #[must_use]
     pub fn user_id(&self) -> &UserId {
         self.user.as_ref()
     }

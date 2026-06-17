@@ -713,23 +713,28 @@ impl StreamBinding {
     }
 
     #[must_use]
-    pub(super) fn ssrc_id(&self) -> Option<Ssrc> {
-        self.ssrc
-    }
-
-    #[must_use]
     pub fn ssrc(&self) -> Option<u32> {
         self.ssrc.map(Ssrc::value)
     }
 
     #[must_use]
-    pub(super) fn rid_id(&self) -> Option<&Rid> {
-        self.rid.as_ref()
+    pub fn rid(&self) -> Option<&str> {
+        self.rid.as_ref().map(Rid::as_str)
     }
 
     #[must_use]
-    pub fn rid(&self) -> Option<&str> {
-        self.rid.as_ref().map(Rid::as_str)
+    pub(super) fn with_payload_type_mapping(
+        mut self,
+        payload_types: &[(PayloadType, PayloadType)],
+    ) -> Self {
+        if let Some(payload_type) = self.payload_type {
+            let mapped_payload_type = payload_types
+                .iter()
+                .find_map(|(original, mapped)| (*original == payload_type).then_some(*mapped))
+                .unwrap_or(payload_type);
+            self.payload_type = Some(mapped_payload_type);
+        }
+        self
     }
 
     #[must_use]

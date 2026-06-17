@@ -17,10 +17,7 @@ use super::{
 };
 use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
-    engine::{
-        MediaWorkerId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-    },
+    engine::{MediaWorkerId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
     prelude::LocalSpilloverPolicyParts,
 };
 
@@ -212,7 +209,6 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
             ),
         ),
         super::super::RoomManagerDeps {
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: Arc::clone(&metrics),
         },
@@ -241,7 +237,6 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
             ),
         ),
         super::super::RoomManagerDeps {
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: Arc::clone(&metrics),
         },

@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, fmt};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use serde_json::{Map, Number, Value};
 use time::format_description::well_known::Rfc3339;
 use tracing::{
@@ -215,8 +215,7 @@ pub fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<Telemet
                     .as_ref()
                     .map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer.clone())),
             )
-            .try_init()
-            .map_err(|error| anyhow!(error.to_string()))?,
+            .try_init()?,
         TelemetryLogFormat::Json => Registry::default()
             .with(env_filter)
             .with(
@@ -230,8 +229,7 @@ pub fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<Telemet
                     .as_ref()
                     .map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer.clone())),
             )
-            .try_init()
-            .map_err(|error| anyhow!(error.to_string()))?,
+            .try_init()?,
     }
     tracing::info!(
         event = schema::event::RUNTIME_TELEMETRY_INITIALIZED,
@@ -263,8 +261,7 @@ pub fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<Telemet
         TelemetryLogFormat::Compact => Registry::default()
             .with(env_filter)
             .with(fmt_layer().with_target(false).compact())
-            .try_init()
-            .map_err(|error| anyhow!(error.to_string()))?,
+            .try_init()?,
         TelemetryLogFormat::Json => Registry::default()
             .with(env_filter)
             .with(
@@ -273,8 +270,7 @@ pub fn init_tracing(config: &TelemetryConfig, process_id: u32) -> Result<Telemet
                     .event_format(RuntimeJsonFormatter::new(resource.clone()))
                     .with_ansi(false),
             )
-            .try_init()
-            .map_err(|error| anyhow!(error.to_string()))?,
+            .try_init()?,
     }
     tracing::info!(
         event = schema::event::RUNTIME_TELEMETRY_INITIALIZED,

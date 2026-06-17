@@ -1,7 +1,6 @@
 mod diagnostics;
 mod fanout;
 mod membership;
-mod recording;
 mod shared;
 #[cfg(any(test, feature = "testing-transport"))]
 #[path = "TESTS/support.rs"]

@@ -23,7 +23,6 @@ use crate::engine::{
     diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
     media_transport::{MediaTransport, TransportSessionKey},
     metrics::RuntimeMetrics,
-    packet_sink_registry::RoomPacketSinkRegistry,
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -48,7 +47,6 @@ impl RoomManagerConfig {
 
 #[derive(Debug, Clone)]
 pub struct RoomManagerDeps {
-    pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub diagnostics: Arc<DiagnosticsStore>,
     pub metrics: Arc<RuntimeMetrics>,
 }
@@ -92,7 +90,6 @@ impl RoomManager {
     pub fn new(config: RoomManagerConfig, deps: RoomManagerDeps) -> Self {
         let factory = RoomFactory::new(
             config.runtime_policy,
-            deps.packet_sink_registry,
             Arc::clone(&deps.diagnostics),
             Arc::clone(&deps.metrics),
         );

@@ -1,29 +1,16 @@
-use std::sync::Arc;
-
 use o_sfu_router::RouterId;
 
 use super::RoomRouterState;
 use crate::{
     MediaCodecFlags,
-    engine::{
-        RoomInstanceId, UserId, metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry, recording::RecordingService,
-        room::rtp_capabilities::router_rtp_capabilities,
-    },
+    engine::{UserId, room::rtp_capabilities::router_rtp_capabilities},
 };
 
 impl RoomRouterState {
     pub fn new_for_test(router_id: RouterId) -> Self {
-        let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
-        let event_sink = Arc::new(RecordingService::new(
-            RoomInstanceId::from_raw(0),
-            packet_sink_registry,
-            Arc::new(RuntimeMetrics::default()),
-        ));
         Self::new(
             router_id,
             router_rtp_capabilities(MediaCodecFlags::default()),
-            event_sink,
         )
     }
 

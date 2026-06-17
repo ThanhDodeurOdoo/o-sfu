@@ -80,11 +80,6 @@ struct DirtyRoomRegistry {
 }
 
 impl DirtyRoomRegistry {
-    fn insert(&self, room_instance_id: RoomInstanceId) {
-        let mut dirty_rooms = lock_unpoisoned(&self.room_instance_ids);
-        dirty_rooms.insert(room_instance_id);
-    }
-
     fn insert_many(&self, room_instance_ids: impl IntoIterator<Item = RoomInstanceId>) -> bool {
         let mut dirty_rooms = lock_unpoisoned(&self.room_instance_ids);
         let mut saw_room = false;
@@ -175,10 +170,7 @@ impl SourcePolicySignal {
     /// duplicate marks are cheap
     /// only the first mark after a drain wakes the subscription
     pub fn mark_dirty(&self, room_instance_id: RoomInstanceId) {
-        self.dirty_rooms.insert(room_instance_id);
-        if self.dirty.mark_dirty() {
-            self.notify.notify_one();
-        }
+        self.mark_dirty_rooms([room_instance_id]);
     }
 
     /// mark a batch of room instances as needing a source-policy refresh

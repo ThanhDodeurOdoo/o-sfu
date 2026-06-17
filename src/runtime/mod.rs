@@ -435,7 +435,6 @@ fn build_room_manager(
     Arc::new(RoomManager::new(
         RoomManagerConfig::new(options.core.routing.media_worker_count, runtime_policy),
         RoomManagerDeps {
-            packet_sink_registry: Arc::clone(&services.packet_sink_registry),
             diagnostics: Arc::clone(&services.diagnostics),
             metrics: Arc::clone(&services.metrics),
         },

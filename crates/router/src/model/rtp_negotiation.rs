@@ -17,7 +17,7 @@ use o_sfu_rfc::rtp as rfc_rtp;
 use super::{
     CodecSetting, HeaderExtension, HeaderExtensionUri, MediaCapabilities, MediaCodec,
     MediaCodecCapability, MediaFormat, MediaKind, MediaStream, PayloadType, RtcpFeedback,
-    RtcpFeedbackKind, StreamBinding,
+    RtcpFeedbackKind,
 };
 #[cfg(any(test, feature = "test-support"))]
 use super::{ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference};
@@ -200,13 +200,12 @@ pub fn derive_consumable_rtp_parameters(
                 .header_extensions()
                 .any(|producer_extension| producer_extension.uri_kind() == extension.uri_kind())
         })
-        .map(clone_header_extension)
+        .cloned()
         .collect::<Vec<_>>();
     let bindings = producer_parameters
         .bindings()
-        .map(|binding| {
-            clone_binding_with_payload_mapping(binding, &producer_to_router_payload_types)
-        })
+        .cloned()
+        .map(|binding| binding.with_payload_type_mapping(&producer_to_router_payload_types))
         .collect::<Vec<_>>();
 
     let mut consumable = MediaStream::new(consumable_formats, header_extensions, bindings);
@@ -297,7 +296,7 @@ pub fn negotiate_consumer_rtp_parameters(
                 formats_contain_payload_type(&negotiated_formats, payload_type)
             })
         })
-        .map(clone_binding)
+        .cloned()
         .collect::<Vec<_>>();
 
     let mut negotiated =
@@ -366,13 +365,8 @@ fn find_matching_rtx_capability<'a>(
     capabilities.codecs().find(|capability_format| {
         capability_format.codec().is_rtx()
             && codec_match_ignoring_payload_type(format, capability_format)
-            && capability_format.settings().any(|setting| {
-                matches!(
-                    setting,
-                    CodecSetting::RtxAssociation(payload_type)
-                    if *payload_type == negotiated_associated_payload_type
-                )
-            })
+            && capability_format.rtx_associated_payload_type_id()
+                == Some(negotiated_associated_payload_type)
     })
 }
 
@@ -393,13 +387,7 @@ fn find_matching_consumer_rtx_capability<'a>(
     capabilities.codecs().find(|capability_format| {
         capability_format.codec().is_rtx()
             && codec_match_ignoring_payload_type(format, capability_format)
-            && capability_format.settings().any(|setting| {
-                matches!(
-                    setting,
-                    CodecSetting::RtxAssociation(payload_type)
-                    if *payload_type == associated_payload_type
-                )
-            })
+            && capability_format.rtx_associated_payload_type_id() == Some(associated_payload_type)
     })
 }
 
@@ -532,16 +520,12 @@ fn vp9_critical_settings_match(
 /// It is the linkage that says which primary payload type this repair stream
 /// protects. Without it, the RTX format is structurally invalid for negotiation.
 fn parse_rtx_associated_payload(format: &MediaFormat) -> Result<PayloadType, RtpNegotiationError> {
-    format
-        .settings()
-        .find_map(|setting| match setting {
-            CodecSetting::RtxAssociation(payload_type) => Some(*payload_type),
-            _ => None,
-        })
-        .ok_or_else(|| RtpNegotiationError::InvalidAptParameter {
+    format.rtx_associated_payload_type_id().ok_or_else(|| {
+        RtpNegotiationError::InvalidAptParameter {
             codec_name: format.codec().as_str().to_owned(),
             payload_type: format.payload_type(),
-        })
+        }
+    })
 }
 
 /// Rebuild the format from the source while applying negotiated overrides.
@@ -574,69 +558,13 @@ fn format_with_overrides(
     }
     if let Some(apt) = apt_override {
         format = format.with_setting(CodecSetting::RtxAssociation(apt));
-    } else if let Some(apt) = source.settings().find_map(|setting| match setting {
-        CodecSetting::RtxAssociation(payload_type) => Some(*payload_type),
-        _ => None,
-    }) {
+    } else if let Some(apt) = source.rtx_associated_payload_type_id() {
         format = format.with_setting(CodecSetting::RtxAssociation(apt));
     }
     for entry in feedback {
         format = format.with_rtcp_feedback(entry.clone());
     }
     format
-}
-
-fn clone_header_extension(source: &HeaderExtension) -> HeaderExtension {
-    let mut extension = HeaderExtension::new(source.uri_kind().clone(), source.id());
-    if source.encrypt() {
-        extension = extension.with_encryption(true);
-    }
-    extension
-}
-
-fn clone_binding(source: &StreamBinding) -> StreamBinding {
-    let mut binding = StreamBinding::new();
-    if let Some(ssrc) = source.ssrc_id() {
-        binding = binding.with_ssrc(ssrc);
-    }
-    if let Some(rid) = source.rid_id() {
-        binding = binding.with_rid(rid.clone());
-    }
-    if let Some(payload_type) = source.payload_type_id() {
-        binding = binding.with_payload_type(payload_type);
-    }
-    if let Some(max_bitrate) = source.max_bitrate() {
-        binding = binding.with_max_bitrate(max_bitrate);
-    }
-    binding
-}
-
-/// Some bindings are payload-type-bound rather then only SSRC/RID-bound.
-/// When the router rewrites primary PTs, those bindings must be rewritten too
-/// otherwise the negotiated stream would containing bindings that still refer to
-/// the producer's private PT numbering.
-fn clone_binding_with_payload_mapping(
-    source: &StreamBinding,
-    producer_to_router_payload_types: &[(PayloadType, PayloadType)],
-) -> StreamBinding {
-    let mut binding = StreamBinding::new();
-    if let Some(ssrc) = source.ssrc_id() {
-        binding = binding.with_ssrc(ssrc);
-    }
-    if let Some(rid) = source.rid_id() {
-        binding = binding.with_rid(rid.clone());
-    }
-    if let Some(payload_type) = source.payload_type_id() {
-        let negotiated_payload_type = producer_to_router_payload_types
-            .iter()
-            .find_map(|(original, mapped)| (*original == payload_type).then_some(*mapped))
-            .unwrap_or(payload_type);
-        binding = binding.with_payload_type(negotiated_payload_type);
-    }
-    if let Some(max_bitrate) = source.max_bitrate() {
-        binding = binding.with_max_bitrate(max_bitrate);
-    }
-    binding
 }
 
 /// RTCP feedback is negotiated by common support, not by union.
@@ -686,7 +614,7 @@ fn negotiate_header_extensions(
                 .header_extensions()
                 .any(|supported| supported.uri_kind() == extension.uri_kind())
         })
-        .map(clone_header_extension)
+        .cloned()
         .collect()
 }
 

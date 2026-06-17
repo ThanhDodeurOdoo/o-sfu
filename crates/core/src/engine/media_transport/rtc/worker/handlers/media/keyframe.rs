@@ -15,7 +15,7 @@ use super::{
         media_registry::RegisteredMediaHandle,
         route_control::PacketLayerGate,
         source_route::{MediaRouteDestination, RemoteSourceRegistration},
-        state::{PacketLoopState, RtcSessionState},
+        state::PacketLoopState,
     },
     control::{ensure_existing_route_src, ensure_local_producer_mid},
     types::RouteSourceKind,
@@ -287,11 +287,28 @@ fn producer_kf_target_rids(
         );
         return Vec::new();
     };
-    let candidate_rids = if rid.is_none() {
-        producer_kf_candidate_rids(session_state, mid)
-    } else {
-        Vec::new()
-    };
+    let mut candidate_rids = Vec::new();
+    if rid.is_none() {
+        for candidate_rid in session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .get(&mid)
+            .into_iter()
+            .flat_map(|parameters| {
+                parameters
+                    .bindings()
+                    .filter_map(|binding| binding.rid().map(Rid::from))
+            })
+        {
+            push_unique_rid(&mut candidate_rids, candidate_rid);
+        }
+        if let Some(pending_streams) = session_state.sdp_negotiation.pending_recv_streams.get(&mid)
+        {
+            for candidate_rid in pending_streams.iter().filter_map(|stream| stream.rid) {
+                push_unique_rid(&mut candidate_rids, candidate_rid);
+            }
+        }
+    }
     let mut direct_api = session_state.rtc.direct_api();
     let mut target_rids = Vec::new();
     if let Some(rid) = rid {
@@ -322,28 +339,6 @@ fn producer_kf_target_rids(
         );
     }
     target_rids
-}
-
-fn producer_kf_candidate_rids(session_state: &RtcSessionState, mid: Mid) -> Vec<Rid> {
-    let mut rids = Vec::new();
-    if let Some(parameters) = session_state
-        .sdp_negotiation
-        .negotiated_producer_parameters
-        .get(&mid)
-    {
-        for rid in parameters
-            .bindings()
-            .filter_map(|binding| binding.rid().map(Rid::from))
-        {
-            push_unique_rid(&mut rids, rid);
-        }
-    }
-    if let Some(pending_streams) = session_state.sdp_negotiation.pending_recv_streams.get(&mid) {
-        for rid in pending_streams.iter().filter_map(|stream| stream.rid) {
-            push_unique_rid(&mut rids, rid);
-        }
-    }
-    rids
 }
 
 fn push_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {

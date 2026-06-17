@@ -116,10 +116,7 @@ impl Room {
             let before = MembershipCountSnapshot::from_state(&state);
             let transport_close = state
                 .committed_transport_user_key(user_id, connection_id)
-                .map(|session_key| TransportCleanupOperation::CloseUser {
-                    session_key,
-                    connection_id,
-                });
+                .map(|session_key| TransportCleanupOperation::CloseUser { session_key });
             let outcome = state.apply_leave(user_id, connection_id);
             if outcome.is_none() {
                 state

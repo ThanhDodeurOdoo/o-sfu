@@ -20,8 +20,6 @@ use crate::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
         media_transport::{TransportMediaId, TransportRelayRouteAction, TransportSessionKey},
         metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-        recording::RecordingService,
         room::{
             LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
             media_graph::{
@@ -42,7 +40,6 @@ use crate::{
 };
 
 fn test_state() -> RoomState {
-    let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
     let runtime_context = RoomRuntimeContext::new(
         RoomInstanceId::from_raw(0),
         LocalRouterRuntimeContext {
@@ -56,11 +53,6 @@ fn test_state() -> RoomState {
         RoomAdmissionPolicy::new(4),
         RoomMediaLimits::default(),
         router_rtp_capabilities(MediaCodecFlags::default()),
-        Arc::new(RecordingService::new(
-            RoomInstanceId::from_raw(0),
-            packet_sink_registry,
-            Arc::new(RuntimeMetrics::default()),
-        )),
     )
 }
 
@@ -533,9 +525,8 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
             operation,
             TransportCleanupOperation::CloseUser {
                 session_key,
-                connection_id,
             } if session_key == &relay.publisher_session
-                && *connection_id == relay.publisher_connection
+                && session_key.connection_id() == relay.publisher_connection
         )
     }));
     assert!(!cleanup.iter().any(|operation| {

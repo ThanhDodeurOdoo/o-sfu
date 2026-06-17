@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use o_sfu_router::{
     ConsumerCapability, ConsumerId as RouterConsumerId, ConsumerRouteState, ConsumerSpec,
@@ -7,10 +7,7 @@ use o_sfu_router::{
     SessionId as RouterSessionId, TransportId as RouterTransportId,
 };
 
-use crate::engine::{
-    UserId,
-    router_events::{RoomRouterEventSink, RoomRouterObserver},
-};
+use crate::engine::UserId;
 
 #[cfg(test)]
 #[path = "TESTS/support.rs"]
@@ -37,7 +34,7 @@ impl From<RouterError> for RoomRouterStateError {
 /// router mutations line up with the room state that already accepted the
 /// signaling transition.
 pub struct RoomRouterState {
-    router: Router<RoomRouterObserver>,
+    router: Router,
     rtp_capabilities: MediaCapabilities,
     sessions_by_user: BTreeMap<UserId, RouterSessionId>,
     transports_by_user: BTreeMap<UserId, SessionTransportIds>,
@@ -53,13 +50,9 @@ struct SessionTransportIds {
 }
 
 impl RoomRouterState {
-    pub(super) fn new(
-        router_id: RouterId,
-        rtp_capabilities: MediaCapabilities,
-        event_sink: Arc<dyn RoomRouterEventSink>,
-    ) -> Self {
+    pub(super) fn new(router_id: RouterId, rtp_capabilities: MediaCapabilities) -> Self {
         Self {
-            router: Router::new_with_observer(router_id, RoomRouterObserver::new(event_sink)),
+            router: Router::new(router_id),
             rtp_capabilities,
             sessions_by_user: BTreeMap::new(),
             transports_by_user: BTreeMap::new(),

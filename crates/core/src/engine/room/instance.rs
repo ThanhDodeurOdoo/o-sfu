@@ -13,12 +13,11 @@ use super::{
 #[cfg(test)]
 use crate::engine::media_transport::TransportMediaId;
 use crate::{
-    RoomSpilloverMode, RoomWorkerPolicy, RuntimeFeatureFlags,
+    RoomSpilloverMode, RoomWorkerPolicy,
     engine::{
         AvailableFeatures, ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState,
         RoomInstanceId, UserId, diagnostics::DiagnosticsStore, media_transport::MediaTransport,
-        metrics::RuntimeMetrics, recording::RecordingService, router_events::RoomRouterEventSink,
-        sync::lock_unpoisoned,
+        metrics::RuntimeMetrics, sync::lock_unpoisoned,
     },
 };
 
@@ -45,7 +44,6 @@ pub struct Room {
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) definition: RoomDefinition,
     pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
-    pub(super) recording_service: Arc<RecordingService>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) cleanup_reconciler: Mutex<CleanupReconciler>,
     pub(super) staged_publishes: StagedPublishes,
@@ -68,18 +66,10 @@ impl Room {
         } = init;
         let definition =
             RoomDefinition::new(&runtime_context, &runtime_policy, issuer, key, config);
-        let recording_service = Arc::new(RecordingService::new(
-            definition.instance_id(),
-            services.packet_sink_registry,
-            Arc::clone(&services.metrics),
-        ));
-        let recording_event_sink = Arc::<RecordingService>::clone(&recording_service);
-        let router_event_sink: Arc<dyn RoomRouterEventSink> = recording_event_sink;
         Self {
             diagnostics: services.diagnostics,
             definition,
             load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
-            recording_service: Arc::clone(&recording_service),
             metrics: services.metrics,
             cleanup_reconciler: Mutex::new(CleanupReconciler::default()),
             staged_publishes: StagedPublishes::default(),
@@ -92,7 +82,6 @@ impl Room {
                 runtime_policy.admission_policy,
                 runtime_policy.media_limits,
                 runtime_policy.router_rtp_capabilities,
-                router_event_sink,
             )),
         }
     }
@@ -156,11 +145,6 @@ impl Room {
     }
 
     #[must_use]
-    pub(crate) const fn recording_available(&self) -> bool {
-        self.definition.recording_available()
-    }
-
-    #[must_use]
     pub async fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
         self.state.read().await.assigned_primary_media_worker_id()
     }
@@ -172,11 +156,6 @@ impl Room {
     #[must_use]
     pub(crate) fn instance_id(&self) -> RoomInstanceId {
         self.definition.instance_id()
-    }
-
-    #[must_use]
-    pub(crate) fn feature_flags(&self) -> RuntimeFeatureFlags {
-        self.definition.feature_flags()
     }
 }
 

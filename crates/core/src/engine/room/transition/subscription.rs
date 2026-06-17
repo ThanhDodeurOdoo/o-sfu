@@ -61,13 +61,17 @@ impl RoomUserOperation<'_> {
     }
 
     pub(crate) async fn apply_session_refreshed(self) -> Option<()> {
-        self.request_video_keyframes_required().await?;
+        let targets = self.video_keyframe_targets().await?;
+        self.request_video_keyframes(targets).await;
         self.setup_missing_consumers().await
     }
 
     async fn refresh_after_initial_answer(self) -> Option<()> {
         self.setup_missing_consumers().await?;
-        self.request_video_keyframes_if_present().await
+        if let Some(targets) = self.video_keyframe_targets().await {
+            self.request_video_keyframes(targets).await;
+        }
+        Some(())
     }
 
     pub(crate) async fn apply_receiver_intent(
@@ -108,20 +112,6 @@ impl RoomUserOperation<'_> {
         effects::batch::build_consumer_readiness(commit)
             .execute(room, RoomEffectContext::runtime(self.media_transport))
             .await;
-        Some(())
-    }
-
-    async fn request_video_keyframes_if_present(self) -> Option<()> {
-        let Some(targets) = self.video_keyframe_targets().await else {
-            return Some(());
-        };
-        self.request_video_keyframes(targets).await;
-        Some(())
-    }
-
-    async fn request_video_keyframes_required(self) -> Option<()> {
-        let targets = self.video_keyframe_targets().await?;
-        self.request_video_keyframes(targets).await;
         Some(())
     }
 

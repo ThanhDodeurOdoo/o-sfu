@@ -309,7 +309,6 @@ impl StagedPublish {
         self.armed = false;
         TransportCleanupOperation::RemoveMedia {
             session_key: self.descriptor.session_key.clone(),
-            connection_id: self.descriptor.owner_connection_id,
             transport_media_id: self.media,
         }
     }

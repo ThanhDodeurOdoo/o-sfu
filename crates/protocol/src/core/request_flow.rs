@@ -29,10 +29,7 @@ pub(super) fn submit_negotiation_answer(
     kind: NegotiationKind,
     sdp: impl Into<String>,
 ) -> Commands {
-    if !core.can_send_client_messages() {
-        return Vec::new();
-    }
-    if !core.phase.resolve_negotiation(request_id, kind) {
+    if !core.can_send_client_messages() || !core.phase.resolve_negotiation(request_id, kind) {
         return Vec::new();
     }
     let sdp = sdp.into();
