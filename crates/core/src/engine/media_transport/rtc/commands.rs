@@ -135,7 +135,11 @@ impl RemoteSourceControl {
     fn send_command(&self, command: RtcWorkerCommand, drop_kind: RtcRemoteControlDropKind) -> bool {
         match self.tx.try_send(command) {
             Ok(()) => true,
-            Err(_error) => {
+            Err(mpsc::error::TrySendError::Full(_command)) => {
+                self.metrics.record_rtc_remote_control_drop(drop_kind);
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_command)) => {
                 self.metrics.record_rtc_remote_control_drop(drop_kind);
                 false
             }
