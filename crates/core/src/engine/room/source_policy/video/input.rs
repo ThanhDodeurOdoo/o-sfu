@@ -10,7 +10,6 @@ use crate::{
     Bitrate,
     engine::{
         UserId,
-        media_transport::TransportConsumerRoute,
         room::{media_graph::ConsumerRouteTransportRef, state::RoomState},
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
@@ -46,7 +45,6 @@ pub(super) fn receiver_video_routes<'a>(
             user_count: input.user_count,
             source,
             route: route.route.clone(),
-            transport_route: route.transport_route.clone(),
             current_selection: route.current_selection,
             layout_intent,
             visible_scalable_route_count: visible_scalable_route_counts
@@ -71,7 +69,6 @@ pub struct ReceiverVideoRouteInput<'a> {
     pub user_count: usize,
     pub source: &'a PublishedSourceDescriptor,
     pub route: ConsumerRouteTransportRef,
-    pub transport_route: TransportConsumerRoute,
     pub current_selection: ConsumerSourceSelection,
     pub layout_intent: ReceiverVideoLayoutIntent,
     pub visible_scalable_route_count: usize,

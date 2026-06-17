@@ -1,7 +1,7 @@
 use super::super::media_graph::ConsumerRouteTransportRef;
 use crate::engine::{
     UserId,
-    media_transport::{ReceiverBweTargetUpdate, SourcePacketGate, TransportConsumerRoute},
+    media_transport::{ReceiverBweTargetUpdate, SourcePacketGate},
     source_model::{
         ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
         ReceiverVideoBudgetDiagnostics, SourceSelector,
@@ -67,7 +67,6 @@ impl BudgetSolverOutcomes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumerPacketSelectionUpdate {
     pub route: ConsumerRouteTransportRef,
-    pub transport_route: TransportConsumerRoute,
     pub source_id: PublishedSourceId,
     pub selector: SourceSelector,
     pub policy_pause_reason: Option<PolicyPauseReason>,
@@ -83,7 +82,6 @@ pub struct ConsumerPacketSelectionUpdate {
 impl ConsumerPacketSelectionUpdate {
     pub fn route_activity(
         route: ConsumerRouteTransportRef,
-        transport_route: TransportConsumerRoute,
         source_id: PublishedSourceId,
         current_selection: ConsumerSourceSelection,
         policy_pause_reason: Option<PolicyPauseReason>,
@@ -91,7 +89,6 @@ impl ConsumerPacketSelectionUpdate {
         let route_activity_update = policy_pause_reason != current_selection.policy_pause_reason();
         route_activity_update.then(|| Self {
             route,
-            transport_route,
             source_id,
             selector: current_selection.selector(),
             policy_pause_reason,

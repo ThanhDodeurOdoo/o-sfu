@@ -12,7 +12,7 @@ use super::{
 use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, ConsumerPacketGateUpdate, MediaTransport, ReceiverBandwidthSnapshot,
-        ReceiverBweTargetUpdate,
+        ReceiverBweTargetUpdate, TransportAdapterError, TransportConsumerRoute,
     },
     metrics::{self, BudgetSolverOutcome},
 };
@@ -23,10 +23,13 @@ mod test_support;
 
 #[derive(Debug, Default)]
 pub struct SourcePolicyEffectPlan {
-    packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+    state_only_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+    transport_effect_packet_updates: Vec<PacketUpdateWithRoute>,
     receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
     featured_users: Vec<FeaturedUserUpdate>,
 }
+
+type PacketUpdateWithRoute = (ConsumerPacketSelectionUpdate, TransportConsumerRoute);
 
 impl SourcePolicyEffectPlan {
     pub fn from_state(
@@ -39,33 +42,46 @@ impl SourcePolicyEffectPlan {
             active_speaker_sources,
             receiver_bandwidth_snapshot,
         );
-        let mut packet_updates = audio::audio_route_activity_updates(&input);
+        let audio_updates = audio::audio_route_activity_updates(&input);
         let video_plan = video::receiver_video_policy_plan(state, &input);
-        packet_updates.extend(video_plan.consumer_packet_updates);
+        let (state_only_packet_updates, transport_effect_packet_updates) = split_packet_updates(
+            state,
+            audio_updates
+                .into_iter()
+                .chain(video_plan.consumer_packet_updates),
+        );
         let featured_users = input.featured_user_updates;
         Self {
-            packet_updates,
+            state_only_packet_updates,
+            transport_effect_packet_updates,
             receiver_bwe_targets: video_plan.receiver_bwe_targets,
             featured_users,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.packet_updates.is_empty()
+        self.state_only_packet_updates.is_empty()
+            && self.transport_effect_packet_updates.is_empty()
             && self.receiver_bwe_targets.is_empty()
             && self.featured_users.is_empty()
     }
 
     pub async fn execute(self, room: &Room, media_port: &MediaTransport) {
         let Self {
-            packet_updates,
+            state_only_packet_updates,
+            transport_effect_packet_updates,
             receiver_bwe_targets,
             featured_users,
         } = self;
         media_port
             .set_receiver_bwe_targets(&receiver_bwe_targets)
             .await;
-        let applied_packet_updates = apply_packet_updates(media_port, packet_updates).await;
+        let applied_packet_updates = apply_packet_updates(
+            media_port,
+            state_only_packet_updates,
+            transport_effect_packet_updates,
+        )
+        .await;
         if applied_packet_updates.is_empty() && featured_users.is_empty() {
             return;
         }
@@ -111,16 +127,26 @@ impl SourcePolicyEffectPlan {
 
 async fn apply_packet_updates(
     media_port: &MediaTransport,
-    updates: Vec<ConsumerPacketSelectionUpdate>,
+    state_only_updates: Vec<ConsumerPacketSelectionUpdate>,
+    transport_effect_updates: Vec<PacketUpdateWithRoute>,
 ) -> Vec<ConsumerPacketSelectionUpdate> {
-    let mut packet_gate_results = media_port
-        .set_consumer_packet_gates(&packet_gate_updates(&updates))
-        .await
-        .into_iter();
-    let mut applied_updates = Vec::with_capacity(updates.len());
-    for update in updates {
+    if transport_effect_updates.is_empty() {
+        return state_only_updates;
+    }
+    let packet_gate_updates = packet_gate_updates(&transport_effect_updates);
+    let packet_gate_results = if packet_gate_updates.is_empty() {
+        Vec::new()
+    } else {
+        media_port
+            .set_consumer_packet_gates(&packet_gate_updates)
+            .await
+    };
+    let mut packet_gate_results = packet_gate_results.into_iter();
+    let mut applied_updates = state_only_updates;
+    applied_updates.reserve(transport_effect_updates.len());
+    for update in transport_effect_updates {
         if let Some(update) =
-            accepted_packet_update(media_port, update, &mut packet_gate_results).await
+            apply_transport_packet_update(media_port, update, &mut packet_gate_results).await
         {
             applied_updates.push(update);
         }
@@ -128,10 +154,10 @@ async fn apply_packet_updates(
     applied_updates
 }
 
-async fn accepted_packet_update<E>(
+async fn apply_transport_packet_update(
     media_port: &MediaTransport,
-    update: ConsumerPacketSelectionUpdate,
-    packet_gate_results: &mut impl Iterator<Item = Result<(), E>>,
+    (update, captured_route): PacketUpdateWithRoute,
+    packet_gate_results: &mut impl Iterator<Item = Result<(), TransportAdapterError>>,
 ) -> Option<ConsumerPacketSelectionUpdate> {
     if update.packet_gate.is_some() && !matches!(packet_gate_results.next(), Some(Ok(()))) {
         warn!(
@@ -140,7 +166,7 @@ async fn accepted_packet_update<E>(
         );
         return None;
     }
-    let outcome = ConsumerRouteEffect::new(&update.transport_route)
+    let outcome = ConsumerRouteEffect::new(&captured_route)
         .with_activity_if(update.route_activity_update, update.route_active())
         .with_keyframe(update.request_keyframe)
         .execute(media_port)
@@ -179,10 +205,34 @@ fn log_keyframe_outcome(update: &ConsumerPacketSelectionUpdate, failed: bool) {
     }
 }
 
-fn packet_gate_updates(updates: &[ConsumerPacketSelectionUpdate]) -> Vec<ConsumerPacketGateUpdate> {
+fn split_packet_updates(
+    state: &RoomState,
+    updates: impl IntoIterator<Item = ConsumerPacketSelectionUpdate>,
+) -> (
+    Vec<ConsumerPacketSelectionUpdate>,
+    Vec<PacketUpdateWithRoute>,
+) {
+    let mut state_only_updates = Vec::new();
+    let mut transport_effect_updates = Vec::new();
+    for update in updates {
+        if requires_media_transport_effect(&update) {
+            let transport_route = state.transport_consumer_route(&update.route);
+            transport_effect_updates.push((update, transport_route));
+        } else {
+            state_only_updates.push(update);
+        }
+    }
+    (state_only_updates, transport_effect_updates)
+}
+
+fn requires_media_transport_effect(update: &ConsumerPacketSelectionUpdate) -> bool {
+    update.packet_gate.is_some() || update.route_activity_update || update.request_keyframe
+}
+
+fn packet_gate_updates(updates: &[PacketUpdateWithRoute]) -> Vec<ConsumerPacketGateUpdate> {
     updates
         .iter()
-        .filter_map(|update| {
+        .filter_map(|(update, transport_route)| {
             debug!(
                 route = ?update.route,
                 selector = ?update.selector,
@@ -192,7 +242,7 @@ fn packet_gate_updates(updates: &[ConsumerPacketSelectionUpdate]) -> Vec<Consume
                 "prepared receiver-driven packet selection update"
             );
             update.packet_gate.as_ref().map(|packet_gate| {
-                ConsumerPacketGateUpdate::new(update.transport_route.clone(), packet_gate.clone())
+                ConsumerPacketGateUpdate::new(transport_route.clone(), packet_gate.clone())
             })
         })
         .collect()
