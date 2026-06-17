@@ -312,7 +312,7 @@ impl RoomManager {
                     room.remove_user(user_id, connection_id, media_transport)
                         .await
                 },
-                |did_remove_active_session| *did_remove_active_session,
+                |_did_remove_active_session| true,
             )
             .await
         else {

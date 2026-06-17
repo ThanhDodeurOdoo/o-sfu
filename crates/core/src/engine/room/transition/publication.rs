@@ -181,16 +181,6 @@ impl RoomUserOperation<'_> {
         }
     }
 
-    pub(crate) async fn rollback_staged_publishes_for_connection(self) {
-        self.room
-            .staged_publishes
-            .cleanup_connection(
-                self,
-                "media transport failed to remove staged publish media during connection cleanup",
-            )
-            .await;
-    }
-
     pub(crate) async fn commit_staged_publishes(
         self,
         applied_answer: &AppliedSessionAnswer,

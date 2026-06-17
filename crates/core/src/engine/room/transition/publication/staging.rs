@@ -86,18 +86,6 @@ impl StagedPublishes {
         )
     }
 
-    pub async fn cleanup_connection(
-        &self,
-        operation: RoomUserOperation<'_>,
-        failure_message: &str,
-    ) {
-        for staged in self.take_for_connection(operation.user_id, operation.connection_id) {
-            staged
-                .cleanup_reserved_media(operation, failure_message)
-                .await;
-        }
-    }
-
     pub async fn commit_answer(
         &self,
         operation: RoomUserOperation<'_>,

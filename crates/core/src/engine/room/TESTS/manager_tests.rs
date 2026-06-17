@@ -347,6 +347,29 @@ async fn manager_lifecycle_future_does_not_block_empty_cleanup() {
 }
 
 #[tokio::test]
+async fn manager_close_retry_removes_empty_room_after_state_cleanup_finished() {
+    let manager = RoomManager::for_test();
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-close-retry").await;
+    let room_id = room.uuid().to_owned();
+    let user_id = UserId::Integer(1);
+    let connection_id = manager_join_user(&manager, &room, 1, &media_transport).await;
+
+    assert!(
+        room.remove_user(&user_id, connection_id, &media_transport)
+            .await
+    );
+    assert!(manager.get_by_uuid(&room_id).await.is_some());
+
+    assert!(
+        !manager
+            .close_session(&room_id, &user_id, connection_id, &media_transport)
+            .await
+    );
+    assert!(manager.get_by_uuid(&room_id).await.is_none());
+}
+
+#[tokio::test]
 async fn load_triggered_join_requires_sustained_receiver_pressure() {
     let manager = manager_with_room_worker_policy(load_triggered_policy(2, 2, 1, 48));
     let media_transport = real_adapter();

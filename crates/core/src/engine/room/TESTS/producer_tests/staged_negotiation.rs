@@ -141,9 +141,25 @@ async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
         PublishStageOutcome::Staged
     );
 
-    scenario.rollback_connection().await;
+    scenario.close_user().await;
 
     assert_eq!(scenario.staged_count(), 0);
     assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
-    scenario.assert_no_outbound();
+    let publisher_output = scenario.drain_publisher();
+    assert!(
+        matches!(
+            publisher_output.as_slice(),
+            [UserOutbound::Close(UserCloseReason::RemovedByRuntime)]
+        ),
+        "publisher should only receive the normal close output: {publisher_output:?}"
+    );
+    let subscriber_output = scenario.drain_subscriber();
+    assert!(
+        matches!(
+            subscriber_output.as_slice(),
+            [UserOutbound::Message(RoomEventMessage::UserDeparted { user_id })]
+                if user_id == &scenario.user_id
+        ),
+        "subscriber should only receive the normal departure output: {subscriber_output:?}"
+    );
 }

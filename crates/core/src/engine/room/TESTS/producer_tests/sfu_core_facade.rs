@@ -1,5 +1,8 @@
 use super::support::*;
-use crate::prelude::{MediaSession, NegotiationOffer, SessionEvent, SfuCore};
+use crate::{
+    engine::room::RoomUserAdmission,
+    prelude::{MediaSession, NegotiationOffer, SessionEvent, SfuCore},
+};
 
 #[tokio::test]
 async fn sfu_core_facade_drives_join_publish_renegotiate_and_subscribe() {
@@ -201,7 +204,85 @@ async fn media_session_queues_renegotiation_requested_while_waiting_for_answer()
     );
 }
 
+#[tokio::test]
+async fn media_session_close_rolls_back_staged_publish_and_removes_room_session() {
+    let PublisherFixture {
+        manager,
+        room,
+        user_id,
+        connection_id,
+        mut session,
+        mut remote,
+        ..
+    } = build_publisher_fixture(55_206).await;
+    establish_session(&mut session, &mut remote).await;
+    stage_scalable_video(&mut session).await;
+    assert!(has_staged_scalable_video(&room, &user_id, connection_id));
+
+    assert!(session.close(&manager).await);
+
+    assert!(!has_staged_scalable_video(&room, &user_id, connection_id));
+    assert!(!room.test_api().inspect().has_session(&user_id).await);
+}
+
+#[tokio::test]
+async fn media_session_close_is_idempotent_after_completed_cleanup() {
+    let PublisherFixture {
+        manager,
+        room,
+        user_id,
+        mut session,
+        mut remote,
+        ..
+    } = build_publisher_fixture(55_207).await;
+    establish_session(&mut session, &mut remote).await;
+
+    assert!(session.close(&manager).await);
+    assert!(!session.close(&manager).await);
+
+    assert!(!room.test_api().inspect().has_session(&user_id).await);
+}
+
+#[tokio::test]
+async fn stale_media_session_close_rolls_back_staged_publish_without_removing_replacement() {
+    let PublisherFixture {
+        manager,
+        room,
+        media_transport,
+        user_id,
+        connection_id,
+        mut session,
+        mut remote,
+    } = build_publisher_fixture(55_208).await;
+    establish_session(&mut session, &mut remote).await;
+    stage_scalable_video(&mut session).await;
+    let replacement = admit_user(&manager, &room, user_id.clone(), &media_transport).await;
+
+    assert!(!session.close(&manager).await);
+
+    assert!(!has_staged_scalable_video(&room, &user_id, connection_id));
+    assert_eq!(
+        room.test_api().inspect().user_connection_id(&user_id).await,
+        Some(replacement.connection_id)
+    );
+}
+
 async fn build_publisher_session(port: u16) -> (MediaSession, Rtc) {
+    let fixture = build_publisher_fixture(port).await;
+    (fixture.session, fixture.remote)
+}
+
+struct PublisherFixture {
+    manager: RoomManager,
+    room: Arc<Room>,
+    media_transport: MediaTransport,
+    user_id: UserId,
+    connection_id: ConnectionId,
+    session: MediaSession,
+    remote: Rtc,
+}
+
+async fn build_publisher_fixture(port: u16) -> PublisherFixture {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room(
@@ -212,15 +293,51 @@ async fn build_publisher_session(port: u16) -> (MediaSession, Rtc) {
         )
         .await;
     let media_transport = build_real_rtc_media_transport();
-    let core = SfuCore::new(media_transport);
+    let core = SfuCore::new(media_transport.clone());
     let publisher_user_id = UserId::Integer(1);
-    let (publisher_tx, _publisher_rx) = test_sender();
-    let publisher_connection_id =
-        join_user_with_sender(&room, publisher_user_id.clone(), publisher_tx).await;
-    let session = core
-        .session(&room, &publisher_user_id, publisher_connection_id)
-        .await;
-    (session, build_remote_rtc(port))
+    let admission = admit_user(&manager, &room, publisher_user_id.clone(), &media_transport).await;
+    let RoomUserAdmission {
+        connection_id,
+        transport_session_key,
+        ..
+    } = admission;
+    let session = core.session_with_transport_key(
+        &room,
+        &publisher_user_id,
+        connection_id,
+        transport_session_key,
+    );
+    PublisherFixture {
+        manager,
+        room,
+        media_transport,
+        user_id: publisher_user_id,
+        connection_id,
+        session,
+        remote: build_remote_rtc(port),
+    }
+}
+
+async fn admit_user(
+    manager: &RoomManager,
+    room: &Arc<Room>,
+    user_id: UserId,
+    media_transport: &MediaTransport,
+) -> RoomUserAdmission {
+    let (sender, _receiver) = test_sender();
+    manager
+        .join_user(
+            room.uuid(),
+            JoinUserRequest {
+                user_id,
+                label: None,
+                permissions: UserPermissions::default(),
+                sender,
+            },
+            media_transport,
+        )
+        .await
+        .expect("user should join through manager")
 }
 
 async fn establish_session(session: &mut MediaSession, remote: &mut Rtc) {
@@ -235,6 +352,16 @@ async fn establish_session(session: &mut MediaSession, remote: &mut Rtc) {
         .await
         .expect("initial answer should apply");
     assert!(events.is_empty());
+}
+
+async fn stage_scalable_video(session: &mut MediaSession) {
+    let events = session
+        .publish(source_publish_intent_for_source(
+            TestSourceKind::ScalableVideo,
+        ))
+        .await
+        .expect("publish should stage through the media session");
+    single_renegotiation(&events);
 }
 
 async fn publish_scalable_video(session: &mut MediaSession, remote: &mut Rtc) {
@@ -257,6 +384,14 @@ async fn publish_scalable_video(session: &mut MediaSession, remote: &mut Rtc) {
             active: true
         }]
     );
+}
+
+fn has_staged_scalable_video(room: &Room, user_id: &UserId, connection_id: ConnectionId) -> bool {
+    room.test_api().media().has_staged_publish(
+        user_id,
+        connection_id,
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
+    )
 }
 
 fn single_renegotiation(events: &[SessionEvent]) -> &NegotiationOffer {

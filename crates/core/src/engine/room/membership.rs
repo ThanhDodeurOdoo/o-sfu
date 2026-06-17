@@ -128,12 +128,14 @@ impl Room {
             (outcome, transport_close, counts)
         };
         let had_state = outcome.is_some();
+        let staged_cleanup = self.drain_staged_publish_cleanup_operations(user_id, connection_id);
         effects::batch::build_connection_close(
             self,
             counts,
             outcome,
             user_id.clone(),
             connection_id,
+            staged_cleanup,
             transport_close,
         )
         .execute(self, context)
