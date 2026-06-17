@@ -28,44 +28,42 @@ pub(super) fn receiver_video_routes<'a>(
         &input.routes,
         &input.featured_source_user_ids,
     );
-    input
-        .routes
-        .iter()
-        .filter_map(|route| {
-            let source = route.source;
-            if source.media_kind() != MediaKind::Video
-                || (source.policy().adaptation() == SourceAdaptationPolicy::None
-                    && source.policy().video_bitrate_cap().is_none())
-            {
-                return None;
-            }
-            let layout_intent = state.receiver_video_layout_intent(
-                &route.route.consumer_user_id,
-                source,
-                &input.featured_source_user_ids,
-            );
-            Some(ReceiverVideoRouteInput {
-                user_count: input.user_count,
-                source,
-                route: route.route.clone(),
-                transport_route: route.transport_route.clone(),
-                current_selection: route.current_selection,
-                layout_intent,
-                visible_scalable_route_count: visible_scalable_route_counts
-                    .get(&route.route.consumer_user_id)
-                    .copied()
-                    .unwrap_or(1),
-                active_speaker_rank: input
-                    .active_speaker_rank_by_user
-                    .get(source.owner().user_id())
-                    .copied(),
-                receiver_bandwidth: input
-                    .receiver_bandwidth_by_user
-                    .get(&route.route.consumer_user_id)
-                    .copied(),
-            })
-        })
-        .collect()
+    let mut routes = Vec::with_capacity(input.routes.len());
+    for route in &input.routes {
+        let source = route.source;
+        if source.media_kind() != MediaKind::Video
+            || (source.policy().adaptation() == SourceAdaptationPolicy::None
+                && source.policy().video_bitrate_cap().is_none())
+        {
+            continue;
+        }
+        let layout_intent = state.receiver_video_layout_intent(
+            &route.route.consumer_user_id,
+            source,
+            &input.featured_source_user_ids,
+        );
+        routes.push(ReceiverVideoRouteInput {
+            user_count: input.user_count,
+            source,
+            route: route.route.clone(),
+            transport_route: route.transport_route.clone(),
+            current_selection: route.current_selection,
+            layout_intent,
+            visible_scalable_route_count: visible_scalable_route_counts
+                .get(&route.route.consumer_user_id)
+                .copied()
+                .unwrap_or(1),
+            active_speaker_rank: input
+                .active_speaker_rank_by_user
+                .get(source.owner().user_id())
+                .copied(),
+            receiver_bandwidth: input
+                .receiver_bandwidth_by_user
+                .get(&route.route.consumer_user_id)
+                .copied(),
+        });
+    }
+    routes
 }
 
 #[derive(Debug, Clone)]

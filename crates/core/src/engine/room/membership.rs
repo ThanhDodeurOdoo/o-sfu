@@ -123,7 +123,7 @@ impl Room {
             let outcome = state.apply_leave(user_id, connection_id);
             if outcome.is_none() {
                 state
-                    .routing
+                    .topology
                     .unregister_committed_placement(user_id, connection_id);
             }
             let counts = before.delta_to(MembershipCountSnapshot::from_state(&state));

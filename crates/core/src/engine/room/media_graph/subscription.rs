@@ -221,7 +221,7 @@ impl RoomState {
                 target.source_id,
             );
         }
-        let Some(source) = self.media.source(target.source_id) else {
+        let Some(source) = self.topology.media().source(target.source_id) else {
             return VideoAdmissionRank::new(
                 SourceRoutePriority::HiddenOrOverflow,
                 None,
@@ -249,7 +249,7 @@ impl RoomState {
             let Some(active) = intent.active() else {
                 continue;
             };
-            let Some(commit) = self.set_consumer_activity(
+            let Some(commit) = self.topology.set_consumer_activity(
                 user_id,
                 connection_id,
                 target_user_id,
@@ -301,7 +301,8 @@ impl RoomState {
         consumer_connection_id: ConnectionId,
         should_include: impl Fn(&PublishedProducer) -> bool,
     ) -> Vec<ConsumerSetupTarget> {
-        self.media
+        self.topology
+            .media()
             .producers()
             .filter_map(|(producer_id, producer)| {
                 if !should_include(producer) {
@@ -324,7 +325,7 @@ impl RoomState {
             return None;
         }
         let key = ConsumerKey::new(user_id, producer.source_id);
-        if self.media.has_consumer_setup_or_route(&key) {
+        if self.topology.media().has_consumer_setup_or_route(&key) {
             return None;
         }
         let consumer_session =
@@ -357,14 +358,17 @@ impl RoomState {
                 user.parsed_client_rtp_capabilities.as_ref()?,
             )
         };
-        let (producer_rtp, producer_active) = {
-            let producer = self.media.producer(target.producer_id)?;
+        let (producer_rtp, producer_active, descriptor) = {
+            let producer = self.topology.media().producer(target.producer_id)?;
             if !target.matches_identity(producer) {
                 return None;
             }
-            (&producer.consumable_rtp_parameters, producer.active)
+            (
+                &producer.consumable_rtp_parameters,
+                producer.active,
+                self.topology.media().source(target.source_id)?.clone(),
+            )
         };
-        let descriptor = self.media.source(target.source_id)?.clone();
         let selection = self.setup_selection(&target, producer_active);
         let rtp = negotiate_consumer_rtp_parameters(producer_rtp, client_caps).ok()?;
         let consumer = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
@@ -383,8 +387,12 @@ impl RoomState {
             active: producer_active,
             stream: target.stream.clone(),
         };
-        let (reservation, relays) =
-            self.reserve_consumer_setup(&target, selection, source_worker, target_worker)?;
+        let (reservation, relays) = self.topology.reserve_consumer_setup(
+            &target,
+            selection,
+            source_worker,
+            target_worker,
+        )?;
         Some(PendingConsumerSetup {
             target,
             reservation,
@@ -401,7 +409,8 @@ impl RoomState {
     ) -> ConsumerSourceSelection {
         let key = target.consumer_key();
         let selection = self
-            .media
+            .topology
+            .media()
             .consumer_source_selection(&key)
             .unwrap_or_else(|| {
                 ConsumerSourceSelection::open(self.desired_source_active(
@@ -447,7 +456,8 @@ impl RoomState {
             })
             .count();
         let pending = self
-            .media
+            .topology
+            .media()
             .pending_consumer_routes_for_user(consumer_user_id)
             .filter(|route| route.source.media_kind() == RouterMediaKind::Video)
             .filter(|route| route.producer.is_some_and(|producer| producer.active))
@@ -489,13 +499,14 @@ impl RoomState {
     ) -> Option<ConsumerRouteState> {
         self.users.get(consumer_user_id)?;
         let Some(source) = self
-            .media
+            .topology
+            .media()
             .source_id_for_owner_stream(producer_user_id, stream_id)
         else {
             return Some(ConsumerRouteState::Absent);
         };
         let key = ConsumerKey::new(consumer_user_id, source);
-        let Some(route) = self.media.committed_consumer_route_for_key(&key) else {
+        let Some(route) = self.topology.media().committed_consumer_route_for_key(&key) else {
             return Some(ConsumerRouteState::Absent);
         };
         let desired_active =

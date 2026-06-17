@@ -30,11 +30,11 @@ impl RoomState {
     }
 
     pub fn producer_count(&self) -> usize {
-        self.media.producer_count()
+        self.topology.media().producer_count()
     }
 
     pub fn consumer_count(&self) -> usize {
-        self.media.consumer_count()
+        self.topology.media().consumer_count()
     }
 
     pub fn has_session(&self, user_id: &UserId) -> bool {
@@ -42,15 +42,15 @@ impl RoomState {
     }
 
     pub fn routing_home_router_id(&self, user_id: &UserId) -> Option<RouterId> {
-        self.routing.home_router_id_for_user(user_id)
+        self.topology.routing().home_router_id_for_user(user_id)
     }
 
     pub fn routing_router_count(&self) -> usize {
-        self.routing.router_count()
+        self.topology.routing().router_count()
     }
 
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
-        self.media.first_published_transport_media_id()
+        self.topology.media().first_published_transport_media_id()
     }
 
     pub fn producer_transport_media_id(
@@ -59,7 +59,7 @@ impl RoomState {
         connection_id: ConnectionId,
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        self.media.producer_transport_media_id(
+        self.topology.media().producer_transport_media_id(
             user_id,
             connection_id,
             &stream_id_for_source(stream_type),
@@ -89,7 +89,8 @@ impl RoomState {
         owner_user_id: &UserId,
         stream_type: TestSourceKind,
     ) -> Option<PublishedSourceId> {
-        self.media
+        self.topology
+            .media()
             .source_id_for_owner_stream(owner_user_id, &stream_id_for_source(stream_type))
     }
 
@@ -99,7 +100,8 @@ impl RoomState {
         consumer_user_id: &UserId,
         source_id: PublishedSourceId,
     ) -> bool {
-        self.media
+        self.topology
+            .media()
             .consumer_source_selection(&ConsumerKey::new(consumer_user_id, source_id))
             .is_some()
     }
@@ -111,7 +113,7 @@ impl RoomState {
         let source_id = self
             .source_transport_media_entry(transport_media_id)?
             .source;
-        self.media.source(source_id).map(|source| {
+        self.topology.media().source(source_id).map(|source| {
             source
                 .encodings()
                 .map(SourceEncodingDescriptor::encoding_id)
@@ -126,7 +128,8 @@ impl RoomState {
         let source_id = self
             .source_transport_media_entry(transport_media_id)?
             .source;
-        self.media
+        self.topology
+            .media()
             .producer_for_source(source_id)
             .map(|producer| producer.owner_connection_id)
     }

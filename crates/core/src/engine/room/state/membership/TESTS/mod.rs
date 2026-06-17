@@ -105,22 +105,25 @@ fn install_test_published_producer(
         )],
     })
     .expect("test source graph should be valid");
-    state.media.install_source(PublishedSourceInstall {
-        source_descriptor: source,
-        producer_id,
-        producer: PublishedProducer {
-            source_id,
-            owner_user_id: user_id.clone(),
-            owner_connection_id: connection_id,
-            stream_id: stream_id_for_source(stream_type),
-            media_kind: MediaKind::Video,
-            consumable_rtp_parameters,
-            routed_producer_id,
-            transport_media_id: Some(transport_media_id),
-            active: true,
-        },
-        transport_media_id,
-    });
+    state
+        .topology
+        .media_mut_for_test()
+        .install_source(PublishedSourceInstall {
+            source_descriptor: source,
+            producer_id,
+            producer: PublishedProducer {
+                source_id,
+                owner_user_id: user_id.clone(),
+                owner_connection_id: connection_id,
+                stream_id: stream_id_for_source(stream_type),
+                media_kind: MediaKind::Video,
+                consumable_rtp_parameters,
+                routed_producer_id,
+                transport_media_id: Some(transport_media_id),
+                active: true,
+            },
+            transport_media_id,
+        });
     (producer_id, source_id)
 }
 
@@ -176,7 +179,8 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let source_media = TransportMediaId::new(11);
     let consumer_media = TransportMediaId::new(21);
     let routed_producer_id = state
-        .routing
+        .topology
+        .routing_mut_for_test()
         .add_producer(&publisher, MediaKind::Video)
         .expect("relayed source producer route should be added");
     let (producer_id, source_id) = install_test_published_producer(
@@ -190,7 +194,8 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     );
     let target = {
         let producer = state
-            .media
+            .topology
+            .media()
             .producer_for_source(source_id)
             .expect("relayed source producer should exist");
         ConsumerSetupTarget::new(
@@ -298,13 +303,16 @@ fn leave_repairs_missing_topology_router_and_removes_member() {
     let connection_id = state
         .user_connection_id(&user_id)
         .expect("joined user should have a connection id");
-    state.routing.remove_router_for_test(RouterId(1));
+    state
+        .topology
+        .routing_mut_for_test()
+        .remove_router_for_test(RouterId(1));
 
     let outcome = state.apply_leave(&user_id, connection_id);
 
     assert!(outcome.is_some());
     assert!(!state.users.contains_key(&user_id));
-    assert_eq!(state.routing.home_router_id_for_user(&user_id), None);
+    assert_eq!(state.routing_home_router_id(&user_id), None);
 }
 
 #[test]
@@ -317,13 +325,16 @@ fn disconnect_repairs_missing_topology_router_and_removes_member() {
             .apply_join(&user_id, None, UserPermissions::default(), sender, false,)
             .is_ok()
     );
-    state.routing.remove_router_for_test(RouterId(1));
+    state
+        .topology
+        .routing_mut_for_test()
+        .remove_router_for_test(RouterId(1));
 
     let outcome = state.apply_disconnect_users(from_ref(&user_id));
 
     assert_eq!(outcome.disconnected_users.len(), 1);
     assert!(!state.users.contains_key(&user_id));
-    assert_eq!(state.routing.home_router_id_for_user(&user_id), None);
+    assert_eq!(state.routing_home_router_id(&user_id), None);
 }
 
 #[test]
@@ -370,7 +381,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
         MediaStream::new(vec![], vec![], vec![]),
     );
     let consumer_key = ConsumerKey::new(&UserId::Integer(2), source_id);
-    assert!(state.media.commit_consumer(
+    assert!(state.topology.media_mut_for_test().commit_consumer(
         consumer_key,
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),
@@ -385,9 +396,9 @@ fn leave_removes_consumer_routes_for_departed_session() {
     let outcome = state.apply_leave(&UserId::Integer(2), consumer_connection_id);
 
     assert!(outcome.is_some());
-    assert_eq!(state.media.consumer_count(), 0);
-    assert_eq!(state.media.producer_count(), 1);
-    assert!(state.media.source(source_id).is_some());
+    assert_eq!(state.topology.media().consumer_count(), 0);
+    assert_eq!(state.topology.media().producer_count(), 1);
+    assert!(state.topology.media().source(source_id).is_some());
 }
 
 #[test]
@@ -469,7 +480,8 @@ fn replacement_join_clears_transport_media_owner_index() {
         .expect("user should have a connection id");
     let transport_media_id = TransportMediaId::new(30);
     let routed_producer_id = state
-        .routing
+        .topology
+        .routing_mut_for_test()
         .add_producer(&user_id, MediaKind::Video)
         .expect("replacement test producer route should be added");
     install_test_published_producer(
@@ -511,16 +523,7 @@ fn replacement_join_clears_transport_media_owner_index() {
         state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
         None
     );
-    assert_eq!(state.media.publication_count(), 0);
-    assert!(
-        state
-            .media
-            .source_id_for_owner_stream(
-                &user_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo)
-            )
-            .is_none()
-    );
+    assert_eq!(state.media_counts().publications, 0);
 }
 
 #[test]

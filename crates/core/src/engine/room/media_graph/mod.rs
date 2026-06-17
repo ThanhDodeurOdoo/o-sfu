@@ -43,7 +43,9 @@ pub(super) use self::{
     },
     route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{ConsumerReadinessCommit, ConsumerRouteUpdate, ReceiverIntentCommit},
-    topology::{MediaTopologyEffects, SessionPlacementCommit, SessionPlacementRejection},
+    topology::{
+        MediaTopologyEffects, RoomTopology, SessionPlacementCommit, SessionPlacementRejection,
+    },
 };
 
 #[derive(Debug, Default)]
@@ -351,15 +353,6 @@ impl RoomMediaGraph {
         stream_id: &UserStreamId,
     ) -> Option<PublishedSourceId> {
         self.sources.id_for_owner_stream(owner_user_id, stream_id)
-    }
-
-    pub fn has_source_for_owner_stream(
-        &self,
-        owner_user_id: &UserId,
-        stream_id: &UserStreamId,
-    ) -> bool {
-        self.source_id_for_owner_stream(owner_user_id, stream_id)
-            .is_some()
     }
 
     pub fn producer_route_target(

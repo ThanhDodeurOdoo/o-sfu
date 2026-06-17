@@ -64,32 +64,7 @@ impl<'a> SourcePolicyInput<'a> {
             featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
         });
         let featured_user_updates = featured_user_updates(state, desired_featured_user_id.as_ref());
-        let routes = state
-            .current_live_consumer_routes()
-            .filter_map(|route| {
-                if !route.producer.active {
-                    return None;
-                }
-                let source = route.source;
-                let desired_active = state.desired_source_active(
-                    &route.consumer_user_id,
-                    source.owner().user_id(),
-                    source.stream_id(),
-                );
-                let current_selection = route.selection_or_open(desired_active);
-                if !current_selection.active() {
-                    return None;
-                }
-                let route = route.transport_ref();
-                let transport_route = state.transport_consumer_route(&route);
-                Some(SourcePolicyRouteInput {
-                    source,
-                    route,
-                    transport_route,
-                    current_selection,
-                })
-            })
-            .collect();
+        let routes = source_policy_routes(state);
         Self {
             routes,
             receiver_bwe_targets: receiver_bwe_targets(state),
@@ -103,6 +78,35 @@ impl<'a> SourcePolicyInput<'a> {
             media_limits,
         }
     }
+}
+
+fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRouteInput<'_>> {
+    let live_routes = state.current_live_consumer_routes();
+    let mut routes = Vec::with_capacity(live_routes.size_hint().1.unwrap_or_default());
+    for route in live_routes {
+        if !route.producer.active {
+            continue;
+        }
+        let source = route.source;
+        let desired_active = state.desired_source_active(
+            &route.consumer_user_id,
+            source.owner().user_id(),
+            source.stream_id(),
+        );
+        let current_selection = route.selection_or_open(desired_active);
+        if !current_selection.active() {
+            continue;
+        }
+        let route = route.transport_ref();
+        let transport_route = state.transport_consumer_route(&route);
+        routes.push(SourcePolicyRouteInput {
+            source,
+            route,
+            transport_route,
+            current_selection,
+        });
+    }
+    routes
 }
 
 fn receiver_bwe_targets(state: &RoomState) -> BTreeMap<UserId, ReceiverBweTargetUpdate> {
