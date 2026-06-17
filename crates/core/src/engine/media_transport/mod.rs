@@ -118,12 +118,10 @@ impl MediaTransport {
         build: impl FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
         log_error: impl FnOnce(TransportAdapterError),
     ) -> Result<T, TransportAdapterError> {
-        let result = async {
-            self.require_worker_for_user(session_key)?
-                .request_worker(build)
-                .await
-        }
-        .await;
+        let result = match self.require_worker_for_user(session_key) {
+            Ok(worker) => worker.request_worker(build).await,
+            Err(error) => Err(error),
+        };
         if let Err(error) = &result {
             log_error(*error);
         }
@@ -136,12 +134,10 @@ impl MediaTransport {
         build: impl FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
         log_error: impl FnOnce(TransportAdapterError),
     ) -> Result<T, TransportAdapterError> {
-        let result = async {
-            self.require_consumer_worker_for_route(route)?
-                .request_worker(build)
-                .await
-        }
-        .await;
+        let result = match self.require_consumer_worker_for_route(route) {
+            Ok(worker) => worker.request_worker(build).await,
+            Err(error) => Err(error),
+        };
         if let Err(error) = &result {
             log_error(*error);
         }

@@ -75,12 +75,6 @@ impl RoomTestLifecycle<'_> {
             .map(|receipt| receipt.connection_id)
     }
 
-    pub async fn force_cleanup_retry_cycle(self, media_transport: &MediaTransport) {
-        self.room
-            .force_cleanup_retry_cycle_for_test(media_transport)
-            .await;
-    }
-
     /// # Errors
     ///
     /// returns [`TransportAdapterError`] when the session or initial offer is absent
@@ -137,11 +131,6 @@ impl RoomTestLifecycle<'_> {
             .await
             .user_connection_id(user_id)
             .ok_or(TransportAdapterError::InvalidInput)
-    }
-
-    #[must_use]
-    pub fn has_pending_cleanup_retries(self) -> bool {
-        self.room.has_pending_cleanup_retries()
     }
 }
 

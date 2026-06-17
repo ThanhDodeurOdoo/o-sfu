@@ -1,15 +1,10 @@
-use o_sfu_router::RouterId;
-
-use super::super::super::{Room, RoomUserPermissions};
+use super::super::super::Room;
 #[cfg(test)]
 use crate::engine::source_model::PublishedSourceId;
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId, UserInfo,
     media_transport::TransportMediaId,
-    source_model::{
-        SourceEncodingId,
-        test_support::{source_kind_for_stream_id, stream_id_for_source},
-    },
+    source_model::test_support::{source_kind_for_stream_id, stream_id_for_source},
 };
 
 #[derive(Clone, Copy)]
@@ -18,15 +13,6 @@ pub struct RoomTestInspect<'a> {
 }
 
 impl RoomTestInspect<'_> {
-    pub async fn router_user_count(self) -> usize {
-        let (count, _active_stream_counts) = self.room.state.read().await.user_stats_counts();
-        usize::try_from(count).unwrap_or(usize::MAX)
-    }
-
-    pub async fn room_user_permissions(self, user_id: &UserId) -> Option<RoomUserPermissions> {
-        self.room.state.read().await.session_permissions(user_id)
-    }
-
     pub async fn session_client_rtp_codec_names(self, user_id: &UserId) -> Option<Vec<String>> {
         self.room
             .state
@@ -98,28 +84,6 @@ impl RoomTestInspect<'_> {
             .and_then(|stream_id| source_kind_for_stream_id(&stream_id))
     }
 
-    pub async fn producer_owner_user_id_for_transport_media_id(
-        self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<UserId> {
-        self.room
-            .state
-            .read()
-            .await
-            .inspect_producer_owner_user_id_for_transport_media_id(transport_media_id)
-    }
-
-    pub async fn producer_owner_connection_id_for_transport_media_id(
-        self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<ConnectionId> {
-        self.room
-            .state
-            .read()
-            .await
-            .inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id)
-    }
-
     #[cfg(test)]
     pub async fn source_id_for_owner_stream(
         self,
@@ -146,17 +110,6 @@ impl RoomTestInspect<'_> {
             .contains_consumer_source_selection(consumer_user_id, source_id)
     }
 
-    pub async fn source_encoding_ids_for_transport_media_id(
-        self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<Vec<SourceEncodingId>> {
-        self.room
-            .state
-            .read()
-            .await
-            .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)
-    }
-
     pub async fn user_info_snapshot(self, user_id: &UserId) -> Option<(UserId, UserInfo)> {
         self.room.state.read().await.user_info_snapshot(user_id)
     }
@@ -168,10 +121,6 @@ impl RoomTestInspect<'_> {
     #[must_use]
     pub fn recording_address(&self) -> Option<&str> {
         self.room.definition.recording_address()
-    }
-
-    pub async fn routing_home_router_id(self, user_id: &UserId) -> Option<RouterId> {
-        self.room.state.read().await.routing_home_router_id(user_id)
     }
 
     pub async fn routing_home_media_worker_id(self, user_id: &UserId) -> Option<usize> {
@@ -186,15 +135,5 @@ impl RoomTestInspect<'_> {
 
     pub async fn routing_router_count(self) -> usize {
         self.room.state.read().await.routing_router_count()
-    }
-
-    #[must_use]
-    pub async fn assigned_primary_media_worker_id(self) -> Option<usize> {
-        self.room
-            .state
-            .read()
-            .await
-            .assigned_primary_media_worker_id()
-            .map(crate::MediaWorkerId::as_usize)
     }
 }

@@ -97,20 +97,15 @@ async fn staged_room() -> (Arc<Room>, MediaTransport, UserId, ConnectionId) {
     (room, media_transport, user_id, connection_id)
 }
 
-async fn staged_media_id(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-) -> TransportMediaId {
+fn staged_media_id(room: &Room, user_id: &UserId, connection_id: ConnectionId) -> TransportMediaId {
     room.staged_media_id(user_id, connection_id, TestSourceKind::ScalableVideo)
-        .await
         .expect("test publish should be staged")
 }
 
 #[tokio::test]
 async fn staged_publish_is_not_visible_in_room_graph_before_answer() {
     let (room, media_transport, user_id, connection_id) = staged_room().await;
-    let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
+    let transport_media_id = staged_media_id(&room, &user_id, connection_id);
     let session_key = room.transport_user_key(&user_id, connection_id).await;
 
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
@@ -136,7 +131,7 @@ async fn staged_publish_is_not_visible_in_room_graph_before_answer() {
 #[tokio::test]
 async fn missing_answered_producer_parameters_release_reserved_publish() {
     let (room, media_transport, user_id, connection_id) = staged_room().await;
-    let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
+    let transport_media_id = staged_media_id(&room, &user_id, connection_id);
 
     let committed = room
         .user_operation(&user_id, connection_id, &media_transport)
@@ -145,7 +140,7 @@ async fn missing_answered_producer_parameters_release_reserved_publish() {
 
     assert!(committed.is_empty());
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
-    assert_eq!(room.staged_count(&user_id, connection_id).await, 0);
+    assert_eq!(room.staged_count(&user_id, connection_id), 0);
     assert!(
         media_transport
             .test_api()
@@ -158,7 +153,7 @@ async fn missing_answered_producer_parameters_release_reserved_publish() {
 #[tokio::test]
 async fn stale_connection_commit_rejects_and_releases_reserved_publish() {
     let (room, media_transport, user_id, stale_connection_id) = staged_room().await;
-    let transport_media_id = staged_media_id(&room, &user_id, stale_connection_id).await;
+    let transport_media_id = staged_media_id(&room, &user_id, stale_connection_id);
     let _new_connection_id = prepare_publish_session(&room, &media_transport, &user_id).await;
     let applied_answer = AppliedSessionAnswer::from_negotiated_producers([(
         transport_media_id,
@@ -184,7 +179,7 @@ async fn stale_connection_commit_rejects_and_releases_reserved_publish() {
 #[tokio::test]
 async fn rollback_before_answer_consumes_reserved_publish_once() {
     let (room, media_transport, user_id, connection_id) = staged_room().await;
-    let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
+    let transport_media_id = staged_media_id(&room, &user_id, connection_id);
 
     assert_eq!(
         room.user_operation(&user_id, connection_id, &media_transport)

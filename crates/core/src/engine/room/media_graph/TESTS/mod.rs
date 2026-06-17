@@ -84,7 +84,7 @@ fn join_test_user(state: &mut RoomState, user_id: &UserId) {
     let sender = test_sender();
     assert!(
         state
-            .apply_join(user_id, None, UserPermissions::default(), sender, false,)
+            .apply_join(user_id, UserPermissions::default(), sender, false,)
             .is_ok()
     );
 }
@@ -505,7 +505,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     let user_id = UserId::Integer(1);
     let sender = test_sender();
 
-    let join = state.apply_join(&user_id, None, UserPermissions::default(), sender, false);
+    let join = state.apply_join(&user_id, UserPermissions::default(), sender, false);
     assert!(join.is_ok());
     let connection_id = state
         .user_connection_id(&user_id)
@@ -563,7 +563,6 @@ fn stale_replaced_connection_cannot_update_download_state() {
         state
             .apply_join(
                 &consumer_user_id,
-                Some(String::from("replacement")),
                 UserPermissions::default(),
                 replacement_sender,
                 false,

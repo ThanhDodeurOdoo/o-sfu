@@ -191,20 +191,13 @@ impl PacketLoopRoutingMissCache {
 /// source can vary sequence numbers, SSRCs or random payload bytes enough to
 /// avoid exact cache hits. The limiter bounds those varied probes by source
 /// address instead of by packet identity
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct UnknownSourceRateLimitEntry {
     miss_count: usize,
     blocked_until: Option<Instant>,
 }
 
 impl UnknownSourceRateLimitEntry {
-    fn new() -> Self {
-        Self {
-            miss_count: 0,
-            blocked_until: None,
-        }
-    }
-
     fn allow_probe(&mut self, now: Instant) -> bool {
         if self
             .blocked_until
@@ -280,7 +273,7 @@ impl UnknownSourceRateLimiter {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
                 self.insertion_order.push_back(source_addr);
-                entry.insert(UnknownSourceRateLimitEntry::new())
+                entry.insert(UnknownSourceRateLimitEntry::default())
             }
         }
     }

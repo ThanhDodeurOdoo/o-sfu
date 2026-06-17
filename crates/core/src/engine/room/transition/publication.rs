@@ -228,11 +228,6 @@ impl RoomUserOperation<'_> {
         .await;
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub async fn unpublish_for_test(self, stream_id: &UserStreamId) -> bool {
-        self.unpublish(stream_id).await
-    }
-
     async fn unpublish(self, stream_id: &UserStreamId) -> bool {
         let room = self.room;
         let user_id = self.user_id;

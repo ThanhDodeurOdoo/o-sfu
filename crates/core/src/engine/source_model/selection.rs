@@ -1,6 +1,5 @@
 use super::{
     PolicyPauseReason, ReceiverVideoBudgetDiagnostics, SourceEncodingId, SourceOperatingPoint,
-    SourceRoomPolicySelector,
 };
 use crate::Bitrate;
 
@@ -8,16 +7,12 @@ use crate::Bitrate;
 ///
 /// The budget planner writes selectors into room state. A later projection step
 /// turns them into transport packet gates such as "open" or "forward this RID".
-/// Transport code should never receive [`Self::RoomPolicy`], because that value
-/// still needs room-level policy resolution.
-///
 /// # Example situations
 ///
 /// [`Self::Open`] means the route has no source-level packet gate.
 /// [`Self::Encoding`] means "forward the negotiated RID for this encoding".
 /// [`Self::OperatingPoint`] means "forward this encoding up to this temporal
-/// layer". [`Self::RoomPolicy`] means "this route is a visible thumbnail" or
-/// another room role that must still be resolved before transport sees it.
+/// layer".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceSelector {
     /// Forward the source without a source-level packet gate.
@@ -40,16 +35,6 @@ pub enum SourceSelector {
         reason = "operating-point selectors stay internal until RFC 9626 metadata negotiation is implemented"
     )]
     OperatingPoint(SourceOperatingPoint),
-    /// Keep the route in a named room-policy bucket.
-    ///
-    /// This is valid as policy input and diagnostics vocabulary. It must be
-    /// resolved to [`Self::Open`], [`Self::Encoding`] or [`Self::OperatingPoint`]
-    /// before transport packet-gate projection.
-    #[allow(
-        dead_code,
-        reason = "room-policy selectors are policy input today; the budget planner still resolves them before transport projection"
-    )]
-    RoomPolicy(SourceRoomPolicySelector),
 }
 
 impl SourceSelector {
@@ -58,7 +43,7 @@ impl SourceSelector {
         match self {
             Self::Encoding(encoding_id) => Some(encoding_id),
             Self::OperatingPoint(operating_point) => Some(operating_point.encoding_id()),
-            Self::Open | Self::RoomPolicy(_) => None,
+            Self::Open => None,
         }
     }
 
@@ -66,7 +51,7 @@ impl SourceSelector {
     pub const fn selected_operating_point(self) -> Option<SourceOperatingPoint> {
         match self {
             Self::OperatingPoint(operating_point) => Some(operating_point),
-            Self::Open | Self::Encoding(_) | Self::RoomPolicy(_) => None,
+            Self::Open | Self::Encoding(_) => None,
         }
     }
 }

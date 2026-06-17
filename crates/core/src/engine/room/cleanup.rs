@@ -224,18 +224,6 @@ impl CleanupReconciler {
         self.pending.clear();
         abandoned
     }
-
-    #[must_use]
-    pub(super) fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn force_due_for_test(&mut self) {
-        for retry in self.pending.values_mut() {
-            retry.wait_cycles = 0;
-        }
-    }
 }
 
 const fn cleanup_error_is_terminal(error: TransportAdapterError) -> bool {
@@ -430,14 +418,7 @@ impl Room {
     }
 
     pub fn has_pending_cleanup_retries(&self) -> bool {
-        self.cleanup_reconciler().has_pending()
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub async fn force_cleanup_retry_cycle_for_test(&self, media_transport: &MediaTransport) {
-        self.cleanup_reconciler().force_due_for_test();
-        self.reconcile_transport_cleanup_retries(media_transport)
-            .await;
+        !self.cleanup_reconciler().pending.is_empty()
     }
 
     fn cleanup_reconciler(&self) -> MutexGuard<'_, CleanupReconciler> {

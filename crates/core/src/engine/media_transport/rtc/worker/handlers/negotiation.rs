@@ -229,14 +229,14 @@ fn upload_encodings_for_mid(
     mid: Mid,
     accepted_rids: &[simulcast::NegotiatedRid],
 ) -> Vec<SessionUploadEncoding> {
-    let mid = mid.to_string();
-    let Some(slot) = upload_slots.iter().find(|slot| slot.mid == mid) else {
+    let mid_name: &str = &mid;
+    let Some(slot) = upload_slots.iter().find(|slot| slot.mid == mid_name) else {
         return Vec::new();
     };
     accepted_rids
         .iter()
         .filter_map(|rid| {
-            let rid_name = rid.rid.to_string();
+            let rid_name: &str = &rid.rid;
             let mut encoding = slot
                 .simulcast_encodings
                 .iter()

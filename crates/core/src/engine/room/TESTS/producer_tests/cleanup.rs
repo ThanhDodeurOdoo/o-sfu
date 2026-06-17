@@ -105,11 +105,5 @@ async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
 
     assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
     assert_transport_media_mapping_is_missing(&scenario.room, transport_media_id).await;
-    assert!(
-        scenario
-            .room
-            .test_api()
-            .lifecycle()
-            .has_pending_cleanup_retries()
-    );
+    assert!(scenario.room.has_pending_cleanup_retries());
 }

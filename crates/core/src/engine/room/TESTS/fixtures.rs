@@ -39,6 +39,7 @@ pub(super) use crate::{
 };
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
+const DEFAULT_ACTIVE_SPEAKER_AUDIO_LEVEL_DBOV: i8 = -20;
 
 pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {
     sample_client_rtp_capabilities()
@@ -200,7 +201,7 @@ impl StagedPublishScenario {
     }
 
     pub(super) async fn commit(&self) {
-        let staged_transport_media_id = self.staged_media_id(TestSourceKind::ScalableVideo).await;
+        let staged_transport_media_id = self.staged_media_id(TestSourceKind::ScalableVideo);
         let applied_answer = AppliedSessionAnswer::from_negotiated_producers([(
             staged_transport_media_id,
             test_simulcast_video_rtp_parameters(),
@@ -216,10 +217,8 @@ impl StagedPublishScenario {
             .await;
     }
 
-    pub(super) async fn staged_count(&self) -> usize {
-        self.room
-            .staged_count(&self.user_id, self.connection_id)
-            .await
+    pub(super) fn staged_count(&self) -> usize {
+        self.room.staged_count(&self.user_id, self.connection_id)
     }
 
     pub(super) async fn scalable_video_is_published(&self) -> bool {
@@ -229,10 +228,9 @@ impl StagedPublishScenario {
             .await
     }
 
-    pub(super) async fn staged_media_id(&self, stream_type: TestSourceKind) -> TransportMediaId {
+    pub(super) fn staged_media_id(&self, stream_type: TestSourceKind) -> TransportMediaId {
         self.room
             .staged_media_id(&self.user_id, self.connection_id, stream_type)
-            .await
             .expect("staged publish should expose its transport media id")
     }
 
@@ -455,7 +453,11 @@ impl SourcePolicyScenario {
         for transport_media_id in transport_media_ids {
             self.adapter
                 .test_api()
-                .observe_audio_activity(transport_media_id, observed_at)
+                .observe_audio_activity_with_level(
+                    transport_media_id,
+                    DEFAULT_ACTIVE_SPEAKER_AUDIO_LEVEL_DBOV,
+                    observed_at,
+                )
                 .await;
         }
     }

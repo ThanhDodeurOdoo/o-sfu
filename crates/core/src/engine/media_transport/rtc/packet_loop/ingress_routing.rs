@@ -328,16 +328,16 @@ fn indexed_session_for_pkt(
         }
         matched_session_key
     };
+    // stale-index cleanup must not depend on whether recovery succeeds
+    for stale_session_key in &stale_session_keys {
+        state
+            .remote_addr_demux
+            .forget_user_remote_candidates(stale_session_key);
+        state
+            .remote_addr_demux
+            .forget_user_local_ice_ufrag(stale_session_key);
+    }
     if let Some(matched_session_key) = matched_session_key {
-        // stale-index cleanup must not depend on whether recovery succeeds
-        for stale_session_key in stale_session_keys {
-            state
-                .remote_addr_demux
-                .forget_user_remote_candidates(&stale_session_key);
-            state
-                .remote_addr_demux
-                .forget_user_local_ice_ufrag(&stale_session_key);
-        }
         debug!(
             source_addr = %source_addr,
             candidate_addr = %candidate_addr,
@@ -351,14 +351,6 @@ fn indexed_session_for_pkt(
             session_key: matched_session_key,
             examined_sessions,
         };
-    }
-    for stale_session_key in stale_session_keys {
-        state
-            .remote_addr_demux
-            .forget_user_remote_candidates(&stale_session_key);
-        state
-            .remote_addr_demux
-            .forget_user_local_ice_ufrag(&stale_session_key);
     }
     debug!(
         source_addr = %source_addr,

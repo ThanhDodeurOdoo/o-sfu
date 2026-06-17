@@ -335,7 +335,6 @@ impl PendingJoinPlacement {
         let placement = self.resolve(&state.placement_usage_snapshot(), allocate_spillover_router);
         state.apply_join_on_placement(
             &request.user_id,
-            request.label,
             request.permissions,
             request.sender,
             emit_joined_fanout,

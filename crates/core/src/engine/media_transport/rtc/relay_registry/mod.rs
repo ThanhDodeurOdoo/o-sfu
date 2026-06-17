@@ -40,7 +40,12 @@ impl RelayPacketMailbox {
         packet: &ForwardedPacket,
         src_media: TransportMediaId,
     ) -> Option<RelayEnqueueReport> {
-        let outcome = forward_packet_to_target(state, &self.tx, packet, src_media)?;
+        let packet = packet.share_for_relay(state, src_media)?;
+        let outcome = match self.tx.try_send(packet) {
+            Ok(()) => RelayEnqueueOutcome::Enqueued,
+            Err(mpsc::error::TrySendError::Full(_packet)) => RelayEnqueueOutcome::Overloaded,
+            Err(mpsc::error::TrySendError::Closed(_packet)) => RelayEnqueueOutcome::Closed,
+        };
         Some(RelayEnqueueReport {
             outcome,
             mailbox_depth: self.backlog_depth(),
@@ -56,20 +61,6 @@ impl RelayPacketMailbox {
 pub(super) struct ActiveRelayTarget {
     pub(super) target_id: RelayTargetId,
     pub(super) target: RelayPacketMailbox,
-}
-
-fn forward_packet_to_target(
-    state: &PacketLoopState,
-    tx: &mpsc::Sender<ForwardedPacket>,
-    packet: &ForwardedPacket,
-    src_media: TransportMediaId,
-) -> Option<RelayEnqueueOutcome> {
-    let packet = packet.share_for_relay(state, src_media)?;
-    Some(match tx.try_send(packet) {
-        Ok(()) => RelayEnqueueOutcome::Enqueued,
-        Err(mpsc::error::TrySendError::Full(_packet)) => RelayEnqueueOutcome::Overloaded,
-        Err(mpsc::error::TrySendError::Closed(_packet)) => RelayEnqueueOutcome::Closed,
-    })
 }
 
 pub(super) fn sender_backlog_depth<T>(tx: &mpsc::Sender<T>) -> usize {
@@ -108,10 +99,12 @@ impl RelaySourceRegistration {
             });
     }
 
-    pub(super) fn remove_target(&mut self, target_id: RelayTargetId) -> bool {
-        self.targets.remove(&target_id);
-        self.rebuild_mailboxes();
-        self.targets.is_empty()
+    pub(super) fn remove_target(&mut self, target_id: RelayTargetId) -> Option<bool> {
+        let removed = self.targets.remove(&target_id)?;
+        if removed.active {
+            self.rebuild_mailboxes();
+        }
+        Some(self.targets.is_empty())
     }
 
     pub(super) fn set_target_active(&mut self, target_id: RelayTargetId, active: bool) {
@@ -132,10 +125,6 @@ impl RelaySourceRegistration {
     #[must_use]
     pub(super) fn has_active_targets(&self) -> bool {
         !self.active_targets.is_empty()
-    }
-
-    pub(super) fn contains_target(&self, target_id: RelayTargetId) -> bool {
-        self.targets.contains_key(&target_id)
     }
 
     pub(super) fn is_target_active(&self, target_id: RelayTargetId) -> bool {

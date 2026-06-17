@@ -29,10 +29,7 @@ use super::{
     },
 };
 use crate::{
-    application::stream_catalog::{
-        AUDIO_STREAM_LABEL, CAMERA_STREAM_LABEL, SCREEN_STREAM_LABEL,
-        diagnostics_bitrate_for_stream_id,
-    },
+    application::stream_catalog::{AUDIO_STREAM_LABEL, CAMERA_STREAM_LABEL, SCREEN_STREAM_LABEL},
     runtime::room::{RoomManager, RuntimeRoomDirectorySnapshot},
 };
 
@@ -348,25 +345,18 @@ fn user_summaries(detail: &DiagnosticsRoomDetail) -> Vec<DiagnosticsUserSummary>
         .iter()
         .map(|user| {
             let bitrate = &user.transport.quality_summary.current_incoming_bitrate;
+            let stream_bitrate_bps =
+                |stream_id| bitrate.by_stream_bps.get(stream_id).copied().unwrap_or(0);
             DiagnosticsUserSummary {
-                audio_incoming_bitrate_bps: diagnostics_bitrate_for_stream_id(
-                    &bitrate.by_stream_bps,
-                    AUDIO_STREAM_LABEL,
-                ),
-                camera_incoming_bitrate_bps: diagnostics_bitrate_for_stream_id(
-                    &bitrate.by_stream_bps,
-                    CAMERA_STREAM_LABEL,
-                ),
+                audio_incoming_bitrate_bps: stream_bitrate_bps(AUDIO_STREAM_LABEL),
+                camera_incoming_bitrate_bps: stream_bitrate_bps(CAMERA_STREAM_LABEL),
                 connection_id: user.transport.connection_id,
                 health: user.transport.health.clone(),
                 incoming_bitrate_bps: bitrate.total,
                 media_worker_id: user.transport.media_worker_id,
                 publication_count: user.publications.len(),
                 room_id: detail.summary.uuid.clone(),
-                screen_incoming_bitrate_bps: diagnostics_bitrate_for_stream_id(
-                    &bitrate.by_stream_bps,
-                    SCREEN_STREAM_LABEL,
-                ),
+                screen_incoming_bitrate_bps: stream_bitrate_bps(SCREEN_STREAM_LABEL),
                 subscription_count: user.subscriptions.len(),
                 user_id: user.user_id.clone(),
                 user_key: user_id_to_path_segment(&user.user_id),

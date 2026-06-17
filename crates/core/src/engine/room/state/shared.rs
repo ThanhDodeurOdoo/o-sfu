@@ -43,12 +43,6 @@ pub struct RoomState {
 
 #[derive(Debug)]
 pub struct ActiveUser {
-    #[allow(
-        dead_code,
-        reason = "stored for future user display and recording metadata"
-    )]
-    pub(super) label: Option<String>,
-    #[allow(dead_code, reason = "stored for future permission-gated actions")]
     pub(super) permissions: RoomUserPermissions,
     pub(super) info: UserInfo,
     pub(super) server_featured: Option<bool>,

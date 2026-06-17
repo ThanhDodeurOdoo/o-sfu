@@ -1,9 +1,6 @@
 pub use o_sfu_telemetry::metrics::*;
 
-use crate::engine::{
-    media_transport::TransportSessionHealth,
-    source_model::{SourceRoomPolicySelector, SourceSelector},
-};
+use crate::engine::{media_transport::TransportSessionHealth, source_model::SourceSelector};
 
 pub(crate) const fn transport_health_state(health: TransportSessionHealth) -> TransportHealthState {
     match health {
@@ -17,16 +14,5 @@ pub(crate) const fn source_selection_kind(selector: SourceSelector) -> SourceSel
         SourceSelector::Open => SourceSelectionKind::Open,
         SourceSelector::Encoding(_) => SourceSelectionKind::Encoding,
         SourceSelector::OperatingPoint(_) => SourceSelectionKind::OperatingPoint,
-        SourceSelector::RoomPolicy(
-            SourceRoomPolicySelector::Pinned
-            | SourceRoomPolicySelector::Featured
-            | SourceRoomPolicySelector::ReadableDetail
-            | SourceRoomPolicySelector::ActiveSpeaker,
-        ) => SourceSelectionKind::RoomPolicyFeatured,
-        SourceSelector::RoomPolicy(
-            SourceRoomPolicySelector::VisibleThumbnail
-            | SourceRoomPolicySelector::Hidden
-            | SourceRoomPolicySelector::Overflow,
-        ) => SourceSelectionKind::RoomPolicyThumbnail,
     }
 }

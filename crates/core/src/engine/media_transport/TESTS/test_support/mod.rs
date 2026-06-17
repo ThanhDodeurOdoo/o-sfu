@@ -15,7 +15,7 @@ use {
 };
 #[cfg(test)]
 use {
-    super::{MediaTransportBuilder, TransportAdapterError, rtc::RtcWorker},
+    super::{MediaTransportBuilder, TransportAdapterError},
     o_sfu_router::MediaStream as RouterRtpParameters,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
@@ -73,14 +73,6 @@ impl MediaTransportTestApi<'_> {
             .ok_or(TransportAdapterError::TransportUnavailable)?
             .negotiated_producer_parameters(session_key, transport_media_id)
             .await
-    }
-
-    #[cfg(test)]
-    pub(super) fn worker_for_user(
-        self,
-        session_key: &TransportSessionKey,
-    ) -> Option<Arc<RtcWorker>> {
-        self.transport.worker_for_user(session_key)
     }
 
     /// Overrides a real RTC session health snapshot in test builds.
@@ -151,11 +143,6 @@ impl MediaTransportTestApi<'_> {
             .worker_for_user(session_key)?
             .debug_session_receiver_bwe_target(session_key)
             .await
-    }
-
-    pub async fn observe_audio_activity(self, transport_media_id: TransportMediaId, now: Instant) {
-        self.observe_audio_activity_with_level(transport_media_id, -20, now)
-            .await;
     }
 
     pub async fn observe_audio_activity_with_level(

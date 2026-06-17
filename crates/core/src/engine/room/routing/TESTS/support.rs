@@ -1,3 +1,4 @@
+#[cfg(test)]
 use o_sfu_router::RouterId;
 #[cfg(test)]
 use {
@@ -13,6 +14,7 @@ use {
 };
 
 use super::RoomRoutingState;
+#[cfg(test)]
 use crate::engine::UserId;
 
 impl RoomRoutingState {
@@ -49,6 +51,7 @@ impl RoomRoutingState {
             .map(super::RoomRouterState::mapped_session_count_for_test)
     }
 
+    #[cfg(test)]
     pub fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
         self.sessions
             .active(user_id)

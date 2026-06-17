@@ -467,19 +467,15 @@ impl RouteSource {
         target_id: RelayTargetId,
     ) -> Option<ForwardingChange> {
         let registration = self.relay.as_mut()?;
-        let removed = registration.contains_target(target_id);
-        if registration.remove_target(target_id) {
+        if registration.remove_target(target_id)? {
             self.relay = None;
         }
-        if removed {
-            self.forget_relay_packet_gate(target_id);
-            return Some(if self.relay.is_none() && self.local_route.is_none() {
-                ForwardingChange::StoppedForwarding
-            } else {
-                ForwardingChange::StillForwarding
-            });
-        }
-        None
+        self.forget_relay_packet_gate(target_id);
+        Some(if self.relay.is_none() && self.local_route.is_none() {
+            ForwardingChange::StoppedForwarding
+        } else {
+            ForwardingChange::StillForwarding
+        })
     }
 
     pub(super) fn set_relay_target_active(&mut self, target_id: RelayTargetId, active: bool) {

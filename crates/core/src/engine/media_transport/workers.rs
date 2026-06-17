@@ -76,7 +76,7 @@ impl MediaTransport {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<Arc<RtcWorker>> {
-        self.worker_for_media_worker_id(session_key.media_worker_id())
+        self.worker_for_index(session_key.media_worker_id().as_usize())
     }
 
     /// Returns the source and consumer workers needed for cross-worker relay.
@@ -440,7 +440,8 @@ impl MediaTransport {
     }
 
     fn worker_index_for_user(&self, session_key: &TransportSessionKey) -> Option<usize> {
-        self.worker_index_for_media_worker_id(session_key.media_worker_id())
+        let worker_index = session_key.media_worker_id().as_usize();
+        (worker_index < self.workers.len()).then_some(worker_index)
     }
 
     pub(super) fn require_worker_for_user(
@@ -455,7 +456,7 @@ impl MediaTransport {
         &self,
         media_worker_id: MediaWorkerId,
     ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
-        self.worker_for_media_worker_id(media_worker_id)
+        self.worker_for_index(media_worker_id.as_usize())
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
 
@@ -491,7 +492,10 @@ impl MediaTransport {
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
-        ensure_same_room_instance(consumer_session_key, source_session_key)
+        if consumer_session_key.room_instance_id() == source_session_key.room_instance_id() {
+            return Ok(());
+        }
+        Err(TransportAdapterError::InvalidInput)
     }
 
     pub(super) fn require_consumer_worker_for_route(
@@ -502,15 +506,6 @@ impl MediaTransport {
         self.require_worker_for_user(route.consumer_session_key())
     }
 
-    fn worker_index_for_media_worker_id(&self, media_worker_id: MediaWorkerId) -> Option<usize> {
-        let worker_index = media_worker_id.as_usize();
-        (worker_index < self.workers.len()).then_some(worker_index)
-    }
-
-    fn worker_for_media_worker_id(&self, media_worker_id: MediaWorkerId) -> Option<Arc<RtcWorker>> {
-        self.worker_for_index(media_worker_id.as_usize())
-    }
-
     fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcWorker>> {
         self.workers.get(worker_index).map(Arc::clone)
     }
@@ -519,16 +514,6 @@ impl MediaTransport {
     pub(super) fn all_workers(&self) -> impl Iterator<Item = &Arc<RtcWorker>> {
         self.workers.iter()
     }
-}
-
-fn ensure_same_room_instance(
-    consumer_session_key: &TransportSessionKey,
-    source_session_key: &TransportSessionKey,
-) -> Result<(), TransportAdapterError> {
-    if consumer_session_key.room_instance_id() == source_session_key.room_instance_id() {
-        return Ok(());
-    }
-    Err(TransportAdapterError::InvalidInput)
 }
 
 /// first media id reserved for one worker index

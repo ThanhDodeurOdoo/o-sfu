@@ -510,7 +510,7 @@ async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() ->
             .lifecycle()
             .join_user(
                 user_id.clone(),
-                Some(String::from("replacement")),
+                None,
                 UserPermissions::default(),
                 replacement_tx,
             )

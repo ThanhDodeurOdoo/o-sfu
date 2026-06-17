@@ -473,7 +473,7 @@ async fn spillover_media_diagnostics_use_connection_worker() {
     assert!(
         room.test_api()
             .media()
-            .publication_activity(&publisher_id, &stream_id, false, &media_transport)
+            .set_publication_active(&publisher_id, &stream_id, false, &media_transport)
             .await
     );
     assert!(

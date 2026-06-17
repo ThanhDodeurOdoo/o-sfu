@@ -95,17 +95,21 @@ async fn duplicate_publish_intent_reactivates_committed_stream() {
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    let outcome = room
+    let connection_id = room
         .test_api()
-        .media()
-        .start_publish_intent(
-            &publisher_id,
+        .inspect()
+        .user_connection_id(&publisher_id)
+        .await
+        .expect("publisher should have a connection id");
+    let outcome: TestPublishIntentOutcome = room
+        .user_operation(&publisher_id, connection_id, &adapter)
+        .start_publish(
             &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
             true,
-            &adapter,
         )
         .await
-        .expect("duplicate publish intent should target a live publisher");
+        .expect("duplicate publish intent should target a live publisher")
+        .into();
 
     assert_eq!(outcome, TestPublishIntentOutcome::Activated);
     assert_eq!(
@@ -113,16 +117,11 @@ async fn duplicate_publish_intent_reactivates_committed_stream() {
         1,
         "duplicate publish should reuse the committed producer"
     );
-    assert_eq!(
-        room.test_api()
-            .media()
-            .staged_publish_count(
-                &publisher_id,
-                user_connection_id(&room, &publisher_id).await
-            )
-            .await,
-        0
-    );
+    assert!(!room.test_api().media().has_staged_publish(
+        &publisher_id,
+        user_connection_id(&room, &publisher_id).await,
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
+    ));
     assert_track_binding_activity_update(
         &drain_outbound(&mut rx1)[0],
         &publisher_id,
@@ -482,7 +481,7 @@ async fn production_change_updates_transport_route_activity() {
     assert!(
         room.test_api()
             .media()
-            .publication_activity(
+            .set_publication_active(
                 &publisher_id,
                 &stream_id_for_source(TestSourceKind::ScalableVideo),
                 false,

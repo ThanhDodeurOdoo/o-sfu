@@ -54,12 +54,11 @@ impl User {
             self.log_unknown_answer(&response_to);
             return Err(UserError::ProtocolViolation);
         };
-        let events = match self.session.answer(&answer.sdp).await {
-            Ok(events) => events,
-            Err(error) => {
-                return Err(self.negotiation_error(kind, Some(&response_to), error));
-            }
-        };
+        let events = self
+            .session
+            .answer(&answer.sdp)
+            .await
+            .map_err(|error| self.negotiation_error(kind, Some(&response_to), error))?;
         Ok(self.project_media_events(events).await)
     }
 
@@ -106,10 +105,8 @@ impl User {
             let stream_id = stream_id_for_stream_type(stream_type);
             self.session.unpublish(&stream_id).await
         };
-        match result {
-            Ok(events) => Ok(self.project_media_events(events).await),
-            Err(error) => Err(self.publish_error(stream_type, error)),
-        }
+        let events = result.map_err(|error| self.publish_error(stream_type, error))?;
+        Ok(self.project_media_events(events).await)
     }
 
     #[instrument(
@@ -152,12 +149,10 @@ impl User {
         )
     )]
     pub(super) async fn run_initial_offer(&mut self) -> Result<UserOutput, UserError> {
-        let offer = match self.session.establish().await {
-            Ok(offer) => offer,
-            Err(error) => {
-                return Err(self.negotiation_error(NegotiationKind::InitialOffer, None, error));
-            }
-        };
+        let offer =
+            self.session.establish().await.map_err(|error| {
+                self.negotiation_error(NegotiationKind::InitialOffer, None, error)
+            })?;
         Ok(offer.map_or_else(UserOutput::new, |offer| {
             vec![self.requests.issue(NegotiationKind::InitialOffer, offer)]
         }))
