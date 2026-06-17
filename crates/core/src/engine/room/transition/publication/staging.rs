@@ -162,7 +162,7 @@ impl StagedPublishes {
         staged.insert(key, transaction);
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
+    #[cfg(test)]
     pub fn staged_count(&self, user_id: &UserId, connection_id: ConnectionId) -> usize {
         lock_unpoisoned(&self.staged)
             .keys()

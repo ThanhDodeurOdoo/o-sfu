@@ -16,7 +16,6 @@ pub(super) enum SourcePacketGateProjectionError {
     MissingRid,
     MissingTemporalMetadata,
     TemporalLayerExceedsAdvertised,
-    UnsupportedRoomPolicy,
 }
 
 pub(super) fn source_packet_gate_for_selector(
@@ -50,9 +49,6 @@ pub(super) fn source_packet_gate_for_selector(
                     operating_point.max_temporal_layer_id().as_u8(),
                 ),
             ))
-        }
-        SourceSelector::RoomPolicy(_) => {
-            Err(SourcePacketGateProjectionError::UnsupportedRoomPolicy)
         }
     }
 }

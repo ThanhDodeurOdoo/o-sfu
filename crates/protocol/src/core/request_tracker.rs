@@ -12,7 +12,7 @@
 //! the tracker keeps two maps because response handling wants
 //! `request_id -> timer`, while timeout handling wants `timer -> request_id`
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, mem};
 
 use super::{Command, Commands, PendingRequestKind, REQUEST_TIMEOUT_TIMER_ID_BASE};
 use crate::signaling::RequestId;
@@ -170,15 +170,10 @@ impl RequestTracker {
     /// each pending request gets exactly one timer cancellation and one failed
     /// resolution so the host side cannot leak promises or wait on stale timers
     pub(super) fn clear_with_commands(&mut self) -> Commands {
-        let negotiation_request_ids: Vec<RequestId> =
-            self.pending_requests.keys().cloned().collect();
-        let mut commands = Vec::new();
-        for request_id in negotiation_request_ids {
-            let Some(pending_request) = self.pending_requests.remove(&request_id) else {
-                continue;
-            };
-            self.request_timeouts
-                .remove(&pending_request.timeout_timer_id);
+        let pending_requests = mem::take(&mut self.pending_requests);
+        self.request_timeouts.clear();
+        let mut commands = Vec::with_capacity(pending_requests.len() * 2);
+        for (request_id, pending_request) in pending_requests {
             commands.push(Command::CancelTimer {
                 id: pending_request.timeout_timer_id,
             });

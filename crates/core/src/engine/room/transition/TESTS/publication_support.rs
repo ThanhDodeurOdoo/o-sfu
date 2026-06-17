@@ -1,12 +1,11 @@
 use o_sfu_router::MediaStream as RouterRtpParameters;
-#[cfg(any(test, feature = "testing-transport"))]
-use {
-    super::Room,
-    crate::engine::{ConnectionId, UserId},
-};
 
+#[cfg(test)]
+use super::Room;
 use super::{RoomUserOperation, StagedPublish};
 use crate::engine::source_model::UserStreamId;
+#[cfg(test)]
+use crate::engine::{ConnectionId, UserId};
 #[cfg(test)]
 use crate::engine::{
     TestSourceKind, media_transport::TransportMediaId, room::media_graph::ValidatedPublish,
@@ -24,17 +23,9 @@ impl StagedPublish {
     }
 }
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 impl Room {
-    #[allow(
-        clippy::unused_async,
-        reason = "test facade stays async to match room inspection helpers used by existing scenarios"
-    )]
-    pub(crate) async fn staged_count(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> usize {
+    pub(crate) fn staged_count(&self, user_id: &UserId, connection_id: ConnectionId) -> usize {
         self.staged_publishes.staged_count(user_id, connection_id)
     }
 }
@@ -66,11 +57,7 @@ impl Room {
         self.staged_publishes.insert_for_test(transaction);
     }
 
-    #[allow(
-        clippy::unused_async,
-        reason = "test facade stays async to match room inspection helpers used by existing scenarios"
-    )]
-    pub(crate) async fn staged_media_id(
+    pub(crate) fn staged_media_id(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,

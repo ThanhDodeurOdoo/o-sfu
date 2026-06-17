@@ -190,7 +190,7 @@ async fn stale_and_current_connections_cannot_bypass_recording_backend_gate() {
         .lifecycle()
         .join_user(
             UserId::Integer(1),
-            Some(String::from("replacement")),
+            None,
             UserPermissions {
                 transcription: Some(true),
                 audio_recording: Some(true),

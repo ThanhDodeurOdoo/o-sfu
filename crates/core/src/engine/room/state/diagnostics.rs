@@ -384,27 +384,6 @@ fn source_selector(value: SourceSelector) -> DiagnosticsSourceSelector {
         SourceSelector::Open => DiagnosticsSourceSelector::Open,
         SourceSelector::Encoding(_) => DiagnosticsSourceSelector::Encoding,
         SourceSelector::OperatingPoint(_) => DiagnosticsSourceSelector::OperatingPoint,
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Pinned) => {
-            DiagnosticsSourceSelector::RoomPolicyPinned
-        }
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Featured) => {
-            DiagnosticsSourceSelector::RoomPolicyFeatured
-        }
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::ReadableDetail) => {
-            DiagnosticsSourceSelector::RoomPolicyReadableDetail
-        }
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::ActiveSpeaker) => {
-            DiagnosticsSourceSelector::RoomPolicyActiveSpeaker
-        }
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::VisibleThumbnail) => {
-            DiagnosticsSourceSelector::RoomPolicyVisibleThumbnail
-        }
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Hidden) => {
-            DiagnosticsSourceSelector::RoomPolicyHidden
-        }
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::Overflow) => {
-            DiagnosticsSourceSelector::RoomPolicyOverflow
-        }
     }
 }
 
@@ -414,7 +393,6 @@ fn source_selection_reason(value: SourceSelector) -> DiagnosticsSourceSelectionR
         SourceSelector::Encoding(_) | SourceSelector::OperatingPoint(_) => {
             DiagnosticsSourceSelectionReason::ReceiverAdaptation
         }
-        SourceSelector::RoomPolicy(_) => DiagnosticsSourceSelectionReason::RoomPolicy,
     }
 }
 

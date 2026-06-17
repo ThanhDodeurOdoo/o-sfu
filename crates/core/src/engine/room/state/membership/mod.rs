@@ -135,14 +135,12 @@ impl RoomState {
     fn install_joined_session(
         &mut self,
         user_id: &UserId,
-        label: Option<String>,
         permissions: RoomUserPermissions,
         sender: OutboundSender,
         connection_id: ConnectionId,
     ) -> Option<OutboundSender> {
         if let Some(user) = self.users.get_mut(user_id) {
             let old_sender = mem::replace(&mut user.sender, sender);
-            user.label = label;
             user.permissions = permissions;
             user.reset_presentation();
             user.negotiation = UserNegotiation::default();
@@ -153,7 +151,6 @@ impl RoomState {
         self.users.insert(
             user_id.clone(),
             ActiveUser {
-                label,
                 permissions,
                 info: UserInfo::default(),
                 server_featured: None,
@@ -171,14 +168,12 @@ impl RoomState {
     pub fn apply_join(
         &mut self,
         user_id: &UserId,
-        label: Option<String>,
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
         emit_joined_fanout: bool,
     ) -> Result<JoinUserOutcome, RoomJoinError> {
         self.apply_join_on_placement(
             user_id,
-            label,
             permissions,
             sender,
             emit_joined_fanout,
@@ -189,7 +184,6 @@ impl RoomState {
     pub fn apply_join_on_placement(
         &mut self,
         user_id: &UserId,
-        label: Option<String>,
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
         emit_joined_fanout: bool,
@@ -206,7 +200,7 @@ impl RoomState {
         let media_effects = placement.replacement_effects;
 
         let previous_sender =
-            self.install_joined_session(user_id, label, permissions, sender, connection_id);
+            self.install_joined_session(user_id, permissions, sender, connection_id);
         let had_previous_sender = previous_sender.is_some();
 
         let mut effects = LifecycleEffects {

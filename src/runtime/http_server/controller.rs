@@ -234,113 +234,92 @@ async fn disconnect(
 }
 
 async fn diagnostics_summary(State(services): State<DiagnosticsServices>) -> Response {
-    async {
-        axum::Json(
-            diagnostics::summary_response(
-                &services.room_manager,
-                &services.media_transport,
-                &services.diagnostics,
-            )
-            .await,
+    axum::Json(
+        diagnostics::summary_response(
+            &services.room_manager,
+            &services.media_transport,
+            &services.diagnostics,
         )
-        .into_response()
-    }
-    .await
+        .await,
+    )
+    .into_response()
 }
 
 async fn diagnostics_rooms(State(services): State<DiagnosticsServices>) -> Response {
-    async {
-        axum::Json(
-            diagnostics::rooms_response(
-                &services.room_manager,
-                &services.media_transport,
-                &services.diagnostics,
-            )
-            .await,
+    axum::Json(
+        diagnostics::rooms_response(
+            &services.room_manager,
+            &services.media_transport,
+            &services.diagnostics,
         )
-        .into_response()
-    }
-    .await
+        .await,
+    )
+    .into_response()
 }
 
 async fn diagnostics_workers(State(services): State<DiagnosticsServices>) -> Response {
-    async {
-        axum::Json(
-            diagnostics::workers_response(&services.room_manager, &services.media_transport).await,
-        )
-        .into_response()
-    }
-    .await
+    axum::Json(
+        diagnostics::workers_response(&services.room_manager, &services.media_transport).await,
+    )
+    .into_response()
 }
 
 async fn diagnostics_room_detail(
     State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
 ) -> Response {
-    async {
-        let payload = diagnostics::room_detail_response(
-            &services.room_manager,
-            &services.media_transport,
-            &services.diagnostics,
-            &room_id,
-        )
-        .await;
-        diagnostics_optional_response(payload)
-    }
-    .await
+    let payload = diagnostics::room_detail_response(
+        &services.room_manager,
+        &services.media_transport,
+        &services.diagnostics,
+        &room_id,
+    )
+    .await;
+    diagnostics_optional_response(payload)
 }
 
 async fn diagnostics_room_users(
     State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
 ) -> Response {
-    async {
-        let payload = diagnostics::room_users_response(
-            &services.room_manager,
-            &services.media_transport,
-            &services.diagnostics,
-            &room_id,
-        )
-        .await;
-        diagnostics_optional_response(payload)
-    }
-    .await
+    let payload = diagnostics::room_users_response(
+        &services.room_manager,
+        &services.media_transport,
+        &services.diagnostics,
+        &room_id,
+    )
+    .await;
+    diagnostics_optional_response(payload)
 }
 
 async fn diagnostics_room_graph(
     State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
 ) -> Response {
-    async {
-        let payload = diagnostics::room_detail_response(
-            &services.room_manager,
-            &services.media_transport,
-            &services.diagnostics,
-            &room_id,
-        )
-        .await
-        .map(|payload| diagnostics::build_graph(&payload));
-        diagnostics_optional_response(payload)
-    }
+    let payload = diagnostics::room_detail_response(
+        &services.room_manager,
+        &services.media_transport,
+        &services.diagnostics,
+        &room_id,
+    )
     .await
+    .map(|payload| diagnostics::build_graph(&payload));
+    diagnostics_optional_response(payload)
 }
 
 async fn diagnostics_user_graph(
     State(services): State<DiagnosticsServices>,
     Path((room_id, user_id)): Path<(String, String)>,
 ) -> Response {
-    async {
-        let payload = diagnostics::room_detail_response(
-            &services.room_manager,
-            &services.media_transport,
-            &services.diagnostics,
-            &room_id,
-        )
-        .await
-        .and_then(|payload| diagnostics::build_user_graph(&payload, &user_id));
-        diagnostics_optional_response(payload)
-    }
+    let payload = diagnostics::room_detail_response(
+        &services.room_manager,
+        &services.media_transport,
+        &services.diagnostics,
+        &room_id,
+    )
     .await
+    .and_then(|payload| diagnostics::build_user_graph(&payload, &user_id));
+    diagnostics_optional_response(payload)
 }
 
 fn diagnostics_optional_response<T>(payload: Option<T>) -> Response
@@ -357,23 +336,20 @@ async fn diagnostics_user_detail(
     State(services): State<DiagnosticsServices>,
     Path(user_id): Path<String>,
 ) -> Response {
-    async {
-        match diagnostics::user_detail_response(
-            &services.room_manager,
-            &services.media_transport,
-            &services.diagnostics,
-            &user_id,
-        )
-        .await
-        {
-            DiagnosticsUserLookup::Missing => StatusCode::NOT_FOUND.into_response(),
-            DiagnosticsUserLookup::Found(payload) => axum::Json(payload).into_response(),
-            DiagnosticsUserLookup::Conflict(payload) => {
-                (StatusCode::CONFLICT, axum::Json(payload)).into_response()
-            }
+    match diagnostics::user_detail_response(
+        &services.room_manager,
+        &services.media_transport,
+        &services.diagnostics,
+        &user_id,
+    )
+    .await
+    {
+        DiagnosticsUserLookup::Missing => StatusCode::NOT_FOUND.into_response(),
+        DiagnosticsUserLookup::Found(payload) => axum::Json(payload).into_response(),
+        DiagnosticsUserLookup::Conflict(payload) => {
+            (StatusCode::CONFLICT, axum::Json(payload)).into_response()
         }
     }
-    .await
 }
 
 async fn require_diagnostics_access(

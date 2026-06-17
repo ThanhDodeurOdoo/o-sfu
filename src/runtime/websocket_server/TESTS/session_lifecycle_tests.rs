@@ -108,7 +108,7 @@ async fn websocket_closes_when_pong_times_out() {
         !server
             .room_manager
             .test_api()
-            .has_session(room.uuid(), &user_id.clone())
+            .has_session(room.uuid(), &user_id)
             .await
     );
 }

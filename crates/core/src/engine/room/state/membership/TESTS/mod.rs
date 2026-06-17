@@ -140,20 +140,13 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let subscriber = UserId::Integer(2);
     assert!(
         state
-            .apply_join(
-                &publisher,
-                None,
-                UserPermissions::default(),
-                test_sender(),
-                false,
-            )
+            .apply_join(&publisher, UserPermissions::default(), test_sender(), false,)
             .is_ok()
     );
     assert!(
         state
             .apply_join(
                 &subscriber,
-                None,
                 UserPermissions::default(),
                 test_sender(),
                 false,
@@ -257,7 +250,6 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
         state
             .apply_join(
                 &UserId::Integer(1),
-                None,
                 UserPermissions::default(),
                 sender_a,
                 false,
@@ -268,7 +260,6 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
         state
             .apply_join(
                 &UserId::Integer(2),
-                None,
                 UserPermissions::default(),
                 sender_b,
                 false,
@@ -297,7 +288,7 @@ fn leave_repairs_missing_topology_router_and_removes_member() {
     let user_id = UserId::Integer(1);
     assert!(
         state
-            .apply_join(&user_id, None, UserPermissions::default(), sender, false,)
+            .apply_join(&user_id, UserPermissions::default(), sender, false,)
             .is_ok()
     );
     let connection_id = state
@@ -322,7 +313,7 @@ fn disconnect_repairs_missing_topology_router_and_removes_member() {
     let user_id = UserId::Integer(1);
     assert!(
         state
-            .apply_join(&user_id, None, UserPermissions::default(), sender, false,)
+            .apply_join(&user_id, UserPermissions::default(), sender, false,)
             .is_ok()
     );
     state
@@ -346,7 +337,6 @@ fn leave_removes_consumer_routes_for_departed_session() {
         state
             .apply_join(
                 &UserId::Integer(1),
-                None,
                 UserPermissions::default(),
                 producer_sender,
                 false,
@@ -357,7 +347,6 @@ fn leave_removes_consumer_routes_for_departed_session() {
         state
             .apply_join(
                 &UserId::Integer(2),
-                None,
                 UserPermissions::default(),
                 consumer_sender,
                 false,
@@ -409,7 +398,6 @@ fn stale_connection_cannot_broadcast() {
         state
             .apply_join(
                 &UserId::Integer(1),
-                None,
                 UserPermissions::default(),
                 sender,
                 false,
@@ -434,7 +422,6 @@ fn presence_update_returns_none_for_stale_connection() {
         state
             .apply_join(
                 &UserId::Integer(1),
-                None,
                 UserPermissions::default(),
                 sender,
                 false,
@@ -472,7 +459,7 @@ fn replacement_join_clears_transport_media_owner_index() {
     let replacement_sender = test_sender();
     assert!(
         state
-            .apply_join(&user_id, None, UserPermissions::default(), sender, false,)
+            .apply_join(&user_id, UserPermissions::default(), sender, false,)
             .is_ok()
     );
     let connection_id = state
@@ -507,7 +494,6 @@ fn replacement_join_clears_transport_media_owner_index() {
         state
             .apply_join(
                 &user_id,
-                Some(String::from("replacement")),
                 UserPermissions::default(),
                 replacement_sender,
                 false,
@@ -534,7 +520,6 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
     let outcome = state
         .apply_join(
             &relay.publisher,
-            Some(String::from("replacement")),
             UserPermissions::default(),
             test_sender(),
             false,

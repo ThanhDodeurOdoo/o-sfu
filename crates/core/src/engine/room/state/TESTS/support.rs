@@ -1,22 +1,17 @@
+#[cfg(test)]
 use o_sfu_router::RouterId;
 #[cfg(test)]
 use {super::super::media_graph::ConsumerKey, crate::engine::source_model::PublishedSourceId};
 
 use super::shared::RoomState;
+#[cfg(test)]
+use crate::engine::source_model::{SourceEncodingDescriptor, SourceEncodingId};
 use crate::engine::{
-    ConnectionId, TestSourceKind, UserId,
-    media_transport::TransportMediaId,
-    room::RoomUserPermissions,
-    source_model::{
-        SourceEncodingDescriptor, SourceEncodingId, test_support::stream_id_for_source,
-    },
+    ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
+    source_model::test_support::stream_id_for_source,
 };
 
 impl RoomState {
-    pub fn session_permissions(&self, user_id: &UserId) -> Option<RoomUserPermissions> {
-        self.users.get(user_id).map(|user| user.permissions)
-    }
-
     pub fn session_client_rtp_codec_names(&self, user_id: &UserId) -> Option<Vec<String>> {
         self.users
             .get(user_id)
@@ -41,6 +36,7 @@ impl RoomState {
         self.users.contains_key(user_id)
     }
 
+    #[cfg(test)]
     pub fn routing_home_router_id(&self, user_id: &UserId) -> Option<RouterId> {
         self.topology.routing().home_router_id_for_user(user_id)
     }
@@ -66,6 +62,7 @@ impl RoomState {
         )
     }
 
+    #[cfg(test)]
     pub fn inspect_producer_owner_user_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
@@ -106,6 +103,7 @@ impl RoomState {
             .is_some()
     }
 
+    #[cfg(test)]
     pub fn inspect_source_encoding_ids_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
@@ -121,6 +119,7 @@ impl RoomState {
         })
     }
 
+    #[cfg(test)]
     pub fn inspect_producer_owner_connection_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,

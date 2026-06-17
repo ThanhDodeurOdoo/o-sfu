@@ -6,12 +6,15 @@ use o_sfu_router::{
 use tracing::warn;
 
 use super::super::super::{Room, transition::StagedPublish};
-use crate::engine::{
-    ConnectionId, TestSourceKind, UserId,
-    media_transport::{MediaTransport, TransportMediaId},
-    source_model::{
-        SourcePublishIntent, SourceSubscriptionIntent, UserStreamId,
-        test_support::source_publish_intent_for_source,
+use crate::{
+    UnpublishIntentOutcome,
+    engine::{
+        ConnectionId, TestSourceKind, UserId,
+        media_transport::{MediaTransport, TransportMediaId},
+        source_model::{
+            SourcePublishIntent, SourceSubscriptionIntent, UserStreamId,
+            test_support::source_publish_intent_for_source,
+        },
     },
 };
 
@@ -148,28 +151,6 @@ impl RoomTestMedia<'_> {
             .await
     }
 
-    #[cfg(test)]
-    pub async fn start_publish_intent(
-        self,
-        user_id: &UserId,
-        intent: &SourcePublishIntent,
-        can_stage: bool,
-        media_transport: &MediaTransport,
-    ) -> Option<TestPublishIntentOutcome> {
-        let connection_id = self
-            .room
-            .test_api()
-            .inspect()
-            .user_connection_id(user_id)
-            .await?;
-        self.room
-            .user_operation(user_id, connection_id, media_transport)
-            .start_publish(intent, can_stage)
-            .await
-            .ok()
-            .map(Into::into)
-    }
-
     pub async fn unpublish_track(
         self,
         user_id: &UserId,
@@ -187,22 +168,12 @@ impl RoomTestMedia<'_> {
         };
         self.room
             .user_operation(user_id, connection_id, media_transport)
-            .unpublish_for_test(stream_id)
+            .stop_publish(stream_id)
             .await
+            != UnpublishIntentOutcome::Noop
     }
 
     pub async fn set_publication_active(
-        self,
-        user_id: &UserId,
-        stream_id: &UserStreamId,
-        active: bool,
-        media_transport: &MediaTransport,
-    ) -> bool {
-        self.publication_activity(user_id, stream_id, active, media_transport)
-            .await
-    }
-
-    pub async fn publication_activity(
         self,
         user_id: &UserId,
         stream_id: &UserStreamId,
@@ -246,14 +217,6 @@ impl RoomTestMedia<'_> {
             .apply_receiver_intent(source_id, intents)
             .await
             .is_some()
-    }
-
-    pub async fn staged_publish_count(
-        self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> usize {
-        self.room.staged_count(user_id, connection_id).await
     }
 
     #[must_use]

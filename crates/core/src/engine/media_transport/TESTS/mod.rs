@@ -243,7 +243,7 @@ fn expect_worker_for_user(
     adapter: &MediaTransport,
     session_key: &TransportSessionKey,
 ) -> Arc<RtcWorker> {
-    let Some(worker) = adapter.test_api().worker_for_user(session_key) else {
+    let Some(worker) = adapter.worker_for_user(session_key) else {
         panic!("test session should be assigned to a media worker");
     };
     worker

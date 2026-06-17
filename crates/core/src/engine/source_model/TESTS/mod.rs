@@ -341,10 +341,6 @@ fn selector_targets_runtime_encoding_identity_not_transport_or_rid() {
         Some(operating_point)
     );
     assert_eq!(SourceSelector::Open.selected_encoding(), None);
-    assert_eq!(
-        SourceSelector::RoomPolicy(SourceRoomPolicySelector::VisibleThumbnail).selected_encoding(),
-        None
-    );
 }
 
 #[test]

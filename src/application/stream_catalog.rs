@@ -148,13 +148,6 @@ pub(crate) fn counter_for_stream_type(
         .unwrap_or(0)
 }
 
-pub(crate) fn diagnostics_bitrate_for_stream_id(
-    by_stream: &BTreeMap<String, u64>,
-    stream_id: &str,
-) -> u64 {
-    by_stream.get(stream_id).copied().unwrap_or(0)
-}
-
 #[cfg(test)]
 #[path = "TESTS/stream_catalog.rs"]
 mod tests;
