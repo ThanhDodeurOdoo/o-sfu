@@ -3,7 +3,7 @@
     reason = "integration tests use panic-based assertions for clear failures"
 )]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use o_sfu::{
     config::Config,
@@ -15,11 +15,8 @@ use o_sfu_protocol::wire::{
 };
 use o_sfu_tests::support::{
     TEST_ROOM_KEY, TestResult, TestServer, create_room, disconnect_sessions_via_http, metrics_text,
-    protocol_harness::{
-        ProtocolWebSocketClient, connect_protocol_pair, protocol_test_config,
-        read_until_server_message,
-    },
-    require_some, signed_connect_claims, spawn_test_server,
+    protocol_harness::{ProtocolWebSocketClient, connect_protocol_pair, read_until_server_message},
+    require_some, signed_connect_claims, spawn_test_server, test_config,
 };
 use reqwest::StatusCode;
 use tokio::time::{Duration, timeout};
@@ -29,11 +26,11 @@ const SLOW_CONSUMER_BATCH_LEN: usize = 64;
 const SLOW_CONSUMER_PAYLOAD_BYTES: usize = 1_024;
 
 async fn default_server() -> TestResult<TestServer> {
-    spawn_test_server(protocol_test_config(1_000, 10)).await
+    spawn_test_server(test_config(1_000, 10)).await
 }
 
 async fn server_with_room(issuer: &str) -> TestResult<(TestServer, String)> {
-    server_with_configured_room(protocol_test_config(1_000, 10), issuer).await
+    server_with_configured_room(test_config(1_000, 10), issuer).await
 }
 
 async fn server_with_configured_room(
@@ -71,18 +68,30 @@ async fn client_in_room(
     )
 }
 
-async fn protocol_pair(
-    server: &TestServer,
-    room: &str,
+type ProtocolPairFuture<'a> = Pin<
+    Box<dyn Future<Output = TestResult<(ProtocolWebSocketClient, ProtocolWebSocketClient)>> + 'a>,
+>;
+
+fn protocol_pair<'a>(
+    server: &'a TestServer,
+    room: &'a str,
     first_user_id: UserId,
     second_user_id: UserId,
-) -> TestResult<(ProtocolWebSocketClient, ProtocolWebSocketClient)> {
-    let first_token = token(room, first_user_id)?;
-    let second_token = token(room, second_user_id.clone())?;
-    require_some(
-        connect_protocol_pair(server, &first_token, &second_token, second_user_id).await,
-        "protocol pair should connect",
-    )
+) -> ProtocolPairFuture<'a> {
+    Box::pin(async move {
+        let first_token = token(room, first_user_id)?;
+        let second_token = token(room, second_user_id.clone())?;
+        require_some(
+            Box::pin(connect_protocol_pair(
+                server,
+                &first_token,
+                &second_token,
+                second_user_id,
+            ))
+            .await,
+            "protocol pair should connect",
+        )
+    })
 }
 
 async fn initial_offer(client: &mut ProtocolWebSocketClient) -> TestResult<ServerRequest> {
@@ -106,7 +115,7 @@ async fn websocket_welcome_and_initial_offer_work_from_integration_test() -> Tes
 
 #[tokio::test]
 async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details() -> TestResult {
-    let config = protocol_test_config(1_000, 10);
+    let config = test_config(1_000, 10);
     let rtc_port_range = config.transport.rtc_port_range;
     let (server, room) = server_with_configured_room(config, "issuer-a").await?;
     let mut client = client_in_room(&server, &room, UserId::Integer(701)).await?;
@@ -139,7 +148,7 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
 
 #[tokio::test]
 async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() -> TestResult {
-    let mut config = protocol_test_config(1_000, 10);
+    let mut config = test_config(1_000, 10);
     config.transport.public_ip = "203.0.113.44".parse().unwrap_or(config.transport.public_ip);
     let (server, room) = server_with_configured_room(config, "issuer-public-ip").await?;
     let mut client = client_in_room(&server, &room, UserId::Integer(702)).await?;
@@ -163,7 +172,7 @@ async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() -> TestRe
 
 #[tokio::test]
 async fn websocket_timeout_is_reported_from_integration_test() -> TestResult {
-    let server = spawn_test_server(protocol_test_config(25, 10)).await?;
+    let server = spawn_test_server(test_config(25, 10)).await?;
 
     let client = ProtocolWebSocketClient::connect(&server).await;
     let mut client = require_some(client, "websocket client should connect")?;
@@ -381,7 +390,7 @@ async fn stats_reports_live_user_aggregates_from_integration_test() -> TestResul
 async fn room_full_and_last_disconnect_cleanup_are_observable_from_integration_test() -> TestResult
 {
     let (server, first_room) =
-        server_with_configured_room(protocol_test_config(1_000, 1), "issuer-a").await?;
+        server_with_configured_room(test_config(1_000, 1), "issuer-a").await?;
     let first_token = token(&first_room, UserId::Integer(1))?;
     let second_token = token(&first_room, UserId::Integer(2))?;
 
@@ -716,7 +725,13 @@ async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() 
     let b_drop_token = token(&room_b, UserId::Integer(1))?;
     let b_keep_token = token(&room_b, UserId::Integer(2))?;
     let (mut b_drop, mut b_keep) = require_some(
-        connect_protocol_pair(&server, &b_drop_token, &b_keep_token, UserId::Integer(2)).await,
+        Box::pin(connect_protocol_pair(
+            &server,
+            &b_drop_token,
+            &b_keep_token,
+            UserId::Integer(2),
+        ))
+        .await,
         "room B protocol pair should connect",
     )?;
 
@@ -797,7 +812,7 @@ async fn mismatched_explicit_room_id_is_rejected_from_integration_test() -> Test
 }
 
 fn slow_consumer_overflow_config() -> Config {
-    let mut config = protocol_test_config(1_000, 10);
+    let mut config = test_config(1_000, 10);
     config.user.outbound_queue_capacity = 1;
     config.user.outbound_queue_byte_capacity = 64 * 1024;
     config

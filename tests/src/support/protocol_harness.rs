@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use futures_util::SinkExt;
-use o_sfu::config::Config;
 use o_sfu_protocol::wire::{
     AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,
     EnvelopeBatch, RecordingOptions, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
@@ -13,16 +12,11 @@ use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 use super::{
     fake_rtc_peer::FakeRtcPeer,
     harness::{
-        TestServer, TestWebSocket, connect_websocket, read_close_code, read_text_message,
-        test_config,
+        TestServer, TestWebSocket, connect_websocket, decode_protocol_welcome_batch,
+        read_close_code, read_text_message,
     },
     protocol_wire::{encode_client_batch, read_protocol_batch, send_server_request_response},
 };
-
-#[must_use]
-pub fn protocol_test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
-    test_config(authentication_timeout_ms, room_size)
-}
 
 pub struct ProtocolWebSocketClient {
     websocket: TestWebSocket,
@@ -89,14 +83,7 @@ impl ProtocolWebSocketClient {
 
     pub async fn read_welcome(&mut self) -> Option<WelcomePayload> {
         let payload = read_text_message(&mut self.websocket).await?;
-        let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-        let envelope = batch.first()?.clone();
-        match ServerEnvelope::decode(envelope).ok()? {
-            ServerEnvelope::Message(ServerMessage::Welcome(welcome)) => Some(welcome),
-            ServerEnvelope::Message(_)
-            | ServerEnvelope::Request { .. }
-            | ServerEnvelope::Response { .. } => None,
-        }
+        decode_protocol_welcome_batch(&payload)
     }
 
     pub async fn finish_initial_negotiation(&mut self) -> Option<()> {

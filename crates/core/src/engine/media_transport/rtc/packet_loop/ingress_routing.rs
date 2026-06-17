@@ -533,7 +533,7 @@ fn route_pkt_by_session(
         return;
     }
     if route_packet_to_session(state, &session_key, route, input, "single-user-scan") {
-        record_route_success(demux, miss_key, route);
+        demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 
@@ -585,7 +585,7 @@ fn route_pkt_by_recovery(
         }
     };
     if route_packet_to_session(state, &session_key, route, input, "recovery-index") {
-        record_route_success(demux, miss_key, route);
+        demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
     }
 }
 
@@ -609,14 +609,6 @@ fn record_no_user_miss(
         source = %route.source_addr,
         "dropping UDP datagram because no rtc user accepted it"
     );
-}
-
-fn record_route_success(
-    demux: &mut DemuxRecoveryState,
-    miss_key: PacketLoopRoutingMissKey,
-    route: &PacketRouteContext<'_>,
-) {
-    demux.record_fallback_route_success(miss_key, route.packet, route.source_addr);
 }
 
 #[cfg(test)]

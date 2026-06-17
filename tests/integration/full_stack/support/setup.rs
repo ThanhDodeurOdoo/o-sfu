@@ -22,7 +22,13 @@ pub(crate) async fn room_fake_peers(
 ) -> TestResult<RoomFakePeers> {
     let (server, room) = room_parts(issuer).await?;
     let (publisher, subscriber) = require_some(
-        connect_two_fake_peers(&server, &room, publisher_user_id, subscriber_user_id).await,
+        Box::pin(connect_two_fake_peers(
+            &server,
+            &room,
+            publisher_user_id,
+            subscriber_user_id,
+        ))
+        .await,
         "fake peers should connect",
     )?;
     Ok(RoomFakePeers {
@@ -51,12 +57,12 @@ pub(crate) async fn ready_room_fake_peers(
     publisher_user_id: UserId,
     subscriber_user_id: UserId,
 ) -> TestResult<ReadyRoomFakePeers> {
-    ready_room_fake_peers_with_config(
+    Box::pin(ready_room_fake_peers_with_config(
         test_config(1_000, 10),
         issuer,
         publisher_user_id,
         subscriber_user_id,
-    )
+    ))
     .await
 }
 
@@ -81,13 +87,13 @@ pub(crate) async fn ready_room_fake_peers_with_config(
 ) -> TestResult<ReadyRoomFakePeers> {
     let (server, room) = room_parts_with_config(config, issuer).await?;
     let (publisher, subscriber) = require_some(
-        connect_two_rtc_ready_fake_peers(
+        Box::pin(connect_two_rtc_ready_fake_peers(
             &server,
             &room,
             publisher_user_id,
             subscriber_user_id,
             Duration::from_secs(5),
-        )
+        ))
         .await,
         "fake RTC peers should reach ready state",
     )?;
@@ -107,11 +113,10 @@ pub(crate) async fn room_parts_with_config(
     config: Config,
     issuer: &str,
 ) -> TestResult<(TestServer, String)> {
-    Ok(require_some(
+    require_some(
         spawn_room_server_with_config(config, issuer, TEST_ROOM_KEY).await,
         "room server should start",
-    )?
-    .into_parts())
+    )
 }
 
 pub(crate) fn cross_worker_test_config() -> Config {

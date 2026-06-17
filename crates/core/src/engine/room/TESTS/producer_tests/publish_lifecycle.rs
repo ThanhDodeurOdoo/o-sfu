@@ -101,17 +101,15 @@ async fn duplicate_publish_intent_reactivates_committed_stream() {
         .user_connection_id(&publisher_id)
         .await
         .expect("publisher should have a connection id");
-    let outcome: TestPublishIntentOutcome = room
-        .user_operation(&publisher_id, connection_id, &adapter)
-        .start_publish(
-            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
-            true,
-        )
-        .await
-        .expect("duplicate publish intent should target a live publisher")
-        .into();
-
-    assert_eq!(outcome, TestPublishIntentOutcome::Activated);
+    assert!(matches!(
+        room.user_operation(&publisher_id, connection_id, &adapter)
+            .start_publish(
+                &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
+                true,
+            )
+            .await,
+        Ok(PublishIntentOutcome::Activated)
+    ));
     assert_eq!(
         room.test_api().inspect().producer_count().await,
         1,

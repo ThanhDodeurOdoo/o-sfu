@@ -621,15 +621,9 @@ fn test_rtc_answer_sdp(request: &ServerRequest) -> Option<String> {
     Some(answer.to_sdp_string())
 }
 
-pub(super) async fn read_message(
-    websocket: &mut TestWebSocket,
-) -> Option<tungstenite::Result<tungstenite::Message>> {
-    websocket.next().await
-}
-
 pub(super) async fn read_websocket_ping(websocket: &mut TestWebSocket) -> Option<Vec<u8>> {
     loop {
-        let message = read_message(websocket).await?;
+        let message = websocket.next().await?;
         match message.ok()? {
             tungstenite::Message::Ping(payload) => return Some(payload.to_vec()),
             tungstenite::Message::Pong(_) => {}
@@ -654,7 +648,7 @@ pub(super) async fn send_websocket_pong(
 
 pub(super) async fn read_text_message(websocket: &mut TestWebSocket) -> Option<String> {
     loop {
-        let message = read_message(websocket).await?;
+        let message = websocket.next().await?;
         match message.ok()? {
             tungstenite::Message::Text(payload) => return Some(payload.to_string()),
             tungstenite::Message::Ping(payload) => {
@@ -673,7 +667,7 @@ pub(super) async fn read_text_message(websocket: &mut TestWebSocket) -> Option<S
 
 pub(super) async fn read_close_code(websocket: &mut TestWebSocket) -> Option<CloseCode> {
     loop {
-        let message = read_message(websocket).await?;
+        let message = websocket.next().await?;
         match message.ok()? {
             tungstenite::Message::Close(frame) => {
                 let code = frame.map(|frame| frame.code);

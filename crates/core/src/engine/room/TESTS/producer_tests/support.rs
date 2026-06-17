@@ -6,12 +6,9 @@ pub(super) use o_sfu_router::{
 };
 pub(super) use str0m::{Candidate, Rtc, change::SdpOffer};
 
-pub(super) use super::super::{
-    api::{NegotiatedPublish, TestPublishIntentOutcome},
-    fixtures::*,
-};
+pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
-    Bitrate, RoomMediaLimits, RtcPortRange,
+    Bitrate, PublishIntentOutcome, RoomMediaLimits, RtcPortRange,
     engine::{
         diagnostics::{
             DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSourceSelector,

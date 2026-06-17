@@ -5,8 +5,6 @@ mod inspect;
 mod lifecycle;
 mod media;
 
-#[cfg(test)]
-pub use self::media::TestPublishIntentOutcome;
 pub use self::{
     inspect::RoomTestInspect,
     lifecycle::RoomTestLifecycle,

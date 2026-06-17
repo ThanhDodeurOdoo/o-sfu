@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use o_sfu_router::{MediaKind, ProducerId, RouterEvent, SessionId as RouterSessionId, TransportId};
 
+use super::super::service::RecordingLifecycleState;
 use crate::engine::{
     RoomInstanceId, UserId as SignalingSessionId,
     media_transport::{
@@ -10,10 +11,7 @@ use crate::engine::{
     },
     metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
     packet_sink_registry::RoomPacketSinkRegistry,
-    recording::{
-        RecordingService,
-        test_support::{RecordingLifecycleState, is_room_active, transition_error_state},
-    },
+    recording::RecordingService,
     router_events::RoomRouterEventSink,
 };
 
@@ -66,24 +64,18 @@ fn recording_service_allows_only_legal_state_machine_transitions() {
         service.snapshot().lifecycle,
         RecordingLifecycleState::Recording
     );
-    assert!(is_room_active(
-        &packet_sink_registry,
-        RoomInstanceId::from_raw(17)
-    ));
+    assert!(packet_sink_registry.has_active_room(RoomInstanceId::from_raw(17)));
 
     let invalid_start = service.start();
     assert!(invalid_start.is_err());
     assert_eq!(
-        invalid_start.err().map(transition_error_state),
+        invalid_start.err().map(|error| error.state),
         Some(RecordingLifecycleState::Recording)
     );
 
     assert!(service.stop().is_ok());
     assert_eq!(service.snapshot().lifecycle, RecordingLifecycleState::Idle);
-    assert!(!is_room_active(
-        &packet_sink_registry,
-        RoomInstanceId::from_raw(17)
-    ));
+    assert!(!packet_sink_registry.has_active_room(RoomInstanceId::from_raw(17)));
 }
 
 #[test]

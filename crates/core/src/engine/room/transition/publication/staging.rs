@@ -59,19 +59,13 @@ impl StagedPublishes {
         failure_message: &str,
     ) -> bool {
         let key = publish.key();
-        let duplicate = {
+        {
             let mut staged = lock_unpoisoned(&self.staged);
-            match staged.entry(key) {
-                Entry::Vacant(slot) => {
-                    slot.insert(publish);
-                    None
-                }
-                Entry::Occupied(_) => Some(publish),
+            if let Entry::Vacant(slot) = staged.entry(key) {
+                slot.insert(publish);
+                return true;
             }
-        };
-        let Some(publish) = duplicate else {
-            return true;
-        };
+        }
         publish
             .cleanup_reserved_media(operation, failure_message)
             .await;
@@ -259,14 +253,7 @@ impl StagedPublish {
         let media = self.media;
         let committed = {
             let mut state = room.state.write().await;
-            let commit = state.commit_publish_reservation(
-                self.descriptor.clone(),
-                rtp,
-                &upload_encodings,
-                media,
-            );
-            drop(state);
-            commit
+            state.commit_publish_reservation(self.descriptor.clone(), rtp, &upload_encodings, media)
         };
         let Some(commit) = committed else {
             self.cleanup_reserved_media(

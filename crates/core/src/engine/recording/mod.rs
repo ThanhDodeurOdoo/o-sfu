@@ -6,9 +6,6 @@
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 mod service;
-#[cfg(test)]
-#[path = "TESTS/support.rs"]
-pub(crate) mod test_support;
 mod user;
 
 pub(crate) use service::RecordingService;

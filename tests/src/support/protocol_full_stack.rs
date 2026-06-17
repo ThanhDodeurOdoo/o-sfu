@@ -87,7 +87,7 @@ pub fn connect_fake_peer<'a>(
             welcome,
             rtc_peer,
         };
-        Box::pin(peer.complete_next_negotiation()).await?;
+        peer.complete_next_negotiation().await?;
         Some(peer)
     })
 }

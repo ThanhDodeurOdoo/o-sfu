@@ -55,7 +55,7 @@ async fn explicit_unpublish_removes_state_and_transport_media() {
 
 #[tokio::test]
 async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
-    let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
+    let mut scenario = setup_real_rtc_refresh_scenario().await;
 
     publish_track(
         &scenario.room,
