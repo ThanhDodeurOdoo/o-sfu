@@ -149,21 +149,18 @@ impl AcceptedUser {
         state: &WebSocketServices,
         writer: &mut WsWriter,
     ) -> Option<()> {
-        let output = match self.user.start().await {
-            Ok(output) => output,
-            Err(_error) => {
-                warn!(
-                    event = telemetry_event::WS_JOIN_FAILED,
-                    user_id = ?self.user.id(),
-                    connection_id = ?self.user.connection_id(),
-                    remote_address = self.user.remote_address(),
-                    outcome = "user_initialize_failed",
-                    "failed to initialize websocket user"
-                );
-                state.metrics.record_ws_user_initialize_failure();
-                self.close(state).await;
-                return None;
-            }
+        let Ok(output) = self.user.start().await else {
+            warn!(
+                event = telemetry_event::WS_JOIN_FAILED,
+                user_id = ?self.user.id(),
+                connection_id = ?self.user.connection_id(),
+                remote_address = self.user.remote_address(),
+                outcome = "user_initialize_failed",
+                "failed to initialize websocket user"
+            );
+            state.metrics.record_ws_user_initialize_failure();
+            self.user.close(&state.room_manager).await;
+            return None;
         };
         if send_user_output_bounded(writer, output).await.is_err() {
             tracing::debug!(
@@ -180,7 +177,7 @@ impl AcceptedUser {
                 outcome = "startup_send_failed",
                 "failed to send websocket user startup payload"
             );
-            self.close(state).await;
+            self.user.close(&state.room_manager).await;
             return None;
         }
         Some(())
@@ -198,19 +195,6 @@ impl AcceptedUser {
             ?reason,
             "closing websocket user"
         );
-        self.close(state).await;
-    }
-
-    async fn close(&mut self, state: &WebSocketServices) {
-        self.user.close().await;
-        state
-            .room_manager
-            .close_session(
-                self.user.room_id(),
-                self.user.id(),
-                self.user.connection_id(),
-                &state.media_transport,
-            )
-            .await;
+        self.user.close(&state.room_manager).await;
     }
 }

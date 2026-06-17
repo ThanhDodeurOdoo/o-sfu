@@ -178,6 +178,7 @@ impl ActiveWebSocketSession {
             return None;
         }
         debug!("closing websocket because the underlying RTC transport disconnected");
+        self.accepted.user.close(&self.services.room_manager).await;
         close_writer_bounded(&mut self.writer, WebSocketCloseCode::Error).await;
         Some(WsSessionLoopExitReason::TransportDisconnected)
     }

@@ -211,9 +211,9 @@ impl StagedPublishScenario {
             .await;
     }
 
-    pub(super) async fn rollback_connection(&self) {
-        self.operation()
-            .rollback_staged_publishes_for_connection()
+    pub(super) async fn close_user(&self) {
+        self.room
+            .remove_user(&self.user_id, self.connection_id, &self.adapter)
             .await;
     }
 

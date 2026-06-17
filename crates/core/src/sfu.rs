@@ -9,7 +9,7 @@ use crate::{
             MediaTransport, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
             TransportAdapterError, TransportSessionHealth, TransportSessionKey,
         },
-        room::{BroadcastPayloadError, Room, RoomUserOperation},
+        room::{BroadcastPayloadError, Room, RoomManager, RoomUserOperation},
         source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
     },
 };
@@ -228,6 +228,7 @@ pub struct MediaSession {
     connection_id: ConnectionId,
     transport_user_key: TransportSessionKey,
     phase: SessionPhase,
+    closed: bool,
 }
 
 impl SfuCore {
@@ -262,6 +263,7 @@ impl SfuCore {
             connection_id,
             transport_user_key,
             phase: SessionPhase::default(),
+            closed: false,
         }
     }
 }
@@ -399,11 +401,21 @@ impl MediaSession {
         }
     }
 
-    pub async fn close(&mut self) {
+    pub async fn close(&mut self, rooms: &RoomManager) -> bool {
+        if self.closed {
+            return false;
+        }
         self.phase.clear_queued_publishes();
-        self.room_operation()
-            .rollback_staged_publishes_for_connection()
+        let did_close = rooms
+            .close_session(
+                self.room_id(),
+                &self.user_id,
+                self.connection_id,
+                &self.core.media_transport,
+            )
             .await;
+        self.closed = true;
+        did_close
     }
 
     /// # Errors

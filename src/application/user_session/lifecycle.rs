@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use super::{User, UserError, UserOutput};
 use crate::{
     core::prelude::{SfuCore, TransportSessionHealth},
-    runtime::{ConnectionId, media_transport::TransportSessionKey, room::Room},
+    runtime::{ConnectionId, media_transport::TransportSessionKey, room},
 };
 
 impl User {
@@ -16,7 +16,7 @@ impl User {
         connection_id: ConnectionId,
         transport_session_key: TransportSessionKey,
         remote_address: Arc<str>,
-        room: &Arc<Room>,
+        room: &Arc<room::Room>,
         sfu_core: &SfuCore,
     ) -> Self {
         let session = sfu_core.session_with_transport_key(
@@ -76,13 +76,12 @@ impl User {
         Ok(output)
     }
 
-    pub async fn close(&mut self) {
-        if self.cleanup_finished {
-            return;
+    pub async fn close(&mut self, rooms: &room::RoomManager) {
+        if !self.cleanup_finished {
+            self.requests.clear();
+            self.session.close(rooms).await;
+            self.cleanup_finished = true;
         }
-        self.requests.clear();
-        self.session.close().await;
-        self.cleanup_finished = true;
     }
 
     pub(super) async fn reject_stale_connection(&self) -> Result<(), UserError> {

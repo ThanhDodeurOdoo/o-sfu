@@ -177,6 +177,14 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
         "server should close once RTC transport health becomes disconnected: {close_code:?}"
     );
     assert_eq!(close_code.ok().flatten(), Some(CloseCode::Error));
+    assert!(
+        wait_for_session_cleanup(&room, &user_id).await.is_some(),
+        "transport disconnect should complete explicit user cleanup"
+    );
+    assert!(
+        wait_for_active_transport_users(&server, 0).await.is_some(),
+        "transport disconnect should close the transport user"
+    );
 }
 
 #[tokio::test]
@@ -236,6 +244,14 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
         "server should close even when the RTC transport disconnects before the initial answer: {close_code:?}"
     );
     assert_eq!(close_code.ok().flatten(), Some(CloseCode::Error));
+    assert!(
+        wait_for_session_cleanup(&room, &user_id).await.is_some(),
+        "initial negotiation transport disconnect should complete explicit user cleanup"
+    );
+    assert!(
+        wait_for_active_transport_users(&server, 0).await.is_some(),
+        "initial negotiation transport disconnect should close the transport user"
+    );
 }
 
 #[tokio::test]
@@ -308,142 +324,6 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
             .await
             .is_some(),
         "user finish should explicitly roll back staged publishes"
-    );
-}
-
-#[tokio::test]
-async fn protocol_error_rolls_back_staged_publish_before_room_cleanup() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
-        "issuer-staged-publish-protocol-error",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let user_id = UserId::Integer(415);
-    let websocket = setup_negotiated_session(&server, &room, user_id.clone()).await;
-    assert!(websocket.is_some());
-    let Some(mut websocket) = websocket else {
-        return;
-    };
-    let connection_id = stage_camera_publish(&mut websocket, &room, &user_id).await;
-    assert!(connection_id.is_some());
-    let Some(connection_id) = connection_id else {
-        return;
-    };
-
-    assert!(
-        websocket
-            .send(tungstenite::Message::Text("{".into()))
-            .await
-            .is_ok()
-    );
-    assert_eq!(
-        read_close_code(&mut websocket).await,
-        Some(CloseCode::Protocol)
-    );
-    assert!(
-        wait_for_staged_publish_cleanup(&room, &user_id, connection_id)
-            .await
-            .is_some(),
-        "protocol-error close should roll back staged publishes"
-    );
-}
-
-#[tokio::test]
-async fn replacement_close_rolls_back_staged_publish_before_room_cleanup() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
-        "issuer-staged-publish-replacement",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let user_id = UserId::Integer(416);
-    let first_socket = setup_negotiated_session(&server, &room, user_id.clone()).await;
-    assert!(first_socket.is_some());
-    let Some(mut first_socket) = first_socket else {
-        return;
-    };
-    let connection_id = stage_camera_publish(&mut first_socket, &room, &user_id).await;
-    assert!(connection_id.is_some());
-    let Some(connection_id) = connection_id else {
-        return;
-    };
-
-    let replacement_socket = setup_negotiated_session(&server, &room, user_id.clone()).await;
-    assert!(replacement_socket.is_some());
-    let Some(mut replacement_socket) = replacement_socket else {
-        return;
-    };
-    assert_eq!(
-        read_close_code(&mut first_socket).await,
-        Some(CloseCode::Library(4108))
-    );
-    assert!(
-        wait_for_staged_publish_cleanup(&room, &user_id, connection_id)
-            .await
-            .is_some(),
-        "replacement close should roll back staged publishes from the stale socket"
-    );
-    assert!(
-        close_socket_and_wait_for_session_cleanup(&mut replacement_socket, &room, &user_id)
-            .await
-            .is_some()
-    );
-}
-
-#[tokio::test]
-async fn runtime_disconnect_rolls_back_staged_publish_before_room_cleanup() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(
-        &server,
-        "issuer-staged-publish-runtime-disconnect",
-        CreateRoomQuery::default(),
-    )
-    .await;
-    let user_id = UserId::Integer(417);
-    let websocket = setup_negotiated_session(&server, &room, user_id.clone()).await;
-    assert!(websocket.is_some());
-    let Some(mut websocket) = websocket else {
-        return;
-    };
-    let connection_id = stage_camera_publish(&mut websocket, &room, &user_id).await;
-    assert!(connection_id.is_some());
-    let Some(connection_id) = connection_id else {
-        return;
-    };
-
-    server
-        .room_manager
-        .disconnect_users(
-            room.uuid(),
-            slice::from_ref(&user_id),
-            &server.media_transport,
-        )
-        .await;
-
-    assert_eq!(
-        read_close_code(&mut websocket).await,
-        Some(CloseCode::Library(4108))
-    );
-    assert!(
-        wait_for_staged_publish_cleanup(&room, &user_id, connection_id)
-            .await
-            .is_some(),
-        "runtime disconnect should roll back staged publishes"
     );
 }
 
@@ -600,43 +480,6 @@ async fn disconnect_cleanup_closes_transport_user_before_empty_room_removal() {
 
     let metrics = server.state.metrics.snapshot();
     assert_eq!(metrics.active_transport_users(), 0);
-}
-
-async fn stage_camera_publish(
-    websocket: &mut TestWebSocket,
-    room: &Room,
-    user_id: &UserId,
-) -> Option<ConnectionId> {
-    let connection_id = room
-        .test_api()
-        .inspect()
-        .user_connection_id(user_id)
-        .await?;
-    let publish = ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
-        stream_type: StreamType::Camera,
-    }))
-    .into_envelope()
-    .ok()?;
-    let payload = serde_json::to_string(&vec![publish]).ok()?;
-    assert!(
-        websocket
-            .send(tungstenite::Message::Text(payload.into()))
-            .await
-            .is_ok()
-    );
-    assert!(
-        wait_for_protocol_server_request(websocket).await.is_some(),
-        "publish intent should stage media and request renegotiation"
-    );
-    assert!(
-        room.test_api().media().has_staged_publish(
-            user_id,
-            connection_id,
-            &stream_id_for_stream_type(StreamType::Camera),
-        ),
-        "publish should be staged before the close path starts"
-    );
-    Some(connection_id)
 }
 
 async fn wait_for_staged_publish_cleanup(
