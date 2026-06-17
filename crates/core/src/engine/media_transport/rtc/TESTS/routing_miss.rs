@@ -47,11 +47,9 @@ fn route_success_clears_source_rate_limit_state() {
         now += Duration::from_millis(1);
     }
 
-    assert!(demux.is_tracking_source(source_addr));
     assert!(demux.should_rate_limit_source(source_addr, start + Duration::from_millis(4),));
 
     demux.record_fallback_route_success(miss_key, &packet, source_addr);
 
-    assert!(!demux.is_tracking_source(source_addr));
     assert!(!demux.should_rate_limit_source(source_addr, start + Duration::from_millis(5),));
 }

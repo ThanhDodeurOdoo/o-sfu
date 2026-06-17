@@ -276,8 +276,7 @@ async fn resolve_handshake_room(
         })?;
         return resolve_room_by_id(state, &unverified_claims.room_id).await;
     };
-    let room = resolve_room_by_id(state, explicit_room_id).await?;
-    Ok(room)
+    resolve_room_by_id(state, explicit_room_id).await
 }
 
 /// look up the selected room id in the live room directory

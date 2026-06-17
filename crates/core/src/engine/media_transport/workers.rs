@@ -504,7 +504,7 @@ impl MediaTransport {
 
     fn worker_index_for_media_worker_id(&self, media_worker_id: MediaWorkerId) -> Option<usize> {
         let worker_index = media_worker_id.as_usize();
-        self.workers.get(worker_index).map(|_| worker_index)
+        (worker_index < self.workers.len()).then_some(worker_index)
     }
 
     fn worker_for_media_worker_id(&self, media_worker_id: MediaWorkerId) -> Option<Arc<RtcWorker>> {

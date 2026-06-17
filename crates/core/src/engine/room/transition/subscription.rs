@@ -61,17 +61,13 @@ impl RoomUserOperation<'_> {
     }
 
     pub(crate) async fn apply_session_refreshed(self) -> Option<()> {
-        self.refresh_after_refresh_answer().await
+        self.request_video_keyframes_required().await?;
+        self.setup_missing_consumers().await
     }
 
     async fn refresh_after_initial_answer(self) -> Option<()> {
         self.setup_missing_consumers().await?;
         self.request_video_keyframes_if_present().await
-    }
-
-    async fn refresh_after_refresh_answer(self) -> Option<()> {
-        self.request_video_keyframes_required().await?;
-        self.setup_missing_consumers().await
     }
 
     pub(crate) async fn apply_receiver_intent(

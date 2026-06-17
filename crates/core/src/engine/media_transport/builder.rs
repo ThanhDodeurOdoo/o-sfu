@@ -181,10 +181,10 @@ fn split_worker_ranges(
     if worker_count == 0 {
         return Err(MediaTransportBuildError::InvalidWorkerCount);
     }
-    rtc_port_range.split_for_workers(worker_count).ok_or(
-        MediaTransportBuildError::InvalidPortSplit {
+    rtc_port_range
+        .split_for_workers(worker_count)
+        .ok_or_else(|| MediaTransportBuildError::InvalidPortSplit {
             worker_count,
             port_count: rtc_port_range.port_count(),
-        },
-    )
+        })
 }

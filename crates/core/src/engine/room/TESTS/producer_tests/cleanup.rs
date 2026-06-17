@@ -110,7 +110,6 @@ async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
             .room
             .test_api()
             .lifecycle()
-            .pending_cleanup_retry_count()
-            > 0
+            .has_pending_cleanup_retries()
     );
 }
