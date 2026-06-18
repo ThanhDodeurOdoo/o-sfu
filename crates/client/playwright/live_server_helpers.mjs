@@ -271,10 +271,6 @@ export async function setStreamDownload(
     );
 }
 
-export async function setCameraDownload(page, targetSessionId, active, cameraLayout = undefined) {
-    await setStreamDownload(page, targetSessionId, "camera", active, cameraLayout);
-}
-
 export async function unpublishStream(page, streamType) {
     assertStreamType(streamType);
     await page.evaluate(async (streamType) => {
@@ -285,10 +281,6 @@ export async function unpublishStream(page, streamType) {
         harness.client.updateUpload(streamType, null);
         await globalThis.__liveHarnessStopLocalMedia(harness, streamType);
     }, streamType);
-}
-
-export async function unpublishCamera(page) {
-    await unpublishStream(page, "camera");
 }
 
 export async function broadcast(page, message) {
@@ -448,10 +440,6 @@ export async function peerLocalDescriptionSdp(page) {
     });
 }
 
-export async function localCameraSenderEncodings(page) {
-    return localSenderEncodings(page, "camera");
-}
-
 export async function localSenderEncodings(page, streamType) {
     assertStreamType(streamType);
     return page.evaluate((targetStreamType) => {
@@ -529,10 +517,6 @@ export async function waitForCameraSubscriptionSelectedRid({
             producerSessionId
         )} to select RID ${expectedRid}`
     );
-}
-
-export async function waitForDecodedRemoteCameraFrame(page, targetSessionId) {
-    return waitForDecodedRemoteVideoFrame(page, targetSessionId, "camera");
 }
 
 export async function waitForDecodedRemoteVideoFrame(

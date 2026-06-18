@@ -1,11 +1,3 @@
-/**
- * remote media track management
- *
- * this module tracks remote media streams received from the sfu and binds
- * them to their protocol-level sessions and types. it handles track events
- * from the peer connection and propagates updates to the client
- */
-
 import type { TrackBinding } from "../protocol.js";
 import {
     CLIENT_UPDATE,
@@ -25,9 +17,6 @@ import {
 
 type TrackUpdateEmitter = (update: ClientUpdateDetail) => void;
 
-/**
- * manager for remote media tracks and their session bindings
- */
 export class RemoteTracks {
     public readonly consumers = new Map<SessionId, ConsumersCompat>();
 
@@ -36,34 +25,25 @@ export class RemoteTracks {
     private _subscriptionStates = new Map<SessionId, DownloadStates>();
     private _staleRemoteTrackMids = new Set<string>();
 
-    /**
-     * clears all remote track state and bindings
-     */
     resetAll(): void {
         this.clearPeerConnectionState();
         this._remoteTrackBindings.clear();
         this._subscriptionStates.clear();
     }
 
-    /**
-     * clears peer connection specific state while keeping session bindings
-     */
     clearPeerConnectionState(): void {
         this.consumers.clear();
         this._remoteTracksByMid.clear();
         this._staleRemoteTrackMids.clear();
     }
 
-    /**
-     * updates the set of active track bindings from the protocol core
-     *
-     * @param bindings new list of track-to-session bindings
-     * @param emitUpdate callback for propagating track updates
-     */
     replaceTrackBindings(bindings: TrackBinding[], emitUpdate: TrackUpdateEmitter): void {
-        const nextBindings = new Map(bindings.map((binding) => [binding.mid, binding]));
+        const nextBindings = new Map<string, TrackBinding>();
+        for (const binding of bindings) {
+            nextBindings.set(binding.mid, binding);
+        }
 
-        for (const mid of [...this._remoteTrackBindings.keys()]) {
+        for (const mid of this._remoteTrackBindings.keys()) {
             if (!nextBindings.has(mid)) {
                 this.removeBinding(mid);
             }
@@ -74,27 +54,15 @@ export class RemoteTracks {
         }
     }
 
-    /**
-     * removes all tracks associated with a specific session
-     *
-     * @param sessionId id of the session whose tracks should be removed
-     */
     removeSessionTracks(sessionId: SessionId): void {
         this.consumers.delete(sessionId);
-        for (const [mid, binding] of [...this._remoteTrackBindings]) {
+        for (const [mid, binding] of this._remoteTrackBindings) {
             if (binding.sessionId === sessionId) {
                 this.removeBinding(mid);
             }
         }
     }
 
-    /**
-     * updates the desired subscription state for a session
-     *
-     * @param sessionId id of the session to update
-     * @param states new desired download states (audio, video, etc)
-     * @param emitUpdate callback for propagating resulting track updates
-     */
     updateSubscriptionStates(
         sessionId: SessionId,
         states: DownloadStates,
@@ -117,12 +85,6 @@ export class RemoteTracks {
         }
     }
 
-    /**
-     * handles a new remote track event from the peer connection
-     *
-     * @param event rtc track event
-     * @param emitUpdate callback for propagating the new track
-     */
     handleTrackEvent(event: PeerConnectionTrackEvent, emitUpdate: TrackUpdateEmitter): void {
         const mid = event.transceiver.mid;
         if (!mid) {
@@ -141,8 +103,11 @@ export class RemoteTracks {
 
     private applyBinding(mid: string, binding: TrackBinding, emitUpdate: TrackUpdateEmitter): void {
         const previousBinding = this._remoteTrackBindings.get(mid);
-        const bindingIdentityChanged = this.bindingIdentityChanged(previousBinding, binding);
-        if (bindingIdentityChanged && previousBinding) {
+        if (
+            previousBinding &&
+            (previousBinding.sessionId !== binding.sessionId ||
+                previousBinding.type !== binding.type)
+        ) {
             this.clearConsumer(previousBinding.sessionId, previousBinding.type);
             this._staleRemoteTrackMids.add(mid);
         }
@@ -235,7 +200,7 @@ export class RemoteTracks {
         states: DownloadStates | undefined
     ): AppliedTrackBinding {
         return {
-            active: binding.active && this.isDownloadEnabled(states, binding.type),
+            active: binding.active && (states?.[binding.type] ?? true),
             sessionId: binding.sessionId,
             type: binding.type
         };
@@ -261,10 +226,6 @@ export class RemoteTracks {
         return merged;
     }
 
-    private isDownloadEnabled(states: DownloadStates | undefined, streamType: StreamType): boolean {
-        return states?.[streamType] ?? true;
-    }
-
     private downloadStatesAreEmpty(states: DownloadStates): boolean {
         return (
             states.audio === undefined &&
@@ -272,17 +233,6 @@ export class RemoteTracks {
             states.screen === undefined &&
             states.cameraLayout === undefined &&
             states.screenLayout === undefined
-        );
-    }
-
-    private bindingIdentityChanged(
-        previousBinding: AppliedTrackBinding | undefined,
-        binding: TrackBinding
-    ): boolean {
-        return Boolean(
-            previousBinding &&
-            (previousBinding.sessionId !== binding.sessionId ||
-                previousBinding.type !== binding.type)
         );
     }
 

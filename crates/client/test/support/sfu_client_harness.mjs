@@ -2,15 +2,12 @@ import { SfuClient } from "../../dist/index.js";
 import { FakePeerConnection, FakeWebSocket } from "./browser_fakes.mjs";
 import { FakeProtocolCore, tick } from "./protocol_fakes.mjs";
 
-export const createTrack = ({ enabled = true, id, kind, muted = false }) => ({
+const createTrack = ({ enabled = true, id, kind, muted = false }) => ({
     enabled,
     id,
     kind,
     muted
 });
-
-export const createAudioTrack = (id, options = {}) =>
-    createTrack({ id, kind: "audio", ...options });
 
 export const createCameraTrack = (id, options = {}) =>
     createTrack({ id, kind: "video", ...options });
@@ -20,11 +17,8 @@ export const createScreenTrack = (id, options = {}) =>
 
 export const createSfuClientHarness = ({
     clearTimer,
-    collectLogs = true,
-    collectUpdates = true,
     createPeerConnection,
     createProtocolCore,
-    createWebSocket,
     peerConnectionOptions = {},
     protocolCore = createProtocolCore ? null : new FakeProtocolCore(),
     setTimer
@@ -32,7 +26,6 @@ export const createSfuClientHarness = ({
     const sockets = [];
     const peerConnections = [];
     const updates = [];
-    const logs = [];
     const handledErrors = [];
     const dependencies = {
         createProtocolCore: createProtocolCore ?? (() => protocolCore),
@@ -44,9 +37,7 @@ export const createSfuClientHarness = ({
             return peerConnection;
         },
         createWebSocket: (url) => {
-            const socket = createWebSocket
-                ? createWebSocket(url, sockets.length)
-                : new FakeWebSocket(url);
+            const socket = new FakeWebSocket(url);
             sockets.push(socket);
             return socket;
         }
@@ -59,16 +50,9 @@ export const createSfuClientHarness = ({
     }
 
     const client = new SfuClient(dependencies);
-    if (collectUpdates) {
-        client.addEventListener("update", (event) => {
-            updates.push(event.detail);
-        });
-    }
-    if (collectLogs) {
-        client.addEventListener("log", (event) => {
-            logs.push(event.detail);
-        });
-    }
+    client.addEventListener("update", (event) => {
+        updates.push(event.detail);
+    });
     client.addEventListener("handledError", (event) => {
         handledErrors.push(event.detail.error);
     });
@@ -98,7 +82,6 @@ export const createSfuClientHarness = ({
         core: protocolCore,
         emitMessage,
         handledErrors,
-        logs,
         open,
         peerConnections,
         sockets,

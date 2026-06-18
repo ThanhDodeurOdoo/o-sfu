@@ -50,6 +50,7 @@ const SESSION_INFO_BOOLEAN_FIELDS = [
 ] as const satisfies readonly (keyof SessionInfo)[];
 export { NEGOTIATION_KIND, PENDING_REQUEST_KIND };
 
+const CONNECTION_STATES = Object.values(SFU_CLIENT_STATE);
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
 
 export type NegotiationKind = (typeof NEGOTIATION_KIND)[keyof typeof NEGOTIATION_KIND];
@@ -243,8 +244,24 @@ function validateHostCommands(value: unknown, context: string): HostCommand[] {
 }
 
 function validateHostCommandOrder(commands: HostCommand[], context: string): void {
+    let closeWebSocketIndex = -1;
+    let closePeerConnectionIndex = -1;
+    let recoveryTimerIndex = -1;
     for (let index = 0; index < commands.length; index += 1) {
         const command = commands[index];
+        if (command.kind === CommandKind.CLOSE_WEB_SOCKET && closeWebSocketIndex < 0) {
+            closeWebSocketIndex = index;
+        }
+        if (command.kind === CommandKind.CLOSE_PEER_CONNECTION && closePeerConnectionIndex < 0) {
+            closePeerConnectionIndex = index;
+        }
+        if (
+            command.kind === CommandKind.SCHEDULE_TIMER &&
+            command.id === 1 &&
+            recoveryTimerIndex < 0
+        ) {
+            recoveryTimerIndex = index;
+        }
         if (command.kind !== CommandKind.APPLY_NEGOTIATION) {
             continue;
         }
@@ -262,12 +279,6 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
         }
     }
 
-    const closeWebSocketIndex = commands.findIndex(
-        (command) => command.kind === CommandKind.CLOSE_WEB_SOCKET
-    );
-    const closePeerConnectionIndex = commands.findIndex(
-        (command) => command.kind === CommandKind.CLOSE_PEER_CONNECTION
-    );
     if (
         closeWebSocketIndex >= 0 &&
         closePeerConnectionIndex >= 0 &&
@@ -278,9 +289,6 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
         );
     }
 
-    const recoveryTimerIndex = commands.findIndex(
-        (command) => command.kind === CommandKind.SCHEDULE_TIMER && command.id === 1
-    );
     if (
         recoveryTimerIndex >= 0 &&
         closePeerConnectionIndex >= 0 &&
@@ -436,32 +444,22 @@ function validateOptionalTrackBinding(
     if (value === null || value === undefined) {
         return value;
     }
+    return validateTrackBinding(value, context);
+}
+
+function validateTrackBinding(value: unknown, context: string): TrackBinding {
     const binding = asRecord(value, context);
     requireString(binding.mid, `${context}.mid`);
     validateSessionId(binding.sessionId, `${context}.sessionId`);
     validateStreamType(binding.type, `${context}.type`);
     requireBoolean(binding.active, `${context}.active`);
     if (binding.source !== undefined) {
-        requirePresent(
-            validateOptionalSourceDescriptor(binding.source, `${context}.source`),
-            `${context}.source`,
-            "source descriptor when provided"
-        );
+        validateSourceDescriptor(binding.source, `${context}.source`);
     }
     return value as TrackBinding;
 }
 
-function validateTrackBinding(value: unknown, context: string): TrackBinding {
-    return requirePresent(validateOptionalTrackBinding(value, context), context, "track binding");
-}
-
-function validateOptionalSourceDescriptor(
-    value: unknown,
-    context: string
-): SourceDescriptor | null | undefined {
-    if (value === null || value === undefined) {
-        return value;
-    }
+function validateSourceDescriptor(value: unknown, context: string): SourceDescriptor {
     const source = asRecord(value, context);
     requireString(source.sourceId, `${context}.sourceId`);
     validateSessionId(source.sessionId, `${context}.sessionId`);
@@ -470,14 +468,6 @@ function validateOptionalSourceDescriptor(
     requireOptionalString(source.mid, `${context}.mid`);
     validateArray(source.encodings, `${context}.encodings`, validateSourceEncodingDescriptor);
     return value as SourceDescriptor;
-}
-
-function validateSourceDescriptor(value: unknown, context: string): SourceDescriptor {
-    return requirePresent(
-        validateOptionalSourceDescriptor(value, context),
-        context,
-        "source descriptor"
-    );
 }
 
 function validateSourceEncodingDescriptor(value: unknown, context: string): void {
@@ -554,7 +544,7 @@ function validateSessionInfo(value: unknown, context: string): SessionInfo {
 }
 
 function validateConnectionState(value: unknown, context: string): ConnectionState {
-    return validateStringEnum(value, Object.values(SFU_CLIENT_STATE), context);
+    return validateStringEnum(value, CONNECTION_STATES, context);
 }
 
 function validateStreamType(value: unknown, context: string): StreamType {
@@ -580,12 +570,16 @@ function asRecord(value: unknown, context: string): Record<string, unknown> {
 
 function toStringKeyedRecord(value: unknown, context: string): Record<string, unknown> {
     if (value instanceof Map) {
-        return Object.fromEntries(
-            [...value.entries()].map(([key, entryValue]) => [
-                requireString(key, `${context} map key`),
-                entryValue
-            ])
-        );
+        const record: Record<string, unknown> = {};
+        for (const [key, entryValue] of value) {
+            Object.defineProperty(record, requireString(key, `${context} map key`), {
+                configurable: true,
+                enumerable: true,
+                value: entryValue,
+                writable: true
+            });
+        }
+        return record;
     }
     return asRecord(value, context);
 }
@@ -657,22 +651,24 @@ function validateArray<T>(
     context: string,
     itemValidator: (item: unknown, context: string) => T,
     arrayExpectation = "must be an array"
-): T[] {
+): void {
     if (!Array.isArray(value)) {
         throw new Error(`${context} ${arrayExpectation}`);
     }
-    return value.map((item, index) => itemValidator(item, `${context}[${index}]`));
+    for (let index = 0; index < value.length; index += 1) {
+        itemValidator(value[index], `${context}[${index}]`);
+    }
 }
 
 function validateOptionalArray<T>(
     value: unknown,
     context: string,
     itemValidator: (item: unknown, context: string) => T
-): T[] | undefined {
+): void {
     if (value === undefined) {
-        return undefined;
+        return;
     }
-    return validateArray(value, context, itemValidator, "must be an array when provided");
+    validateArray(value, context, itemValidator, "must be an array when provided");
 }
 
 function validateStringEnum<T extends string>(
@@ -685,13 +681,6 @@ function validateStringEnum<T extends string>(
         throw new Error(invalidMessage);
     }
     return value as T;
-}
-
-function requirePresent<T>(value: T | null | undefined, context: string, label: string): T {
-    if (value === null || value === undefined) {
-        throw new Error(`${context} must be a ${label}`);
-    }
-    return value;
 }
 
 function requireOptionalNumber(

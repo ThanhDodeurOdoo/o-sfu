@@ -12,7 +12,6 @@ import {
     latestBroadcastUpdate,
     latestInfoUpdate,
     latestTrackUpdate,
-    localCameraSenderEncodings,
     localSenderEncodings,
     localSenderTrackId,
     peerLocalDescriptionSdp,
@@ -21,14 +20,11 @@ import {
     publishSyntheticCamera,
     publishSyntheticScreen,
     roomUserInfo,
-    setCameraDownload,
     setStreamDownload,
     spawnLiveServer,
-    unpublishCamera,
     unpublishStream,
     updateInfo,
     waitForCameraSubscriptionSelectedRid,
-    waitForDecodedRemoteCameraFrame,
     waitForDecodedRemoteVideoFrame,
     waitForUserMediaWorker
 } from "./live_server_helpers.mjs";
@@ -60,7 +56,7 @@ test("default VP8 live publish applies RID simulcast and renders remotely", asyn
 
     await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
     await expect
-        .poll(async () => localCameraSenderEncodings(publisher))
+        .poll(async () => localSenderEncodings(publisher, "camera"))
         .toEqual([
             {
                 active: true,
@@ -85,9 +81,10 @@ test("default VP8 live publish applies RID simulcast and renders remotely", asyn
     expect(video.hasSendSimulcastLoHi).toBeTruthy();
 
     if (browserName === "chromium") {
-        const decodedFrame = await waitForDecodedRemoteCameraFrame(
+        const decodedFrame = await waitForDecodedRemoteVideoFrame(
             subscriber,
-            PUBLISHER_SESSION_ID
+            PUBLISHER_SESSION_ID,
+            "camera"
         );
         expect(decodedFrame.width).toBeGreaterThan(0);
         expect(decodedFrame.height).toBeGreaterThan(0);
@@ -118,7 +115,7 @@ test("browser compatibility upload and download flows survive live-server replac
 
     await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
 
-    await setCameraDownload(subscriber, PUBLISHER_SESSION_ID, false);
+    await setStreamDownload(subscriber, PUBLISHER_SESSION_ID, "camera", false);
 
     await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, false);
 
@@ -153,11 +150,11 @@ test("browser compatibility upload and download flows survive live-server replac
 
     await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, false);
 
-    await setCameraDownload(subscriber, PUBLISHER_SESSION_ID, true);
+    await setStreamDownload(subscriber, PUBLISHER_SESSION_ID, "camera", true);
 
     await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
 
-    await unpublishCamera(replacement);
+    await unpublishStream(replacement, "camera");
 
     await expect
         .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.camera ?? null)
@@ -408,7 +405,7 @@ test("live recovery replays sticky publish subscribe and info intents", async ({
 
     await publishSyntheticCamera(publisher, "recovery-publisher-camera");
     await publishSyntheticCamera(subscriber, "recovery-subscriber-camera");
-    await setCameraDownload(publisher, SUBSCRIBER_SESSION_ID, true, "featured");
+    await setStreamDownload(publisher, SUBSCRIBER_SESSION_ID, "camera", true, "featured");
     await updateInfo(
         publisher,
         {
@@ -459,7 +456,7 @@ test("live recovery replays sticky publish subscribe and info intents", async ({
             { timeout: 15_000 }
         )
         .toBeTruthy();
-    await setCameraDownload(subscriber, PUBLISHER_SESSION_ID, true, "featured");
+    await setStreamDownload(subscriber, PUBLISHER_SESSION_ID, "camera", true, "featured");
     await expect
         .poll(
             () =>
@@ -501,23 +498,11 @@ test("load-triggered spillover relays VP8 camera between real browsers", async (
         "the bundled Playwright Firefox build does not decode the current VP8 live relay flow"
     );
     test.setTimeout(45_000);
-    const liveServerPorts =
-        browserName === "firefox"
-            ? {
-                  bindPort: 18087,
-                  rtcMaxPort: 58455,
-                  rtcMinPort: 58392
-              }
-            : {
-                  bindPort: 18086,
-                  rtcMaxPort: 58391,
-                  rtcMinPort: 58328
-              };
     const server = await spawnLiveServer({
-        bindPort: liveServerPorts.bindPort,
+        bindPort: 18086,
         codecFlags: { vp8: true },
-        rtcMaxPort: liveServerPorts.rtcMaxPort,
-        rtcMinPort: liveServerPorts.rtcMinPort,
+        rtcMaxPort: 58391,
+        rtcMinPort: 58328,
         spillover: {
             activationWindow: 1,
             minReceivers: 2,
@@ -562,7 +547,7 @@ test("load-triggered spillover relays VP8 camera between real browsers", async (
 
         await publishSyntheticCamera(publisher, "load-spillover-vp8");
         await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
-        await setCameraDownload(subscriber, PUBLISHER_SESSION_ID, true, "featured");
+        await setStreamDownload(subscriber, PUBLISHER_SESSION_ID, "camera", true, "featured");
         await waitForCameraSubscriptionSelectedRid({
             consumerSessionId: SUBSCRIBER_SESSION_ID,
             expectedRid: "hi",
@@ -571,9 +556,10 @@ test("load-triggered spillover relays VP8 camera between real browsers", async (
             roomId: channelUuid
         });
 
-        const decodedFrame = await waitForDecodedRemoteCameraFrame(
+        const decodedFrame = await waitForDecodedRemoteVideoFrame(
             subscriber,
-            PUBLISHER_SESSION_ID
+            PUBLISHER_SESSION_ID,
+            "camera"
         );
         expect(decodedFrame.width).toBeGreaterThan(0);
         expect(decodedFrame.height).toBeGreaterThan(0);
@@ -591,22 +577,10 @@ test("H264-only live publish applies RID simulcast and renders when supported", 
         browserName === "firefox",
         "the bundled Playwright Firefox build does not render the current H264-only live flow"
     );
-    const liveServerPorts =
-        browserName === "firefox"
-            ? {
-                  bindPort: 18085,
-                  rtcMaxPort: 58327,
-                  rtcMinPort: 58296
-              }
-            : {
-                  bindPort: 18084,
-                  rtcMaxPort: 58295,
-                  rtcMinPort: 58264
-              };
     const server = await spawnLiveServer({
-        bindPort: liveServerPorts.bindPort,
-        rtcMinPort: liveServerPorts.rtcMinPort,
-        rtcMaxPort: liveServerPorts.rtcMaxPort,
+        bindPort: 18084,
+        rtcMinPort: 58264,
+        rtcMaxPort: 58295,
         codecFlags: { h264: true, vp8: false }
     });
     try {
@@ -635,7 +609,7 @@ test("H264-only live publish applies RID simulcast and renders when supported", 
 
         await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
         await expect
-            .poll(async () => localCameraSenderEncodings(publisher))
+            .poll(async () => localSenderEncodings(publisher, "camera"))
             .toEqual([
                 {
                     active: true,
@@ -795,8 +769,6 @@ function parseVideoCodecAnswer(sdp) {
     const h264Variants = new Set();
     const h264PayloadTypes = new Set();
     const fmtpByPayloadType = new Map();
-    const hasAnySendRid = lines.some((line) => /^a=rid:[^ ]+ send(?: |$)/.test(line));
-    const hasAnySendSimulcast = lines.some((line) => /^a=simulcast:send /.test(line));
     const hasSendRidHi = lines.some((line) => /^a=rid:hi send(?: |$)/.test(line));
     const hasSendRidLo = lines.some((line) => /^a=rid:lo send(?: |$)/.test(line));
     const hasSendSimulcastLoHi = lines.some((line) => /^a=simulcast:send lo[;,]hi$/.test(line));
@@ -867,8 +839,6 @@ function parseVideoCodecAnswer(sdp) {
     }
 
     return {
-        hasAnySendRid,
-        hasAnySendSimulcast,
         hasSendRidHi,
         hasSendRidLo,
         hasSendSimulcastLoHi,

@@ -1,11 +1,3 @@
-/**
- * main entry point for the o-sfu client
- *
- * this module provides the high-level surface for interacting with the sfu.
- * it connects the rtc runtime, the protocol core, and the public state exposed
- * to the application
- */
-
 import {
     CLIENT_UPDATE,
     CLIENT_LOG_LEVEL,
@@ -57,13 +49,6 @@ export type { SfuClientDependencies } from "./internals/browser_types.js";
 
 const CLIENT_LOG_SOURCE = "sfu_client";
 
-/**
- * primary client class for o-sfu interactions
- *
- * it handles connection lifecycle, media publishing, remote track
- * subscriptions, and protocol-level messaging. it emits events for
- * state changes and remote updates
- */
 export class SfuClient extends EventTarget implements SfuClientSurface {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
     public errors: Error[] = [];
@@ -94,20 +79,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this._syncPublicState();
     }
 
-    /**
-     * returns the current connection state
-     */
     get state(): ConnectionState {
         return this._state;
     }
 
-    /**
-     * starts the connection flow to a room
-     *
-     * @param url signaling server url
-     * @param jwt authentication token
-     * @param options optional room and ice configuration
-     */
     connect(url: string, jwt: string, options: ConnectOptions = {}): void {
         validateConnectOptions(options);
         this.errors = [];
@@ -127,9 +102,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
     }
 
-    /**
-     * gracefully closes the current connection
-     */
     disconnect(): void {
         this.errors = [];
         this._emitLog(CLIENT_LOG_LEVEL.INFO, "disconnect requested");
@@ -139,16 +111,9 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
     }
 
-    /**
-     * publishes or unpublishes a local media track
-     *
-     * @param type type of the stream to publish (audio, camera, screen)
-     * @param track media track to publish, or null to unpublish
-     */
     publish(type: StreamType, track: MediaStreamTrack | null | undefined): void {
         validateTrackForStreamType(type, track);
-        const normalizedTrack = track ?? null;
-        const transition = this._localUploads.setTrack(type, normalizedTrack);
+        const transition = this._localUploads.setTrack(type, track ?? null);
         const action =
             transition.hadTrack && transition.hasTrack
                 ? "replacing"
@@ -189,12 +154,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
     }
 
-    /**
-     * updates subscription preferences for a remote session
-     *
-     * @param sessionId id of the remote session
-     * @param states desired download states for each stream type
-     */
     subscribe(sessionId: SessionId, states: DownloadStates): void {
         validateDownloadStates(states);
         this._emitLog(
@@ -226,12 +185,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this.subscribe(sessionId, states);
     }
 
-    /**
-     * updates the local session info (name, etc) visible to others
-     *
-     * @param info new session info
-     * @param _options optional update behavior
-     */
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
         this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `updating user info: ${JSON.stringify(info)}`);
         this._runtime.enqueueProtocolCommands(
@@ -240,20 +193,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
     }
 
-    /**
-     * returns transport and media statistics for all active tracks
-     *
-     * @returns combined stats report
-     */
     async getStats(): Promise<SfuStats> {
         return this._runtime.getStats(this._localUploads);
     }
 
-    /**
-     * sends a broadcast message to all other participants in the room
-     *
-     * @param message payload to broadcast
-     */
     broadcast(message: unknown): void {
         this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `broadcast requested: ${JSON.stringify(message)}`);
         this._runtime.enqueueProtocolCommands(
@@ -262,21 +205,10 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
     }
 
-    /**
-     * starts recording the current call session
-     *
-     * @param options recording layout and format options
-     * @returns promise resolving to true if the request was accepted
-     */
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
         return this._beginPendingRequest(() => this._protocolCore.startRecording(options));
     }
 
-    /**
-     * stops the current recording session
-     *
-     * @returns promise resolving to true if the request was accepted
-     */
     stopRecording(): Promise<boolean> {
         return this._beginPendingRequest(() => this._protocolCore.stopRecording());
     }
@@ -284,12 +216,8 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     private _beginPendingRequest(getCommands: () => HostCommand[]): Promise<boolean> {
         return this._pendingRequests.begin(
             getCommands,
-            (commands) => {
-                this._runtime.enqueue(commands, this._runtimeHooks());
-            },
-            (error) => {
-                this._handleRuntimeError(error);
-            }
+            (commands) => this._runtime.enqueue(commands, this._runtimeHooks()),
+            (error) => this._handleRuntimeError(error)
         );
     }
 
@@ -326,13 +254,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     private _applyCompatUpdate(update: ClientUpdateDetail): void {
-        if (
-            update.name === CLIENT_UPDATE.CHANNEL_INFO_CHANGE &&
-            update.payload &&
-            typeof update.payload === "object" &&
-            "state" in update.payload &&
-            update.payload.state
-        ) {
+        if (update.name === CLIENT_UPDATE.CHANNEL_INFO_CHANGE) {
             this.recordingState = update.payload.state;
             return;
         }
@@ -363,24 +285,14 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         return {
             iceServers: this._iceServers,
             localUploads: this._localUploads,
-            onLog: (detail) => {
-                this._emitRuntimeLog(detail);
-            },
-            onRuntimeError: (error) => {
-                this._handleRuntimeError(error);
-            },
-            onStateChange: (state, cause) => {
-                this._emitStateChange(state, cause);
-            },
-            onUpdate: (update) => {
-                this._emitUpdate(update);
-            },
+            onLog: (detail) => this._emitRuntimeLog(detail),
+            onRuntimeError: (error) => this._handleRuntimeError(error),
+            onStateChange: (state, cause) => this._emitStateChange(state, cause),
+            onUpdate: (update) => this._emitUpdate(update),
             pendingRequests: this._pendingRequests,
             protocolCore: this._protocolCore,
             remoteTracks: this._remoteTracks,
-            syncPublicState: () => {
-                this._syncPublicState();
-            }
+            syncPublicState: () => this._syncPublicState()
         };
     }
 

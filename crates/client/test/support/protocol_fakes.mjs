@@ -208,6 +208,16 @@ export class FakeProtocolCore {
                         }
                     }
                 ];
+            case "info-change-map-proto":
+                return [
+                    {
+                        kind: "emitUpdate",
+                        update: {
+                            name: CLIENT_UPDATE.INFO_CHANGE,
+                            payload: new Map([["__proto__", { isRaisingHand: true }]])
+                        }
+                    }
+                ];
             case "source-descriptors":
                 this.sourceDescriptors.set("source-1", {
                     active: true,
@@ -313,7 +323,6 @@ export class FakeProtocolCore {
 
     publish(type, active) {
         this.publicationUpdates.push({ active, type });
-        this.lastPublicationUpdate = { active, type };
         return [
             {
                 active,
@@ -372,7 +381,6 @@ export const createManualTimers = () => {
     const handles = new Map();
     return {
         clearTimer(handle) {
-            handle.active = false;
             handles.delete(handle.id);
         },
         fireLastByDelay(ms) {
@@ -383,7 +391,6 @@ export const createManualTimers = () => {
         fireByDelay(ms) {
             const handle = [...handles.values()].find((candidate) => candidate.ms === ms);
             assert.ok(handle, `expected timer with delay ${ms}`);
-            handle.active = false;
             handles.delete(handle.id);
             handle.callback();
         },
@@ -392,7 +399,6 @@ export const createManualTimers = () => {
         },
         setTimer(callback, ms) {
             const handle = {
-                active: true,
                 callback,
                 id: nextHandleId++,
                 ms
