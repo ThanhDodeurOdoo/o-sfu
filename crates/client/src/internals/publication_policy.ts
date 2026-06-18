@@ -34,15 +34,15 @@ export async function applyUploadPublicationPolicy(
     if (!transceiver.sender.getParameters || !transceiver.sender.setParameters) {
         return singleEncodingPolicy("sender parameter API is unavailable");
     }
-    if (!plan.simulcastEncodings.every(isValidSimulcastEncodingOffer)) {
-        return singleEncodingPolicy("offer advertised an invalid simulcast encoding profile");
-    }
-
     const parameters = transceiver.sender.getParameters();
     const previousEncodings = Array.isArray(parameters.encodings) ? parameters.encodings : [];
-    const encodings = plan.simulcastEncodings.map((encoding, index) =>
-        buildSenderEncodingParameters(previousEncodings[index] ?? {}, encoding)
-    );
+    const encodings: RTCRtpEncodingParameters[] = [];
+    for (const [index, encoding] of plan.simulcastEncodings.entries()) {
+        if (!isValidSimulcastEncodingOffer(encoding)) {
+            return singleEncodingPolicy("offer advertised an invalid simulcast encoding profile");
+        }
+        encodings.push(buildSenderEncodingParameters(previousEncodings[index] ?? {}, encoding));
+    }
 
     try {
         await transceiver.sender.setParameters({
@@ -71,16 +71,21 @@ function buildSenderEncodingParameters(
     previousEncoding: RTCRtpEncodingParameters,
     encoding: SimulcastEncodingOffer
 ): RTCRtpEncodingParameters {
-    return {
+    const parameters: RTCRtpEncodingParameters = {
         ...previousEncoding,
         active: true,
-        ...(encoding.maxBitrate === undefined ? {} : { maxBitrate: encoding.maxBitrate }),
-        ...(encoding.maxFramerate === undefined ? {} : { maxFramerate: encoding.maxFramerate }),
-        rid: encoding.rid,
-        ...(encoding.resolutionScale === undefined
-            ? {}
-            : { scaleResolutionDownBy: encoding.resolutionScale })
+        rid: encoding.rid
     };
+    if (encoding.maxBitrate !== undefined) {
+        parameters.maxBitrate = encoding.maxBitrate;
+    }
+    if (encoding.maxFramerate !== undefined) {
+        parameters.maxFramerate = encoding.maxFramerate;
+    }
+    if (encoding.resolutionScale !== undefined) {
+        parameters.scaleResolutionDownBy = encoding.resolutionScale;
+    }
+    return parameters;
 }
 
 function isValidSimulcastEncodingOffer(encoding: SimulcastEncodingOffer): boolean {

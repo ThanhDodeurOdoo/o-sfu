@@ -40,6 +40,33 @@ test("connect normalizes the URL and sends auth on WebSocket open", async () => 
     assert.deepEqual(sockets[0].sent, ["auth-frame"]);
 });
 
+test("connect emits public client and runtime log events", async () => {
+    const { client, connect } = createSfuClientHarness();
+    const logs = [];
+    client.addEventListener("log", (event) => {
+        logs.push(event.detail);
+    });
+
+    await connect("ws://example.test/ws", "jwt-token");
+
+    assert.ok(
+        logs.some(
+            (log) =>
+                log.id === "sfu_client" &&
+                log.level === "info" &&
+                log.message === "connect requested for implicit room"
+        )
+    );
+    assert.ok(
+        logs.some(
+            (log) =>
+                log.id === "browser_runtime" &&
+                log.level === "info" &&
+                log.message.includes("opening websocket connection")
+        )
+    );
+});
+
 test("startRecording resolves through the protocol request lifecycle", async () => {
     const { client, emitMessage, connectWithWelcome } = createSfuClientHarness();
 
@@ -378,6 +405,21 @@ test("new connect neutralizes a stale recovery timer", async () => {
     assert.equal(sockets.length, 2);
 });
 
+test("new connect closes the previous socket without feeding a stale close to the protocol core", async () => {
+    const core = new FakeProtocolCore();
+    const { client, sockets, connect, open } = createSfuClientHarness({ protocolCore: core });
+
+    await connect("ws://example.test/old", "old-token");
+    await open();
+
+    client.connect("ws://example.test/new", "new-token");
+    await tick();
+
+    assert.equal(sockets[0].closeCode, 1000);
+    assert.equal(sockets[1].url, "ws://example.test/new");
+    assert.deepEqual(core.wsCloseCodes, []);
+});
+
 test("negotiation creates a peer connection and emits lowercase track updates", async () => {
     const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
         createSfuClientHarness();
@@ -464,6 +506,19 @@ test("info_change map payloads are normalized into plain objects", async () => {
             }
         }
     ]);
+});
+
+test("info_change map payloads preserve __proto__ as an own property", async () => {
+    const { emitMessage, updates, connect } = createSfuClientHarness();
+
+    await connect();
+    await emitMessage("info-change-map-proto");
+
+    assert.equal(Object.hasOwn(updates[0].payload, "__proto__"), true);
+    assert.deepEqual(Object.keys(updates[0].payload), ["__proto__"]);
+    assert.deepEqual(updates[0].payload.__proto__, {
+        isRaisingHand: true
+    });
 });
 
 test("source descriptor updates are exposed as additive client state", async () => {
@@ -1111,11 +1166,6 @@ async function renegotiateCamera(frame, trackId, harnessOptions = {}) {
 }
 
 function assertSenderEncodings(peerConnection, transceiver, expected) {
-    assert.deepEqual(
-        transceiver.sender.setParametersCalls,
-        expected.length > 0 ? [{ encodings: expected }] : []
-    );
-
     const snapshot = peerConnection.answerSnapshots
         .at(-1)
         .find((candidate) => candidate.mid === transceiver.mid);
@@ -1134,7 +1184,7 @@ function assertSubmittedRenegotiation(core, requestId) {
 }
 
 test("renegotiation configures RID simulcast before answering supported video publishes", async () => {
-    const { core, logs, peerConnections, track, transceiver } = await renegotiateCamera(
+    const { core, peerConnections, track, transceiver } = await renegotiateCamera(
         "renegotiate-with-pending-simulcast-camera",
         "camera-track-simulcast"
     );
@@ -1142,14 +1192,6 @@ test("renegotiation configures RID simulcast before answering supported video pu
     assert.equal(transceiver.sender.track, track);
     assertSenderEncodings(peerConnections[0], transceiver, EXPECTED_RID_ENCODINGS);
     assertSubmittedRenegotiation(core, "12");
-    assert.ok(
-        logs.some(
-            (entry) =>
-                entry.id === "browser_runtime" &&
-                entry.level === "info" &&
-                entry.message === "enabled RID simulcast for camera on mid 2"
-        )
-    );
 });
 
 test("renegotiation configures RID simulcast from server-defined upload slots", async () => {

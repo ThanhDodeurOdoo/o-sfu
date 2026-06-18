@@ -40,7 +40,6 @@ export class FakeSender {
     ) {
         this.parameters = { encodings: [] };
         this.rejectSetParameters = rejectSetParameters;
-        this.setParametersCalls = [];
         this.statsReport = statsReport;
         this.track = null;
         if (!parameterApi) {
@@ -66,7 +65,6 @@ export class FakeSender {
             throw new Error("simulcast unsupported");
         }
         this.parameters = structuredClone(parameters);
-        this.setParametersCalls.push(structuredClone(parameters));
     }
 }
 
@@ -89,8 +87,6 @@ export class FakePeerConnection {
         this.config = config;
         this.gatheredAnswerSdp = gatheredAnswerSdp;
         this.iceGatheringState = "new";
-        this.currentLocalDescription = null;
-        this.localDescriptions = [];
         this.localDescription = null;
         this.onconnectionstatechange = null;
         this.onicecandidate = null;
@@ -98,7 +94,6 @@ export class FakePeerConnection {
         this.ontrack = null;
         this.peerConnectionStats = peerConnectionStats;
         this.preCompleteAnswerSdp = preCompleteAnswerSdp;
-        this.remoteDescriptions = [];
         this.senderOptionsByMid = senderOptionsByMid;
         this.transceivers = [this._transceiver("0", "audio"), this._transceiver("1", "video")];
     }
@@ -118,8 +113,6 @@ export class FakePeerConnection {
 
     async setLocalDescription(description) {
         this.localDescription = description;
-        this.currentLocalDescription = description;
-        this.localDescriptions.push(description);
         this.transceivers.forEach((transceiver) => {
             if (transceiver.sender.track) {
                 transceiver.currentDirection = transceiver.direction;
@@ -145,7 +138,6 @@ export class FakePeerConnection {
     }
 
     async setRemoteDescription(description) {
-        this.remoteDescriptions.push(description);
         this._addRemoteTransceiver(description, "2", "video");
         this._addRemoteTransceiver(description, "3", "video");
         if (
@@ -195,7 +187,6 @@ export class FakePeerConnection {
             ...description,
             sdp: this.preCompleteAnswerSdp
         };
-        this.currentLocalDescription = this.localDescription;
         this.onicecandidate?.({
             candidate: {
                 candidate: "candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
@@ -211,7 +202,6 @@ export class FakePeerConnection {
             ...description,
             sdp: this.gatheredAnswerSdp
         };
-        this.currentLocalDescription = this.localDescription;
         this.iceGatheringState = "complete";
         if (emitCandidate) {
             this.onicecandidate?.({

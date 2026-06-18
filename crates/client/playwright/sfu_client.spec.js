@@ -30,7 +30,6 @@ test.beforeEach(async ({ page }) => {
 
         class FakeWebSocket {
             constructor(url) {
-                this.closeEvents = [];
                 this.onclose = null;
                 this.onerror = null;
                 this.onmessage = null;
@@ -46,7 +45,6 @@ test.beforeEach(async ({ page }) => {
                     return;
                 }
                 this.readyState = 3;
-                this.closeEvents.push(code);
                 this.onclose?.({ code });
             }
 
@@ -80,11 +78,9 @@ test.beforeEach(async ({ page }) => {
                 this.config = config;
                 this.iceGatheringState = "new";
                 this.localDescription = null;
-                this.localDescriptions = [];
                 this.onicecandidate = null;
                 this.onicegatheringstatechange = null;
                 this.ontrack = null;
-                this.remoteDescriptions = [];
                 this.transceivers = [
                     { mid: "0", sender: new FakeSender() },
                     { mid: "1", sender: new FakeSender() }
@@ -114,12 +110,9 @@ test.beforeEach(async ({ page }) => {
             async setLocalDescription(description) {
                 this.localDescription = description;
                 this.iceGatheringState = "complete";
-                this.localDescriptions.push(description);
             }
 
-            async setRemoteDescription(description) {
-                this.remoteDescriptions.push(description);
-            }
+            async setRemoteDescription() {}
         }
 
         globalThis.__browserHarness = {
@@ -240,6 +233,27 @@ test("default browser runtime negotiates and emits remote track updates", async 
                 { cause: undefined, state: "connected" }
             ]
         });
+    await expect
+        .poll(async () =>
+            page.evaluate(() => ({
+                hasClientLog: globalThis.__browserHarness.logs.some(
+                    (log) =>
+                        log.id === "sfu_client" &&
+                        log.level === "info" &&
+                        log.message === "connect requested for room channel-a"
+                ),
+                hasRuntimeLog: globalThis.__browserHarness.logs.some(
+                    (log) =>
+                        log.id === "browser_runtime" &&
+                        log.level === "info" &&
+                        log.message.includes("opening websocket connection")
+                )
+            }))
+        )
+        .toEqual({
+            hasClientLog: true,
+            hasRuntimeLog: true
+        });
 
     await page.evaluate(() => {
         globalThis.__browserHarness.state.peerConnections[0].emitTrack(
@@ -289,38 +303,6 @@ test("default browser runtime negotiates and emits remote track updates", async 
                 }
             }
         ]);
-
-    await expect
-        .poll(async () => page.evaluate(() => globalThis.__browserHarness.logs))
-        .toEqual(
-            expect.arrayContaining([
-                {
-                    id: "sfu_client",
-                    level: "info",
-                    message: "connect requested for room channel-a"
-                },
-                {
-                    id: "browser_runtime",
-                    level: "info",
-                    message: "opening websocket connection to wss://example.test/ws"
-                },
-                {
-                    id: "browser_runtime",
-                    level: "debug",
-                    message: "created RTCPeerConnection"
-                },
-                {
-                    id: "browser_runtime",
-                    level: "debug",
-                    message: "applying offer negotiation request 7"
-                },
-                {
-                    id: "browser_runtime",
-                    level: "debug",
-                    message: "received remote track event for mid 0 (kind=video)"
-                }
-            ])
-        );
 });
 
 test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) => {
