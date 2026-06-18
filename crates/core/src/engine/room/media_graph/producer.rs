@@ -201,7 +201,7 @@ impl RoomState {
             .ok()?;
         let publish_before = self.media_counts();
         let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
-        let producer = match self.topology.commit_published_source(
+        let producer = match self.topology.publish_source(
             publish,
             producer_id,
             source_descriptor,
@@ -426,17 +426,7 @@ impl RoomState {
     ) -> Option<UnpublishCommit> {
         let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
         let before = self.media_counts();
-        let removal = self
-            .topology
-            .remove_published_source(user_id, &producer_target)?;
-        if let Some(error) = removal.router_teardown_error {
-            error!(
-                ?user_id,
-                stream_id = %stream_id,
-                ?error,
-                "repaired published track room state after router producer teardown failed"
-            );
-        }
+        let media_effects = self.topology.unpublish_source(user_id, &producer_target)?;
         let after = self.media_counts();
         Some(UnpublishCommit {
             before,
@@ -451,7 +441,7 @@ impl RoomState {
                 stream_id: stream_id.clone(),
                 active: None,
             },
-            media_effects: removal.effects,
+            media_effects,
         })
     }
 

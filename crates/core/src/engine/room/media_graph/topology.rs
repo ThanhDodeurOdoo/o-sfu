@@ -2,13 +2,13 @@ use o_sfu_router::{
     ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, MediaCapabilities,
     MediaStream as RouterRtpParameters, ProducerRouteState,
 };
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::{
-    ConsumerKey, ConsumerRouteTransportRef, ConsumerSetupTarget, ProducerRouteTarget,
-    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall, ReceiverRouteActivity,
-    ResolvedRelayRouteEffect, RoomMediaGraph, TransportMediaRemoval, ValidatedPublish,
-    route_graph::{ConsumerRouteReservation, RelayRouteEffect},
+    ConsumerKey, ConsumerRouteTransportRef, ConsumerSetupOutcome, ConsumerSetupTarget,
+    PendingConsumerSetup, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer,
+    PublishedSourceInstall, ReceiverRouteActivity, RemoteTrackSetup, ResolvedRelayRouteEffect,
+    RoomMediaGraph, TransportMediaRemoval, ValidatedPublish, route_graph::RelayRouteEffect,
 };
 use crate::{
     RoomSpilloverMode,
@@ -20,10 +20,11 @@ use crate::{
         room::{
             LocalRouterRuntimeContext, RoomMediaCounts, RoomRuntimeContext,
             cleanup::TransportCleanupOperation,
+            outbound::OutboundSender,
             placement::LoadTriggeredPlacementState,
             routing::{
                 CommittedRoutingReceipt, DisplacedRoutingSession, RoomRoutingError,
-                RoomRoutingRepairReport, RoomRoutingState,
+                RoomRoutingState, RoutedConsumerId,
             },
         },
         source_model::{
@@ -39,12 +40,6 @@ pub struct RoomTopology {
 }
 
 #[derive(Debug)]
-pub struct UserTopologyTeardown {
-    pub effects: MediaTopologyEffects,
-    pub routing_repair: RoomRoutingRepairReport,
-}
-
-#[derive(Debug)]
 pub struct SessionPlacementCommit {
     pub receipt: CommittedRoutingReceipt,
     pub replacement_effects: MediaTopologyEffects,
@@ -55,15 +50,6 @@ pub(super) struct ConsumerActivityCommit {
     pub(super) update: Option<ReceiverRouteActivity>,
     pub(super) relay_effects: Vec<ResolvedRelayRouteEffect>,
     pub(super) routing_error: Option<RoomRoutingError>,
-}
-
-#[derive(Debug)]
-pub(super) struct ConsumerTopologyRejected;
-
-#[derive(Debug)]
-pub(super) struct PublishedSourceTeardown {
-    pub effects: MediaTopologyEffects,
-    pub router_teardown_error: Option<RoomRoutingError>,
 }
 
 #[derive(Debug)]
@@ -185,7 +171,7 @@ impl RoomTopology {
             .update_consumer_source_selection(route, source_id, update)
     }
 
-    pub fn commit_published_source(
+    pub fn publish_source(
         &mut self,
         publish: ValidatedPublish,
         producer_id: ProducerRuntimeId,
@@ -295,26 +281,31 @@ impl RoomTopology {
             .collect()
     }
 
-    pub(super) fn remove_published_source(
+    pub(super) fn unpublish_source(
         &mut self,
         user_id: &UserId,
         target: &ProducerRouteTarget,
-    ) -> Option<PublishedSourceTeardown> {
+    ) -> Option<MediaTopologyEffects> {
         let transport_removals = self
             .media
             .transport_removals_for_producer_target(user_id, target);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         let affected_consumers = self.media.routed_consumer_ids_for_source(target.source_id);
-        let router_teardown_error = self
+        if let Some(error) = self
             .routing
             .remove_producer(target.routed_producer_id, affected_consumers)
-            .err();
+            .err()
+        {
+            error!(
+                ?user_id,
+                ?target,
+                ?error,
+                "repaired published track room state after router producer teardown failed"
+            );
+        }
         let (_producer, relay_effects) = self.media.remove_source(target.source_id)?;
         let relay_effects = self.resolved_relay_route_effects(relay_effects);
-        Some(PublishedSourceTeardown {
-            effects: MediaTopologyEffects::new(relay_effects, transport_cleanup),
-            router_teardown_error,
-        })
+        Some(MediaTopologyEffects::new(relay_effects, transport_cleanup))
     }
 
     pub fn set_published_source_activity(
@@ -392,7 +383,7 @@ impl RoomTopology {
         })
     }
 
-    pub fn remove_user(&mut self, user_id: &UserId) -> UserTopologyTeardown {
+    pub fn remove_session(&mut self, user_id: &UserId) -> MediaTopologyEffects {
         let transport_removals = self.media.transport_removals_for_user(user_id);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         let affected_consumers = self.media.routed_consumer_ids_affected_by_user(user_id);
@@ -401,49 +392,86 @@ impl RoomTopology {
         let routing_repair = self
             .routing
             .remove_session_repairing(user_id, affected_consumers);
-        UserTopologyTeardown {
-            effects: MediaTopologyEffects::new(relay_effects, transport_cleanup),
-            routing_repair,
+        if !routing_repair.is_clean() {
+            error!(
+                ?user_id,
+                errors = ?routing_repair.errors(),
+                "repaired user topology during room teardown"
+            );
         }
+        MediaTopologyEffects::new(relay_effects, transport_cleanup)
     }
 
     pub(super) fn commit_consumer_setup(
         &mut self,
-        reservation: &ConsumerRouteReservation,
-        target: &ConsumerSetupTarget,
+        mut setup: PendingConsumerSetup,
         selection: ConsumerSourceSelection,
         media: TransportMediaId,
-    ) -> Result<Option<bool>, ConsumerTopologyRejected> {
+        mid: Option<String>,
+        producer_active: bool,
+    ) -> ConsumerSetupOutcome {
+        if self.media.contains_consumer(setup.reservation.key()) {
+            return ConsumerSetupOutcome::Released(self.release_consumer_setup(setup));
+        }
         let active = selection.delivery_active();
+        let Some(routed_consumer_id) = self.add_consumer_route(&setup.target, active) else {
+            return ConsumerSetupOutcome::Released(self.release_consumer_setup(setup));
+        };
+        if self.media.routes.commit(
+            &setup.reservation,
+            setup.target.consumer_state(routed_consumer_id, media),
+            selection,
+        ) {
+            if let Some(mid) = mid {
+                setup.track.mid = mid;
+            }
+            setup.track.active = producer_active;
+            return ConsumerSetupOutcome::Committed {
+                sender: setup.sender,
+                track: setup.track,
+                transport_activity_update: (active
+                    != setup.reservation.selection().delivery_active())
+                .then_some(active),
+            };
+        }
+        self.rollback_consumer_route(&setup.target, routed_consumer_id);
+        ConsumerSetupOutcome::Released(self.release_consumer_setup(setup))
+    }
+
+    fn add_consumer_route(
+        &mut self,
+        target: &ConsumerSetupTarget,
+        active: bool,
+    ) -> Option<RoutedConsumerId> {
         let route_state = if active {
             RouterConsumerRouteState::Active
         } else {
             RouterConsumerRouteState::Paused
         };
-        let routed_consumer_id = self
-            .routing
-            .add_consumer_with_route_state(
-                &target.user,
-                target.routed,
-                ConsumerCapability::Compatible,
-                route_state,
-            )
-            .map_err(|error| {
+        match self.routing.add_consumer_with_route_state(
+            &target.user,
+            target.routed,
+            ConsumerCapability::Compatible,
+            route_state,
+        ) {
+            Ok(routed_consumer_id) => Some(routed_consumer_id),
+            Err(error) => {
                 warn!(
                     consumer_user_id = ?target.user,
                     source_id = ?target.source_id,
                     ?error,
                     "router rejected consumer creation"
                 );
-                ConsumerTopologyRejected
-            })?;
-        if self.media.routes.commit(
-            reservation,
-            target.consumer_state(routed_consumer_id, media),
-            selection,
-        ) {
-            return Ok((active != reservation.selection().delivery_active()).then_some(active));
+                None
+            }
         }
+    }
+
+    fn rollback_consumer_route(
+        &mut self,
+        target: &ConsumerSetupTarget,
+        routed_consumer_id: RoutedConsumerId,
+    ) {
         if let Some(error) = self.routing.remove_consumer(routed_consumer_id).err() {
             warn!(
                 consumer_user_id = ?target.user,
@@ -458,16 +486,17 @@ impl RoomTopology {
                 "media graph rejected topology consumer commit"
             );
         }
-        Err(ConsumerTopologyRejected)
     }
 
     pub(super) fn reserve_consumer_setup(
         &mut self,
-        target: &ConsumerSetupTarget,
+        target: ConsumerSetupTarget,
         selection: ConsumerSourceSelection,
         source_worker: MediaWorkerId,
         target_worker: MediaWorkerId,
-    ) -> Option<(ConsumerRouteReservation, Vec<ResolvedRelayRouteEffect>)> {
+        sender: OutboundSender,
+        track: RemoteTrackSetup,
+    ) -> Option<PendingConsumerSetup> {
         let key = target.consumer_key();
         let active = selection.delivery_active();
         let reservation = self.media.routes.reserve_consumer_setup(key, selection)?;
@@ -477,17 +506,23 @@ impl RoomTopology {
             let relays =
                 self.media
                     .routes
-                    .reserve_relay(&reservation, target, target_worker, active);
+                    .reserve_relay(&reservation, &target, target_worker, active);
             self.resolved_relay_route_effects(relays)
         };
-        Some((reservation, relays))
+        Some(PendingConsumerSetup {
+            target,
+            reservation,
+            sender,
+            track,
+            relays,
+        })
     }
 
     pub(super) fn release_consumer_setup(
         &mut self,
-        reservation: ConsumerRouteReservation,
+        setup: PendingConsumerSetup,
     ) -> Vec<ResolvedRelayRouteEffect> {
-        let relays = self.media.routes.release_consumer_setup(reservation);
+        let relays = self.media.routes.release_consumer_setup(setup.reservation);
         self.resolved_relay_route_effects(relays)
     }
 
