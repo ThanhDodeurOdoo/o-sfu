@@ -19,9 +19,23 @@ use crate::engine::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConsumerRouteUpdate {
-    pub target: ConsumerRouteTarget,
-    pub active: bool,
+pub struct ReceiverRouteActivity {
+    target: ConsumerRouteTarget,
+    active: bool,
+}
+
+impl ReceiverRouteActivity {
+    pub const fn new(target: ConsumerRouteTarget, active: bool) -> Self {
+        Self { target, active }
+    }
+
+    pub const fn target(&self) -> &ConsumerRouteTarget {
+        &self.target
+    }
+
+    pub const fn active(&self) -> bool {
+        self.active
+    }
 }
 
 /// observable receiver route state for room inspection
@@ -34,25 +48,46 @@ pub enum ConsumerRouteState {
 }
 
 #[derive(Debug, Default)]
-pub struct PlannedSubscriptionChange {
-    pub updates: Vec<ConsumerRouteUpdate>,
-    pub setups: Vec<PendingConsumerSetup>,
-    pub relays: Vec<ResolvedRelayRouteEffect>,
+pub struct ReceiverRouteWork {
+    activities: Vec<ReceiverRouteActivity>,
+    setups: Vec<PendingConsumerSetup>,
+    relays: Vec<ResolvedRelayRouteEffect>,
+}
+
+impl ReceiverRouteWork {
+    pub(in crate::engine::room) fn new(
+        activities: Vec<ReceiverRouteActivity>,
+        setups: Vec<PendingConsumerSetup>,
+        relays: Vec<ResolvedRelayRouteEffect>,
+    ) -> Self {
+        Self {
+            activities,
+            setups,
+            relays,
+        }
+    }
+
+    pub(in crate::engine::room) fn route_graph_changed(&self) -> bool {
+        !self.activities.is_empty() || !self.setups.is_empty() || !self.relays.is_empty()
+    }
+
+    pub(in crate::engine::room) fn into_parts(
+        self,
+    ) -> (
+        Vec<ReceiverRouteActivity>,
+        Vec<PendingConsumerSetup>,
+        Vec<ResolvedRelayRouteEffect>,
+    ) {
+        (self.activities, self.setups, self.relays)
+    }
 }
 
 #[derive(Debug)]
-pub struct ReceiverIntentCommit {
-    pub before: RoomMediaCounts,
-    pub after: RoomMediaCounts,
-    pub media_worker_id: MediaWorkerId,
-    pub change: PlannedSubscriptionChange,
-}
-
-#[derive(Debug)]
-pub struct ConsumerReadinessCommit {
-    pub before: RoomMediaCounts,
-    pub after: RoomMediaCounts,
-    pub setups: Vec<PendingConsumerSetup>,
+pub struct ReceiverRouteCommit {
+    pub(in crate::engine::room) before: RoomMediaCounts,
+    pub(in crate::engine::room) after: RoomMediaCounts,
+    pub(in crate::engine::room) media_worker_id: MediaWorkerId,
+    pub(in crate::engine::room) work: ReceiverRouteWork,
 }
 
 impl RoomState {
@@ -63,11 +98,11 @@ impl RoomState {
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
         worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Option<ReceiverIntentCommit> {
+    ) -> Option<ReceiverRouteCommit> {
         self.user_for_connection(user_id, connection_id)?;
         let before = self.media_counts();
         let media_worker_id = self.media_worker_id_for_connection(connection_id);
-        let change = self.plan_receiver_intent_change(
+        let work = self.plan_receiver_intent_change(
             user_id,
             connection_id,
             target_user_id,
@@ -75,25 +110,25 @@ impl RoomState {
             worker_for,
         );
         let after = self.media_counts();
-        Some(ReceiverIntentCommit {
+        Some(ReceiverRouteCommit {
             before,
             after,
             media_worker_id,
-            change,
+            work,
         })
     }
 
     #[cfg(test)]
-    pub fn plan_subscription_change(
+    pub fn plan_receiver_route_work(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
         worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> PlannedSubscriptionChange {
+    ) -> ReceiverRouteWork {
         if self.user_for_connection(user_id, connection_id).is_none() {
-            return PlannedSubscriptionChange::default();
+            return ReceiverRouteWork::default();
         }
         self.plan_receiver_intent_change(
             user_id,
@@ -111,7 +146,7 @@ impl RoomState {
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
         worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> PlannedSubscriptionChange {
+    ) -> ReceiverRouteWork {
         self.persist_intents(user_id, target_user_id, intents);
         let (updates, relays) =
             self.apply_route_updates(user_id, connection_id, target_user_id, intents);
@@ -119,11 +154,7 @@ impl RoomState {
             self.missing_targets_for_peer(user_id, connection_id, target_user_id),
             worker_for,
         );
-        PlannedSubscriptionChange {
-            updates,
-            setups,
-            relays,
-        }
+        ReceiverRouteWork::new(updates, setups, relays)
     }
 
     fn persist_intents(
@@ -155,7 +186,7 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Option<ConsumerReadinessCommit> {
+    ) -> Option<ReceiverRouteCommit> {
         let can_consume = {
             let user = self.users.get(user_id)?;
             if user.connection_id != connection_id {
@@ -171,10 +202,11 @@ impl RoomState {
             Vec::new()
         };
         let after = self.media_counts();
-        Some(ConsumerReadinessCommit {
+        Some(ReceiverRouteCommit {
             before,
             after,
-            setups,
+            media_worker_id: self.media_worker_id_for_connection(connection_id),
+            work: ReceiverRouteWork::new(Vec::new(), setups, Vec::new()),
         })
     }
 
@@ -242,7 +274,7 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-    ) -> (Vec<ConsumerRouteUpdate>, Vec<ResolvedRelayRouteEffect>) {
+    ) -> (Vec<ReceiverRouteActivity>, Vec<ResolvedRelayRouteEffect>) {
         let mut updates = Vec::new();
         let mut relays = Vec::new();
         for (stream_id, intent) in intents {

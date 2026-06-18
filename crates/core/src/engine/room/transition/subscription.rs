@@ -109,7 +109,7 @@ impl RoomUserOperation<'_> {
             commit
         };
         let commit = commit?;
-        effects::batch::build_consumer_readiness(commit)
+        effects::batch::build_consumer_readiness(room, self.user_id, self.connection_id, commit)
             .execute(room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())

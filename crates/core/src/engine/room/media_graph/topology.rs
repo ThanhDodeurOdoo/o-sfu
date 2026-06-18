@@ -5,8 +5,8 @@ use o_sfu_router::{
 use tracing::warn;
 
 use super::{
-    ConsumerKey, ConsumerRouteTransportRef, ConsumerRouteUpdate, ConsumerSetupTarget,
-    ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
+    ConsumerKey, ConsumerRouteTransportRef, ConsumerSetupTarget, ProducerRouteTarget,
+    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall, ReceiverRouteActivity,
     ResolvedRelayRouteEffect, RoomMediaGraph, TransportMediaRemoval, ValidatedPublish,
     route_graph::{ConsumerRouteReservation, RelayRouteEffect},
 };
@@ -52,7 +52,7 @@ pub struct SessionPlacementCommit {
 
 #[derive(Debug)]
 pub(super) struct ConsumerActivityCommit {
-    pub(super) update: Option<ConsumerRouteUpdate>,
+    pub(super) update: Option<ReceiverRouteActivity>,
     pub(super) relay_effects: Vec<ResolvedRelayRouteEffect>,
     pub(super) routing_error: Option<RoomRoutingError>,
 }
@@ -92,10 +92,6 @@ impl MediaTopologyEffects {
     pub fn extend(&mut self, other: Self) {
         self.relay_effects.extend(other.relay_effects);
         self.transport_cleanup.extend(other.transport_cleanup);
-    }
-
-    pub fn extend_relays(&mut self, relay_effects: Vec<ResolvedRelayRouteEffect>) {
-        self.relay_effects.extend(relay_effects);
     }
 
     pub fn extend_cleanup(&mut self, transport_cleanup: Vec<TransportCleanupOperation>) {
@@ -546,7 +542,7 @@ impl RoomTopology {
             .err();
         let update = routing_error
             .is_none()
-            .then_some(ConsumerRouteUpdate { target, active });
+            .then_some(ReceiverRouteActivity::new(target, active));
         Some(ConsumerActivityCommit {
             update,
             relay_effects,
