@@ -15,5 +15,6 @@ test-support = []
 workspace = true
 
 [dependencies]
+o-sfu-model.workspace = true
 o-sfu-rfc.workspace = true
 thiserror.workspace = true

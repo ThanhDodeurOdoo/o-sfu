@@ -1,7 +1,7 @@
 name: Performance
 
 on:
-  # keep this expensive Callgrind job scoped to core call-flow performance and benchmark ownership files
+  # keep this expensive Callgrind job scoped to room call-flow performance and benchmark ownership files
   push:
     branches: [main, master]
     paths:
@@ -14,6 +14,9 @@ on:
       - crates/core/src/engine/packet_sink_registry.rs
       - crates/core/src/engine/recording/**
       - crates/core/src/engine/media_transport/rtc/**
+      - crates/router/Cargo.toml
+      - crates/router/src/model/*.rs
+      - crates/router/src/model/topology/**
       - tests/Cargo.toml
       - tests/benchmarks/**
   pull_request:
@@ -28,6 +31,9 @@ on:
       - crates/core/src/engine/packet_sink_registry.rs
       - crates/core/src/engine/recording/**
       - crates/core/src/engine/media_transport/rtc/**
+      - crates/router/Cargo.toml
+      - crates/router/src/model/*.rs
+      - crates/router/src/model/topology/**
       - tests/Cargo.toml
       - tests/benchmarks/**
   workflow_dispatch:

@@ -4,12 +4,14 @@ use tracing::{debug, error, warn};
 
 use super::{
     super::{
-        BroadcastPayload, BroadcastPayloadError, LocalRouterRuntimeContext, RoomEventMessage,
-        RoomJoinError, RoomUserPermissions, UserCloseReason,
+        BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError,
+        RoomUserPermissions, RouterPlacement, UserCloseReason,
         cleanup::TransportCleanupOperation,
-        media_graph::{MediaTopologyEffects, SessionPlacementCommit, SessionPlacementRejection},
+        media_graph::{
+            CommittedTransportReceipt, MediaTopologyEffects, SessionPlacementCommit,
+            SessionPlacementRejection,
+        },
         outbound::{MessageFanout, OutboundSender},
-        routing::CommittedRoutingReceipt,
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     shared::{ActiveUser, RoomState},
@@ -54,7 +56,7 @@ type RuntimeUserRemoval = (ActiveUser, MediaTopologyEffects);
 pub struct JoinUserOutcome {
     pub effects: LifecycleEffects,
     pub user_id: UserId,
-    pub routing_receipt: CommittedRoutingReceipt,
+    pub routing_receipt: CommittedTransportReceipt,
     pub media_effects: MediaTopologyEffects,
 }
 
@@ -84,7 +86,7 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         is_new: bool,
-        home_placement: LocalRouterRuntimeContext,
+        home_placement: RouterPlacement,
     ) -> Result<SessionPlacementCommit, RoomJoinError> {
         let previous_connection = if is_new {
             None
@@ -125,9 +127,9 @@ impl RoomState {
     }
 
     #[cfg(test)]
-    fn fallback_join_placement(&self) -> LocalRouterRuntimeContext {
-        LocalRouterRuntimeContext {
-            router: self.topology.routing().primary_router_id(),
+    fn fallback_join_placement(&self) -> RouterPlacement {
+        RouterPlacement {
+            router: self.topology.routing().usage_snapshot().primary_router(),
             media_worker: MediaWorkerId::from_raw(0),
         }
     }
@@ -187,7 +189,7 @@ impl RoomState {
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
         emit_joined_fanout: bool,
-        home_placement: LocalRouterRuntimeContext,
+        home_placement: RouterPlacement,
     ) -> Result<JoinUserOutcome, RoomJoinError> {
         let permissions = permissions.into();
         let is_new = !self.users.contains_key(user_id);
@@ -243,7 +245,7 @@ impl RoomState {
 
     fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
         let user = self.users.remove(user_id)?;
-        let media_effects = self.topology.remove_session(user_id);
+        let media_effects = self.topology.remove_session(user_id, user.connection_id);
         Some((user, media_effects))
     }
 

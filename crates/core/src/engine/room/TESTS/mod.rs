@@ -23,9 +23,3 @@ mod producer_tests;
 #[cfg(test)]
 #[path = "recording_tests.rs"]
 mod recording_tests;
-#[cfg(test)]
-#[path = "router_state_tests.rs"]
-mod router_state_tests;
-#[cfg(test)]
-#[path = "topology_tests.rs"]
-mod topology_tests;

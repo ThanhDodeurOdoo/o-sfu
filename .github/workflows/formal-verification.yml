@@ -33,6 +33,7 @@ jobs:
               cargo kani -p o-sfu-proofs
               -Z unstable-options
               --harness bounded_symbolic_router_adds_preserve_invariants
+              --harness concrete_router_adds_write_reverse_index_memberships
           - shard: router-symbolic-routing
             command: >-
               cargo kani -p o-sfu-proofs
@@ -48,6 +49,11 @@ jobs:
               cargo kani -p o-sfu-proofs
               -Z unstable-options
               --harness session_teardown_clears_reverse_indices_and_dependents
+          - shard: router-topology
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness routing_shadow_refcounts_prune_after_last_consumer
+              --harness routing_placement_replacement_retires_stale_connection
           - shard: router-producer-removal
             command: >-
               cargo kani -p o-sfu-proofs

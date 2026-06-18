@@ -7,6 +7,7 @@ on:
       - .github/workflows/formal-verification-pr.yml
       - Cargo.lock
       - Cargo.toml
+      - crates/model/**
       - crates/protocol/**
       - crates/rfc/**
       - crates/router/**
@@ -36,6 +37,11 @@ jobs:
               cargo kani -p o-sfu-proofs
               -Z unstable-options
               --harness session_teardown_clears_reverse_indices_and_dependents
+          - shard: router-topology
+            command: >-
+              cargo kani -p o-sfu-proofs
+              --harness routing_shadow_refcounts_prune_after_last_consumer
+              --harness routing_placement_replacement_retires_stale_connection
           - shard: protocol-recovery-reset
             command: >-
               cargo kani -p o-sfu-proofs

@@ -3,10 +3,11 @@
     reason = "route graph tests fail loudly when fixed route reservations are invalid"
 )]
 
-use o_sfu_router::{ConsumerId, MediaKind, MediaStream, ProducerId, RouterId};
+use o_sfu_router::{
+    ConsumerId, MediaKind, MediaStream, ProducerId, RoutedConsumerId, RoutedProducerId, RouterId,
+};
 
 use super::{
-    super::routing::RoutedProducerId,
     ConsumerKey, ConsumerSourceSelection, ConsumerState, ProducerRuntimeId, PublishedProducer,
     consumer_setup::ConsumerSetupTarget,
     route_graph::{ConsumerRouteReservation, RelayRouteEffect, RouteGraph},
@@ -16,7 +17,6 @@ use crate::engine::{
     media_transport::{
         RelayRouteActivity, TransportMediaId, TransportRelayRouteAction, TransportSessionKey,
     },
-    room::routing::RoutedConsumerId,
     source_model::{PublishedSourceId, UserStreamId},
 };
 

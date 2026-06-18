@@ -1,6 +1,6 @@
-//! Cross-router receiver shadow ownership for room topology.
+//! Cross-router receiver shadow ownership for routing topology.
 //!
-//! `RoomRoutingState` creates a receiver shadow session on a producer's source
+//! `RoutingTopology` creates a receiver shadow session on a producer's source
 //! router when a receiver's home router is different. The pure router owns the
 //! real session, transport, producer and consumer maps. This module contains only
 //! the derived question that the pure router cannot answer by itself:
@@ -11,12 +11,15 @@
 //! removes the last routed consumer edge for that receiver on that source
 //! router.
 
+#[cfg(not(kani))]
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::RouterId;
+use o_sfu_model::UserId;
 
 use super::RoutedConsumerId;
-use crate::engine::UserId;
+use crate::model::RouterId;
+#[cfg(kani)]
+use crate::model::proof_storage::{BTreeMap, BTreeSet};
 
 /// Identity of one receiver shadow session on one source router.
 ///
@@ -51,8 +54,8 @@ impl ShadowSessionKey {
 
 /// Tracks which routed consumer edges keep cross-router shadows alive.
 ///
-/// The tracker does not call into `RoomRouterState` and it does not decide
-/// placement. `RoomRoutingState` registers routed producers and consumers after the
+/// The tracker does not call into `RouterAdapterState` and it does not decide
+/// placement. `RoutingTopology` registers routed producers and consumers after the
 /// pure router accepts them. On teardown, the tracker releases its derived
 /// ownership and returns the shadow sessions whose reference count reached
 /// zero. The caller then removes those sessions from the relevant router.
@@ -88,15 +91,16 @@ impl ShadowSessionTracker {
         };
         self.consumer_shadows
             .insert(consumer_id, shadow_key.clone());
-        self.shadow_refcounts
-            .entry(shadow_key)
-            .and_modify(|count| *count = count.saturating_add(1))
-            .or_insert(1);
+        if let Some(count) = self.shadow_refcounts.get_mut(&shadow_key) {
+            *count = count.saturating_add(1);
+            return;
+        }
+        self.shadow_refcounts.insert(shadow_key, 1);
     }
 
     /// Return whether a shadow currently has any tracked routed edge.
     ///
-    /// `RoomRoutingState` uses this before finishing consumer creation. If the pure
+    /// `RoutingTopology` uses this before finishing consumer creation. If the pure
     /// router later rejects the consumer, the topology can remove a newly
     /// materialized shadow without touching an older shadow that still belongs
     /// to another live consumer.
@@ -105,11 +109,11 @@ impl ShadowSessionTracker {
         self.shadow_refcounts.contains_key(shadow_key)
     }
 
-    /// Release all routed consumer edges supplied by room media state.
+    /// Release all routed consumer edges supplied by the caller.
     ///
-    /// Room media state owns the producer and consumer graph. The topology
-    /// tracker only keeps the shadow reference counts needed after router
-    /// teardown accepts the mutation.
+    /// The caller owns the producer and consumer graph. The topology tracker
+    /// only keeps the shadow reference counts needed after router teardown
+    /// accepts the mutation.
     #[must_use]
     pub(super) fn unregister_consumers(
         &mut self,

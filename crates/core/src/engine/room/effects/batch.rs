@@ -16,12 +16,11 @@ use crate::engine::{
         Room,
         cleanup::TransportCleanupOperation,
         media_graph::{
-            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, PendingConsumerSetup,
-            ProducerActivityCommit, PublishCommit, ReceiverRouteCommit, ReceiverRouteWork,
-            UnpublishCommit,
+            CommittedTransportReceipt, ConsumerRouteTarget, ConsumerSetupOrigin,
+            MediaTopologyEffects, PendingConsumerSetup, ProducerActivityCommit, PublishCommit,
+            ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
         },
         outbound::MessageFanout,
-        routing::CommittedRoutingReceipt,
         state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome},
     },
 };
@@ -94,7 +93,7 @@ pub fn build_join(
     room: &Room,
     counts: RoomGaugeDelta,
     outcome: JoinUserOutcome,
-) -> (RoomEffects, CommittedRoutingReceipt) {
+) -> (RoomEffects, CommittedTransportReceipt) {
     let JoinUserOutcome {
         effects,
         user_id,

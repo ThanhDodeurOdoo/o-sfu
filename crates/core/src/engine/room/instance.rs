@@ -16,8 +16,11 @@ use crate::{
     RoomSpilloverMode, RoomWorkerPolicy,
     engine::{
         AvailableFeatures, ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState,
-        RoomInstanceId, UserId, diagnostics::DiagnosticsStore, media_transport::MediaTransport,
-        metrics::RuntimeMetrics, sync::lock_unpoisoned,
+        RoomInstanceId, UserId,
+        diagnostics::DiagnosticsStore,
+        media_transport::{MediaTransport, TransportSessionKey},
+        metrics::RuntimeMetrics,
+        sync::lock_unpoisoned,
     },
 };
 
@@ -147,6 +150,18 @@ impl Room {
     #[must_use]
     pub async fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
         self.state.read().await.assigned_primary_media_worker_id()
+    }
+
+    #[must_use]
+    pub async fn transport_user_key(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> TransportSessionKey {
+        self.state
+            .read()
+            .await
+            .transport_user_key(user_id, connection_id)
     }
 
     pub fn room_worker_policy(&self) -> RoomWorkerPolicy {

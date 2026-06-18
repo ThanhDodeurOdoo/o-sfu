@@ -142,5 +142,5 @@ async fn join_inputs(
     room.record_worker_load(&mut loads).await;
     let placement = room.plan_join_placement(loads).await;
     let snapshot = room.placement_usage_snapshot().await;
-    (placement, snapshot.next_local_router_id())
+    (placement, snapshot.next_router_id())
 }

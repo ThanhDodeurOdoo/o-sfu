@@ -14,7 +14,7 @@ use crate::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
         VideoLayoutIntent,
         media_transport::{TransportConsumerRoute, TransportSessionKey},
-        room::placement::{LoadTriggeredPlacementState, RoomPlacementUsageSnapshot},
+        room::placement::{LoadTriggeredPlacementState, RoutingPlacementSnapshot},
         source_model::{
             ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor,
             PublishedSourceId, SourceSubscriptionIntent, UserStreamId,
@@ -147,9 +147,7 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        self.topology
-            .routing()
-            .transport_user_key(user_id, connection_id)
+        self.topology.transport_user_key(user_id, connection_id)
     }
 
     pub fn committed_transport_user_key(
@@ -158,7 +156,6 @@ impl RoomState {
         connection_id: ConnectionId,
     ) -> Option<TransportSessionKey> {
         self.topology
-            .routing()
             .committed_transport_user_key(user_id, connection_id)
     }
 
@@ -169,7 +166,7 @@ impl RoomState {
         self.topology.transport_consumer_route(route)
     }
 
-    pub fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+    pub fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {
         self.topology.routing().usage_snapshot()
     }
 

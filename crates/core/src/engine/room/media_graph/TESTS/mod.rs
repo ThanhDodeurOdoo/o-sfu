@@ -9,8 +9,8 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use o_sfu_router::{
-    ConsumerCapability, ConsumerId, MediaKind as RouterMediaKind, ProducerId, RouterId,
-    derive_consumable_rtp_parameters,
+    ConsumerCapability, ConsumerId, MediaKind as RouterMediaKind, ProducerId, RoutedConsumerId,
+    RoutedProducerId, RouterId, derive_consumable_rtp_parameters,
     test_support::rtp_samples::{
         sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
         sample_video_rtp_parameters,
@@ -28,10 +28,8 @@ use crate::{
         media_transport::{SessionUploadEncoding, TransportMediaId},
         metrics::RuntimeMetrics,
         room::{
-            LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
-            routing::{RoutedConsumerId, RoutedProducerId},
-            rtp_capabilities::router_rtp_capabilities,
-            state::RoomState,
+            RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
+            rtp_capabilities::router_rtp_capabilities, state::RoomState,
         },
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
@@ -54,7 +52,7 @@ fn test_state() -> RoomState {
 fn test_state_with_media_limits(media_limits: RoomMediaLimits) -> RoomState {
     let runtime_context = RoomRuntimeContext::new(
         RoomInstanceId::from_raw(0),
-        LocalRouterRuntimeContext {
+        RouterPlacement {
             router: RouterId(1),
             media_worker: MediaWorkerId::from_raw(0),
         },

@@ -110,7 +110,7 @@ where
     /// the consumer map
     /// normal builds return a `Vec` snapshot for borrow separation
     /// the Kani build can return the bounded set directly because proof storage
-    /// is copy based
+    /// owns a detached fixed-capacity set
     #[cfg(not(kani))]
     fn values_snapshot(&self, key: K) -> Vec<V> {
         self.entries
@@ -120,7 +120,7 @@ where
 
     #[cfg(kani)]
     fn values_snapshot(&self, key: K) -> BTreeSet<V> {
-        self.entries.get(&key).copied().unwrap_or_default()
+        self.entries.get(&key).cloned().unwrap_or_default()
     }
 
     /// expose exact relation membership to tests and proof predicates
