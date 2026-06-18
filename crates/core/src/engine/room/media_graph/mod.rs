@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::MediaKind;
+use o_sfu_router::{MediaKind, RoutedConsumerId, RoutedProducerId};
 
 use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
     ConnectionId, UserId,
     media_transport::{RelayRouteActivity, TransportConsumerRoute, TransportMediaId},
-    room::routing::{RoutedConsumerId, RoutedProducerId},
     source_model::{
         ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
         UserStreamId,
@@ -42,7 +41,8 @@ pub(super) use self::{
     route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{ReceiverRouteActivity, ReceiverRouteCommit, ReceiverRouteWork},
     topology::{
-        MediaTopologyEffects, RoomTopology, SessionPlacementCommit, SessionPlacementRejection,
+        CommittedTransportReceipt, MediaTopologyEffects, RoomTopology, SessionPlacementCommit,
+        SessionPlacementRejection,
     },
 };
 

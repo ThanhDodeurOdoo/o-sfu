@@ -10,22 +10,22 @@ fn worker_id(raw: usize) -> MediaWorkerId {
     MediaWorkerId::from_raw(raw)
 }
 
-fn placement(router: u64, media_worker: usize) -> LocalRouterRuntimeContext {
-    LocalRouterRuntimeContext {
+fn placement(router: u64, media_worker: usize) -> RouterPlacement {
+    RouterPlacement {
         router: RouterId(router),
         media_worker: worker_id(media_worker),
     }
 }
 
-fn primary_placement() -> LocalRouterRuntimeContext {
+fn primary_placement() -> RouterPlacement {
     placement(7, 0)
 }
 
-fn room_with(placements: Vec<LocalRouterRuntimeContext>) -> RoomPlacementUsageSnapshot {
-    RoomPlacementUsageSnapshot::new(RouterId(7), true, placements)
+fn room_with(placements: Vec<RouterPlacement>) -> RoutingPlacementSnapshot {
+    RoutingPlacementSnapshot::new(RouterId(7), true, placements)
 }
 
-fn primary_room() -> RoomPlacementUsageSnapshot {
+fn primary_room() -> RoutingPlacementSnapshot {
     room_with(vec![primary_placement()])
 }
 
@@ -67,7 +67,7 @@ fn first_join_uses_lowest_load_worker() {
     let mut loads = WorkerLoadIndex::new(2, Vec::new());
     loads.record_session(worker_id(0));
     let planner = RoomPlacementPlanner::new(RoomWorkerPolicy::strict_single_router());
-    let room = RoomPlacementUsageSnapshot::new(RouterId(7), false, Vec::new());
+    let room = RoutingPlacementSnapshot::new(RouterId(7), false, Vec::new());
 
     assert_eq!(
         planner.choose(&room, &loads),

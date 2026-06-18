@@ -10,7 +10,13 @@ use o_sfu_router::{
     ConsumerCapability, ConsumerId, ConsumerRouteState, ConsumerSpec, MediaKind, ProducerId,
     ProducerRouteState, ProducerSpec, Router, RouterError, RouterId, Session, SessionId,
     TransportDirection, TransportId,
-    test_support::{proof::RouterProofView, router_satisfies_invariants},
+    test_support::{
+        proof::{
+            RouterProofView, assert_routing_placement_replacement_retires_stale_connection,
+            assert_routing_shadow_refcounts_prune_after_last_consumer,
+        },
+        router_satisfies_invariants,
+    },
 };
 
 const SYMBOLIC_ROUTE_COMMAND_VARIANTS: u8 = 9;
@@ -74,6 +80,19 @@ fn bounded_symbolic_router_adds_preserve_invariants() {
     build_symbolic_trace_topology(&mut router);
     add_symbolic_trace_consumers(&mut router);
     assert_symbolic_trace_invariants(&router);
+
+    std::mem::forget(router);
+}
+
+/// prove concrete accepted insertions write every reverse-index membership edge
+#[kani::proof]
+#[kani::unwind(8)]
+fn concrete_router_adds_write_reverse_index_memberships() {
+    let mut router = Router::new(RouterId(0));
+
+    build_symbolic_trace_topology(&mut router);
+    add_compatible_trace_consumers(&mut router);
+    assert_concrete_reverse_index_memberships(&router);
 
     std::mem::forget(router);
 }
@@ -201,8 +220,7 @@ fn apply_cleanup_trace_route_state(router: &mut Router) {
 /// assert exact topology facts after symbolic add or cleanup commands
 ///
 /// each entity may or may not be present depending on earlier symbolic choices
-/// every count, reverse-index key and membership assertion is derived from that
-/// present set
+/// every count and reverse-index key assertion is derived from that present set
 fn assert_symbolic_trace_invariants(router: &Router) {
     let view = RouterProofView::new(router);
     let session_1 = view.contains_session(SessionId(1));
@@ -267,9 +285,9 @@ fn assert_symbolic_trace_invariants(router: &Router) {
         session_2,
     );
 
-    assert_transport_producer_index(router, TransportId(10), ProducerId(30), producer_30);
+    assert_transport_producer_index(router, TransportId(10), producer_30);
     assert_empty_transport_producer_index(router, TransportId(11));
-    assert_transport_producer_index(router, TransportId(20), ProducerId(31), producer_31);
+    assert_transport_producer_index(router, TransportId(20), producer_31);
     assert_empty_transport_producer_index(router, TransportId(21));
     assert!(view.transport_producers().key_count() == present(producer_30) + present(producer_31));
 
@@ -290,14 +308,14 @@ fn assert_symbolic_trace_invariants(router: &Router) {
         transport_20,
     );
 
-    assert_transport_consumer_index(router, TransportId(11), ConsumerId(41), consumer_41);
+    assert_transport_consumer_index(router, TransportId(11), consumer_41);
     assert_empty_transport_consumer_index(router, TransportId(10));
     assert_empty_transport_consumer_index(router, TransportId(20));
-    assert_transport_consumer_index(router, TransportId(21), ConsumerId(40), consumer_40);
+    assert_transport_consumer_index(router, TransportId(21), consumer_40);
     assert!(view.transport_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
-    assert_producer_consumer_index(router, ProducerId(30), ConsumerId(40), consumer_40);
-    assert_producer_consumer_index(router, ProducerId(31), ConsumerId(41), consumer_41);
+    assert_producer_consumer_index(router, ProducerId(30), consumer_40);
+    assert_producer_consumer_index(router, ProducerId(31), consumer_41);
     assert!(view.producer_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
     assert_known_consumer(
@@ -381,9 +399,9 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
         true,
     );
 
-    assert_transport_producer_index(router, TransportId(10), ProducerId(30), true);
+    assert_transport_producer_index(router, TransportId(10), true);
     assert_empty_transport_producer_index(router, TransportId(11));
-    assert_transport_producer_index(router, TransportId(20), ProducerId(31), true);
+    assert_transport_producer_index(router, TransportId(20), true);
     assert_empty_transport_producer_index(router, TransportId(21));
     assert!(view.transport_producers().key_count() == 2);
 
@@ -404,14 +422,14 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
         true,
     );
 
-    assert_transport_consumer_index(router, TransportId(11), ConsumerId(41), consumer_41);
+    assert_transport_consumer_index(router, TransportId(11), consumer_41);
     assert_empty_transport_consumer_index(router, TransportId(10));
     assert_empty_transport_consumer_index(router, TransportId(20));
-    assert_transport_consumer_index(router, TransportId(21), ConsumerId(40), consumer_40);
+    assert_transport_consumer_index(router, TransportId(21), consumer_40);
     assert!(view.transport_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
-    assert_producer_consumer_index(router, ProducerId(30), ConsumerId(40), consumer_40);
-    assert_producer_consumer_index(router, ProducerId(31), ConsumerId(41), consumer_41);
+    assert_producer_consumer_index(router, ProducerId(30), consumer_40);
+    assert_producer_consumer_index(router, ProducerId(31), consumer_41);
     assert!(view.producer_consumers().key_count() == present(consumer_40) + present(consumer_41));
 
     assert_known_consumer(
@@ -463,7 +481,6 @@ fn assert_known_transport(
     assert!(view.transport_matches(transport_id, session_id, direction) == transport_exists);
     if transport_exists {
         assert!(session_exists);
-        assert!(view.session_transports().contains(session_id, transport_id));
     }
 }
 
@@ -471,17 +488,11 @@ fn assert_known_transport(
 fn assert_transport_producer_index(
     router: &Router,
     transport_id: TransportId,
-    producer_id: ProducerId,
     producer_exists: bool,
 ) {
     let view = RouterProofView::new(router);
     assert!(view.transport_producers().count(transport_id) == present(producer_exists));
     assert!(view.transport_producers().contains_key(transport_id) == producer_exists);
-    assert!(
-        view.transport_producers()
-            .contains(transport_id, producer_id)
-            == producer_exists
-    );
 }
 
 /// assert that a transport has no indexed producer
@@ -511,17 +522,11 @@ fn assert_known_producer(
 fn assert_transport_consumer_index(
     router: &Router,
     transport_id: TransportId,
-    consumer_id: ConsumerId,
     consumer_exists: bool,
 ) {
     let view = RouterProofView::new(router);
     assert!(view.transport_consumers().count(transport_id) == present(consumer_exists));
     assert!(view.transport_consumers().contains_key(transport_id) == consumer_exists);
-    assert!(
-        view.transport_consumers()
-            .contains(transport_id, consumer_id)
-            == consumer_exists
-    );
 }
 
 /// assert that a transport has no indexed consumer
@@ -532,16 +537,10 @@ fn assert_empty_transport_consumer_index(router: &Router, transport_id: Transpor
 }
 
 /// assert the producer-to-consumer reverse index for one consumer dependency
-fn assert_producer_consumer_index(
-    router: &Router,
-    producer_id: ProducerId,
-    consumer_id: ConsumerId,
-    consumer_exists: bool,
-) {
+fn assert_producer_consumer_index(router: &Router, producer_id: ProducerId, consumer_exists: bool) {
     let view = RouterProofView::new(router);
     assert!(view.producer_consumers().count(producer_id) == present(consumer_exists));
     assert!(view.producer_consumers().contains_key(producer_id) == consumer_exists);
-    assert!(view.producer_consumers().contains(producer_id, consumer_id) == consumer_exists);
 }
 
 /// assert consumer primary-map data plus required producer and transport owners
@@ -596,6 +595,65 @@ fn build_symbolic_trace_topology(router: &mut Router) {
         ProducerId(31),
         MediaKind::Video,
     ));
+}
+
+fn assert_concrete_reverse_index_memberships(router: &Router) {
+    let view = RouterProofView::new(router);
+
+    assert!(
+        view.session_transports()
+            .contains(SessionId(1), TransportId(10))
+    );
+    assert!(
+        view.session_transports()
+            .contains(SessionId(1), TransportId(11))
+    );
+    assert!(
+        view.session_transports()
+            .contains(SessionId(2), TransportId(20))
+    );
+    assert!(
+        view.session_transports()
+            .contains(SessionId(2), TransportId(21))
+    );
+    assert!(
+        view.transport_producers()
+            .contains(TransportId(10), ProducerId(30))
+    );
+    assert!(
+        view.transport_producers()
+            .contains(TransportId(20), ProducerId(31))
+    );
+    assert!(
+        view.transport_consumers()
+            .contains(TransportId(21), ConsumerId(40))
+    );
+    assert!(
+        view.transport_consumers()
+            .contains(TransportId(11), ConsumerId(41))
+    );
+    assert!(
+        view.producer_consumers()
+            .contains(ProducerId(30), ConsumerId(40))
+    );
+    assert!(
+        view.producer_consumers()
+            .contains(ProducerId(31), ConsumerId(41))
+    );
+}
+
+/// prove topology shadow reference counts keep a shared shadow until the last consumer leaves
+#[kani::proof]
+#[kani::unwind(8)]
+fn routing_shadow_refcounts_prune_after_last_consumer() {
+    assert_routing_shadow_refcounts_prune_after_last_consumer();
+}
+
+/// prove session replacement cannot leave a stale committed connection active
+#[kani::proof]
+#[kani::unwind(8)]
+fn routing_placement_replacement_retires_stale_connection() {
+    assert_routing_placement_replacement_retires_stale_connection();
 }
 
 /// prove session teardown drains all owned transports and dependent media

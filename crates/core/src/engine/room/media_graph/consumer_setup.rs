@@ -1,12 +1,10 @@
-use o_sfu_router::{MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters};
+use o_sfu_router::{
+    MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, RoutedConsumerId,
+    RoutedProducerId,
+};
 
 use super::{
-    super::{
-        RoomMediaCounts,
-        outbound::OutboundSender,
-        routing::{RoutedConsumerId, RoutedProducerId},
-        state::RoomState,
-    },
+    super::{RoomMediaCounts, outbound::OutboundSender, state::RoomState},
     ConsumerKey, ConsumerRuntimeId, ConsumerState, ProducerRuntimeId, PublishedProducer,
     route_graph::{ConsumerRouteReservation, RelayRouteKey, ResolvedRelayRouteEffect},
 };

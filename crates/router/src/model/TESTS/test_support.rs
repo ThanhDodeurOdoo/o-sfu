@@ -428,7 +428,7 @@ fn consumer_route_shadows_producer<O: RouterObserver>(router: &Router<O>) -> boo
 /// into each assertion
 #[cfg(kani)]
 pub mod proof {
-    pub use super::super::relation_index::RelationProofView;
+    pub use super::super::{relation_index::RelationProofView, topology::test_support::proof::*};
     use super::{super::NoopRouterObserver, *};
 
     /// cfg-gated proof view over primary maps and reverse relations

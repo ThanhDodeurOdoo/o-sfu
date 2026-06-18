@@ -1377,6 +1377,7 @@ dependencies = [
 name = "o-sfu-router"
 version = "0.4.1"
 dependencies = [
+ "o-sfu-model",
  "o-sfu-rfc",
  "thiserror",
 ]

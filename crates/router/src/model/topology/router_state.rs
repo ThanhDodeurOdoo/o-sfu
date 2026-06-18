@@ -1,39 +1,42 @@
+#[cfg(not(kani))]
 use std::collections::BTreeMap;
 
-use o_sfu_router::{
+use o_sfu_model::UserId;
+
+#[cfg(kani)]
+use crate::model::proof_storage::BTreeMap;
+use crate::model::{
     ConsumerCapability, ConsumerId as RouterConsumerId, ConsumerRouteState, ConsumerSpec,
     MediaCapabilities, MediaKind as RouterMediaKind, ProducerId as RouterProducerId,
     ProducerRouteState, ProducerSpec, Router, RouterError, RouterId, Session as RouterSession,
     SessionId as RouterSessionId, TransportId as RouterTransportId,
 };
 
-use crate::engine::UserId;
-
-#[cfg(test)]
-#[path = "TESTS/support.rs"]
+#[cfg(any(test, feature = "test-support"))]
+#[path = "../TESTS/topology_router_state_support.rs"]
 mod test_support;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoomRouterStateError {
+pub enum RouterAdapterError {
     MissingSessionMapping { user_id: UserId },
     Router(RouterError),
 }
 
-impl From<RouterError> for RoomRouterStateError {
+impl From<RouterError> for RouterAdapterError {
     fn from(error: RouterError) -> Self {
         Self::Router(error)
     }
 }
 
-#[derive(Debug, Clone)]
-/// Room adapter around one pure router instance.
+/// Adapter around one pure router instance.
 ///
-/// The adapter translates compatibility-facing room identities into compact
+/// The adapter translates compatibility-facing user identities into compact
 /// router identifiers and keeps the upload and download transport pair for
 /// each user. It owns no transport runtime resources. Its job is to make pure
-/// router mutations line up with the room state that already accepted the
-/// signaling transition.
-pub struct RoomRouterState {
+/// router mutations line up with the topology state that already accepted the
+/// placement transition.
+#[derive(Debug, Clone)]
+pub struct RouterAdapterState {
     router: Router,
     rtp_capabilities: MediaCapabilities,
     sessions_by_user: BTreeMap<UserId, RouterSessionId>,
@@ -49,7 +52,7 @@ struct SessionTransportIds {
     download_id: RouterTransportId,
 }
 
-impl RoomRouterState {
+impl RouterAdapterState {
     pub(super) fn new(router_id: RouterId, rtp_capabilities: MediaCapabilities) -> Self {
         Self {
             router: Router::new(router_id),
@@ -73,12 +76,12 @@ impl RoomRouterState {
     /// Ensure the pure router contains a user matching the signaling-layer user.
     ///
     /// The runtime still accepts integer and string signaling user IDs, so this
-    /// room-local map keeps that compatibility at the edge while the pure router
-    /// continues to use compact numeric identifiers internally.
+    /// adapter-local map keeps that compatibility at the edge while the pure
+    /// router continues to use compact numeric identifiers internally.
     ///
     /// TODO: once Discuss only sends database-backed numeric user IDs, remove
     /// the string compatibility branch and use one identity type across the
-    /// room boundary.
+    /// signaling boundary.
     ///
     /// # Errors
     ///
@@ -87,14 +90,14 @@ impl RoomRouterState {
         &mut self,
         user_id: &UserId,
         router_session_seed: u64,
-    ) -> Result<(), RoomRouterStateError> {
+    ) -> Result<(), RouterAdapterError> {
         if self.sessions_by_user.contains_key(user_id) {
             return Ok(());
         }
         let session_id = RouterSessionId(router_session_seed);
         self.router
             .join(RouterSession::new(session_id))
-            .map_err(RoomRouterStateError::from)?;
+            .map_err(RouterAdapterError::from)?;
         self.sessions_by_user.insert(user_id.clone(), session_id);
         Ok(())
     }
@@ -106,14 +109,14 @@ impl RoomRouterState {
     pub fn ensure_session_transports(
         &mut self,
         user_id: &UserId,
-    ) -> Result<(), RoomRouterStateError> {
+    ) -> Result<(), RouterAdapterError> {
         self.ensure_transport_ids(user_id).map(|_| ())
     }
 
     fn ensure_transport_ids(
         &mut self,
         user_id: &UserId,
-    ) -> Result<SessionTransportIds, RoomRouterStateError> {
+    ) -> Result<SessionTransportIds, RouterAdapterError> {
         if let Some(transport_ids) = self.transports_by_user.get(user_id).copied() {
             return Ok(transport_ids);
         }
@@ -123,11 +126,11 @@ impl RoomRouterState {
         self.router
             .session(session_id)
             .and_then(|session| session.open_receive_transport(upload_id))
-            .map_err(RoomRouterStateError::from)?;
+            .map_err(RouterAdapterError::from)?;
         self.router
             .session(session_id)
             .and_then(|session| session.open_send_transport(download_id))
-            .map_err(RoomRouterStateError::from)?;
+            .map_err(RouterAdapterError::from)?;
         let transport_ids = SessionTransportIds {
             upload_id,
             download_id,
@@ -145,13 +148,13 @@ impl RoomRouterState {
         &mut self,
         user_id: &UserId,
         media_kind: RouterMediaKind,
-    ) -> Result<RouterProducerId, RoomRouterStateError> {
+    ) -> Result<RouterProducerId, RouterAdapterError> {
         let transport_ids = self.ensure_transport_ids(user_id)?;
         let producer_id = self.allocate_producer_id();
         self.router
             .receive_transport(transport_ids.upload_id)
             .and_then(|transport| transport.publish(ProducerSpec::new(producer_id, media_kind)))
-            .map_err(RoomRouterStateError::from)?;
+            .map_err(RouterAdapterError::from)?;
         Ok(producer_id)
     }
 
@@ -161,7 +164,7 @@ impl RoomRouterState {
         producer_id: RouterProducerId,
         capability: ConsumerCapability,
         route_state: ConsumerRouteState,
-    ) -> Result<RouterConsumerId, RoomRouterStateError> {
+    ) -> Result<RouterConsumerId, RouterAdapterError> {
         let transport_ids = self.ensure_transport_ids(consumer_user_id)?;
         let consumer_id = self.allocate_consumer_id();
         self.router
@@ -172,13 +175,13 @@ impl RoomRouterState {
                         .with_route_state(route_state),
                 )
             })
-            .map_err(RoomRouterStateError::from)?;
+            .map_err(RouterAdapterError::from)?;
         Ok(consumer_id)
     }
 
     /// Update the source route state of a producer in the pure router.
     ///
-    /// This is the room boundary for producer activity changes. The pure router
+    /// This is the topology boundary for producer activity changes. The pure router
     /// propagates the producer route state to each dependent consumer's source
     /// shadow while preserving every consumer-local subscription state.
     ///
@@ -189,10 +192,10 @@ impl RoomRouterState {
         &mut self,
         producer_id: RouterProducerId,
         route_state: ProducerRouteState,
-    ) -> Result<(), RoomRouterStateError> {
+    ) -> Result<(), RouterAdapterError> {
         self.router
             .set_producer_route_state(producer_id, route_state)
-            .map_err(RoomRouterStateError::from)
+            .map_err(RouterAdapterError::from)
     }
 
     /// Update the local route state of a consumer in the pure router.
@@ -207,10 +210,10 @@ impl RoomRouterState {
         &mut self,
         consumer_id: RouterConsumerId,
         route_state: ConsumerRouteState,
-    ) -> Result<(), RoomRouterStateError> {
+    ) -> Result<(), RouterAdapterError> {
         self.router
             .set_consumer_route_state(consumer_id, route_state)
-            .map_err(RoomRouterStateError::from)
+            .map_err(RouterAdapterError::from)
     }
 
     /// Remove a consumer from the pure router.
@@ -221,10 +224,10 @@ impl RoomRouterState {
     pub(super) fn remove_consumer(
         &mut self,
         consumer_id: RouterConsumerId,
-    ) -> Result<(), RoomRouterStateError> {
+    ) -> Result<(), RouterAdapterError> {
         self.router
             .remove_consumer(consumer_id)
-            .map_err(RoomRouterStateError::from)
+            .map_err(RouterAdapterError::from)
     }
 
     /// Remove a producer from the pure router.
@@ -237,10 +240,10 @@ impl RoomRouterState {
     pub(super) fn remove_producer(
         &mut self,
         producer_id: RouterProducerId,
-    ) -> Result<(), RoomRouterStateError> {
+    ) -> Result<(), RouterAdapterError> {
         self.router
             .remove_producer(producer_id)
-            .map_err(RoomRouterStateError::from)
+            .map_err(RouterAdapterError::from)
     }
 
     /// Remove the pure-router user for the signaling-layer user if one exists.
@@ -249,13 +252,13 @@ impl RoomRouterState {
     ///
     /// Returns the underlying [`RouterError`] if the runtime/user map and router
     /// state ever diverge.
-    pub(super) fn remove_session(&mut self, user_id: &UserId) -> Result<(), RoomRouterStateError> {
+    pub(super) fn remove_session(&mut self, user_id: &UserId) -> Result<(), RouterAdapterError> {
         let Some(session_id) = self.sessions_by_user.get(user_id).copied() else {
             return Ok(());
         };
         self.router
             .remove_session(session_id)
-            .map_err(RoomRouterStateError::from)?;
+            .map_err(RouterAdapterError::from)?;
         self.sessions_by_user.remove(user_id);
         self.transports_by_user.remove(user_id);
         Ok(())
@@ -264,10 +267,10 @@ impl RoomRouterState {
     pub(super) fn remove_session_repairing(
         &mut self,
         user_id: &UserId,
-    ) -> Result<(), RoomRouterStateError> {
+    ) -> Result<(), RouterAdapterError> {
         match self.remove_session(user_id) {
             Ok(()) => Ok(()),
-            Err(error @ RoomRouterStateError::Router(RouterError::MissingSession(_))) => {
+            Err(error @ RouterAdapterError::Router(RouterError::MissingSession(_))) => {
                 self.forget_session_indexes(user_id);
                 Err(error)
             }
@@ -280,9 +283,9 @@ impl RoomRouterState {
         self.transports_by_user.remove(user_id);
     }
 
-    fn session_id(&self, user_id: &UserId) -> Result<RouterSessionId, RoomRouterStateError> {
+    fn session_id(&self, user_id: &UserId) -> Result<RouterSessionId, RouterAdapterError> {
         self.sessions_by_user.get(user_id).copied().ok_or_else(|| {
-            RoomRouterStateError::MissingSessionMapping {
+            RouterAdapterError::MissingSessionMapping {
                 user_id: user_id.clone(),
             }
         })

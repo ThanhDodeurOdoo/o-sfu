@@ -9,7 +9,7 @@
 use std::{slice::from_ref, sync::Arc};
 
 use o_sfu_router::{
-    ConsumerId, MediaKind, MediaStream, ProducerId, RouterId,
+    ConsumerId, MediaKind, MediaStream, ProducerId, RoutedConsumerId, RoutedProducerId, RouterId,
     test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
 };
 
@@ -21,13 +21,12 @@ use crate::{
         media_transport::{TransportMediaId, TransportRelayRouteAction, TransportSessionKey},
         metrics::RuntimeMetrics,
         room::{
-            LocalRouterRuntimeContext, RoomAdmissionPolicy, RoomRuntimeContext, UserOutboundSender,
+            RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
             media_graph::{
                 ConsumerKey, ConsumerSetupOutcome, ConsumerSetupTarget, ConsumerState,
                 ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
                 ResolvedRelayRouteEffect,
             },
-            routing::{RoutedConsumerId, RoutedProducerId},
             rtp_capabilities::router_rtp_capabilities,
         },
         source_model::{
@@ -42,7 +41,7 @@ use crate::{
 fn test_state() -> RoomState {
     let runtime_context = RoomRuntimeContext::new(
         RoomInstanceId::from_raw(0),
-        LocalRouterRuntimeContext {
+        RouterPlacement {
             router: RouterId(1),
             media_worker: MediaWorkerId::from_raw(0),
         },

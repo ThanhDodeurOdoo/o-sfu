@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
 use o_sfu_router::{
     ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, MediaCapabilities,
-    MediaStream as RouterRtpParameters, ProducerRouteState,
+    MediaStream as RouterRtpParameters, ProducerRouteState, RoutedConsumerId, RoutingError,
+    RoutingTopology,
 };
 use tracing::{error, warn};
 
@@ -13,19 +16,15 @@ use super::{
 use crate::{
     RoomSpilloverMode,
     engine::{
-        ConnectionId, MediaWorkerId, UserId,
+        ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
         media_transport::{
-            RelayRouteActivity, TransportConsumerRoute, TransportMediaId, TransportSourceKey,
+            RelayRouteActivity, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+            TransportSourceKey,
         },
         room::{
-            LocalRouterRuntimeContext, RoomMediaCounts, RoomRuntimeContext,
-            cleanup::TransportCleanupOperation,
-            outbound::OutboundSender,
+            RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
+            cleanup::TransportCleanupOperation, outbound::OutboundSender,
             placement::LoadTriggeredPlacementState,
-            routing::{
-                CommittedRoutingReceipt, DisplacedRoutingSession, RoomRoutingError,
-                RoomRoutingState, RoutedConsumerId,
-            },
         },
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, UserStreamId,
@@ -35,13 +34,21 @@ use crate::{
 
 #[derive(Debug)]
 pub struct RoomTopology {
+    instance: RoomInstanceId,
     media: RoomMediaGraph,
-    routing: RoomRoutingState,
+    routing: RoutingTopology,
+    transport_session_by_connection: BTreeMap<ConnectionId, TransportSessionKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedTransportReceipt {
+    pub connection_id: ConnectionId,
+    pub transport_session_key: TransportSessionKey,
 }
 
 #[derive(Debug)]
 pub struct SessionPlacementCommit {
-    pub receipt: CommittedRoutingReceipt,
+    pub receipt: CommittedTransportReceipt,
     pub replacement_effects: MediaTopologyEffects,
 }
 
@@ -49,13 +56,13 @@ pub struct SessionPlacementCommit {
 pub(super) struct ConsumerActivityCommit {
     pub(super) update: Option<ReceiverRouteActivity>,
     pub(super) relay_effects: Vec<ResolvedRelayRouteEffect>,
-    pub(super) routing_error: Option<RoomRoutingError>,
+    pub(super) routing_error: Option<RoutingError>,
 }
 
 #[derive(Debug)]
 pub enum SessionPlacementRejection {
     MissingPreviousSession { previous_connection: ConnectionId },
-    Router(RoomRoutingError),
+    Router(RoutingError),
 }
 
 #[derive(Debug, Default)]
@@ -104,13 +111,14 @@ impl RoomTopology {
         router_rtp_capabilities: MediaCapabilities,
     ) -> Self {
         Self {
+            instance: runtime_context.instance(),
             media: RoomMediaGraph::default(),
-            routing: RoomRoutingState::new_with_runtime(
-                runtime_context.instance(),
+            routing: RoutingTopology::new(
                 runtime_context.primary_router(),
-                runtime_context.initial_local_router_placements().cloned(),
+                runtime_context.initial_router_placements().cloned(),
                 router_rtp_capabilities,
             ),
+            transport_session_by_connection: BTreeMap::new(),
         }
     }
 
@@ -118,8 +126,51 @@ impl RoomTopology {
         &self.media
     }
 
-    pub(in crate::engine::room) fn routing(&self) -> &RoomRoutingState {
+    pub(in crate::engine::room) fn routing(&self) -> &RoutingTopology {
         &self.routing
+    }
+
+    #[must_use]
+    pub fn committed_transport_user_key(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> Option<TransportSessionKey> {
+        self.routing
+            .committed_media_worker_id(user_id, connection_id)?;
+        self.transport_session_by_connection
+            .get(&connection_id)
+            .cloned()
+    }
+
+    #[must_use]
+    #[expect(
+        clippy::unreachable,
+        reason = "current room operations require committed connection placement and must not synthesize a transport worker"
+    )]
+    pub fn transport_user_key(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> TransportSessionKey {
+        let Some(session_key) = self.committed_transport_user_key(user_id, connection_id) else {
+            unreachable!("transport session key lookup requires committed connection placement");
+        };
+        session_key
+    }
+
+    fn transport_session_key(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        media_worker_id: MediaWorkerId,
+    ) -> TransportSessionKey {
+        TransportSessionKey::new(
+            self.instance,
+            media_worker_id,
+            connection_id,
+            user_id.clone(),
+        )
     }
 
     pub fn unregister_committed_placement(
@@ -127,6 +178,13 @@ impl RoomTopology {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) {
+        if self
+            .routing
+            .committed_media_worker_id(user_id, connection_id)
+            .is_some()
+        {
+            self.transport_session_by_connection.remove(&connection_id);
+        }
         self.routing
             .unregister_committed_placement(user_id, connection_id);
     }
@@ -178,7 +236,7 @@ impl RoomTopology {
         source_descriptor: PublishedSourceDescriptor,
         consumable_rtp_parameters: RouterRtpParameters,
         transport_media_id: TransportMediaId,
-    ) -> Result<PublishedProducer, RoomRoutingError> {
+    ) -> Result<PublishedProducer, RoutingError> {
         let routed_producer_id = self
             .routing
             .add_producer(&publish.owner_user_id, publish.media_kind)?;
@@ -208,12 +266,10 @@ impl RoomTopology {
         route: &ConsumerRouteTransportRef,
     ) -> TransportConsumerRoute {
         TransportConsumerRoute::new(
-            self.routing
-                .transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
+            self.transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
             route.consumer_media,
             TransportSourceKey::new(
-                self.routing
-                    .transport_user_key(&route.source_user_id, route.source_connection_id),
+                self.transport_user_key(&route.source_user_id, route.source_connection_id),
                 route.source_media,
             ),
         )
@@ -228,9 +284,7 @@ impl RoomTopology {
             .map(|removal| {
                 let connection_id = removal.connection;
                 TransportCleanupOperation::RemoveMedia {
-                    session_key: self
-                        .routing
-                        .transport_user_key(&removal.user, connection_id),
+                    session_key: self.transport_user_key(&removal.user, connection_id),
                     transport_media_id: removal.transport_media,
                 }
             })
@@ -245,7 +299,6 @@ impl RoomTopology {
             .into_iter()
             .map(|effect| ResolvedRelayRouteEffect {
                 source_session_key: self
-                    .routing
                     .transport_user_key(&effect.route.source_user, effect.route.source_connection),
                 route: effect.route,
                 action: effect.action,
@@ -257,17 +310,17 @@ impl RoomTopology {
         &self,
         effects: impl IntoIterator<Item = RelayRouteEffect>,
         user_id: &UserId,
-        session: &DisplacedRoutingSession,
+        session_key: &TransportSessionKey,
     ) -> Vec<ResolvedRelayRouteEffect> {
         effects
             .into_iter()
             .map(|effect| {
                 let source_session_key = if effect.route.source_user == *user_id
-                    && effect.route.source_connection == session.connection_id
+                    && effect.route.source_connection == session_key.connection_id()
                 {
-                    session.transport_session_key.clone()
+                    session_key.clone()
                 } else {
-                    self.routing.transport_user_key(
+                    self.transport_user_key(
                         &effect.route.source_user,
                         effect.route.source_connection,
                     )
@@ -313,7 +366,7 @@ impl RoomTopology {
         target: &ProducerRouteTarget,
         current_connection_id: Option<ConnectionId>,
         active: bool,
-    ) -> Result<bool, RoomRoutingError> {
+    ) -> Result<bool, RoutingError> {
         let Some(producer) = self
             .media
             .producer_for_route_target(target, current_connection_id)
@@ -339,37 +392,51 @@ impl RoomTopology {
         user_id: &UserId,
         connection_id: ConnectionId,
         previous_connection: Option<ConnectionId>,
-        home_placement: LocalRouterRuntimeContext,
+        home_placement: RouterPlacement,
     ) -> Result<SessionPlacementCommit, SessionPlacementRejection> {
-        if let Some(previous_connection) = previous_connection
-            && self
-                .routing
-                .committed_transport_user_key(user_id, previous_connection)
-                .is_none()
-        {
-            return Err(SessionPlacementRejection::MissingPreviousSession {
-                previous_connection,
-            });
-        }
+        let previous_session_key = if let Some(previous_connection) = previous_connection {
+            let Some(key) = self.committed_transport_user_key(user_id, previous_connection) else {
+                return Err(SessionPlacementRejection::MissingPreviousSession {
+                    previous_connection,
+                });
+            };
+            Some(key)
+        } else {
+            None
+        };
         let affected_consumers = if previous_connection.is_some() {
             self.media.routed_consumer_ids_affected_by_user(user_id)
         } else {
             Vec::new()
         };
         let mut routing = self.routing.clone();
-        let (receipt, displaced) = routing
+        let (router_receipt, displaced_connection) = routing
             .commit_session_placement(user_id, connection_id, home_placement, affected_consumers)
             .map_err(SessionPlacementRejection::Router)?;
+        let session_key = self.transport_session_key(
+            user_id,
+            router_receipt.connection_id,
+            router_receipt.media_worker_id,
+        );
         self.routing = routing;
+        if let Some(connection_id) = displaced_connection {
+            self.transport_session_by_connection.remove(&connection_id);
+        }
+        self.transport_session_by_connection
+            .insert(router_receipt.connection_id, session_key.clone());
+        let receipt = CommittedTransportReceipt {
+            connection_id: router_receipt.connection_id,
+            transport_session_key: session_key,
+        };
         let replacement_effects = if previous_connection.is_some() {
-            let transport_cleanup = displaced.as_ref().map_or_else(Vec::new, |session| {
+            let transport_cleanup = previous_session_key.as_ref().map_or_else(Vec::new, |key| {
                 vec![TransportCleanupOperation::CloseUser {
-                    session_key: session.transport_session_key.clone(),
+                    session_key: key.clone(),
                 }]
             });
             let relay_effects = self.media.remove_user_media(user_id);
-            let relay_effects = if let Some(session) = displaced.as_ref() {
-                self.resolved_relay_route_effects_with_displaced(relay_effects, user_id, session)
+            let relay_effects = if let Some(key) = previous_session_key.as_ref() {
+                self.resolved_relay_route_effects_with_displaced(relay_effects, user_id, key)
             } else {
                 self.resolved_relay_route_effects(relay_effects)
             };
@@ -383,12 +450,17 @@ impl RoomTopology {
         })
     }
 
-    pub fn remove_session(&mut self, user_id: &UserId) -> MediaTopologyEffects {
+    pub fn remove_session(
+        &mut self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> MediaTopologyEffects {
         let transport_removals = self.media.transport_removals_for_user(user_id);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         let affected_consumers = self.media.routed_consumer_ids_affected_by_user(user_id);
         let relay_effects = self.media.remove_user_media(user_id);
         let relay_effects = self.resolved_relay_route_effects(relay_effects);
+        self.transport_session_by_connection.remove(&connection_id);
         let routing_repair = self
             .routing
             .remove_session_repairing(user_id, affected_consumers);
@@ -591,7 +663,7 @@ impl RoomTopology {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::room) fn routing_mut_for_test(&mut self) -> &mut RoomRoutingState {
+    pub(in crate::engine::room) fn routing_mut_for_test(&mut self) -> &mut RoutingTopology {
         &mut self.routing
     }
 }

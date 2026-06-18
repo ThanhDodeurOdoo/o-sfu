@@ -140,13 +140,16 @@ Proof notes:
 
 - `cargo test -p o-sfu-proofs` compiles proofs only
 - `cargo kani` executes `#[kani::proof]` harnesses
-- router Kani harnesses call the production `o_sfu_router::Router`
+- pure-router Kani harnesses call production `o_sfu_router::Router` paths for
+  router invariants
+- router topology Kani harnesses verify bounded placement storage and
+  shadow-tracker cleanup invariants
 - Kani builds use router bounded proof storage
 - normal builds use `std::collections::BTreeMap` plus `BTreeSet`
 - `PR Formal Verification` runs
-  `session_teardown_clears_reverse_indices_and_dependents` and protocol
-  recovery-reset Kani shards on pull requests touching router, protocol, RFC or
-  proof code
+  `session_teardown_clears_reverse_indices_and_dependents`, router topology
+  state and protocol recovery-reset Kani shards on pull requests touching
+  router, model, protocol, RFC or proof code
 - scheduled formal verification runs one router proof per one-hour worker
 
 ## Dependency check
@@ -334,4 +337,12 @@ Run one router proof:
 cargo kani -p o-sfu-proofs \
   -Z unstable-options \
   --harness session_teardown_clears_reverse_indices_and_dependents
+```
+
+Run the router topology shard:
+
+```bash
+cargo kani -p o-sfu-proofs \
+  --harness routing_shadow_refcounts_prune_after_last_consumer \
+  --harness routing_placement_replacement_retires_stale_connection
 ```

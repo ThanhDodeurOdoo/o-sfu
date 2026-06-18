@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
+use o_sfu_router::RoutedConsumerId;
+
 use super::{
     ConsumerKey, ConsumerSourceSelection, ConsumerState, TransportMediaRemoval,
     consumer_setup::ConsumerSetupTarget, remove_from_index_set,
@@ -9,7 +11,6 @@ use crate::engine::{
     media_transport::{
         RelayRouteActivity, TransportMediaId, TransportRelayRouteAction, TransportSessionKey,
     },
-    room::routing::RoutedConsumerId,
     source_model::PublishedSourceId,
 };
 

@@ -19,9 +19,10 @@ mod router;
 mod rtp;
 mod rtp_negotiation;
 mod session;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test-support", kani))]
 #[path = "TESTS/test_support.rs"]
 pub mod test_support;
+mod topology;
 mod transport;
 
 pub use o_sfu_rfc::webrtc::MediaKind;
@@ -34,7 +35,7 @@ use self::{consumer::Consumer, producer::Producer, transport::Transport};
 pub use self::{
     consumer_capability::ConsumerCapability,
     error::RouterError,
-    ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId},
+    ids::{ConnectionId, ConsumerId, MediaWorkerId, ProducerId, RouterId, SessionId, TransportId},
     mutation::{
         ConsumerSpec, ProducerSpec, ReceiveTransportHandle, SendTransportHandle, SessionHandle,
     },
@@ -51,5 +52,10 @@ pub use self::{
         negotiate_consumer_rtp_parameters,
     },
     session::{Session, SessionState},
+    topology::{
+        RoutedConsumerId, RoutedProducerId, RouterPlacement, RouterPlacements,
+        RouterPlacementsError, RoutingCommitReceipt, RoutingError, RoutingPlacementSnapshot,
+        RoutingRepairReport, RoutingTopology,
+    },
     transport::TransportDirection,
 };

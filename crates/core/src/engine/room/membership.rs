@@ -12,8 +12,8 @@ use super::{
         self,
         batch::{RoomEffectContext, RoomGaugeDelta},
     },
+    media_graph::CommittedTransportReceipt,
     placement::PendingJoinPlacement,
-    routing::CommittedRoutingReceipt,
     state::RoomState,
 };
 use crate::engine::{
@@ -54,7 +54,7 @@ impl Room {
         context: RoomEffectContext<'_>,
         after_planning: Fut,
         allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> Result<CommittedRoutingReceipt, RoomJoinError>
+    ) -> Result<CommittedTransportReceipt, RoomJoinError>
     where
         Fut: Future<Output = ()>,
     {
@@ -71,7 +71,7 @@ impl Room {
         placement: PendingJoinPlacement,
         context: RoomEffectContext<'_>,
         allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> Result<CommittedRoutingReceipt, RoomJoinError> {
+    ) -> Result<CommittedTransportReceipt, RoomJoinError> {
         let (outcome, counts) = {
             let mut state = self.state.write().await;
             let before = MembershipCountSnapshot::from_state(&state);

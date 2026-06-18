@@ -1,6 +1,9 @@
-use std::{collections::BTreeMap, iter};
+use std::collections::BTreeMap;
 
 use o_sfu_router::RouterId;
+pub use o_sfu_router::{
+    RouterPlacement, RouterPlacements, RouterPlacementsError, RoutingPlacementSnapshot,
+};
 
 use super::{
     Room, RoomJoinError,
@@ -20,87 +23,20 @@ use crate::{
 pub struct RoomRuntimeContext {
     instance: RoomInstanceId,
     primary_router: RouterId,
-    initial_local_router_placements: Option<LocalRoomRouterPlacements>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalRouterRuntimeContext {
-    pub router: RouterId,
-    pub media_worker: MediaWorkerId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalRoomRouterPlacements {
-    primary: LocalRouterRuntimeContext,
-    spillover: Vec<LocalRouterRuntimeContext>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalRoomRouterPlacementsError {
-    Empty,
-}
-
-impl LocalRoomRouterPlacements {
-    #[must_use]
-    pub fn new(
-        primary: LocalRouterRuntimeContext,
-        spillover: Vec<LocalRouterRuntimeContext>,
-    ) -> Self {
-        Self { primary, spillover }
-    }
-
-    /// # Errors
-    ///
-    /// returns [`LocalRoomRouterPlacementsError::Empty`] when `placements` is empty
-    pub fn try_from_vec(
-        placements: Vec<LocalRouterRuntimeContext>,
-    ) -> Result<Self, LocalRoomRouterPlacementsError> {
-        let mut placements = placements.into_iter();
-        let Some(primary) = placements.next() else {
-            return Err(LocalRoomRouterPlacementsError::Empty);
-        };
-        Ok(Self::new(primary, placements.collect()))
-    }
-
-    #[must_use]
-    pub const fn primary(&self) -> LocalRouterRuntimeContext {
-        self.primary
-    }
-
-    pub fn upsert(&mut self, placement: LocalRouterRuntimeContext) {
-        if self.primary.router == placement.router {
-            self.primary = placement;
-            return;
-        }
-        if let Some(existing) = self
-            .spillover
-            .iter_mut()
-            .find(|existing| existing.router == placement.router)
-        {
-            *existing = placement;
-            return;
-        }
-        self.spillover.push(placement);
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = LocalRouterRuntimeContext> + '_ {
-        iter::once(self.primary).chain(self.spillover.iter().copied())
-    }
+    initial_router_placements: Option<RouterPlacements>,
 }
 
 impl RoomRuntimeContext {
     #[must_use]
     pub fn new(
         instance: RoomInstanceId,
-        primary: LocalRouterRuntimeContext,
-        spillover: Vec<LocalRouterRuntimeContext>,
+        primary: RouterPlacement,
+        spillover: Vec<RouterPlacement>,
     ) -> Self {
         Self {
             instance,
             primary_router: primary.router,
-            initial_local_router_placements: Some(LocalRoomRouterPlacements::new(
-                primary, spillover,
-            )),
+            initial_router_placements: Some(RouterPlacements::new(primary, spillover)),
         }
     }
 
@@ -109,22 +45,22 @@ impl RoomRuntimeContext {
         Self {
             instance,
             primary_router,
-            initial_local_router_placements: None,
+            initial_router_placements: None,
         }
     }
 
     /// # Errors
     ///
-    /// returns [`LocalRoomRouterPlacementsError::Empty`] when `placements` is empty
+    /// returns [`RouterPlacementsError::Empty`] when `placements` is empty
     pub fn try_from_placements(
         instance: RoomInstanceId,
-        placements: Vec<LocalRouterRuntimeContext>,
-    ) -> Result<Self, LocalRoomRouterPlacementsError> {
-        let local_routers = LocalRoomRouterPlacements::try_from_vec(placements)?;
+        placements: Vec<RouterPlacement>,
+    ) -> Result<Self, RouterPlacementsError> {
+        let routers = RouterPlacements::try_from_vec(placements)?;
         Ok(Self {
             instance,
-            primary_router: local_routers.primary().router,
-            initial_local_router_placements: Some(local_routers),
+            primary_router: routers.primary().router,
+            initial_router_placements: Some(routers),
         })
     }
 
@@ -139,64 +75,15 @@ impl RoomRuntimeContext {
     }
 
     #[must_use]
-    pub fn initial_local_router_placements(&self) -> Option<&LocalRoomRouterPlacements> {
-        self.initial_local_router_placements.as_ref()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoomPlacementUsageSnapshot {
-    primary_router: RouterId,
-    has_assigned_placements: bool,
-    placements: Vec<LocalRouterRuntimeContext>,
-}
-
-impl RoomPlacementUsageSnapshot {
-    #[must_use]
-    pub(super) fn new(
-        primary_router: RouterId,
-        has_assigned_placements: bool,
-        placements: Vec<LocalRouterRuntimeContext>,
-    ) -> Self {
-        Self {
-            primary_router,
-            has_assigned_placements,
-            placements,
-        }
-    }
-
-    #[must_use]
-    pub(super) const fn primary_router(&self) -> RouterId {
-        self.primary_router
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    #[must_use]
-    pub(super) fn next_local_router_id(&self) -> RouterId {
-        let router_id = self
-            .placements
-            .iter()
-            .map(|placement| placement.router.0)
-            .max()
-            .map_or(self.primary_router.0, |router_id| {
-                router_id.saturating_add(1)
-            });
-        RouterId(router_id)
-    }
-
-    fn assigned_placements(&self) -> &[LocalRouterRuntimeContext] {
-        if self.has_assigned_placements {
-            &self.placements
-        } else {
-            &[]
-        }
+    pub fn initial_router_placements(&self) -> Option<&RouterPlacements> {
+        self.initial_router_placements.as_ref()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomPlacementDecision {
     AssignPrimary { media_worker_id: MediaWorkerId },
-    UseExisting(LocalRouterRuntimeContext),
+    UseExisting(RouterPlacement),
     AllocateSpillover { media_worker_id: MediaWorkerId },
 }
 
@@ -257,7 +144,7 @@ impl LoadTriggeredPlacementState {
 }
 
 impl Room {
-    pub async fn placement_usage_snapshot(&self) -> RoomPlacementUsageSnapshot {
+    pub async fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {
         self.state.read().await.placement_usage_snapshot()
     }
 
@@ -344,9 +231,9 @@ impl PendingJoinPlacement {
 
     fn resolve(
         self,
-        room: &RoomPlacementUsageSnapshot,
+        room: &RoutingPlacementSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> LocalRouterRuntimeContext {
+    ) -> RouterPlacement {
         let Self {
             decision,
             loads,
@@ -357,13 +244,11 @@ impl PendingJoinPlacement {
         let Some(first_assigned) = assigned_placements.first().copied() else {
             return match decision {
                 RoomPlacementDecision::AssignPrimary { media_worker_id }
-                | RoomPlacementDecision::AllocateSpillover { media_worker_id } => {
-                    LocalRouterRuntimeContext {
-                        router: room.primary_router(),
-                        media_worker: media_worker_id,
-                    }
-                }
-                RoomPlacementDecision::UseExisting(placement) => LocalRouterRuntimeContext {
+                | RoomPlacementDecision::AllocateSpillover { media_worker_id } => RouterPlacement {
+                    router: room.primary_router(),
+                    media_worker: media_worker_id,
+                },
+                RoomPlacementDecision::UseExisting(placement) => RouterPlacement {
                     router: room.primary_router(),
                     media_worker: placement.media_worker,
                 },
@@ -393,7 +278,7 @@ impl PendingJoinPlacement {
                 }
                 // router allocation stays in final resolution so stale plans do
                 // not reserve spillover the room no longer needs
-                LocalRouterRuntimeContext {
+                RouterPlacement {
                     router: allocate_spillover_router(),
                     media_worker: loads.least_loaded_worker(assigned_placements, score_policy),
                 }
@@ -548,7 +433,7 @@ impl WorkerLoadIndex {
     )]
     fn least_loaded_worker(
         &self,
-        excluded_placements: &[LocalRouterRuntimeContext],
+        excluded_placements: &[RouterPlacement],
         policy: LocalSpilloverPolicy,
     ) -> MediaWorkerId {
         let Some(load) = self
@@ -569,10 +454,10 @@ impl WorkerLoadIndex {
 
     fn least_loaded_placement(
         &self,
-        placements: &[LocalRouterRuntimeContext],
-        fallback: LocalRouterRuntimeContext,
+        placements: &[RouterPlacement],
+        fallback: RouterPlacement,
         policy: LocalSpilloverPolicy,
-    ) -> LocalRouterRuntimeContext {
+    ) -> RouterPlacement {
         placements
             .iter()
             .copied()
@@ -599,7 +484,7 @@ impl RoomPlacementPlanner {
     #[must_use]
     pub(super) fn choose(
         &self,
-        room: &RoomPlacementUsageSnapshot,
+        room: &RoutingPlacementSnapshot,
         load_index: &WorkerLoadIndex,
     ) -> RoomPlacementDecision {
         let mut load_state = LoadTriggeredPlacementState::default();
@@ -608,7 +493,7 @@ impl RoomPlacementPlanner {
 
     pub(super) fn choose_with_load_state(
         &self,
-        room: &RoomPlacementUsageSnapshot,
+        room: &RoutingPlacementSnapshot,
         load_index: &WorkerLoadIndex,
         load_state: &mut LoadTriggeredPlacementState,
     ) -> RoomPlacementDecision {

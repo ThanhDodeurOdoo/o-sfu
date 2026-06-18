@@ -19,7 +19,6 @@ mod outbound;
 mod placement;
 mod read_model;
 mod recording;
-mod routing;
 pub mod rtp_capabilities;
 mod source_policy;
 mod state;
@@ -52,10 +51,7 @@ pub use outbound::{
     UserOutboundOverflowKind, UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
     UserOutboundSender,
 };
-pub use placement::{
-    LocalRoomRouterPlacements, LocalRoomRouterPlacementsError, LocalRouterRuntimeContext,
-    RoomRuntimeContext,
-};
+pub use placement::{RoomRuntimeContext, RouterPlacement, RouterPlacements, RouterPlacementsError};
 pub use read_model::{IncomingBitrateSnapshot, RoomUserStatsSnapshot};
 
 #[cfg(any(test, feature = "testing-transport"))]
