@@ -1,9 +1,9 @@
-use super::SourcePolicyEffectPlan;
+use super::SourcePolicyPlan;
 use crate::engine::{
     UserId, media_transport::TransportConsumerRoute, source_model::PublishedSourceId,
 };
 
-impl SourcePolicyEffectPlan {
+impl SourcePolicyPlan {
     pub fn retain_updates_for_consumer_source_for_test(
         &mut self,
         consumer_user_id: &UserId,

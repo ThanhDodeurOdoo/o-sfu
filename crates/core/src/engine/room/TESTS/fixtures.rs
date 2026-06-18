@@ -17,7 +17,10 @@ pub(super) use tokio::time::timeout;
 pub(super) use super::super::{
     JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
     RoomJoinError, RoomManager, UserCloseReason, UserOutbound, UserOutboundReceiver,
-    UserOutboundSender, routing::RoomRoutingState, transition::PublishStageOutcome,
+    UserOutboundSender,
+    routing::RoomRoutingState,
+    source_policy::{SourcePolicyTrigger, SourcePolicyTurn},
+    transition::PublishStageOutcome,
 };
 pub(super) use crate::{
     RoomMediaLimits, TransportEffectOutcome,
@@ -480,9 +483,13 @@ impl SourcePolicyScenario {
     }
 
     pub(super) async fn refresh_policy(&self) {
-        self.room
-            .sync_source_packet_selection_policy(&self.adapter)
-            .await;
+        SourcePolicyTurn::new(
+            &self.room,
+            SourcePolicyTrigger::PacketSelection,
+            Some(&self.adapter),
+        )
+        .run()
+        .await;
     }
 
     pub(super) async fn refresh_policy_until_upgrades_settle(&self) {

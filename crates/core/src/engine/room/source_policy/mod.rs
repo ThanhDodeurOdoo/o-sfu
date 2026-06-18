@@ -1,13 +1,10 @@
 mod action;
 mod audio;
-mod effects;
 mod input;
-mod sync;
+mod turn;
 mod video;
 
-pub use self::{
-    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
-    effects::SourcePolicyEffectPlan,
-    sync::SourcePolicyEvent,
-    video::VideoAdmissionRank,
-};
+#[cfg(test)]
+pub(super) use self::turn::SourcePolicyPlan;
+pub(super) use self::turn::{SourcePolicyTrigger, SourcePolicyTurn};
+pub use self::video::VideoAdmissionRank;
