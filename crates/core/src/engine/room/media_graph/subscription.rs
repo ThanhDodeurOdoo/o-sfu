@@ -419,19 +419,14 @@ impl RoomState {
             active: producer_active,
             stream: target.stream.clone(),
         };
-        let (reservation, relays) = self.topology.reserve_consumer_setup(
-            &target,
+        self.topology.reserve_consumer_setup(
+            target,
             selection,
             source_worker,
             target_worker,
-        )?;
-        Some(PendingConsumerSetup {
-            target,
-            reservation,
             sender,
             track,
-            relays,
-        })
+        )
     }
 
     pub(super) fn setup_selection(

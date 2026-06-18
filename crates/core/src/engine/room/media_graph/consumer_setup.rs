@@ -88,61 +88,6 @@ impl ConsumerSetupOrigin {
     }
 }
 
-impl PendingConsumerSetup {
-    fn commit(
-        mut self,
-        state: &mut RoomState,
-        media: TransportMediaId,
-        mid: Option<String>,
-    ) -> ConsumerSetupOutcome {
-        let Some(user) = state.users.get(&self.target.user) else {
-            return self.release_into_outcome(state);
-        };
-        if user.connection_id != self.target.connection || !user.negotiation.can_consume() {
-            return self.release_into_outcome(state);
-        }
-        let Some(producer) = state.topology.media().producer(self.target.producer_id) else {
-            return self.release_into_outcome(state);
-        };
-        if !self.target.matches_identity(producer) {
-            return self.release_into_outcome(state);
-        }
-        let producer_active = producer.active;
-        if state
-            .topology
-            .media()
-            .contains_consumer(self.reservation.key())
-        {
-            return self.release_into_outcome(state);
-        }
-        let selection = state.setup_selection(&self.target, producer_active);
-        let Ok(topology_commit) =
-            state
-                .topology
-                .commit_consumer_setup(&self.reservation, &self.target, selection, media)
-        else {
-            return self.release_into_outcome(state);
-        };
-        if let Some(mid) = mid {
-            self.track.mid = mid;
-        }
-        self.track.active = producer_active;
-        ConsumerSetupOutcome::Committed {
-            sender: self.sender,
-            track: self.track,
-            transport_activity_update: topology_commit,
-        }
-    }
-
-    fn release(self, state: &mut RoomState) -> Vec<ResolvedRelayRouteEffect> {
-        state.topology.release_consumer_setup(self.reservation)
-    }
-
-    fn release_into_outcome(self, state: &mut RoomState) -> ConsumerSetupOutcome {
-        ConsumerSetupOutcome::Released(self.release(state))
-    }
-}
-
 impl RoomState {
     pub fn commit_pending_consumer_setup(
         &mut self,
@@ -151,9 +96,41 @@ impl RoomState {
         mid: Option<String>,
     ) -> (RoomMediaCounts, RoomMediaCounts, ConsumerSetupOutcome) {
         let before = self.media_counts();
-        let outcome = setup.commit(self, media, mid);
+        let outcome = self.finish_pending_consumer_setup(setup, media, mid);
         let after = self.media_counts();
         (before, after, outcome)
+    }
+
+    fn finish_pending_consumer_setup(
+        &mut self,
+        setup: PendingConsumerSetup,
+        media: TransportMediaId,
+        mid: Option<String>,
+    ) -> ConsumerSetupOutcome {
+        let target = &setup.target;
+        let Some(user) = self.users.get(&target.user) else {
+            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
+        };
+        if user.connection_id != target.connection || !user.negotiation.can_consume() {
+            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
+        }
+        let Some(producer) = self.topology.media().producer(target.producer_id) else {
+            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
+        };
+        if !target.matches_identity(producer) {
+            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
+        }
+        let active = producer.active;
+        if self
+            .topology
+            .media()
+            .contains_consumer(setup.reservation.key())
+        {
+            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
+        }
+        let selection = self.setup_selection(target, active);
+        self.topology
+            .commit_consumer_setup(setup, selection, media, mid, active)
     }
 
     pub fn release_pending_consumer_setup(
@@ -165,7 +142,7 @@ impl RoomState {
         Vec<ResolvedRelayRouteEffect>,
     ) {
         let before = self.media_counts();
-        let relays = setup.release(self);
+        let relays = self.topology.release_consumer_setup(setup);
         let after = self.media_counts();
         (before, after, relays)
     }

@@ -243,15 +243,8 @@ impl RoomState {
 
     fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
         let user = self.users.remove(user_id)?;
-        let teardown = self.topology.remove_user(user_id);
-        if !teardown.routing_repair.is_clean() {
-            error!(
-                ?user_id,
-                errors = ?teardown.routing_repair.errors(),
-                "repaired user topology during room teardown"
-            );
-        }
-        Some((user, teardown.effects))
+        let media_effects = self.topology.remove_session(user_id);
+        Some((user, media_effects))
     }
 
     pub fn apply_leave(
