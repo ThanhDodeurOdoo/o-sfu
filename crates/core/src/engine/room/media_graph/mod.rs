@@ -31,8 +31,6 @@ mod route_graph_tests;
 pub use self::consumer_setup::RemoteTrackSetup;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use self::subscription::ConsumerRouteState;
-#[cfg(test)]
-pub(super) use self::subscription::PlannedSubscriptionChange;
 pub(super) use self::{
     consumer_setup::{
         ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
@@ -42,7 +40,7 @@ pub(super) use self::{
         ProducerActivityCommit, PublishCommit, PublishIntentPlan, UnpublishCommit, ValidatedPublish,
     },
     route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
-    subscription::{ConsumerReadinessCommit, ConsumerRouteUpdate, ReceiverIntentCommit},
+    subscription::{ReceiverRouteActivity, ReceiverRouteCommit, ReceiverRouteWork},
     topology::{
         MediaTopologyEffects, RoomTopology, SessionPlacementCommit, SessionPlacementRejection,
     },

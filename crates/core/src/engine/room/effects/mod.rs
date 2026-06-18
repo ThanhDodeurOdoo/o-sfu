@@ -2,9 +2,8 @@
 
 pub mod batch;
 pub mod consumer_route;
-mod consumer_setup;
-mod consumer_transport;
 mod observability;
 mod output;
 mod policy;
+mod receiver_routes;
 mod transport;

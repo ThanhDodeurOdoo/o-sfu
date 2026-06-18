@@ -8,8 +8,8 @@ use super::{
         effects::{self, batch::RoomEffectContext},
         manager::JoinPlacementTestGate,
         media_graph::{
-            ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerRouteUpdate,
-            PlannedSubscriptionChange, ReceiverIntentCommit,
+            ConsumerRouteTarget, ConsumerRouteTransportRef, ReceiverRouteActivity,
+            ReceiverRouteCommit, ReceiverRouteWork,
         },
     },
     api::NegotiatedPublish,
@@ -166,22 +166,15 @@ async fn apply_subscription_route_activity(
         let transport_route = state.transport_consumer_route(&route);
         let target =
             ConsumerRouteTarget::new(route, transport_route, stream_id.clone(), MediaKind::Audio);
-        let route_update = ConsumerRouteUpdate {
-            target,
-            active: false,
-        };
+        let route_update = ReceiverRouteActivity::new(target, false);
         let counts = state.media_counts();
-        let change = PlannedSubscriptionChange {
-            updates: vec![route_update],
-            setups: Vec::new(),
-            relays: Vec::new(),
-        };
+        let work = ReceiverRouteWork::new(vec![route_update], Vec::new(), Vec::new());
         drop(state);
-        ReceiverIntentCommit {
+        ReceiverRouteCommit {
             before: counts,
             after: counts,
             media_worker_id: MediaWorkerId::from_raw(media_worker_id),
-            change,
+            work,
         }
     };
     let route_update_batch = effects::batch::build_receiver_intent(

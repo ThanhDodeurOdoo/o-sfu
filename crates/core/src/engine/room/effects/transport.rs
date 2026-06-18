@@ -28,10 +28,6 @@ impl RoomTransportPlan {
         self.topology.extend(effects);
     }
 
-    pub(super) fn extend_relays(&mut self, relays: Vec<ResolvedRelayRouteEffect>) {
-        self.topology.extend_relays(relays);
-    }
-
     pub(super) fn extend_cleanup(&mut self, cleanup: Vec<TransportCleanupOperation>) {
         self.topology.extend_cleanup(cleanup);
     }

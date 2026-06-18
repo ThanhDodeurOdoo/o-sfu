@@ -2,10 +2,10 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 
 pub use super::observability::RoomGaugeDelta;
 use super::{
-    consumer_transport::ConsumerTransportPlan,
     observability::RoomObservabilityPlan,
     output::RoomOutputPlan,
     policy::RoomPolicyPlan,
+    receiver_routes::ReceiverRoutePlan,
     transport::{ProducerActivityEffect, RoomTransportPlan},
 };
 use crate::engine::{
@@ -16,9 +16,9 @@ use crate::engine::{
         Room,
         cleanup::TransportCleanupOperation,
         media_graph::{
-            ConsumerReadinessCommit, ConsumerRouteTarget, ConsumerRouteUpdate, ConsumerSetupOrigin,
-            MediaTopologyEffects, PendingConsumerSetup, ProducerActivityCommit, PublishCommit,
-            ReceiverIntentCommit, UnpublishCommit,
+            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, PendingConsumerSetup,
+            ProducerActivityCommit, PublishCommit, ReceiverRouteCommit, ReceiverRouteWork,
+            UnpublishCommit,
         },
         outbound::MessageFanout,
         routing::CommittedRoutingReceipt,
@@ -85,7 +85,7 @@ impl<'a> RoomDiagnosticsContext<'a> {
 pub struct RoomEffects {
     observability: RoomObservabilityPlan,
     transport: RoomTransportPlan,
-    consumers: ConsumerTransportPlan,
+    receiver_routes: ReceiverRoutePlan,
     output: RoomOutputPlan,
     policy: RoomPolicyPlan,
 }
@@ -239,19 +239,29 @@ pub fn build_unpublish(commit: UnpublishCommit) -> RoomEffects {
     batch
 }
 
-pub fn build_consumer_readiness(commit: ConsumerReadinessCommit) -> RoomEffects {
+pub fn build_consumer_readiness(
+    room: &Room,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+    commit: ReceiverRouteCommit,
+) -> RoomEffects {
     let mut batch = RoomEffects::default();
     batch
         .observability
         .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
-    batch.push_consumer_setups(commit.setups, ConsumerSetupOrigin::Readiness);
+    batch.push_receiver_work(
+        room,
+        RoomDiagnosticsContext::new(user_id, connection_id, commit.media_worker_id),
+        commit.work,
+        ConsumerSetupOrigin::Readiness,
+    );
     batch.policy.route_graph_changed();
     batch
 }
 
 pub fn build_keyframe_refresh(targets: Vec<ConsumerRouteTarget>) -> RoomEffects {
     let mut batch = RoomEffects::default();
-    batch.consumers.extend_keyframe_refresh(targets);
+    batch.receiver_routes.push_keyframes(targets);
     batch
 }
 
@@ -266,19 +276,19 @@ pub fn build_receiver_intent(
     room: &Room,
     user_id: &UserId,
     connection_id: ConnectionId,
-    commit: ReceiverIntentCommit,
+    commit: ReceiverRouteCommit,
 ) -> RoomEffects {
-    let route_graph_changed = !commit.change.updates.is_empty()
-        || !commit.change.setups.is_empty()
-        || !commit.change.relays.is_empty();
-    let diagnostics = RoomDiagnosticsContext::new(user_id, connection_id, commit.media_worker_id);
+    let route_graph_changed = commit.work.route_graph_changed();
     let mut batch = RoomEffects::default();
     batch
         .observability
         .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
-    batch.transport.extend_relays(commit.change.relays);
-    batch.push_route_updates(room, diagnostics, commit.change.updates);
-    batch.push_consumer_setups(commit.change.setups, ConsumerSetupOrigin::Subscribe);
+    batch.push_receiver_work(
+        room,
+        RoomDiagnosticsContext::new(user_id, connection_id, commit.media_worker_id),
+        commit.work,
+        ConsumerSetupOrigin::Subscribe,
+    );
     if route_graph_changed {
         batch.policy.route_graph_changed();
     } else {
@@ -300,18 +310,19 @@ impl RoomEffects {
         self.transport.push_cleanup(operation);
     }
 
-    fn push_route_updates(
+    fn push_receiver_work(
         &mut self,
         room: &Room,
         context: RoomDiagnosticsContext<'_>,
-        updates: Vec<ConsumerRouteUpdate>,
+        work: ReceiverRouteWork,
+        origin: ConsumerSetupOrigin,
     ) {
-        for update in updates {
-            let ConsumerRouteUpdate { target, active } = update;
-            let diagnostics = context
+        self.receiver_routes.push_work(work, origin, |activity| {
+            let target = activity.target();
+            context
                 .event_data(room, telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED)
                 .with_transport_media_id(target.consumer_media_id().as_u64())
-                .insert_field("active", active)
+                .insert_field("active", activity.active())
                 .insert_field(
                     "producer_user_id",
                     serde_json::to_value(target.producer_user_id())
@@ -321,9 +332,8 @@ impl RoomEffects {
                     "source_transport_media_id",
                     target.source_media_id().as_u64(),
                 )
-                .insert_field("stream_id", target.stream_id().to_string());
-            self.consumers.push_activity(target, active, diagnostics);
-        }
+                .insert_field("stream_id", target.stream_id().to_string())
+        });
     }
 
     fn push_consumer_setups(
@@ -331,7 +341,7 @@ impl RoomEffects {
         setups: Vec<PendingConsumerSetup>,
         origin: ConsumerSetupOrigin,
     ) {
-        self.consumers.push_setups(setups, origin);
+        self.receiver_routes.push_setups(setups, origin);
     }
 
     /// preserves the room-wide side-effect order across transport and policy work
@@ -345,13 +355,13 @@ impl RoomEffects {
             .execute(room, context.media_transport(), context.route_transport())
             .await;
         observability.extend_records(transport_diagnostics);
-        let consumer = self
-            .consumers
+        let receiver_routes = self
+            .receiver_routes
             .execute(room, context.route_transport())
             .await;
-        observability.extend_gauges(consumer.gauges);
-        observability.extend_records(consumer.diagnostics);
-        policy.extend(consumer.policy);
+        observability.extend_gauges(receiver_routes.gauges);
+        observability.extend_records(receiver_routes.diagnostics);
+        policy.extend(receiver_routes.policy);
         observability.record_gauges(room);
         output.emit_before_policy();
         policy.execute(room, context.media_transport()).await;

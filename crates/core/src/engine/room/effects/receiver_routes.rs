@@ -15,28 +15,140 @@ use crate::engine::{
         Room, UserOutbound,
         cleanup::TransportCleanupOperation,
         media_graph::{
-            ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
+            ConsumerRouteTarget, ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget,
+            PendingConsumerSetup, ReceiverRouteActivity, ReceiverRouteWork,
+            ResolvedRelayRouteEffect,
         },
     },
     source_model::UserStreamId,
 };
 
-#[derive(Debug)]
-pub(super) struct ConsumerSetupEffect {
-    setup: PendingConsumerSetup,
-    origin: ConsumerSetupOrigin,
+#[derive(Debug, Default)]
+pub(super) struct ReceiverRoutePlan {
+    relays: Vec<ResolvedRelayRouteEffect>,
+    activities: Vec<ReceiverRouteActivityEffect>,
+    setups: Vec<ReceiverRouteSetup>,
+    keyframes: Vec<ConsumerRouteTarget>,
 }
 
-impl ConsumerSetupEffect {
-    pub(super) const fn new(setup: PendingConsumerSetup, origin: ConsumerSetupOrigin) -> Self {
-        Self { setup, origin }
+impl ReceiverRoutePlan {
+    pub(super) fn push_work(
+        &mut self,
+        work: ReceiverRouteWork,
+        origin: ConsumerSetupOrigin,
+        mut diagnostics: impl FnMut(&ReceiverRouteActivity) -> DiagnosticsEventData,
+    ) {
+        let (activities, setups, relays) = work.into_parts();
+        self.relays.extend(relays);
+        self.activities
+            .extend(activities.into_iter().map(|activity| {
+                let event = diagnostics(&activity);
+                ReceiverRouteActivityEffect {
+                    activity,
+                    diagnostics: event,
+                }
+            }));
+        self.push_setups(setups, origin);
+    }
+
+    pub(super) fn push_keyframes(&mut self, targets: Vec<ConsumerRouteTarget>) {
+        self.keyframes.extend(targets);
+    }
+
+    pub(super) fn push_setups(
+        &mut self,
+        setups: Vec<PendingConsumerSetup>,
+        origin: ConsumerSetupOrigin,
+    ) {
+        self.setups.extend(
+            setups
+                .into_iter()
+                .map(|setup| ReceiverRouteSetup { setup, origin }),
+        );
     }
 
     pub(super) async fn execute(
         self,
         room: &Room,
+        media_transport: Option<&MediaTransport>,
+    ) -> ReceiverRouteOutcome {
+        let Some(media_transport) = media_transport else {
+            return ReceiverRouteOutcome::default();
+        };
+        let mut outcome = ReceiverRouteOutcome::default();
+        execute_relay_route_effects(room, media_transport, &self.relays).await;
+        for activity in self.activities {
+            outcome
+                .diagnostics
+                .push(activity.execute(media_transport).await);
+        }
+        for target in self.keyframes {
+            request_keyframe(media_transport, target).await;
+        }
+        for setup in self.setups {
+            let setup = setup.execute(room, media_transport).await;
+            outcome.gauges.push(setup.gauge);
+            if let Some(diagnostics) = setup.diagnostics {
+                outcome.diagnostics.push(diagnostics);
+            }
+            outcome.policy.extend(setup.policy);
+        }
+        outcome
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ReceiverRouteOutcome {
+    pub(super) gauges: Vec<RoomGaugeDelta>,
+    pub(super) diagnostics: Vec<DiagnosticsEventData>,
+    pub(super) policy: RoomPolicyPlan,
+}
+
+#[derive(Debug)]
+struct ReceiverRouteActivityEffect {
+    activity: ReceiverRouteActivity,
+    diagnostics: DiagnosticsEventData,
+}
+
+impl ReceiverRouteActivityEffect {
+    async fn execute(self, media_transport: &MediaTransport) -> DiagnosticsEventData {
+        let target = self.activity.target();
+        let active = self.activity.active();
+        let outcome = ConsumerRouteEffect::new(target.transport_route())
+            .with_activity(active)
+            .with_keyframe(target.request_keyframe_after_activity(active))
+            .execute(media_transport)
+            .await;
+        if outcome.activity_failed {
+            warn!(
+                route = ?target.transport_route(),
+                stream_id = %target.stream_id(),
+                active,
+                "media transport failed to update consumer route activity"
+            );
+        } else if outcome.keyframe_failed {
+            warn!(
+                route = ?target.transport_route(),
+                stream_id = %target.stream_id(),
+                "media transport failed to request a consumer keyframe refresh"
+            );
+        }
+        self.diagnostics
+    }
+}
+
+#[derive(Debug)]
+struct ReceiverRouteSetup {
+    setup: PendingConsumerSetup,
+    origin: ConsumerSetupOrigin,
+}
+
+impl ReceiverRouteSetup {
+    async fn execute(
+        self,
+        room: &Room,
         media_transport: &MediaTransport,
-    ) -> ConsumerSetupEffectOutcome {
+    ) -> ReceiverRouteSetupOutcome {
         let relays = &self.setup.relays;
         if !execute_relay_route_effects(room, media_transport, relays).await {
             return release_failed_setup(room, self.setup, media_transport).await;
@@ -79,10 +191,10 @@ impl ConsumerSetupEffect {
 }
 
 #[derive(Debug)]
-pub(super) struct ConsumerSetupEffectOutcome {
-    pub(super) gauge: RoomGaugeDelta,
-    pub(super) diagnostics: Option<DiagnosticsEventData>,
-    pub(super) policy: RoomPolicyPlan,
+struct ReceiverRouteSetupOutcome {
+    gauge: RoomGaugeDelta,
+    diagnostics: Option<DiagnosticsEventData>,
+    policy: RoomPolicyPlan,
 }
 
 async fn declare_consumer(
@@ -134,7 +246,7 @@ async fn finish_setup(
     route: TransportConsumerRoute,
     gauge: RoomGaugeDelta,
     outcome: ConsumerSetupOutcome,
-) -> ConsumerSetupEffectOutcome {
+) -> ReceiverRouteSetupOutcome {
     match outcome {
         ConsumerSetupOutcome::Committed {
             sender,
@@ -146,7 +258,7 @@ async fn finish_setup(
             }
             let diagnostics = setup_diagnostics(room.uuid(), &target, origin, &route);
             let _ = sender.send(UserOutbound::SetupRemoteTrack(Box::new(track)));
-            ConsumerSetupEffectOutcome {
+            ReceiverRouteSetupOutcome {
                 gauge,
                 diagnostics: Some(diagnostics),
                 policy: RoomPolicyPlan::default(),
@@ -160,7 +272,7 @@ async fn finish_setup(
             };
             room.execute_transport_cleanup_operations(media_transport, slice::from_ref(&cleanup))
                 .await;
-            ConsumerSetupEffectOutcome {
+            ReceiverRouteSetupOutcome {
                 gauge,
                 diagnostics: None,
                 policy: fanout_pressure_plan(),
@@ -222,7 +334,7 @@ async fn release_failed_setup(
     room: &Room,
     setup: PendingConsumerSetup,
     media_transport: &MediaTransport,
-) -> ConsumerSetupEffectOutcome {
+) -> ReceiverRouteSetupOutcome {
     let (before, after, relays) = {
         let mut state = room.state.write().await;
         let (before, after, relays) = state.release_pending_consumer_setup(setup);
@@ -230,10 +342,27 @@ async fn release_failed_setup(
         (before, after, relays)
     };
     execute_relay_route_effects(room, media_transport, &relays).await;
-    ConsumerSetupEffectOutcome {
+    ReceiverRouteSetupOutcome {
         gauge: RoomGaugeDelta::media(before, after),
         diagnostics: None,
         policy: fanout_pressure_plan(),
+    }
+}
+
+async fn request_keyframe(media_transport: &MediaTransport, target: ConsumerRouteTarget) {
+    if ConsumerRouteEffect::new(target.transport_route())
+        .with_keyframe(true)
+        .execute(media_transport)
+        .await
+        .keyframe_failed
+    {
+        warn!(
+            consumer_user_id = ?target.transport_route().consumer_session_key().user_id(),
+            consumer_transport_media_id = ?target.transport_route().consumer_transport_media_id(),
+            producer_user_id = ?target.producer_user_id(),
+            source_transport_media_id = ?target.source_media_id(),
+            "media transport failed to request a refreshed consumer keyframe"
+        );
     }
 }
 

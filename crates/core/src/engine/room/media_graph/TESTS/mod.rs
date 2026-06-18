@@ -563,17 +563,18 @@ fn stale_replaced_connection_cannot_update_download_state() {
     );
 
     let intents = subscription_intents_from_test_states(&scalable_video_states(false));
-    let change = state.plan_subscription_change(
+    let change = state.plan_receiver_route_work(
         &consumer_user_id,
         stale_connection_id,
         &producer_user_id,
         &intents,
         |_| MediaWorkerId::from_raw(0),
     );
+    let (activities, setups, relays) = change.into_parts();
 
-    assert!(change.updates.is_empty());
-    assert!(change.setups.is_empty());
-    assert!(change.relays.is_empty());
+    assert!(activities.is_empty());
+    assert!(setups.is_empty());
+    assert!(relays.is_empty());
     assert!(
         state.desired_source_active(
             &consumer_user_id,
@@ -608,17 +609,18 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
     );
 
     let intents = subscription_intents_from_test_states(&scalable_video_states(false));
-    let change = state.plan_subscription_change(
+    let change = state.plan_receiver_route_work(
         &subscriber_user_id,
         subscriber_connection_id,
         &publisher_user_id,
         &intents,
         |_| MediaWorkerId::from_raw(0),
     );
+    let (activities, setups, relays) = change.into_parts();
 
-    assert!(change.updates.is_empty());
-    assert!(change.relays.is_empty());
-    assert_eq!(change.setups.len(), 1);
+    assert!(activities.is_empty());
+    assert!(relays.is_empty());
+    assert_eq!(setups.len(), 1);
     let selection = state
         .topology
         .media()
@@ -657,14 +659,15 @@ fn consumer_setup_commit_uses_latest_room_state() {
     );
 
     let intents = subscription_intents_from_test_states(&scalable_video_states(false));
-    let change = state.plan_subscription_change(
+    let change = state.plan_receiver_route_work(
         &subscriber_user_id,
         subscriber_connection_id,
         &publisher_user_id,
         &intents,
         |_| MediaWorkerId::from_raw(0),
     );
-    assert!(change.setups.is_empty());
+    let (_, setups, _) = change.into_parts();
+    assert!(setups.is_empty());
 
     let ConsumerSetupOutcome::Committed {
         track,
