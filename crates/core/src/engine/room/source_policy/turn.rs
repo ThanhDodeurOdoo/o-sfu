@@ -1,11 +1,10 @@
+//! source-policy turn ownership without transport awaits under the room lock
+
 use tracing::{debug, warn};
 
 use super::{
-    super::{
-        Room, RoomEventMessage, effects::consumer_route::ConsumerRouteEffect,
-        outbound::MessageFanout, state::RoomState,
-    },
-    ConsumerPacketSelectionUpdate, FeaturedUserUpdate, audio,
+    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
+    audio,
     input::SourcePolicyInput,
     video,
 };
@@ -15,14 +14,112 @@ use crate::engine::{
         ReceiverBweTargetUpdate, TransportAdapterError, TransportConsumerRoute,
     },
     metrics::{self, BudgetSolverOutcome},
+    room::{
+        Room, RoomEventMessage, effects::consumer_route::ConsumerRouteEffect,
+        outbound::MessageFanout, state::RoomState,
+    },
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourcePolicyTrigger {
+    RouteGraph,
+    PacketSelection,
+    FanoutPressure,
+}
+
+impl SourcePolicyTrigger {
+    pub const fn merge(self, next: Self) -> Self {
+        use SourcePolicyTrigger::{FanoutPressure, PacketSelection, RouteGraph};
+
+        match (self, next) {
+            (RouteGraph, _)
+            | (_, RouteGraph)
+            | (PacketSelection, FanoutPressure)
+            | (FanoutPressure, PacketSelection) => RouteGraph,
+            (PacketSelection, PacketSelection) => PacketSelection,
+            (FanoutPressure, FanoutPressure) => FanoutPressure,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SourcePolicyTurn<'a> {
+    room: &'a Room,
+    trigger: SourcePolicyTrigger,
+    media_transport: Option<&'a MediaTransport>,
+    active_speakers: Option<&'a [ActiveSpeakerSource]>,
+}
+
+impl<'a> SourcePolicyTurn<'a> {
+    pub const fn new(
+        room: &'a Room,
+        trigger: SourcePolicyTrigger,
+        media_transport: Option<&'a MediaTransport>,
+    ) -> Self {
+        Self {
+            room,
+            trigger,
+            media_transport,
+            active_speakers: None,
+        }
+    }
+
+    pub const fn with_active_speakers(mut self, sources: &'a [ActiveSpeakerSource]) -> Self {
+        self.active_speakers = Some(sources);
+        self
+    }
+
+    pub async fn run(self) {
+        if matches!(
+            self.trigger,
+            SourcePolicyTrigger::RouteGraph | SourcePolicyTrigger::FanoutPressure
+        ) {
+            self.room.observe_source_fanout_pressure().await;
+        }
+        let Some(media_transport) = self.media_transport else {
+            return;
+        };
+        if self.trigger == SourcePolicyTrigger::FanoutPressure {
+            return;
+        }
+        if let Some(sources) = self.active_speakers {
+            self.run_packet_selection(sources, media_transport).await;
+        } else {
+            let sources = media_transport.active_speaker_source_snapshot().await;
+            self.run_packet_selection(&sources, media_transport).await;
+        }
+    }
+
+    async fn run_packet_selection(
+        &self,
+        active_speakers: &[ActiveSpeakerSource],
+        media_transport: &MediaTransport,
+    ) {
+        let sessions = {
+            let state = self.room.state.read().await;
+            state
+                .transport_user_entries()
+                .into_iter()
+                .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
+                .collect::<Vec<_>>()
+        };
+        let bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
+        let plan = {
+            let state = self.room.state.read().await;
+            SourcePolicyPlan::from_state(&state, active_speakers, &bandwidth)
+        };
+        if !plan.is_empty() {
+            plan.execute(self.room, media_transport).await;
+        }
+    }
+}
+
 #[cfg(test)]
-#[path = "TESTS/effects_support.rs"]
+#[path = "TESTS/turn_support.rs"]
 mod test_support;
 
 #[derive(Debug, Default)]
-pub struct SourcePolicyEffectPlan {
+pub struct SourcePolicyPlan {
     state_only_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
     transport_effect_packet_updates: Vec<PacketUpdateWithRoute>,
     receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
@@ -31,17 +128,13 @@ pub struct SourcePolicyEffectPlan {
 
 type PacketUpdateWithRoute = (ConsumerPacketSelectionUpdate, TransportConsumerRoute);
 
-impl SourcePolicyEffectPlan {
+impl SourcePolicyPlan {
     pub fn from_state(
         state: &RoomState,
-        active_speaker_sources: &[ActiveSpeakerSource],
-        receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
+        active_speakers: &[ActiveSpeakerSource],
+        bandwidth: &ReceiverBandwidthSnapshot,
     ) -> Self {
-        let input = SourcePolicyInput::from_state(
-            state,
-            active_speaker_sources,
-            receiver_bandwidth_snapshot,
-        );
+        let input = SourcePolicyInput::from_state(state, active_speakers, bandwidth);
         let audio_updates = audio::audio_route_activity_updates(&input);
         let video_plan = video::receiver_video_policy_plan(state, &input);
         let (state_only_packet_updates, transport_effect_packet_updates) = split_packet_updates(
@@ -50,12 +143,11 @@ impl SourcePolicyEffectPlan {
                 .into_iter()
                 .chain(video_plan.consumer_packet_updates),
         );
-        let featured_users = input.featured_user_updates;
         Self {
             state_only_packet_updates,
             transport_effect_packet_updates,
             receiver_bwe_targets: video_plan.receiver_bwe_targets,
-            featured_users,
+            featured_users: input.featured_user_updates,
         }
     }
 
@@ -85,7 +177,7 @@ impl SourcePolicyEffectPlan {
         if applied_packet_updates.is_empty() && featured_users.is_empty() {
             return;
         }
-        Self::record_source_selection_metrics(room, &applied_packet_updates);
+        record_source_selection_metrics(room, &applied_packet_updates);
         let info_fanout = {
             let mut state = room.state.write().await;
             commit_packet_updates(&mut state, &applied_packet_updates);
@@ -95,32 +187,30 @@ impl SourcePolicyEffectPlan {
             info_fanout.emit();
         }
     }
+}
 
-    fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelectionUpdate]) {
-        for update in updates {
-            if update.packet_gate.is_some() {
-                room.metrics
-                    .record_source_selection_update(metrics::source_selection_kind(
-                        update.selector,
-                    ));
-            }
-            let outcomes = update.outcomes;
-            if outcomes.is_degraded() {
-                room.metrics
-                    .record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
-            }
-            if outcomes.is_paused() {
-                room.metrics
-                    .record_budget_solver_outcome(BudgetSolverOutcome::Paused);
-            }
-            if outcomes.is_resumed() {
-                room.metrics
-                    .record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
-            }
-            if outcomes.is_protected_over_budget() {
-                room.metrics
-                    .record_budget_solver_outcome(BudgetSolverOutcome::ProtectedOverBudget);
-            }
+fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelectionUpdate]) {
+    for update in updates {
+        if update.packet_gate.is_some() {
+            room.metrics
+                .record_source_selection_update(metrics::source_selection_kind(update.selector));
+        }
+        let outcomes = update.outcomes;
+        if outcomes.is_degraded() {
+            room.metrics
+                .record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
+        }
+        if outcomes.is_paused() {
+            room.metrics
+                .record_budget_solver_outcome(BudgetSolverOutcome::Paused);
+        }
+        if outcomes.is_resumed() {
+            room.metrics
+                .record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
+        }
+        if outcomes.is_protected_over_budget() {
+            room.metrics
+                .record_budget_solver_outcome(BudgetSolverOutcome::ProtectedOverBudget);
         }
     }
 }

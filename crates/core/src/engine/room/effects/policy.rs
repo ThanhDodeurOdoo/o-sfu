@@ -1,56 +1,47 @@
 use crate::engine::{
     media_transport::MediaTransport,
-    room::{Room, SourcePolicyEvent},
+    room::{
+        Room,
+        source_policy::{SourcePolicyTrigger, SourcePolicyTurn},
+    },
 };
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(super) struct RoomPolicyPlan {
-    event: Option<SourcePolicyEvent>,
+    trigger: Option<SourcePolicyTrigger>,
 }
 
 impl RoomPolicyPlan {
     pub(super) fn route_graph_changed(&mut self) {
-        self.push(SourcePolicyEvent::RouteGraphChanged);
+        self.push(SourcePolicyTrigger::RouteGraph);
     }
 
     pub(super) fn receiver_intent_changed(&mut self) {
-        self.push(SourcePolicyEvent::ReceiverIntentChanged);
+        self.push(SourcePolicyTrigger::PacketSelection);
     }
 
     pub(super) fn fanout_pressure_changed(&mut self) {
-        self.push(SourcePolicyEvent::FanoutPressureChanged);
+        self.push(SourcePolicyTrigger::FanoutPressure);
     }
 
     pub(super) fn extend(&mut self, plan: Self) {
-        if let Some(event) = plan.event {
-            self.push(event);
+        if let Some(trigger) = plan.trigger {
+            self.push(trigger);
         }
     }
 
     pub(super) async fn execute(self, room: &Room, media_transport: Option<&MediaTransport>) {
-        if let Some(event) = self.event {
-            room.handle_source_policy_event(event, media_transport)
+        if let Some(trigger) = self.trigger {
+            SourcePolicyTurn::new(room, trigger, media_transport)
+                .run()
                 .await;
         }
     }
 
-    fn push(&mut self, event: SourcePolicyEvent) {
-        self.event = Some(
-            self.event
-                .map_or(event, |current| merge_events(current, event)),
+    fn push(&mut self, trigger: SourcePolicyTrigger) {
+        self.trigger = Some(
+            self.trigger
+                .map_or(trigger, |current| current.merge(trigger)),
         );
-    }
-}
-
-fn merge_events(current: SourcePolicyEvent, next: SourcePolicyEvent) -> SourcePolicyEvent {
-    use SourcePolicyEvent::{FanoutPressureChanged, ReceiverIntentChanged, RouteGraphChanged};
-
-    match (current, next) {
-        (RouteGraphChanged, _)
-        | (_, RouteGraphChanged)
-        | (ReceiverIntentChanged, FanoutPressureChanged)
-        | (FanoutPressureChanged, ReceiverIntentChanged) => RouteGraphChanged,
-        (ReceiverIntentChanged, ReceiverIntentChanged) => ReceiverIntentChanged,
-        (FanoutPressureChanged, FanoutPressureChanged) => FanoutPressureChanged,
     }
 }
