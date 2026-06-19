@@ -56,8 +56,8 @@ pub(super) fn receiver_video_routes<'a>(
                 .get(source.owner().user_id())
                 .copied(),
             receiver_bandwidth: input
-                .receiver_bandwidth_by_user
-                .get(&route.route.consumer_user_id)
+                .receiver_bandwidth_by_connection
+                .get(&route.route.consumer_connection_id)
                 .copied(),
         });
     }

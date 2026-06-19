@@ -1,7 +1,7 @@
 use super::support::*;
 use crate::engine::{
     media_transport::ReceiverBandwidthSnapshot,
-    room::source_policy::{SourcePolicyPlan, SourcePolicyTrigger, SourcePolicyTurn},
+    room::source_policy::SourcePolicyPlan,
     source_model::{SourcePolicy, SourcePublishIntent},
 };
 
@@ -205,11 +205,91 @@ async fn source_policy_resets_receiver_bwe_target_after_last_video_route_removal
             )
             .await
     );
-    SourcePolicyTurn::new(&room, SourcePolicyTrigger::PacketSelection, Some(&adapter))
-        .run()
-        .await;
+    refresh_source_policy(&room, &adapter).await;
 
     assert_receiver_bwe_target(&room, &adapter, &UserId::Integer(2), Bitrate::zero()).await;
+}
+
+#[tokio::test]
+async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    let featured_user_id = UserId::Integer(1);
+    scenario.publish_audio_and_camera(1).await;
+    let audio_media_id = scenario.audio_media_id(1).await;
+    scenario.mark_active_speaker(audio_media_id).await;
+    let plan = source_policy_plan_from_transport_snapshot(&scenario).await;
+
+    let (replacement_tx, _replacement_rx) = test_sender();
+    join_user_without_transport_cleanup(
+        &scenario.room,
+        &scenario.adapter,
+        featured_user_id.clone(),
+        replacement_tx,
+    )
+    .await;
+    plan.execute(&scenario.room, &scenario.adapter).await;
+
+    let info = scenario
+        .room
+        .test_api()
+        .inspect()
+        .user_info_snapshot(&featured_user_id)
+        .await
+        .expect("replacement user should still be present")
+        .1;
+    assert_eq!(info.is_featured, Some(false));
+}
+
+#[tokio::test]
+async fn source_policy_ignores_receiver_bandwidth_from_replaced_connection() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    let receiver_user_id = UserId::Integer(2);
+    publish_simulcast_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+    let old_connection_id = user_connection_id(&scenario.room, &receiver_user_id).await;
+    let old_session_key = scenario
+        .room
+        .transport_user_key(&receiver_user_id, old_connection_id)
+        .await;
+
+    let (replacement_tx, _replacement_rx) = test_sender();
+    join_user_without_transport_cleanup(
+        &scenario.room,
+        &scenario.adapter,
+        receiver_user_id.clone(),
+        replacement_tx,
+    )
+    .await;
+    make_session_ready_with_transport(&scenario.room, &receiver_user_id, &scenario.adapter).await;
+    let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
+        per_session: vec![(old_session_key, Bitrate::from_kbps(100))],
+    };
+    let plan = {
+        let state = scenario.room.state.read().await;
+        SourcePolicyPlan::from_state(&state, &[], &receiver_bandwidth_snapshot)
+    };
+    plan.execute(&scenario.room, &scenario.adapter).await;
+
+    let diagnostics = scenario
+        .room
+        .diagnostics_user_views(&scenario.adapter)
+        .await;
+    let subscription = diagnostics
+        .iter()
+        .find(|view| view.user_id == receiver_user_id)
+        .and_then(|view| {
+            view.subscriptions.iter().find(|subscription| {
+                subscription.producer_user_id == UserId::Integer(1)
+                    && subscription.stream_id
+                        == stream_id_for_source(TestSourceKind::ScalableVideo).as_str()
+            })
+        })
+        .expect("replacement receiver should have a current video route");
+    assert_eq!(
+        subscription
+            .selection
+            .latest_receiver_bandwidth_estimate_bps,
+        None
+    );
 }
 
 #[tokio::test]

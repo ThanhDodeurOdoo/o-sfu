@@ -12,10 +12,10 @@ pub(super) use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream};
 pub(super) use tokio::time::timeout;
 
 pub(super) use super::super::{
-    JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
+    JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
     RoomJoinError, RoomManager, UserCloseReason, UserOutbound, UserOutboundReceiver,
     UserOutboundSender,
-    source_policy::{SourcePolicyTrigger, SourcePolicyTurn},
+    source_policy::{self, SourcePolicyTrigger},
     transition::PublishStageOutcome,
 };
 pub(super) use crate::{
@@ -36,6 +36,16 @@ pub(super) use crate::{
         },
     },
 };
+
+pub(super) async fn refresh_source_policy(room: &Room, adapter: &MediaTransport) {
+    source_policy::apply(
+        room,
+        SourcePolicyTrigger::PacketSelection,
+        Some(adapter),
+        None,
+    )
+    .await;
+}
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
 const DEFAULT_ACTIVE_SPEAKER_AUDIO_LEVEL_DBOV: i8 = -20;
@@ -481,13 +491,7 @@ impl SourcePolicyScenario {
     }
 
     pub(super) async fn refresh_policy(&self) {
-        SourcePolicyTurn::new(
-            &self.room,
-            SourcePolicyTrigger::PacketSelection,
-            Some(&self.adapter),
-        )
-        .run()
-        .await;
+        refresh_source_policy(&self.room, &self.adapter).await;
     }
 
     pub(super) async fn refresh_policy_until_upgrades_settle(&self) {

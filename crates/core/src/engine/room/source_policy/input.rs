@@ -7,7 +7,7 @@ use super::action::FeaturedUserUpdate;
 use crate::{
     Bitrate, RoomMediaLimits,
     engine::{
-        UserId,
+        ConnectionId, UserId,
         media_transport::{
             ActiveSpeakerSource, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
             TransportMediaId,
@@ -25,7 +25,7 @@ const ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT: usize = 5;
 pub struct SourcePolicyInput<'a> {
     pub(super) routes: Vec<SourcePolicyRouteInput<'a>>,
     pub(super) receiver_bwe_targets: BTreeMap<UserId, ReceiverBweTargetUpdate>,
-    pub(super) receiver_bandwidth_by_user: BTreeMap<UserId, Bitrate>,
+    pub(super) receiver_bandwidth_by_connection: BTreeMap<ConnectionId, Bitrate>,
     pub(super) active_speaker_media_ids: BTreeSet<TransportMediaId>,
     pub(super) admitted_audio_media_ids: BTreeSet<TransportMediaId>,
     pub(super) featured_source_user_ids: BTreeSet<UserId>,
@@ -48,18 +48,14 @@ impl<'a> SourcePolicyInput<'a> {
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
-        let ranked_active_speaker_sources = rank_active_speaker_sources(active_speaker_sources);
-        let media_limits = state.source_policy_media_limits();
-        let active_speakers = active_speaker_media_ids(&ranked_active_speaker_sources);
-        let admitted_audio_speakers = admitted_audio_media_ids(
-            &ranked_active_speaker_sources,
-            media_limits.max_active_audio_speakers(),
-        );
-        let featured_source_user_ids =
-            featured_source_user_ids(state, &ranked_active_speaker_sources);
-        let active_speaker_rank_by_user =
-            active_speaker_rank_by_user(state, &ranked_active_speaker_sources);
-        let desired_featured_user_id = ranked_active_speaker_sources.iter().find_map(|source| {
+        let ranked_sources = rank_active_speaker_sources(active_speaker_sources);
+        let media_limits = state.media_limits;
+        let active_speakers = active_speaker_media_ids(&ranked_sources);
+        let admitted_audio_speakers =
+            admitted_audio_media_ids(&ranked_sources, media_limits.max_active_audio_speakers());
+        let featured_source_user_ids = featured_source_user_ids(state, &ranked_sources);
+        let active_speaker_rank_by_user = active_speaker_rank_by_user(state, &ranked_sources);
+        let desired_featured_user_id = ranked_sources.iter().find_map(|source| {
             featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
         });
         let featured_user_updates = featured_user_updates(state, desired_featured_user_id.as_ref());
@@ -67,7 +63,9 @@ impl<'a> SourcePolicyInput<'a> {
         Self {
             routes,
             receiver_bwe_targets: receiver_bwe_targets(state),
-            receiver_bandwidth_by_user: receiver_bandwidth_by_user(receiver_bandwidth_snapshot),
+            receiver_bandwidth_by_connection: receiver_bandwidth_by_connection(
+                receiver_bandwidth_snapshot,
+            ),
             active_speaker_media_ids: active_speakers,
             admitted_audio_media_ids: admitted_audio_speakers,
             featured_source_user_ids,
@@ -119,11 +117,13 @@ fn receiver_bwe_targets(state: &RoomState) -> BTreeMap<UserId, ReceiverBweTarget
         .collect()
 }
 
-fn receiver_bandwidth_by_user(snapshot: &ReceiverBandwidthSnapshot) -> BTreeMap<UserId, Bitrate> {
+fn receiver_bandwidth_by_connection(
+    snapshot: &ReceiverBandwidthSnapshot,
+) -> BTreeMap<ConnectionId, Bitrate> {
     snapshot
         .per_session
         .iter()
-        .map(|(session_key, estimate_bps)| (session_key.user_id().clone(), *estimate_bps))
+        .map(|(session, estimate)| (session.connection_id(), *estimate))
         .collect()
 }
 
@@ -192,13 +192,14 @@ fn featured_source_owner_for_active_speaker_source(
     transport_media_id: TransportMediaId,
 ) -> Option<UserId> {
     let entry = state.source_transport_media_entry(transport_media_id)?;
-    let detector_source = state.source_policy_source(entry.source)?;
+    let media = state.topology.media();
+    let detector_source = media.source(entry.source)?;
     let detector_policy = detector_source.policy().active_speaker()?;
     if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
         return None;
     }
-    state
-        .source_policy_owner_has_promotable_source_in_group(&entry.owner, detector_policy.group())
+    media
+        .owner_has_promotable_source_in_group(&entry.owner, detector_policy.group())
         .then(|| entry.owner.clone())
 }
 
@@ -207,22 +208,23 @@ fn featured_user_updates(
     desired_featured_user_id: Option<&UserId>,
 ) -> Vec<FeaturedUserUpdate> {
     if desired_featured_user_id.is_none()
-        && !state
-            .source_policy_user_featured_states()
-            .any(|(_user_id, featured)| featured.is_some())
+        && !state.users.values().any(|user| user.featured().is_some())
     {
         return Vec::new();
     }
     state
-        .source_policy_user_featured_states()
-        .filter_map(|(user_id, current_featured)| {
+        .users
+        .iter()
+        .filter_map(|(user_id, user)| {
+            let current_featured = user.featured();
             let desired_featured = match desired_featured_user_id {
                 Some(featured_user_id) => Some(featured_user_id == user_id),
                 None if current_featured.is_some() => Some(false),
                 None => None,
             };
-            (desired_featured != current_featured)
-                .then(|| FeaturedUserUpdate::new(user_id.clone(), desired_featured))
+            (desired_featured != current_featured).then(|| {
+                FeaturedUserUpdate::new(user_id.clone(), user.connection_id, desired_featured)
+            })
         })
         .collect()
 }

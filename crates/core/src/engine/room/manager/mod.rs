@@ -17,7 +17,7 @@ use super::{
     factory::RoomFactory,
     membership::JoinUserRequest,
     placement::WorkerLoadIndex,
-    source_policy::{SourcePolicyTrigger, SourcePolicyTurn},
+    source_policy::{self, SourcePolicyTrigger},
 };
 use crate::engine::{
     ConnectionId, RoomInstanceId, UserId,
@@ -213,13 +213,12 @@ impl RoomManager {
         }
         let active_speaker_sources = media_transport.active_speaker_source_snapshot().await;
         for room in rooms {
-            SourcePolicyTurn::new(
+            source_policy::apply(
                 &room,
                 SourcePolicyTrigger::PacketSelection,
                 Some(media_transport),
+                Some(&active_speaker_sources),
             )
-            .with_active_speakers(&active_speaker_sources)
-            .run()
             .await;
         }
     }

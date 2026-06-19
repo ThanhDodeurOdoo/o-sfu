@@ -1,4 +1,4 @@
-//! source-policy turn ownership without transport awaits under the room lock
+//! source-policy apply ownership without transport awaits under the room lock
 
 use super::{
     action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
@@ -40,75 +40,90 @@ impl SourcePolicyTrigger {
     }
 }
 
-#[derive(Debug)]
-pub struct SourcePolicyTurn<'a> {
-    room: &'a Room,
-    trigger: SourcePolicyTrigger,
-    media_transport: Option<&'a MediaTransport>,
-    active_speakers: Option<&'a [ActiveSpeakerSource]>,
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SourcePolicyWakeups {
+    trigger: Option<SourcePolicyTrigger>,
 }
 
-impl<'a> SourcePolicyTurn<'a> {
-    pub const fn new(
-        room: &'a Room,
-        trigger: SourcePolicyTrigger,
-        media_transport: Option<&'a MediaTransport>,
-    ) -> Self {
-        Self {
-            room,
-            trigger,
-            media_transport,
-            active_speakers: None,
+impl SourcePolicyWakeups {
+    pub fn route_graph_changed(&mut self) {
+        self.push(SourcePolicyTrigger::RouteGraph);
+    }
+
+    pub fn receiver_intent_changed(&mut self) {
+        self.push(SourcePolicyTrigger::PacketSelection);
+    }
+
+    pub fn fanout_pressure_changed(&mut self) {
+        self.push(SourcePolicyTrigger::FanoutPressure);
+    }
+
+    pub fn extend(&mut self, wakeups: Self) {
+        if let Some(trigger) = wakeups.trigger {
+            self.push(trigger);
         }
     }
 
-    pub const fn with_active_speakers(mut self, sources: &'a [ActiveSpeakerSource]) -> Self {
-        self.active_speakers = Some(sources);
-        self
-    }
-
-    pub async fn run(self) {
-        if matches!(
-            self.trigger,
-            SourcePolicyTrigger::RouteGraph | SourcePolicyTrigger::FanoutPressure
-        ) {
-            self.room.observe_source_fanout_pressure().await;
-        }
-        let Some(media_transport) = self.media_transport else {
-            return;
-        };
-        if self.trigger == SourcePolicyTrigger::FanoutPressure {
-            return;
-        }
-        if let Some(sources) = self.active_speakers {
-            self.run_packet_selection(sources, media_transport).await;
-        } else {
-            let sources = media_transport.active_speaker_source_snapshot().await;
-            self.run_packet_selection(&sources, media_transport).await;
+    pub async fn execute(self, room: &Room, media_transport: Option<&MediaTransport>) {
+        if let Some(trigger) = self.trigger {
+            apply(room, trigger, media_transport, None).await;
         }
     }
 
-    async fn run_packet_selection(
-        &self,
-        active_speakers: &[ActiveSpeakerSource],
-        media_transport: &MediaTransport,
+    fn push(&mut self, trigger: SourcePolicyTrigger) {
+        self.trigger = Some(
+            self.trigger
+                .map_or(trigger, |current| current.merge(trigger)),
+        );
+    }
+}
+
+pub async fn apply(
+    room: &Room,
+    trigger: SourcePolicyTrigger,
+    media_transport: Option<&MediaTransport>,
+    active_speakers: Option<&[ActiveSpeakerSource]>,
+) {
+    if matches!(
+        trigger,
+        SourcePolicyTrigger::RouteGraph | SourcePolicyTrigger::FanoutPressure
     ) {
-        let sessions = {
-            let state = self.room.state.read().await;
-            state
-                .transport_user_entries()
-                .into_iter()
-                .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
-                .collect::<Vec<_>>()
-        };
-        let bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
-        let plan = {
-            let state = self.room.state.read().await;
-            SourcePolicyPlan::from_state(&state, active_speakers, &bandwidth)
-        };
-        if !plan.is_empty() {
-            plan.execute(self.room, media_transport).await;
-        }
+        room.observe_source_fanout_pressure().await;
+    }
+    let Some(media_transport) = media_transport else {
+        return;
+    };
+    if trigger == SourcePolicyTrigger::FanoutPressure {
+        return;
+    }
+    if let Some(sources) = active_speakers {
+        run_packet_selection(room, sources, media_transport).await;
+    } else {
+        let sources = media_transport.active_speaker_source_snapshot().await;
+        run_packet_selection(room, &sources, media_transport).await;
+    }
+}
+
+async fn run_packet_selection(
+    room: &Room,
+    active_speakers: &[ActiveSpeakerSource],
+    media_transport: &MediaTransport,
+) {
+    let sessions = {
+        let state = room.state.read().await;
+        state
+            .transport_user_entries()
+            .into_iter()
+            .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
+            .collect::<Vec<_>>()
+    };
+    let bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
+    let plan = {
+        let state = room.state.read().await;
+        SourcePolicyPlan::from_state(&state, active_speakers, &bandwidth)
+    };
+    if !plan.is_empty() {
+        plan.execute(room, media_transport).await;
     }
 }
 
@@ -222,7 +237,7 @@ fn split_packet_updates(
     let mut transport_effect_updates = Vec::new();
     for update in updates {
         if requires_media_transport_effect(&update) {
-            let transport_route = state.transport_consumer_route(&update.route);
+            let transport_route = state.topology.transport_consumer_route(&update.route);
             transport_effect_updates.push((update, transport_route));
         } else {
             state_only_updates.push(update);
@@ -237,7 +252,7 @@ fn requires_media_transport_effect(update: &ConsumerPacketSelectionUpdate) -> bo
 
 fn commit_packet_updates(state: &mut RoomState, updates: &[ConsumerPacketSelectionUpdate]) {
     for update in updates {
-        state.update_source_policy_consumer_selection(
+        state.topology.update_consumer_source_selection(
             &update.route,
             update.source_id,
             |selection| {
@@ -259,9 +274,15 @@ fn commit_featured_user_updates(
 ) -> Option<MessageFanout> {
     let mut changed_user_ids = Vec::new();
     for update in updates {
-        if state.update_source_policy_featured_user(&update.user_id, update.featured) {
-            changed_user_ids.push(update.user_id.clone());
+        let Some(user) = state.user_mut_for_connection(&update.user_id, update.connection_id)
+        else {
+            continue;
+        };
+        if user.featured() == update.featured {
+            continue;
         }
+        user.set_featured(update.featured);
+        changed_user_ids.push(update.user_id.clone());
     }
     if changed_user_ids.is_empty() {
         return None;

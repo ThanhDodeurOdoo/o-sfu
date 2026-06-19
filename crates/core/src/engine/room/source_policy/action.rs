@@ -1,6 +1,6 @@
 use super::super::media_graph::ConsumerRouteTransportRef;
 use crate::engine::{
-    UserId,
+    ConnectionId, UserId,
     media_transport::{ReceiverBweTargetUpdate, SourcePacketGate},
     source_model::{
         ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
@@ -110,12 +110,17 @@ impl ConsumerPacketSelectionUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeaturedUserUpdate {
     pub user_id: UserId,
+    pub connection_id: ConnectionId,
     pub featured: Option<bool>,
 }
 
 impl FeaturedUserUpdate {
     #[must_use]
-    pub fn new(user_id: UserId, featured: Option<bool>) -> Self {
-        Self { user_id, featured }
+    pub fn new(user_id: UserId, connection_id: ConnectionId, featured: Option<bool>) -> Self {
+        Self {
+            user_id,
+            connection_id,
+            featured,
+        }
     }
 }
