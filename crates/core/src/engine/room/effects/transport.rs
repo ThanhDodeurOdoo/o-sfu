@@ -5,8 +5,8 @@ use crate::{
     engine::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            MediaTransport, ProducerActivity, TransportRelayRouteAction, TransportRelayRouteEffect,
-            TransportSourceKey,
+            MediaTransport, ProducerActivity, RouteControlPlan, TransportRelayRouteAction,
+            TransportRelayRouteEffect, TransportSourceKey,
         },
         room::{
             Room,
@@ -99,24 +99,27 @@ async fn execute_producer_activity(
     media_transport: Option<&MediaTransport>,
     producers: Vec<ProducerActivityEffect>,
 ) -> Vec<DiagnosticsEventData> {
-    let mut diagnostics = Vec::with_capacity(producers.len());
-    for op in producers {
-        if let Some(media_transport) = media_transport
-            && media_transport
-                .set_producer_active(&op.source, ProducerActivity::from_active(op.active))
-                .await
-                .is_err()
-        {
-            warn!(
-                source = ?op.source,
-                stream_id = %op.stream,
-                active = op.active,
-                "media transport failed to update producer route activity"
-            );
-        }
-        diagnostics.push(op.diagnostics);
+    if producers.is_empty() {
+        return Vec::new();
     }
-    diagnostics
+    if let Some(media_transport) = media_transport {
+        let mut plan = RouteControlPlan::new();
+        for op in &producers {
+            plan.push_producer(op.source.clone(), ProducerActivity::from_active(op.active));
+        }
+        let outcome = media_transport.apply_route_control(plan.ready()).await;
+        for (op, result) in producers.iter().zip(&outcome.producers) {
+            if result.is_err() {
+                warn!(
+                    source = ?op.source,
+                    stream_id = %op.stream,
+                    active = op.active,
+                    "media transport failed to update producer route activity"
+                );
+            }
+        }
+    }
+    producers.into_iter().map(|op| op.diagnostics).collect()
 }
 
 pub(super) async fn execute_relay_route_effects(

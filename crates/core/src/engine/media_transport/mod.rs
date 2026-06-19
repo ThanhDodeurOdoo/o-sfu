@@ -20,6 +20,7 @@
 mod builder;
 mod config;
 mod policy_invalidation;
+mod route_control;
 mod rtc;
 #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
 #[path = "TESTS/test_support/mod.rs"]
@@ -34,6 +35,9 @@ pub use config::{MediaTransportConfig, MediaTransportDeps};
 use o_sfu_router::{MediaKind, MediaStream as RouterRtpParameters};
 pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
+};
+pub(crate) use route_control::{
+    ConsumerRouteControl, ConsumerRouteControlOutcome, RouteControlPlan,
 };
 #[cfg(feature = "internal-benchmarks")]
 pub mod benchmark_support {
