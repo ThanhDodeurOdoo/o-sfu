@@ -14,13 +14,16 @@
 
 use std::{collections::BTreeMap, mem};
 
-use super::{Command, Commands, PendingRequestKind, REQUEST_TIMEOUT_TIMER_ID_BASE};
+use super::{
+    Command, Commands, PendingRequestKind,
+    timers::{REQUEST_TIMEOUT_TIMER_BASE, RequestTimeoutId},
+};
 use crate::signaling::RequestId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingRequestState {
     kind: PendingRequestKind,
-    timeout_timer_id: u32,
+    timeout_timer_id: RequestTimeoutId,
 }
 
 /// pending request registration returned to the caller
@@ -31,7 +34,7 @@ struct PendingRequestState {
 pub(super) struct RequestRegistration {
     pub(super) request_id: RequestId,
     pub(super) kind: PendingRequestKind,
-    pub(super) timeout_timer_id: u32,
+    pub(super) timeout_timer_id: RequestTimeoutId,
 }
 
 /// small state machine for request-shaped protocol operations
@@ -41,9 +44,9 @@ pub(super) struct RequestRegistration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RequestTracker {
     next_request_counter: u64,
-    next_timeout_timer_id: u32,
+    next_timeout_timer_id: RequestTimeoutId,
     pending_requests: BTreeMap<RequestId, PendingRequestState>,
-    request_timeouts: BTreeMap<u32, RequestId>,
+    request_timeouts: BTreeMap<RequestTimeoutId, RequestId>,
 }
 
 impl Default for RequestTracker {
@@ -56,7 +59,7 @@ impl RequestTracker {
     pub(super) fn new() -> Self {
         Self {
             next_request_counter: 0,
-            next_timeout_timer_id: REQUEST_TIMEOUT_TIMER_ID_BASE,
+            next_timeout_timer_id: REQUEST_TIMEOUT_TIMER_BASE,
             pending_requests: BTreeMap::new(),
             request_timeouts: BTreeMap::new(),
         }
@@ -124,7 +127,7 @@ impl RequestTracker {
             .remove(&pending_request.timeout_timer_id);
         vec![
             Command::CancelTimer {
-                id: pending_request.timeout_timer_id,
+                id: pending_request.timeout_timer_id.raw(),
             },
             Command::ResolvePendingRequest {
                 request_id: response_to.clone(),
@@ -139,11 +142,13 @@ impl RequestTracker {
     /// "not one of ours" from "this timer belonged to us and produced no new
     /// commands (it can happen if the timer path wins a race after the
     /// request entry was already removed elsewhere)
-    pub(super) fn resolve_timeout(&mut self, timer_id: u32) -> Option<Commands> {
-        let request_id = self.request_timeouts.remove(&timer_id)?;
+    pub(super) fn resolve_timeout(&mut self, timeout_id: RequestTimeoutId) -> Option<Commands> {
+        let request_id = self.request_timeouts.remove(&timeout_id)?;
         let commands = if self.pending_requests.remove(&request_id).is_some() {
             vec![
-                Command::CancelTimer { id: timer_id },
+                Command::CancelTimer {
+                    id: timeout_id.raw(),
+                },
                 Command::ResolvePendingRequest {
                     request_id,
                     ok: false,
@@ -175,7 +180,7 @@ impl RequestTracker {
         let mut commands = Vec::with_capacity(pending_requests.len() * 2);
         for (request_id, pending_request) in pending_requests {
             commands.push(Command::CancelTimer {
-                id: pending_request.timeout_timer_id,
+                id: pending_request.timeout_timer_id.raw(),
             });
             commands.push(Command::ResolvePendingRequest {
                 request_id,
@@ -191,12 +196,9 @@ impl RequestTracker {
         request_id
     }
 
-    fn next_timeout_timer_id(&mut self) -> u32 {
+    fn next_timeout_timer_id(&mut self) -> RequestTimeoutId {
         let timer_id = self.next_timeout_timer_id;
-        self.next_timeout_timer_id = self
-            .next_timeout_timer_id
-            .saturating_add(1)
-            .max(REQUEST_TIMEOUT_TIMER_ID_BASE);
+        self.next_timeout_timer_id = timer_id.next();
         timer_id
     }
 }

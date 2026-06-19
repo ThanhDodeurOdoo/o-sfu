@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() {
+fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
@@ -12,22 +12,28 @@ fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() {
     });
     let second_commands = core.broadcast(serde_json::json!({ "kind": "notice" }));
 
-    assert_eq!(
-        first_commands,
-        vec![Command::ScheduleTimer {
-            id: BATCH_FLUSH_TIMER_ID,
+    let [
+        Command::ScheduleTimer {
+            id: flush_timer_id,
             ms: 100,
-        }]
-    );
+        },
+    ] = first_commands.as_slice()
+    else {
+        return Err(format!("expected one flush timer, got {first_commands:?}"));
+    };
     assert!(second_commands.is_empty());
 
-    let flush_commands = core.on_timer(BATCH_FLUSH_TIMER_ID);
+    let flush_commands = core.on_timer(*flush_timer_id);
     let mut batch = decode_sent_batch(&flush_commands).into_iter();
     let Some(first_envelope) = batch.next() else {
-        return;
+        return Err(format!(
+            "expected first flushed envelope, got {flush_commands:?}"
+        ));
     };
     let Some(second_envelope) = batch.next() else {
-        return;
+        return Err(format!(
+            "expected second flushed envelope, got {flush_commands:?}"
+        ));
     };
 
     assert_eq!(
@@ -45,4 +51,5 @@ fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() {
             }
         )))
     );
+    Ok(())
 }

@@ -32,6 +32,7 @@ mod request_flow;
 mod request_tracker;
 mod server_events;
 mod sticky_replay;
+mod timers;
 #[cfg(feature = "verification-models")]
 pub mod verification;
 
@@ -39,6 +40,7 @@ pub use command_batch::{CommandBatch, CommandBatchError};
 use outbound_batch::{FlushMode, OutboundBatcher};
 use request_tracker::RequestTracker;
 use sticky_replay::StickyReplayState;
+use timers::RequestTimeoutId;
 
 pub use crate::bundle_api::BundleConnectionState as ConnectionState;
 use crate::{
@@ -55,10 +57,9 @@ use crate::{
     },
 };
 
-/// Timer id used by the recovery backoff scheduler.
+/// host-facing timer id used by the recovery backoff scheduler
 pub const RECOVERY_TIMER_ID: u32 = 1;
 const BATCH_FLUSH_TIMER_ID: u32 = 2;
-const REQUEST_TIMEOUT_TIMER_ID_BASE: u32 = 10_000;
 const INITIAL_RECOVERY_DELAY_MS: u32 = 1_000;
 const MAX_RECOVERY_DELAY_MS: u32 = 30_000;
 const BATCH_FLUSH_DELAY_MS: u32 = 100;
@@ -652,7 +653,9 @@ impl ProtocolCore {
         if timer_id == BATCH_FLUSH_TIMER_ID {
             return command_batch(self.flush_pending_batch(false));
         }
-        if let Some(commands) = self.request_tracker.resolve_timeout(timer_id) {
+        if let Some(commands) = RequestTimeoutId::try_from_raw(timer_id)
+            .and_then(|timeout_id| self.request_tracker.resolve_timeout(timeout_id))
+        {
             return command_batch(commands);
         }
         CommandBatch::default()
