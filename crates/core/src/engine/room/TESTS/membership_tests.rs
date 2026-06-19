@@ -1,4 +1,8 @@
-use super::fixtures::*;
+use super::{
+    super::cleanup::{CLEANUP_RETRY_CAPACITY, TransportCleanupOperation},
+    fixtures::*,
+};
+use crate::{MediaWorkerId, RoomInstanceId, engine::media_transport::TransportSessionKey};
 
 #[tokio::test]
 async fn join_user_enforces_capacity() {
@@ -285,5 +289,32 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
             .await
             .is_none()
     );
+    assert!(!room.has_pending_cleanup_retries());
+}
+
+#[tokio::test]
+async fn large_cleanup_batch_executes_every_first_attempt() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await;
+    let media_transport = real_adapter();
+    let cap = u64::try_from(CLEANUP_RETRY_CAPACITY).expect("cleanup capacity should fit u64");
+    let operations = (1..=cap + 1)
+        .map(|raw| TransportCleanupOperation::CloseUser {
+            session_key: TransportSessionKey::new(
+                RoomInstanceId::from_raw(1),
+                MediaWorkerId::from_raw(0),
+                ConnectionId::from_raw(raw),
+                UserId::Integer(1),
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    let outcome = room
+        .execute_transport_cleanup_operations(&media_transport, &operations)
+        .await;
+
+    assert_eq!(outcome, TransportEffectOutcome::Applied);
     assert!(!room.has_pending_cleanup_retries());
 }
