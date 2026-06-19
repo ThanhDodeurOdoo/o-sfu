@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, btree_map::Entry},
+    marker::PhantomData,
+    slice,
     sync::Mutex,
 };
 
@@ -35,7 +37,7 @@ type StagedPublishKey = (UserId, ConnectionId, UserStreamId);
 pub struct StagedPublish {
     descriptor: ValidatedPublish,
     media: TransportMediaId,
-    armed: bool,
+    reservation: PublishReservation<Reserved>,
 }
 
 impl StagedPublishes {
@@ -182,7 +184,7 @@ impl StagedPublish {
         Self {
             descriptor,
             media: transport_media_id,
-            armed: true,
+            reservation: PublishReservation::new(),
         }
     }
 
@@ -221,9 +223,7 @@ impl StagedPublish {
             );
             return None;
         };
-        let encodings = applied_answer
-            .negotiated_producer_upload_encodings(media)
-            .to_vec();
+        let encodings = applied_answer.negotiated_producer_upload_encodings(media);
         self.commit_with_negotiated_parameters(operation, rtp, encodings)
             .await
     }
@@ -232,7 +232,7 @@ impl StagedPublish {
         self,
         operation: RoomUserOperation<'_>,
         rtp: RouterRtpParameters,
-        upload_encodings: Vec<SessionUploadEncoding>,
+        upload_encodings: &[SessionUploadEncoding],
     ) -> Option<UserStreamId> {
         let room = operation.room;
         let user = self.descriptor.owner_user_id.clone();
@@ -241,7 +241,7 @@ impl StagedPublish {
         let media = self.media;
         let committed = {
             let mut state = room.state.write().await;
-            state.commit_publish_reservation(self.descriptor.clone(), rtp, &upload_encodings, media)
+            state.commit_publish_reservation(self.descriptor.clone(), rtp, upload_encodings, media)
         };
         let Some(commit) = committed else {
             self.cleanup_reserved_media(
@@ -258,7 +258,7 @@ impl StagedPublish {
             );
             return None;
         };
-        self.commit();
+        self.commit_reservation();
         effects::batch::build_publish_commit(room, commit)
             .execute(room, RoomEffectContext::runtime(operation.media_transport))
             .await;
@@ -270,17 +270,20 @@ impl StagedPublish {
         operation: RoomUserOperation<'_>,
         failure_message: &str,
     ) -> TransportEffectOutcome {
-        let mut publish = self;
-        let cleanup = [publish.release_cleanup_operation()];
+        let media = self.media;
+        let cleanup = self.into_cleanup_operation();
         let outcome = operation
             .room
-            .execute_transport_cleanup_operations(operation.media_transport, &cleanup)
+            .execute_transport_cleanup_operations(
+                operation.media_transport,
+                slice::from_ref(&cleanup),
+            )
             .await;
         if outcome == TransportEffectOutcome::Failed {
             warn!(
-                user_id = ?publish.descriptor.owner_user_id,
-                connection_id = ?publish.descriptor.owner_connection_id,
-                transport_media_id = ?publish.media,
+                user_id = ?cleanup.user_id(),
+                connection_id = ?cleanup.connection_id(),
+                transport_media_id = ?media,
                 "{failure_message}"
             );
         }
@@ -288,26 +291,77 @@ impl StagedPublish {
     }
 
     pub(super) fn into_cleanup_operation(self) -> TransportCleanupOperation {
-        let mut publish = self;
-        publish.release_cleanup_operation()
-    }
-
-    fn release_cleanup_operation(&mut self) -> TransportCleanupOperation {
-        debug_assert!(self.armed);
-        self.armed = false;
+        let Self {
+            descriptor,
+            media,
+            reservation,
+        } = self;
+        let _released = reservation.release();
         TransportCleanupOperation::RemoveMedia {
-            session_key: self.descriptor.session_key.clone(),
-            transport_media_id: self.media,
+            session_key: descriptor.session_key,
+            transport_media_id: media,
         }
     }
 
-    fn commit(mut self) {
+    fn commit_reservation(self) {
+        let _committed = self.reservation.commit();
+    }
+}
+
+#[derive(Debug)]
+struct Reserved;
+
+#[derive(Debug)]
+struct Committed;
+
+#[derive(Debug)]
+struct Released;
+
+#[derive(Debug)]
+#[must_use = "publish reservations must be committed or released"]
+struct PublishReservation<State> {
+    guard: PublishReservationGuard,
+    _state: PhantomData<fn() -> State>,
+}
+
+#[derive(Debug)]
+struct PublishReservationGuard {
+    armed: bool,
+}
+
+impl PublishReservation<Reserved> {
+    fn new() -> Self {
+        Self {
+            guard: PublishReservationGuard { armed: true },
+            _state: PhantomData,
+        }
+    }
+
+    fn commit(mut self) -> PublishReservation<Committed> {
+        self.guard.disarm();
+        PublishReservation {
+            guard: self.guard,
+            _state: PhantomData,
+        }
+    }
+
+    fn release(mut self) -> PublishReservation<Released> {
+        self.guard.disarm();
+        PublishReservation {
+            guard: self.guard,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl PublishReservationGuard {
+    fn disarm(&mut self) {
         debug_assert!(self.armed);
         self.armed = false;
     }
 }
 
-impl Drop for StagedPublish {
+impl Drop for PublishReservationGuard {
     fn drop(&mut self) {
         #[cfg(test)]
         assert!(

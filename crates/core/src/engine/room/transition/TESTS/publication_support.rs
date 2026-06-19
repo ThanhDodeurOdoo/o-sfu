@@ -18,7 +18,7 @@ impl StagedPublish {
         operation: RoomUserOperation<'_>,
         rtp: RouterRtpParameters,
     ) -> Option<UserStreamId> {
-        self.commit_with_negotiated_parameters(operation, rtp, Vec::new())
+        self.commit_with_negotiated_parameters(operation, rtp, &[])
             .await
     }
 }
