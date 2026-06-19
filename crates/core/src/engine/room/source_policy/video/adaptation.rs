@@ -158,13 +158,12 @@ fn desired_encoding_index(
             allowed_encoding_indices(encodings, source_cap).next()
         };
     };
-    let budget = if featured {
+    let budget = if featured || route.visible_scalable_route_count <= 1 {
         receiver_bandwidth
     } else {
         let divisor = u64::try_from(route.visible_scalable_route_count)
             .unwrap_or(u64::MAX)
-            .saturating_mul(THUMBNAIL_BUDGET_DIVISOR)
-            .max(1);
+            .saturating_mul(THUMBNAIL_BUDGET_DIVISOR);
         receiver_bandwidth.divided_by(divisor)
     };
     highest_affordable_encoding_index(encodings, budget, featured, source_cap)
