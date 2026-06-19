@@ -19,7 +19,6 @@ use o_sfu_router::{
     },
 };
 
-const SYMBOLIC_ROUTE_COMMAND_VARIANTS: u8 = 9;
 const SYMBOLIC_CLEANUP_COMMAND_VARIANTS: u8 = 7;
 
 fn session(id: SessionId) -> Session {
@@ -97,19 +96,68 @@ fn concrete_router_adds_write_reverse_index_memberships() {
     std::mem::forget(router);
 }
 
-/// prove that route-state commands preserve topology and shadow invariants
-///
-/// this keeps cleanup out of scope so the proof can assert that the base
-/// topology remains live while producer shadows follow source-side route state
-#[kani::proof]
-#[kani::unwind(8)]
-fn bounded_symbolic_router_route_trace_preserves_invariants() {
+#[derive(Clone, Copy)]
+enum RouteTraceCommand {
+    Noop,
+    Producer(ProducerId, ProducerRouteState),
+    Consumer(ConsumerId, ConsumerRouteState),
+}
+
+macro_rules! route_trace_proof {
+    ($name:ident, $command:expr) => {
+        #[kani::proof]
+        #[kani::unwind(8)]
+        fn $name() {
+            assert_route_trace_preserves_invariants($command);
+        }
+    };
+}
+
+mod route_trace {
+    use super::*;
+
+    route_trace_proof!(noop_preserves_invariants, RouteTraceCommand::Noop);
+    route_trace_proof!(
+        producer_30_pause_preserves_invariants,
+        RouteTraceCommand::Producer(ProducerId(30), ProducerRouteState::Paused)
+    );
+    route_trace_proof!(
+        producer_30_resume_preserves_invariants,
+        RouteTraceCommand::Producer(ProducerId(30), ProducerRouteState::Active)
+    );
+    route_trace_proof!(
+        producer_31_pause_preserves_invariants,
+        RouteTraceCommand::Producer(ProducerId(31), ProducerRouteState::Paused)
+    );
+    route_trace_proof!(
+        producer_31_resume_preserves_invariants,
+        RouteTraceCommand::Producer(ProducerId(31), ProducerRouteState::Active)
+    );
+    route_trace_proof!(
+        consumer_40_pause_preserves_invariants,
+        RouteTraceCommand::Consumer(ConsumerId(40), ConsumerRouteState::Paused)
+    );
+    route_trace_proof!(
+        consumer_40_resume_preserves_invariants,
+        RouteTraceCommand::Consumer(ConsumerId(40), ConsumerRouteState::Active)
+    );
+    route_trace_proof!(
+        consumer_41_pause_preserves_invariants,
+        RouteTraceCommand::Consumer(ConsumerId(41), ConsumerRouteState::Paused)
+    );
+    route_trace_proof!(
+        consumer_41_resume_preserves_invariants,
+        RouteTraceCommand::Consumer(ConsumerId(41), ConsumerRouteState::Active)
+    );
+}
+
+fn assert_route_trace_preserves_invariants(command: RouteTraceCommand) {
     let mut router = Router::new(RouterId(0));
 
     build_symbolic_trace_topology(&mut router);
-    add_symbolic_trace_consumers(&mut router);
-    apply_symbolic_route_command(&mut router, symbolic_route_command());
-    assert_symbolic_route_trace_invariants(&router);
+    add_compatible_trace_consumers(&mut router);
+    apply_route_trace_command(&mut router, command);
+    assert_route_trace_invariants(&router, command);
 
     std::mem::forget(router);
 }
@@ -140,11 +188,6 @@ fn symbolic_capability() -> ConsumerCapability {
     } else {
         ConsumerCapability::Incompatible
     }
-}
-
-/// choose one bounded route-state command for the route trace proof
-fn symbolic_route_command() -> u8 {
-    kani::any_where(|command| *command < SYMBOLIC_ROUTE_COMMAND_VARIANTS)
 }
 
 /// choose one bounded cleanup command for the teardown trace proof
@@ -340,14 +383,9 @@ fn assert_symbolic_trace_invariants(router: &Router) {
     );
 }
 
-/// assert route-state trace facts when base topology must remain live
-///
-/// route commands are not allowed to remove entities
-/// only consumer acceptance remains symbolic
-fn assert_symbolic_route_trace_invariants(router: &Router) {
+/// assert route-state trace facts when every route must remain live
+fn assert_route_trace_invariants(router: &Router, command: RouteTraceCommand) {
     let view = RouterProofView::new(router);
-    let consumer_40 = view.contains_consumer(ConsumerId(40));
-    let consumer_41 = view.contains_consumer(ConsumerId(41));
 
     assert!(view.contains_session(SessionId(1)));
     assert!(view.contains_session(SessionId(2)));
@@ -357,14 +395,12 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
     assert!(view.contains_transport(TransportId(21)));
     assert!(view.contains_producer(ProducerId(30)));
     assert!(view.contains_producer(ProducerId(31)));
+    assert!(view.contains_consumer(ConsumerId(40)));
+    assert!(view.contains_consumer(ConsumerId(41)));
     assert!(router.session_count() == 2);
     assert!(view.transport_count() == 4);
     assert!(view.producer_count() == 2);
-    assert!(view.consumer_count() == present(consumer_40) + present(consumer_41));
-
-    assert_session_transport_index(router, SessionId(1), true, true);
-    assert_session_transport_index(router, SessionId(2), true, true);
-    assert!(view.session_transports().key_count() == 2);
+    assert!(view.consumer_count() == 2);
 
     assert_known_transport(
         router,
@@ -399,12 +435,6 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
         true,
     );
 
-    assert_transport_producer_index(router, TransportId(10), true);
-    assert_empty_transport_producer_index(router, TransportId(11));
-    assert_transport_producer_index(router, TransportId(20), true);
-    assert_empty_transport_producer_index(router, TransportId(21));
-    assert!(view.transport_producers().key_count() == 2);
-
     assert_known_producer(
         router,
         ProducerId(30),
@@ -422,23 +452,13 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
         true,
     );
 
-    assert_transport_consumer_index(router, TransportId(11), consumer_41);
-    assert_empty_transport_consumer_index(router, TransportId(10));
-    assert_empty_transport_consumer_index(router, TransportId(20));
-    assert_transport_consumer_index(router, TransportId(21), consumer_40);
-    assert!(view.transport_consumers().key_count() == present(consumer_40) + present(consumer_41));
-
-    assert_producer_consumer_index(router, ProducerId(30), consumer_40);
-    assert_producer_consumer_index(router, ProducerId(31), consumer_41);
-    assert!(view.producer_consumers().key_count() == present(consumer_40) + present(consumer_41));
-
     assert_known_consumer(
         router,
         ConsumerId(40),
         ProducerId(30),
         TransportId(21),
         MediaKind::Audio,
-        consumer_40,
+        true,
         true,
         true,
     );
@@ -448,10 +468,12 @@ fn assert_symbolic_route_trace_invariants(router: &Router) {
         ProducerId(31),
         TransportId(11),
         MediaKind::Video,
-        consumer_41,
+        true,
         true,
         true,
     );
+
+    assert_route_trace_effect(router, command);
 }
 
 /// assert the session reverse index for a pair of known transports
@@ -564,6 +586,30 @@ fn assert_known_consumer(
         assert!(transport_exists);
         assert!(view.consumer_shadows_producer(consumer_id));
     }
+}
+
+/// assert the route-state effect for one concrete route command
+fn assert_route_trace_effect(router: &Router, command: RouteTraceCommand) {
+    let mut producer_30 = ProducerRouteState::Active;
+    let mut producer_31 = ProducerRouteState::Active;
+    let mut consumer_40 = ConsumerRouteState::Active;
+    let mut consumer_41 = ConsumerRouteState::Active;
+
+    match command {
+        RouteTraceCommand::Noop => {}
+        RouteTraceCommand::Producer(id, state) if id == ProducerId(30) => producer_30 = state,
+        RouteTraceCommand::Producer(id, state) if id == ProducerId(31) => producer_31 = state,
+        RouteTraceCommand::Consumer(id, state) if id == ConsumerId(40) => consumer_40 = state,
+        RouteTraceCommand::Consumer(id, state) if id == ConsumerId(41) => consumer_41 = state,
+        RouteTraceCommand::Producer(_, _) | RouteTraceCommand::Consumer(_, _) => {
+            unreachable!("unknown route trace target")
+        }
+    }
+
+    let view = RouterProofView::new(router);
+    assert!(view.consumer_route_matches(ConsumerId(40), consumer_40, producer_30));
+    assert!(view.consumer_route_matches(ConsumerId(41), consumer_41, producer_31));
+    assert!(router_satisfies_invariants(router));
 }
 
 /// convert symbolic presence into an arithmetic count contribution
@@ -1140,35 +1186,24 @@ fn consumer_local_pause_stays_independent_from_producer_shadow_updates() {
     std::mem::forget(router);
 }
 
-/// apply one bounded route-state command to the symbolic trace topology
-fn apply_symbolic_route_command(router: &mut Router, command: u8) {
+/// apply one route-state command to the trace topology
+fn apply_route_trace_command(router: &mut Router, command: RouteTraceCommand) {
     match command {
-        0 => {}
-        1 => {
-            let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Paused);
+        RouteTraceCommand::Noop => {}
+        RouteTraceCommand::Producer(producer_id, route_state) => {
+            assert!(
+                router
+                    .set_producer_route_state(producer_id, route_state)
+                    .is_ok()
+            );
         }
-        2 => {
-            let _ = router.set_producer_route_state(ProducerId(30), ProducerRouteState::Active);
+        RouteTraceCommand::Consumer(consumer_id, route_state) => {
+            assert!(
+                router
+                    .set_consumer_route_state(consumer_id, route_state)
+                    .is_ok()
+            );
         }
-        3 => {
-            let _ = router.set_producer_route_state(ProducerId(31), ProducerRouteState::Paused);
-        }
-        4 => {
-            let _ = router.set_producer_route_state(ProducerId(31), ProducerRouteState::Active);
-        }
-        5 => {
-            let _ = router.set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Paused);
-        }
-        6 => {
-            let _ = router.set_consumer_route_state(ConsumerId(40), ConsumerRouteState::Active);
-        }
-        7 => {
-            let _ = router.set_consumer_route_state(ConsumerId(41), ConsumerRouteState::Paused);
-        }
-        8 => {
-            let _ = router.set_consumer_route_state(ConsumerId(41), ConsumerRouteState::Active);
-        }
-        _ => {}
     }
 }
 

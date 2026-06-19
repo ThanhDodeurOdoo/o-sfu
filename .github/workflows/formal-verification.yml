@@ -38,7 +38,8 @@ jobs:
             command: >-
               cargo kani -p o-sfu-proofs
               -Z unstable-options
-              --harness bounded_symbolic_router_route_trace_preserves_invariants
+              --output-format terse
+              --harness router::proofs::route_trace
           - shard: router-symbolic-cleanup
             command: >-
               cargo kani -p o-sfu-proofs
