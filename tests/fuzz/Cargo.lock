@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1191,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bitflags 2.13.0",
  "futures-util",
@@ -1225,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-model"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-protocol"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "o-sfu-model",
  "o-sfu-rfc",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-rfc"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "base64",
  "serde",
@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-router"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "o-sfu-model",
  "o-sfu-rfc",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-telemetry"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "o-sfu-model",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "o-sfu-telemetry-macros"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "proc-macro2",
  "quote",
