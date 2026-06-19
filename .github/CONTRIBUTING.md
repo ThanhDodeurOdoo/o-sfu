@@ -33,7 +33,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 
 - **No Low-Value Comments**: Avoid trivial comments that describe obvious code or that is just a rephrase of a function or variable name. Only write comments for necessary complex logic or obscure implementation / standard docstring / header comment (for files that need a global explanation).
 - **Justify Overrides**: Any override of a linter rule MUST be justified with a descriptive comment.
-- **Avoid literals**: use constants or enums with a meaningful name instead. Magic numbers and strings, for example from RFCs have their dedicated rfc crate.
+- **Avoid literals**: like magic numbers or string literals, use constants, static vars or enums with a meaningful name instead.
 - **Document unhandled errors**: Errors that are thrown, or `Result` types in Rust, must have their errors documented.
 - **Tests**: Every new feature must include corresponding tests (meaningful tests, not noisy trivial checks) / proof / fuzzing / ... (depending on the changes).
 - Failing the performance CI isn't necessarily breaking, but the commit message should include a `performance` section that justifies why.
@@ -53,7 +53,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 
 ## Tooling
 
-if running rust-analyzer and on an OS that is not linux, I recommend adding `"rust-analyzer.cargo.target": "x86_64-unknown-linux-gnu"` to your settngs. 
+if running rust-analyzer and on an OS that is not linux, I recommend adding `"rust-analyzer.cargo.target": "x86_64-unknown-linux-gnu"` to your settngs.
 
 ## Verification
 
