@@ -6,7 +6,36 @@ mod TESTS;
 mod control;
 mod keyframe;
 mod lifecycle;
-mod types;
+
+use o_sfu_router::MediaStream as RouterRtpParameters;
+use str0m::media::MediaKind;
+
+use super::super::super::commands::RemoteSourceControl;
+use crate::engine::media_transport::{TransportSessionKey, TransportSourceKey};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RouteSourceKind {
+    Local,
+    Remote,
+}
+
+pub(super) struct AddSendMediaRequest<'a> {
+    pub consumer_key: &'a TransportSessionKey,
+    pub media_kind: MediaKind,
+    pub source: &'a TransportSourceKey,
+    pub remote_source_control: Option<RemoteSourceControl>,
+    pub consumer_rtp_parameters: &'a RouterRtpParameters,
+    pub active: bool,
+}
+
+impl RouteSourceKind {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Remote => "remote",
+        }
+    }
+}
 
 #[cfg(test)]
 use control::observe_src_rid_ready;
@@ -20,4 +49,3 @@ pub use keyframe::{KeyframeRequestMode, KeyframeRequestTarget, request_kf_for_ta
 pub(super) use lifecycle::{
     RecvMediaPolicy, worker_add_recv_media, worker_add_send_media, worker_remove_media,
 };
-pub(super) use types::AddSendMediaRequest;

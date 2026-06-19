@@ -3,7 +3,7 @@ use std::time::Instant;
 use o_sfu_router::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid, Pt};
 
-use super::{super::types::RouteSourceKind, selected_rid};
+use super::{super::RouteSourceKind, selected_rid};
 use crate::engine::media_transport::{
     TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
     TransportSessionKey, TransportSourceKey,
@@ -11,6 +11,7 @@ use crate::engine::media_transport::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
         local_send_rewrite::forget_transport_media_stream,
         media_registry::RegisteredMediaHandle,
+        relay_registry::{RelayPacketMailbox, RelayTargetId},
         route_control::PacketLayerGate,
         simulcast,
         slots::ConsumerStreamHandle,
@@ -152,6 +153,49 @@ pub fn consumer_payload_type(consumer_rtp: &RouterRtpParameters) -> Option<Pt> {
                 .find(|format| !format.codec().is_rtx())
                 .map(|format| Pt::from(format.payload_type()))
         })
+}
+
+pub(super) fn set_remote_src_pkt_gate(
+    state: &mut PacketLoopState,
+    source: &TransportSourceKey,
+    target_id: RelayTargetId,
+    packet_gate: PacketLayerGate,
+) {
+    let src_media = source.transport_media_id();
+    if ensure_local_producer_mid(state, source.session_key(), src_media).is_err() {
+        return;
+    }
+    state
+        .routes
+        .set_relay_pkt_gate(src_media, target_id, packet_gate);
+}
+
+pub(super) fn worker_add_relay_target(
+    state: &mut PacketLoopState,
+    source: &TransportSourceKey,
+    target_id: RelayTargetId,
+    target: RelayPacketMailbox,
+) -> Result<(), TransportAdapterError> {
+    let src_media = source.transport_media_id();
+    ensure_local_producer_mid(state, source.session_key(), src_media)?;
+    state.routes.add_relay_target(src_media, target_id, target);
+    Ok(())
+}
+
+pub(super) fn worker_set_relay_target_active(
+    state: &mut PacketLoopState,
+    source: &TransportSourceKey,
+    target_id: RelayTargetId,
+    active: bool,
+) -> Result<(), TransportAdapterError> {
+    let src_media = source.transport_media_id();
+    if active {
+        ensure_local_producer_mid(state, source.session_key(), src_media)?;
+    }
+    state
+        .routes
+        .set_relay_target_active(src_media, target_id, active);
+    Ok(())
 }
 
 pub fn remove_consumer_route(

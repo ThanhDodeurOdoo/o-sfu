@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use super::{
     super::keyframe::{worker_request_consumer_kf, worker_request_remote_kf},
-    remote_source, routes,
+    routes,
 };
 use crate::engine::{
     media_transport::{
@@ -43,7 +43,7 @@ pub fn apply_route_control_request(
             source,
             target_id,
             target,
-        } => remote_source::worker_add_relay_target(state, &source, target_id, target),
+        } => routes::worker_add_relay_target(state, &source, target_id, target),
         RouteControlRequest::RemoveRelayTarget {
             src_media,
             target_id,
@@ -55,7 +55,7 @@ pub fn apply_route_control_request(
             source,
             target_id,
             active,
-        } => remote_source::worker_set_relay_target_active(state, &source, target_id, active),
+        } => routes::worker_set_relay_target_active(state, &source, target_id, active),
         RouteControlRequest::RequestRemoteKeyframe {
             source,
             target_id,
@@ -70,7 +70,7 @@ pub fn apply_route_control_request(
             target_id,
             packet_gate,
         } => {
-            remote_source::set_remote_src_pkt_gate(state, &source, target_id, packet_gate);
+            routes::set_remote_src_pkt_gate(state, &source, target_id, packet_gate);
             Ok(())
         }
     };

@@ -36,11 +36,11 @@ use super::{
         },
         negotiation,
     },
+    AddSendMediaRequest, RouteSourceKind,
     control::{
         ConsumerRouteRegistration, ensure_route_src_registered, register_consumer_route,
         remove_consumer_route, remove_source_route,
     },
-    types::{AddSendMediaRequest, RouteSourceKind},
 };
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, VideoBitrateLimits,

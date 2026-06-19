@@ -5,7 +5,6 @@
 //! between simulcast paths.
 
 mod common;
-mod consumer;
 mod h264;
 mod vp8;
 
@@ -189,7 +188,7 @@ pub(super) fn send_rids_for_mid(
 pub(super) fn initial_consumer_packet_gate(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) -> PacketLayerGate {
-    consumer::initial_packet_gate(consumer_rtp_parameters)
+    common::initial_packet_gate(consumer_rtp_parameters)
 }
 
 fn publish_uses_default_profile(rtp_parameters: &RouterRtpParameters) -> bool {
