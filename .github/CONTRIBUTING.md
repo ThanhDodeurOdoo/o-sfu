@@ -1,12 +1,19 @@
 # Contributing
 
+If you want to make a PR that does substantial changes to the codebase, before wasting time writing too much code:
+
+**You work at Odoo**: use our internal means of communication to reach me first.
+
+**You are an external contributor**: open an [issue](https://github.com/ThanhDodeurOdoo/o-sfu/issues) to talk about it and to defend your idea first.
+
 > [!WARNING]
 > AI policy
 >
 > Trivial changes are allowed (rewording docstring, basic autocompletion,...)
 >
-> Non-Trivial changes written by AI must have the `AI` tag on the PR, and may be rejected.
-> The author must always understand all the added code and can justify the changes
+> Non-Trivial changes written by AI must have the `AI` tag on the PR.
+>
+> The author must always understand all the added code and can justify the changes (replying with copy-pasted AI responses does not count).
 
 ## Learning resources
 
@@ -28,12 +35,8 @@
 - **Justify Overrides**: Any override of a linter rule MUST be justified with a descriptive comment.
 - **Avoid literals**: use constants or enums with a meaningful name instead. Magic numbers and strings, for example from RFCs have their dedicated rfc crate.
 - **Document unhandled errors**: Errors that are thrown, or `Result` types in Rust, must have their errors documented.
-- **Tests**: Every new feature must include corresponding tests.
-
-  you write critical concurrency code => Loom test
-  you write critical router state => Kani proof
-  you add a feature across the whole stack => Playwright and integration tests
-  you add potentially arbitrary user input => Fuzzing
+- **Tests**: Every new feature must include corresponding tests (meaningful tests, not noisy trivial checks) / proof / fuzzing / ... (depending on the changes).
+- Failing the performance CI isn't necessarily breaking, but the commit message should include a `performance` section that justifies why.
 
 ### Rust
 
