@@ -6,9 +6,8 @@ use std::{
 use tokio::sync::RwLock;
 
 use super::{
-    cleanup::CleanupReconciler, definition::RoomDefinition, init::RoomInit,
-    operation::RoomUserOperation, placement::LoadTriggeredPlacementState, state::RoomState,
-    transition::StagedPublishes,
+    cleanup::CleanupReconciler, definition::RoomDefinition, factory::RoomInit,
+    placement::LoadTriggeredPlacementState, state::RoomState, transition::StagedPublishes,
 };
 #[cfg(test)]
 use crate::engine::media_transport::TransportMediaId;
@@ -43,6 +42,14 @@ pub struct RoomMediaCounts {
     pub subscriptions: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct RoomUserOperation<'a> {
+    pub room: &'a Room,
+    pub user_id: &'a UserId,
+    pub connection_id: ConnectionId,
+    pub media_transport: &'a MediaTransport,
+}
+
 pub struct Room {
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) definition: RoomDefinition,
@@ -58,7 +65,7 @@ pub struct Room {
 }
 
 impl Room {
-    pub(crate) fn new(init: RoomInit) -> Self {
+    pub(super) fn new(init: RoomInit) -> Self {
         let RoomInit {
             runtime_context,
             runtime_policy,
@@ -95,7 +102,12 @@ impl Room {
         connection_id: ConnectionId,
         media_transport: &'a MediaTransport,
     ) -> RoomUserOperation<'a> {
-        RoomUserOperation::new(self, user_id, connection_id, media_transport)
+        RoomUserOperation {
+            room: self,
+            user_id,
+            connection_id,
+            media_transport,
+        }
     }
 
     #[must_use]

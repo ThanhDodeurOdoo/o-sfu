@@ -302,10 +302,10 @@ async fn stored_receiver_intent_applies_to_future_consumer_setup() {
 
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert_eq!(
-        room.state
-            .read()
-            .await
-            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id),
+        room.test_api()
+            .inspect()
+            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id)
+            .await,
         Some(ConsumerRouteState::Inactive)
     );
 }
@@ -340,10 +340,10 @@ async fn receiver_intent_updates_transport_route_activity() {
         Some(())
     );
     assert_eq!(
-        room.state
-            .read()
-            .await
-            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id,),
+        room.test_api()
+            .inspect()
+            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id)
+            .await,
         Some(ConsumerRouteState::Inactive)
     );
     assert_eq!(
@@ -358,10 +358,10 @@ async fn receiver_intent_updates_transport_route_activity() {
         Some(())
     );
     assert_eq!(
-        room.state
-            .read()
-            .await
-            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id,),
+        room.test_api()
+            .inspect()
+            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id)
+            .await,
         Some(ConsumerRouteState::Active)
     );
     assert_eq!(
@@ -498,11 +498,14 @@ async fn committed_consumer_reaches_graph_topology_and_transport() {
 
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert_eq!(
-        room.state.read().await.consumer_route_state(
-            &subscriber_id,
-            &publisher_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-        ),
+        room.test_api()
+            .inspect()
+            .consumer_route_state(
+                &subscriber_id,
+                &publisher_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+            )
+            .await,
         Some(ConsumerRouteState::Active)
     );
     assert!(

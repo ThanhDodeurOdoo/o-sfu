@@ -5,16 +5,11 @@ mod cleanup;
 mod definition;
 mod directory;
 mod effects;
-mod events;
 mod factory;
-mod init;
 mod instance;
-mod lifecycle;
 mod manager;
-mod media;
 mod media_graph;
 mod membership;
-mod operation;
 mod outbound;
 mod placement;
 mod read_model;
@@ -30,12 +25,9 @@ pub use TESTS::api::{
     NegotiatedPublish, RoomManagerTestApi, RoomTestApi, RoomTestInspect, RoomTestLifecycle,
     RoomTestMedia,
 };
-pub use events::{
-    BroadcastPayload, BroadcastPayloadError, MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage,
-};
-pub use init::{RoomAdmissionPolicy, RoomConfig, RoomRuntimePolicy};
+pub use factory::{RoomAdmissionPolicy, RoomConfig, RoomRuntimePolicy};
+pub(crate) use instance::RoomUserOperation;
 pub use instance::{Room, RoomJoinError, RoomManagerJoinError, RoomMediaCounts};
-pub use lifecycle::{RoomUserPermissions, UserCloseReason};
 pub use manager::{
     RoomManager, RoomManagerConfig, RoomManagerDeps, RoomUserAdmission,
     RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot,
@@ -43,10 +35,10 @@ pub use manager::{
 #[cfg(any(test, feature = "testing-transport"))]
 pub use media_graph::ConsumerRouteState;
 pub use media_graph::RemoteTrackSetup;
-pub use membership::JoinUserRequest;
-pub(crate) use operation::RoomUserOperation;
+pub use membership::{JoinUserRequest, RoomUserPermissions, UserCloseReason};
 pub use outbound::{
-    DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
+    BroadcastPayload, BroadcastPayloadError, DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
+    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage,
     TrackBindingUpdate, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
     UserOutboundOverflowKind, UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
     UserOutboundSender,

@@ -223,6 +223,8 @@ impl StagedPublishScenario {
     pub(super) async fn scalable_video_is_published(&self) -> bool {
         let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
         self.room
+            .test_api()
+            .inspect()
             .is_stream_published(&self.user_id, &stream_id)
             .await
     }

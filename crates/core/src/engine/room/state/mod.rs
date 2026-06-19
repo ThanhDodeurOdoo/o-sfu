@@ -1,5 +1,4 @@
 mod diagnostics;
-mod fanout;
 mod membership;
 mod shared;
 #[cfg(any(test, feature = "testing-transport"))]
