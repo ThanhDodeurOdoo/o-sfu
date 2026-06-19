@@ -1,10 +1,13 @@
-use super::super::super::Room;
+use super::super::super::{Room, media_graph::ConsumerRouteState};
 #[cfg(test)]
 use crate::engine::source_model::PublishedSourceId;
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId, UserInfo,
     media_transport::TransportMediaId,
-    source_model::test_support::{source_kind_for_stream_id, stream_id_for_source},
+    source_model::{
+        UserStreamId,
+        test_support::{source_kind_for_stream_id, stream_id_for_source},
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -116,6 +119,28 @@ impl RoomTestInspect<'_> {
 
     pub async fn has_session(self, user_id: &UserId) -> bool {
         self.room.state.read().await.has_session(user_id)
+    }
+
+    pub async fn is_stream_published(self, user_id: &UserId, stream_id: &UserStreamId) -> bool {
+        self.room
+            .state
+            .read()
+            .await
+            .producer_route_target_for_user(user_id, stream_id)
+            .is_some()
+    }
+
+    pub async fn consumer_route_state(
+        self,
+        consumer_user_id: &UserId,
+        producer_user_id: &UserId,
+        stream_id: &UserStreamId,
+    ) -> Option<ConsumerRouteState> {
+        self.room.state.read().await.consumer_route_state(
+            consumer_user_id,
+            producer_user_id,
+            stream_id,
+        )
     }
 
     #[must_use]

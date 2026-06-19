@@ -11,7 +11,7 @@ use super::{
             CommittedTransportReceipt, MediaTopologyEffects, SessionPlacementCommit,
             SessionPlacementRejection,
         },
-        outbound::{MessageFanout, OutboundSender},
+        outbound::{MessageFanout, OutboundSender, fanout_all},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     shared::{ActiveUser, RoomState},
@@ -81,6 +81,24 @@ pub struct DisconnectUsersOutcome {
 }
 
 impl RoomState {
+    pub fn fanout_all(&self, message: &RoomEventMessage) -> MessageFanout {
+        fanout_all(self.users.values().map(|user| user.sender.clone()), message)
+    }
+
+    pub fn fanout_all_except(
+        &self,
+        message: &RoomEventMessage,
+        excluded_user_id: &UserId,
+    ) -> MessageFanout {
+        fanout_all(
+            self.users
+                .iter()
+                .filter(|(user_id, _session)| excluded_user_id != *user_id)
+                .map(|(_user_id, user)| user.sender.clone()),
+            message,
+        )
+    }
+
     fn apply_join_routing(
         &mut self,
         user_id: &UserId,
@@ -218,7 +236,7 @@ impl RoomState {
                 &RoomEventMessage::UserDeparted {
                     user_id: user_id.clone(),
                 },
-                Some(user_id),
+                user_id,
             )
         }));
         effects.push_fanout(if emit_joined_fanout {
@@ -229,7 +247,7 @@ impl RoomState {
                             user_id: joined_user_id,
                             info,
                         },
-                        Some(user_id),
+                        user_id,
                     )
                 })
         } else {
@@ -390,7 +408,7 @@ impl RoomState {
                 sender_id: user_id.clone(),
                 message,
             },
-            Some(user_id),
+            user_id,
         )))
     }
 }
