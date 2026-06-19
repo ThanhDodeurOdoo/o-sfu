@@ -129,6 +129,8 @@ impl TransportCleanupOperation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CleanupFailureAction {
     RetryQueued,
+    RetryAlreadyQueued,
+    QueueFull,
     Terminal,
 }
 
@@ -152,38 +154,31 @@ struct PendingCleanupRetry {
 }
 
 impl CleanupReconciler {
-    fn track_for_retry(&mut self, operation: TransportCleanupOperation) -> bool {
+    fn record_failure(
+        &mut self,
+        operation: TransportCleanupOperation,
+        error: TransportAdapterError,
+    ) -> CleanupFailureAction {
+        if cleanup_error_is_terminal(error) {
+            self.pending.remove(&operation);
+            return CleanupFailureAction::Terminal;
+        }
         let pending_is_full = self.pending.len() >= CLEANUP_RETRY_CAPACITY;
         match self.pending.entry(operation) {
-            Entry::Occupied(_) => true,
-            Entry::Vacant(_) if pending_is_full => false,
+            Entry::Occupied(_) => CleanupFailureAction::RetryAlreadyQueued,
+            Entry::Vacant(_) if pending_is_full => CleanupFailureAction::QueueFull,
             Entry::Vacant(entry) => {
                 entry.insert(PendingCleanupRetry {
                     attempts: 0,
                     wait_cycles: 0,
                 });
-                true
+                CleanupFailureAction::RetryQueued
             }
         }
     }
 
     fn record_success(&mut self, operation: &TransportCleanupOperation) {
         self.pending.remove(operation);
-    }
-
-    fn record_tracked_failure(
-        &mut self,
-        operation: &TransportCleanupOperation,
-        error: TransportAdapterError,
-    ) -> Option<CleanupFailureAction> {
-        if cleanup_error_is_terminal(error) {
-            self.pending.remove(operation);
-            return Some(CleanupFailureAction::Terminal);
-        }
-        if self.pending.contains_key(operation) {
-            return Some(CleanupFailureAction::RetryQueued);
-        }
-        None
     }
 
     pub(super) fn due_retries(&mut self) -> Vec<TransportCleanupOperation> {
@@ -248,21 +243,7 @@ impl Room {
         operations: &[TransportCleanupOperation],
     ) -> TransportEffectOutcome {
         let mut cleanup = TransportEffectOutcome::Applied;
-        let mut tracked = Vec::with_capacity(operations.len());
-        let mut queue_full = Vec::new();
         for operation in operations {
-            if self.cleanup_reconciler().track_for_retry(operation.clone()) {
-                tracked.push(operation);
-            } else {
-                queue_full.push(operation);
-                cleanup = TransportEffectOutcome::Failed;
-            }
-        }
-        for operation in queue_full {
-            self.escalate_cleanup(operation, QueueFull, media_transport)
-                .await;
-        }
-        for operation in tracked {
             match self
                 .execute_transport_cleanup_operation(operation, media_transport)
                 .await
@@ -318,16 +299,23 @@ impl Room {
         error: TransportAdapterError,
         media_transport: &MediaTransport,
     ) {
-        let Some(action) = self
+        let action = self
             .cleanup_reconciler()
-            .record_tracked_failure(operation, error)
-        else {
-            return;
-        };
+            .record_failure(operation.clone(), error);
         match action {
             CleanupFailureAction::RetryQueued => {
                 self.metrics.record_transport_cleanup_retry_scheduled();
                 warn_transport_cleanup_failure(operation, "queued transport cleanup retry");
+            }
+            CleanupFailureAction::RetryAlreadyQueued => {
+                warn_transport_cleanup_failure(
+                    operation,
+                    "transport cleanup retry was already queued",
+                );
+            }
+            CleanupFailureAction::QueueFull => {
+                self.escalate_cleanup(operation, QueueFull, media_transport)
+                    .await;
             }
             CleanupFailureAction::Terminal => {
                 self.escalate_cleanup(operation, Terminal, media_transport)
