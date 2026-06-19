@@ -63,27 +63,6 @@ impl From<PendingRequestKind> for HostPendingRequestKind {
     }
 }
 
-pub(crate) const HOST_COMMAND_KINDS: &[(&str, &str)] = &[
-    ("CONNECT", "connect"),
-    ("SEND_WEB_SOCKET", "sendWebSocket"),
-    ("SET_LOCAL_UPLOAD_INTENT", "setLocalUploadIntent"),
-    ("CLOSE_WEB_SOCKET", "closeWebSocket"),
-    ("APPLY_NEGOTIATION", "applyNegotiation"),
-    ("CREATE_PEER_CONNECTION", "createPeerConnection"),
-    ("CLOSE_PEER_CONNECTION", "closePeerConnection"),
-    ("ATTACH_TRACK", "attachTrack"),
-    ("DETACH_TRACK", "detachTrack"),
-    ("REPLACE_TRACK_BINDINGS", "replaceTrackBindings"),
-    ("REPLACE_SOURCE_DESCRIPTORS", "replaceSourceDescriptors"),
-    ("REMOVE_SESSION_TRACKS", "removeSessionTracks"),
-    ("EMIT_STATE_CHANGE", "emitStateChange"),
-    ("EMIT_UPDATE", "emitUpdate"),
-    ("REGISTER_PENDING_REQUEST", "registerPendingRequest"),
-    ("RESOLVE_PENDING_REQUEST", "resolvePendingRequest"),
-    ("SCHEDULE_TIMER", "scheduleTimer"),
-    ("CANCEL_TIMER", "cancelTimer"),
-];
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HostCommand {
@@ -158,32 +137,42 @@ pub enum HostCommand {
     },
 }
 
-fn project_commands_for_event(event: ProtocolEvent) -> Vec<HostCommand> {
-    match event {
+fn push_commands_for_event(commands: &mut Vec<HostCommand>, event: ProtocolEvent) {
+    let update = match event {
         ProtocolEvent::TrackSnapshot { bindings } => {
-            vec![HostCommand::ReplaceTrackBindings { bindings }]
+            commands.push(HostCommand::ReplaceTrackBindings { bindings });
+            return;
         }
         ProtocolEvent::SourceSnapshot { sources } => {
-            vec![HostCommand::ReplaceSourceDescriptors { sources }]
+            commands.push(HostCommand::ReplaceSourceDescriptors { sources });
+            return;
         }
-        ProtocolEvent::PeerLeft { user_id } => vec![
-            HostCommand::RemoveSessionTracks {
+        ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
+            peers
+                .into_iter()
+                .map(|peer| (bundle_session_info_key(&peer.user_id), peer.info))
+                .collect::<BundleSessionInfoSnapshotById>(),
+        ),
+        ProtocolEvent::PeerInfo { user_id, info } => BundleUpdate::SessionInfoChange(
+            BundleSessionInfoSnapshotById::from([(bundle_session_info_key(&user_id), info)]),
+        ),
+        ProtocolEvent::PeerLeft { user_id } => {
+            commands.push(HostCommand::RemoveSessionTracks {
                 user_id: user_id.clone(),
-            },
-            HostCommand::EmitUpdate {
-                update: BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id }),
-            },
-        ],
-        other_event => project_bundle_update(other_event)
-            .into_iter()
-            .map(|update| HostCommand::EmitUpdate { update })
-            .collect(),
-    }
+            });
+            BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id })
+        }
+        ProtocolEvent::Broadcast { sender_id, message } => {
+            BundleUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
+        }
+        ProtocolEvent::RecordingStateChanged { state } => BundleUpdate::ChannelInfoChange(state),
+    };
+    commands.push(HostCommand::EmitUpdate { update });
 }
 
 #[must_use]
 pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
-    let mut project_commands = Vec::new();
+    let mut project_commands = Vec::with_capacity(commands.len());
     for command in commands {
         match command {
             Command::SendWebSocket(frame) => {
@@ -229,7 +218,7 @@ pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
                 });
             }
             Command::EmitEvent { event } => {
-                project_commands.extend(project_commands_for_event(event));
+                push_commands_for_event(&mut project_commands, event);
             }
             Command::RegisterPendingRequest { request_id, kind } => {
                 project_commands.push(HostCommand::RegisterPendingRequest {
@@ -265,30 +254,6 @@ pub fn connection_state_tag(state: ConnectionState) -> &'static str {
 #[must_use]
 pub fn track_binding(core: &ProtocolCore, mid: &str) -> Option<TrackBinding> {
     core.track_binding(mid).cloned()
-}
-
-fn project_bundle_update(event: ProtocolEvent) -> Option<BundleUpdate> {
-    Some(match event {
-        ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
-            peers
-                .into_iter()
-                .map(|peer| (bundle_session_info_key(&peer.user_id), peer.info))
-                .collect::<BundleSessionInfoSnapshotById>(),
-        ),
-        ProtocolEvent::TrackSnapshot { .. } | ProtocolEvent::SourceSnapshot { .. } => return None,
-        ProtocolEvent::PeerInfo { user_id, info } => BundleUpdate::SessionInfoChange(
-            [(bundle_session_info_key(&user_id), info)]
-                .into_iter()
-                .collect::<BundleSessionInfoSnapshotById>(),
-        ),
-        ProtocolEvent::PeerLeft { user_id } => {
-            BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id })
-        }
-        ProtocolEvent::Broadcast { sender_id, message } => {
-            BundleUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
-        }
-        ProtocolEvent::RecordingStateChanged { state } => BundleUpdate::ChannelInfoChange(state),
-    })
 }
 
 #[cfg(test)]

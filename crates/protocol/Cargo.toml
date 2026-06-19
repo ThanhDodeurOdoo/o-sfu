@@ -15,10 +15,6 @@ version.workspace = true
 [features]
 verification-models = []
 
-[[bin]]
-name = "o-sfu-protocol-manifest"
-path = "src/bin/o_sfu_protocol_manifest.rs"
-
 [dependencies]
 o-sfu-model.workspace = true
 o-sfu-rfc.workspace = true

@@ -52,68 +52,21 @@ impl WireTag {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EnvelopeKind {
-    Message,
-    Request,
-    Response,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct EnvelopeSpec {
-    kind: EnvelopeKind,
-    tag: WireTag,
-}
-
-impl EnvelopeSpec {
-    pub(crate) const fn kind(self) -> EnvelopeKind {
-        self.kind
-    }
-
-    pub(crate) const fn tag(self) -> &'static str {
-        self.tag.as_str()
-    }
-}
-
 type EntryDecode<T> = fn(WireTag, Option<Value>) -> Result<T, EnvelopeDecodeError>;
 
 #[derive(Clone, Copy)]
 struct EnvelopeEntry<T> {
     tag: WireTag,
     decode: EntryDecode<T>,
-    kind: EnvelopeKind,
 }
 
 impl<T> EnvelopeEntry<T> {
-    const fn message(tag: WireTag, decode: EntryDecode<T>) -> Self {
-        Self::new(EnvelopeKind::Message, tag, decode)
-    }
-
-    const fn request(tag: WireTag, decode: EntryDecode<T>) -> Self {
-        Self::new(EnvelopeKind::Request, tag, decode)
-    }
-
-    const fn empty_request(tag: WireTag, decode: EntryDecode<T>) -> Self {
-        Self::request(tag, decode)
-    }
-
-    const fn response(tag: WireTag, decode: EntryDecode<T>) -> Self {
-        Self::new(EnvelopeKind::Response, tag, decode)
-    }
-
-    const fn new(kind: EnvelopeKind, tag: WireTag, decode: EntryDecode<T>) -> Self {
-        Self { tag, decode, kind }
+    const fn new(tag: WireTag, decode: EntryDecode<T>) -> Self {
+        Self { tag, decode }
     }
 
     fn decode(&self, payload: Option<Value>) -> Result<T, EnvelopeDecodeError> {
         (self.decode)(self.tag, payload)
-    }
-
-    const fn spec(&self) -> EnvelopeSpec {
-        EnvelopeSpec {
-            kind: self.kind,
-            tag: self.tag,
-        }
     }
 }
 
@@ -136,22 +89,22 @@ pub enum ClientMessage {
 
 impl ClientMessage {
     const ENTRIES: &'static [EnvelopeEntry<Self>] = &[
-        EnvelopeEntry::message(WireTag::Auth, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Auth, |tag, payload| {
             decode_payload(tag, payload, Self::Auth)
         }),
-        EnvelopeEntry::message(WireTag::Publish, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Publish, |tag, payload| {
             decode_payload(tag, payload, Self::Publish)
         }),
-        EnvelopeEntry::message(WireTag::Unpublish, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Unpublish, |tag, payload| {
             decode_payload(tag, payload, Self::Unpublish)
         }),
-        EnvelopeEntry::message(WireTag::Subscribe, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Subscribe, |tag, payload| {
             decode_payload(tag, payload, Self::Subscribe)
         }),
-        EnvelopeEntry::message(WireTag::Info, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Info, |tag, payload| {
             decode_payload(tag, payload, Self::Info)
         }),
-        EnvelopeEntry::message(WireTag::Broadcast, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Broadcast, |tag, payload| {
             decode_payload(tag, payload, Self::Broadcast)
         }),
     ];
@@ -170,9 +123,6 @@ impl ClientMessage {
     pub(crate) fn decode(tag: &str, payload: Option<Value>) -> Result<Self, EnvelopeDecodeError> {
         decode_entry(tag, payload, Self::ENTRIES)
     }
-    pub(crate) fn specs() -> impl Iterator<Item = EnvelopeSpec> {
-        entry_specs(Self::ENTRIES)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,10 +133,10 @@ pub enum ClientRequest {
 
 impl ClientRequest {
     const ENTRIES: &'static [EnvelopeEntry<Self>] = &[
-        EnvelopeEntry::request(WireTag::StartRecording, |tag, payload| {
+        EnvelopeEntry::new(WireTag::StartRecording, |tag, payload| {
             decode_payload(tag, payload, Self::StartRecording)
         }),
-        EnvelopeEntry::empty_request(WireTag::StopRecording, |tag, payload| {
+        EnvelopeEntry::new(WireTag::StopRecording, |tag, payload| {
             decode_empty(tag, payload.as_ref(), Self::StopRecording)
         }),
     ];
@@ -210,9 +160,6 @@ impl ClientRequest {
     pub(crate) fn decode(tag: &str, payload: Option<Value>) -> Result<Self, EnvelopeDecodeError> {
         decode_entry(tag, payload, Self::ENTRIES)
     }
-    pub(crate) fn specs() -> impl Iterator<Item = EnvelopeSpec> {
-        entry_specs(Self::ENTRIES)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,10 +170,10 @@ pub enum ServerRequest {
 
 impl ServerRequest {
     const ENTRIES: &'static [EnvelopeEntry<Self>] = &[
-        EnvelopeEntry::request(WireTag::Offer, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Offer, |tag, payload| {
             decode_payload(tag, payload, Self::Offer)
         }),
-        EnvelopeEntry::request(WireTag::Renegotiate, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Renegotiate, |tag, payload| {
             decode_payload(tag, payload, Self::Renegotiate)
         }),
     ];
@@ -247,9 +194,6 @@ impl ServerRequest {
     pub(crate) fn decode(tag: &str, payload: Option<Value>) -> Result<Self, EnvelopeDecodeError> {
         decode_entry(tag, payload, Self::ENTRIES)
     }
-    pub(crate) fn specs() -> impl Iterator<Item = EnvelopeSpec> {
-        entry_specs(Self::ENTRIES)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,10 +204,10 @@ pub enum ClientResponse {
 
 impl ClientResponse {
     const ENTRIES: &'static [EnvelopeEntry<Self>] = &[
-        EnvelopeEntry::response(WireTag::Offer, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Offer, |tag, payload| {
             decode_payload(tag, payload, Self::Offer)
         }),
-        EnvelopeEntry::response(WireTag::Renegotiate, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Renegotiate, |tag, payload| {
             decode_payload(tag, payload, Self::Renegotiate)
         }),
     ];
@@ -283,9 +227,6 @@ impl ClientResponse {
     pub(crate) fn decode(tag: &str, payload: Option<Value>) -> Result<Self, EnvelopeDecodeError> {
         decode_entry(tag, payload, Self::ENTRIES)
     }
-    pub(crate) fn specs() -> impl Iterator<Item = EnvelopeSpec> {
-        entry_specs(Self::ENTRIES)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,25 +242,25 @@ pub enum ServerMessage {
 
 impl ServerMessage {
     const ENTRIES: &'static [EnvelopeEntry<Self>] = &[
-        EnvelopeEntry::message(WireTag::Welcome, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Welcome, |tag, payload| {
             decode_payload(tag, payload, Self::Welcome)
         }),
-        EnvelopeEntry::message(WireTag::Tracks, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Tracks, |tag, payload| {
             decode_payload(tag, payload, Self::Tracks)
         }),
-        EnvelopeEntry::message(WireTag::PeerInfo, |tag, payload| {
+        EnvelopeEntry::new(WireTag::PeerInfo, |tag, payload| {
             decode_payload(tag, payload, Self::PeerInfo)
         }),
-        EnvelopeEntry::message(WireTag::PeerJoined, |tag, payload| {
+        EnvelopeEntry::new(WireTag::PeerJoined, |tag, payload| {
             decode_payload(tag, payload, Self::PeerJoined)
         }),
-        EnvelopeEntry::message(WireTag::PeerLeft, |tag, payload| {
+        EnvelopeEntry::new(WireTag::PeerLeft, |tag, payload| {
             decode_payload(tag, payload, Self::PeerLeft)
         }),
-        EnvelopeEntry::message(WireTag::Broadcast, |tag, payload| {
+        EnvelopeEntry::new(WireTag::Broadcast, |tag, payload| {
             decode_payload(tag, payload, Self::Broadcast)
         }),
-        EnvelopeEntry::message(WireTag::RecordingChange, |tag, payload| {
+        EnvelopeEntry::new(WireTag::RecordingChange, |tag, payload| {
             decode_payload(tag, payload, Self::RecordingChange)
         }),
     ];
@@ -345,9 +286,6 @@ impl ServerMessage {
     pub(crate) fn decode(tag: &str, payload: Option<Value>) -> Result<Self, EnvelopeDecodeError> {
         decode_entry(tag, payload, Self::ENTRIES)
     }
-    pub(crate) fn specs() -> impl Iterator<Item = EnvelopeSpec> {
-        entry_specs(Self::ENTRIES)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,10 +296,10 @@ pub enum ServerResponse {
 
 impl ServerResponse {
     const ENTRIES: &'static [EnvelopeEntry<Self>] = &[
-        EnvelopeEntry::response(WireTag::StartRecording, |tag, payload| {
+        EnvelopeEntry::new(WireTag::StartRecording, |tag, payload| {
             decode_payload(tag, payload, Self::StartRecording)
         }),
-        EnvelopeEntry::response(WireTag::StopRecording, |tag, payload| {
+        EnvelopeEntry::new(WireTag::StopRecording, |tag, payload| {
             decode_payload(tag, payload, Self::StopRecording)
         }),
     ];
@@ -386,15 +324,6 @@ impl ServerResponse {
     pub(crate) fn decode(tag: &str, payload: Option<Value>) -> Result<Self, EnvelopeDecodeError> {
         decode_entry(tag, payload, Self::ENTRIES)
     }
-    pub(crate) fn specs() -> impl Iterator<Item = EnvelopeSpec> {
-        entry_specs(Self::ENTRIES)
-    }
-}
-
-fn entry_specs<T: 'static>(
-    entries: &'static [EnvelopeEntry<T>],
-) -> impl Iterator<Item = EnvelopeSpec> {
-    entries.iter().map(EnvelopeEntry::spec)
 }
 
 fn encode_message<T: Serialize>(tag: WireTag, payload: T) -> Result<Envelope, serde_json::Error> {
@@ -433,16 +362,11 @@ fn decode_entry<T>(
     payload: Option<Value>,
     entries: &[EnvelopeEntry<T>],
 ) -> Result<T, EnvelopeDecodeError> {
-    entry_for_tag(entries, tag)
+    entries
+        .iter()
+        .find(|entry| entry.tag.as_str() == tag)
         .ok_or_else(|| unknown_tag(tag))?
         .decode(payload)
-}
-
-fn entry_for_tag<'a, T>(
-    entries: &'a [EnvelopeEntry<T>],
-    tag: &str,
-) -> Option<&'a EnvelopeEntry<T>> {
-    entries.iter().find(|entry| entry.tag.as_str() == tag)
 }
 
 fn decode_payload<T, P>(
@@ -485,7 +409,3 @@ fn ensure_empty_payload(tag: &str, payload: Option<&Value>) -> Result<(), Envelo
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "TESTS/wire_catalog.rs"]
-mod tests;

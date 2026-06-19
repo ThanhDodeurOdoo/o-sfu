@@ -3,7 +3,6 @@
 mod bundle_api;
 mod core;
 mod host_bridge;
-pub mod manifest;
 mod shared;
 mod signaling;
 #[cfg(target_arch = "wasm32")]
