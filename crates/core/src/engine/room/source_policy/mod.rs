@@ -6,5 +6,8 @@ mod video;
 
 #[cfg(test)]
 pub(super) use self::turn::SourcePolicyPlan;
-pub(super) use self::turn::{SourcePolicyTrigger, SourcePolicyTurn};
 pub use self::video::VideoAdmissionRank;
+pub(super) use self::{
+    action::ConsumerPacketSelectionUpdate,
+    turn::{SourcePolicyTrigger, SourcePolicyTurn},
+};
