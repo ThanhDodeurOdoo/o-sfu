@@ -12,13 +12,9 @@ use crate::{
     RoomMediaLimits, RoomSpilloverMode,
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
-        VideoLayoutIntent,
         media_transport::{TransportConsumerRoute, TransportSessionKey},
         room::placement::{LoadTriggeredPlacementState, RoutingPlacementSnapshot},
-        source_model::{
-            ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor,
-            PublishedSourceId, SourceSubscriptionIntent, UserStreamId,
-        },
+        source_model::{SourceSubscriptionIntent, UserStreamId},
     },
 };
 
@@ -60,11 +56,11 @@ impl ActiveUser {
         self.info.apply_partial_update(info);
     }
 
-    pub(super) const fn featured(&self) -> Option<bool> {
+    pub(in crate::engine::room) const fn featured(&self) -> Option<bool> {
         self.server_featured
     }
 
-    pub(super) fn set_featured(&mut self, featured: Option<bool>) {
+    pub(in crate::engine::room) fn set_featured(&mut self, featured: Option<bool>) {
         self.server_featured = featured;
     }
 
@@ -306,73 +302,6 @@ impl RoomState {
                 self.user_connection_id(&route.consumer_user_id)
                     == Some(route.state.consumer_connection_id)
             })
-    }
-
-    pub fn source_policy_media_limits(&self) -> RoomMediaLimits {
-        self.media_limits
-    }
-
-    pub fn source_policy_source(
-        &self,
-        source_id: PublishedSourceId,
-    ) -> Option<&PublishedSourceDescriptor> {
-        self.topology.media().source(source_id)
-    }
-
-    pub fn source_policy_owner_has_promotable_source_in_group(
-        &self,
-        owner_user_id: &UserId,
-        group: ActiveSpeakerGroup,
-    ) -> bool {
-        self.topology
-            .media()
-            .owner_has_promotable_source_in_group(owner_user_id, group)
-    }
-
-    pub fn source_policy_layout_preference(
-        &self,
-        consumer_user_id: &UserId,
-        source_user_id: &UserId,
-        stream_id: &UserStreamId,
-    ) -> Option<VideoLayoutIntent> {
-        self.users
-            .get(consumer_user_id)
-            .and_then(|user| user.desired_source_subscriptions.get(source_user_id))
-            .and_then(|states| states.get(stream_id))
-            .and_then(|intent| intent.layout())
-    }
-
-    pub fn source_policy_user_featured_states(
-        &self,
-    ) -> impl Iterator<Item = (&UserId, Option<bool>)> {
-        self.users
-            .iter()
-            .map(|(user_id, user)| (user_id, user.featured()))
-    }
-
-    pub fn update_source_policy_consumer_selection(
-        &mut self,
-        route: &ConsumerRouteTransportRef,
-        source_id: PublishedSourceId,
-        update_selection: impl FnOnce(&mut ConsumerSourceSelection),
-    ) {
-        self.topology
-            .update_consumer_source_selection(route, source_id, update_selection);
-    }
-
-    pub fn update_source_policy_featured_user(
-        &mut self,
-        user_id: &UserId,
-        featured: Option<bool>,
-    ) -> bool {
-        let Some(user) = self.users.get_mut(user_id) else {
-            return false;
-        };
-        if user.featured() == featured {
-            return false;
-        }
-        user.set_featured(featured);
-        true
     }
 
     pub fn media_counts(&self) -> RoomMediaCounts {

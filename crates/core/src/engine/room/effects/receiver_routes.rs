@@ -4,10 +4,7 @@ use o_sfu_router::MediaStream as RouterRtpParameters;
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
-use super::{
-    RoomRouteEffects, batch::RoomGaugeDelta, policy::RoomPolicyPlan,
-    transport::execute_relay_route_effects,
-};
+use super::{RoomRouteEffects, batch::RoomGaugeDelta, transport::execute_relay_route_effects};
 use crate::engine::{
     diagnostics::DiagnosticsEventData,
     media_transport::{ConsumerActivity, MediaTransport, TransportConsumerRoute},
@@ -19,6 +16,7 @@ use crate::engine::{
             PendingConsumerSetup, ReceiverRouteActivity, ReceiverRouteWork,
             ResolvedRelayRouteEffect,
         },
+        source_policy::SourcePolicyWakeups,
     },
 };
 
@@ -82,7 +80,7 @@ impl ReceiverRoutePlan {
             if let Some(diagnostics) = setup.diagnostics {
                 outcome.diagnostics.push(diagnostics);
             }
-            outcome.policy.extend(setup.policy);
+            outcome.source_policy.extend(setup.source_policy);
         }
         outcome
     }
@@ -92,7 +90,7 @@ impl ReceiverRoutePlan {
 pub(super) struct ReceiverRouteOutcome {
     pub(super) gauges: Vec<RoomGaugeDelta>,
     pub(super) diagnostics: Vec<DiagnosticsEventData>,
-    pub(super) policy: RoomPolicyPlan,
+    pub(super) source_policy: SourcePolicyWakeups,
 }
 
 #[derive(Debug)]
@@ -152,7 +150,7 @@ impl ReceiverRouteSetup {
 struct ReceiverRouteSetupOutcome {
     gauge: RoomGaugeDelta,
     diagnostics: Option<DiagnosticsEventData>,
-    policy: RoomPolicyPlan,
+    source_policy: SourcePolicyWakeups,
 }
 
 async fn declare_consumer(
@@ -221,7 +219,7 @@ async fn finish_setup(
             ReceiverRouteSetupOutcome {
                 gauge,
                 diagnostics: Some(diagnostics),
-                policy: RoomPolicyPlan::default(),
+                source_policy: SourcePolicyWakeups::default(),
             }
         }
         ConsumerSetupOutcome::Released(relays) => {
@@ -235,7 +233,7 @@ async fn finish_setup(
             ReceiverRouteSetupOutcome {
                 gauge,
                 diagnostics: None,
-                policy: fanout_pressure_plan(),
+                source_policy: fanout_pressure_wakeups(),
             }
         }
     }
@@ -275,12 +273,12 @@ async fn release_failed_setup(
     ReceiverRouteSetupOutcome {
         gauge: RoomGaugeDelta::media(before, after),
         diagnostics: None,
-        policy: fanout_pressure_plan(),
+        source_policy: fanout_pressure_wakeups(),
     }
 }
 
-fn fanout_pressure_plan() -> RoomPolicyPlan {
-    let mut policy = RoomPolicyPlan::default();
+fn fanout_pressure_wakeups() -> SourcePolicyWakeups {
+    let mut policy = SourcePolicyWakeups::default();
     policy.fanout_pressure_changed();
     policy
 }

@@ -2,7 +2,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 
 pub use super::observability::RoomGaugeDelta;
 use super::{
-    observability::RoomObservabilityPlan, output::RoomOutputPlan, policy::RoomPolicyPlan,
+    observability::RoomObservabilityPlan, output::RoomOutputPlan,
     receiver_routes::ReceiverRoutePlan, transport::RoomTransportPlan,
 };
 use crate::engine::{
@@ -18,6 +18,7 @@ use crate::engine::{
             ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
         },
         outbound::MessageFanout,
+        source_policy::SourcePolicyWakeups,
         state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome},
     },
 };
@@ -83,7 +84,7 @@ pub struct RoomEffects {
     transport: RoomTransportPlan,
     receiver_routes: ReceiverRoutePlan,
     output: RoomOutputPlan,
-    policy: RoomPolicyPlan,
+    source_policy: SourcePolicyWakeups,
 }
 
 pub fn build_join(
@@ -106,7 +107,7 @@ pub fn build_join(
     let mut batch = RoomEffects::default();
     batch.observability.push_gauge(counts);
     batch.extend_media_topology_effects(media_effects);
-    batch.policy.route_graph_changed();
+    batch.source_policy.route_graph_changed();
     batch.output.push_lifecycle(effects);
     batch.observability.register_user(user_id);
     batch.observability.record(diagnostics);
@@ -138,7 +139,7 @@ pub fn build_connection_close(
         batch.output.push_lifecycle(outcome.effects);
         batch.observability.record(diagnostics);
         batch.observability.forget_user(user_id);
-        batch.policy.route_graph_changed();
+        batch.source_policy.route_graph_changed();
     }
     batch.transport.extend_cleanup(staged_cleanup);
     if let Some(transport_close) = transport_close {
@@ -157,7 +158,7 @@ pub fn build_disconnect(
     batch.observability.push_gauge(counts);
     batch.transport.extend_cleanup(staged_cleanup);
     batch.extend_media_topology_effects(outcome.media_effects);
-    batch.policy.route_graph_changed();
+    batch.source_policy.route_graph_changed();
     batch.output.push_lifecycle(outcome.effects);
     for user in outcome.disconnected_users {
         let media_worker_id = user.close_operation.session_key().media_worker_id();
@@ -185,7 +186,7 @@ pub fn build_publish_commit(room: &Room, commit: PublishCommit) -> RoomEffects {
         commit.setup_after,
     ));
     batch.push_consumer_setups(commit.setups, ConsumerSetupOrigin::Publish);
-    batch.policy.route_graph_changed();
+    batch.source_policy.route_graph_changed();
     batch.observability.record(diagnostics);
     batch
 }
@@ -213,7 +214,7 @@ pub fn build_publication_activity(
     let mut batch = RoomEffects::default();
     batch.transport.push_producer(source, active, diagnostics);
     batch.output.push_track_binding(recipients, update);
-    batch.policy.fanout_pressure_changed();
+    batch.source_policy.fanout_pressure_changed();
     batch
 }
 
@@ -226,7 +227,7 @@ pub fn build_unpublish(commit: UnpublishCommit) -> RoomEffects {
     batch
         .output
         .push_track_binding(commit.recipients, commit.update);
-    batch.policy.route_graph_changed();
+    batch.source_policy.route_graph_changed();
     batch
 }
 
@@ -246,7 +247,7 @@ pub fn build_consumer_readiness(
         commit.work,
         ConsumerSetupOrigin::Readiness,
     );
-    batch.policy.route_graph_changed();
+    batch.source_policy.route_graph_changed();
     batch
 }
 
@@ -258,7 +259,7 @@ pub fn build_keyframe_refresh(targets: Vec<ConsumerRouteTarget>) -> RoomEffects 
 
 pub fn build_user_info_update(fanout: MessageFanout) -> RoomEffects {
     let mut batch = RoomEffects::default();
-    batch.policy.receiver_intent_changed();
+    batch.source_policy.receiver_intent_changed();
     batch.output.push_user_info(fanout);
     batch
 }
@@ -281,9 +282,9 @@ pub fn build_receiver_intent(
         ConsumerSetupOrigin::Subscribe,
     );
     if route_graph_changed {
-        batch.policy.route_graph_changed();
+        batch.source_policy.route_graph_changed();
     } else {
-        batch.policy.receiver_intent_changed();
+        batch.source_policy.receiver_intent_changed();
     }
     batch
 }
@@ -339,7 +340,7 @@ impl RoomEffects {
     pub async fn execute(self, room: &Room, context: RoomEffectContext<'_>) {
         let mut observability = self.observability;
         let mut output = self.output;
-        let mut policy = self.policy;
+        let mut source_policy = self.source_policy;
         observability.record_gauges(room);
         let transport_diagnostics = self
             .transport
@@ -352,10 +353,10 @@ impl RoomEffects {
             .await;
         observability.extend_gauges(receiver_routes.gauges);
         observability.extend_records(receiver_routes.diagnostics);
-        policy.extend(receiver_routes.policy);
+        source_policy.extend(receiver_routes.source_policy);
         observability.record_gauges(room);
         output.emit_before_policy();
-        policy.execute(room, context.media_transport()).await;
+        source_policy.execute(room, context.media_transport()).await;
         output.emit_after_policy();
         observability.record_diagnostics(room);
     }

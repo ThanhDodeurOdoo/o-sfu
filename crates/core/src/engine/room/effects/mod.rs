@@ -3,7 +3,6 @@
 pub mod batch;
 mod observability;
 mod output;
-mod policy;
 mod receiver_routes;
 mod route;
 mod transport;

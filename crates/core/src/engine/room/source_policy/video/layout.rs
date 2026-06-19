@@ -97,11 +97,7 @@ impl RoomState {
         source: &PublishedSourceDescriptor,
         active_speaker_source_user_ids: &BTreeSet<UserId>,
     ) -> ReceiverVideoLayoutIntent {
-        let preference = self.source_policy_layout_preference(
-            consumer_user_id,
-            source.owner().user_id(),
-            source.stream_id(),
-        );
+        let preference = layout_preference(self, consumer_user_id, source);
         ReceiverVideoLayoutIntent::resolve(
             source,
             preference,
@@ -116,17 +112,33 @@ impl RoomState {
         source: &PublishedSourceDescriptor,
     ) -> Option<ReceiverVideoLayoutIntent> {
         source.policy().layout()?;
-        let active_speaker_source_user_ids = self
-            .source_policy_user_featured_states()
-            .filter(|(_user_id, featured)| *featured == Some(true))
-            .map(|(user_id, _featured)| user_id.clone())
-            .collect();
-        Some(self.receiver_video_layout_intent(
-            consumer_user_id,
+        let preference = layout_preference(self, consumer_user_id, source);
+        let active_speaker = self
+            .users
+            .get(source.owner().user_id())
+            .is_some_and(|user| user.featured() == Some(true));
+        Some(ReceiverVideoLayoutIntent::resolve(
             source,
-            &active_speaker_source_user_ids,
+            preference,
+            active_speaker,
         ))
     }
+}
+
+fn layout_preference(
+    state: &RoomState,
+    consumer_user_id: &UserId,
+    source: &PublishedSourceDescriptor,
+) -> Option<VideoLayoutIntent> {
+    state
+        .users
+        .get(consumer_user_id)
+        .and_then(|user| {
+            user.desired_source_subscriptions
+                .get(source.owner().user_id())
+        })
+        .and_then(|states| states.get(source.stream_id()))
+        .and_then(|intent| intent.layout())
 }
 
 #[cfg(test)]
