@@ -1,30 +1,63 @@
 use super::*;
 
 #[test]
-fn protocol_core_disconnect_cleans_up_live_session() {
+fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
-    let _ = core.start_recording(RecordingOptions {
+    let start_commands = core.start_recording(RecordingOptions {
         audio: Some(true),
         video: None,
         transcription: None,
     });
-    let _ = core.on_timer(BATCH_FLUSH_TIMER_ID);
+    let [
+        Command::RegisterPendingRequest {
+            request_id,
+            kind: PendingRequestKind::StartRecording,
+        },
+        Command::ScheduleTimer {
+            id: timeout_timer_id,
+            ms: REQUEST_TIMEOUT_MS,
+        },
+        Command::ScheduleTimer {
+            id: flush_timer_id,
+            ms: 100,
+        },
+    ] = start_commands.as_slice()
+    else {
+        return Err(format!(
+            "expected recording request registration, got {start_commands:?}"
+        ));
+    };
+    let request_id = request_id.clone();
+    let timeout_timer_id = *timeout_timer_id;
+    let _ = core.on_timer(*flush_timer_id);
     let _ = core.on_transport_ready();
 
     let commands = core.disconnect();
 
     assert_eq!(core.state(), ConnectionState::Disconnected);
-    assert!(commands.contains(&Command::CancelTimer {
-        id: RECOVERY_TIMER_ID,
-    }));
-    assert!(commands.contains(&Command::CloseWebSocket { code: 1000 }));
-    assert!(commands.contains(&Command::ClosePeerConnection));
-    assert!(commands.contains(&Command::EmitStateChange {
-        state: ConnectionState::Disconnected,
-        cause: None,
-    }));
+    assert_eq!(
+        commands,
+        vec![
+            Command::CancelTimer {
+                id: RECOVERY_TIMER_ID,
+            },
+            Command::CancelTimer {
+                id: timeout_timer_id,
+            },
+            Command::ResolvePendingRequest {
+                request_id,
+                ok: false,
+            },
+            Command::CloseWebSocket { code: 1000 },
+            Command::ClosePeerConnection,
+            Command::EmitStateChange {
+                state: ConnectionState::Disconnected,
+                cause: None,
+            },
+        ]
+    );
     assert_eq!(
         core.features(),
         &AvailableFeatures {
@@ -36,6 +69,7 @@ fn protocol_core_disconnect_cleans_up_live_session() {
     );
     let recording_state = serde_json::to_value(core.recording_state());
     assert_eq!(recording_state.unwrap_or_default(), empty_recording_json());
+    Ok(())
 }
 
 #[test]

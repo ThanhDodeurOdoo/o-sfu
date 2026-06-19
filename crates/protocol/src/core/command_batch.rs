@@ -52,7 +52,7 @@ impl CommandBatch {
                 kind: registration.kind,
             },
             Command::ScheduleTimer {
-                id: registration.timeout_timer_id,
+                id: registration.timeout_timer_id.raw(),
                 ms: REQUEST_TIMEOUT_MS,
             },
         ];
