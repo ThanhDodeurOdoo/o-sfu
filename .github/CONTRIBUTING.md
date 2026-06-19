@@ -54,11 +54,11 @@ if running rust-analyzer and on an OS that is not linux, I recommend adding `"ru
 
 ## Verification
 
-Verification commands and the `tests/` layout are at [tests/README.md](../tests/README.md).
+Verification commands and the `tests/` layout are at [tests/README.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/tests/README.md).
 
 ## Running the server
 
-(will write a dedicated md doc later)
+TODO: will write a dedicated md doc later
 
 Same general idea than odoo/sfu
 
@@ -108,6 +108,7 @@ uet `PROXY=true` only when `o-sfu` sits behind a trusted reverse
 proxy that overwrites `x-forwarded-*` headers before forwarding requests.
 
 For reverse-proxy deployments, keep this in mind:
+(full deployment guide at [deployment.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/DEPLOYMENT.md))
 
 - expose the TCP listener at `BIND_ADDRESS` for HTTP and WebSocket traffic
 - expose the full UDP range from `RTC_MIN_PORT` through `RTC_MAX_PORT`
