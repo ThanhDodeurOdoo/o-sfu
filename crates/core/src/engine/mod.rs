@@ -11,16 +11,28 @@
 //! lets them share media-engine state without making the server crate import
 //! RTC workers or room-state internals.
 
-pub mod diagnostics;
 pub mod h264_payloads;
 mod hot_path;
 pub mod media_transport;
-pub mod metrics;
+mod observability;
 pub mod packet_sink_registry;
 pub mod recording;
 pub mod room;
 pub mod source_model;
 pub mod sync;
+
+pub mod diagnostics {
+    pub use super::observability::diagnostics::*;
+    pub(crate) use super::observability::{
+        diagnostics_room_instance_id, diagnostics_transport_health, health_json_value,
+        maybe_health_json_value,
+    };
+}
+
+pub mod metrics {
+    pub use super::observability::metrics::*;
+    pub(crate) use super::observability::{source_selection_kind, transport_health_state};
+}
 
 pub use o_sfu_model::{
     AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,

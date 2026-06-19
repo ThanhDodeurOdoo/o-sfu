@@ -25,7 +25,6 @@
 
 mod descriptor;
 mod diagnostics;
-mod errors;
 mod ids;
 mod intent;
 mod policy;
@@ -33,8 +32,9 @@ mod selection;
 
 pub use descriptor::{
     PublishedSourceDescriptor, PublishedSourceDescriptorParts, SourceEncodingDescriptor,
-    SourceEncodingDescriptorParts,
+    SourceEncodingDescriptorParts, SourceModelError,
 };
+pub use diagnostics::{OverBudgetExceptionReason, ReceiverVideoBudgetDiagnostics};
 pub use ids::{
     PublishedSourceId, PublishedSourceOwner, SourceEncodingId, SourceOperatingPoint,
     SourceTemporalLayerId, UserStreamId,
@@ -46,11 +46,6 @@ pub use policy::{
     SourceRoutePriority, UploadLayerPolicyRole,
 };
 pub use selection::{ConsumerSourceSelection, SourceSelector};
-
-pub use self::{
-    diagnostics::{OverBudgetExceptionReason, ReceiverVideoBudgetDiagnostics},
-    errors::SourceModelError,
-};
 
 #[cfg(any(test, feature = "testing-transport"))]
 #[path = "TESTS/support.rs"]

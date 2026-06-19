@@ -17,8 +17,8 @@ use super::{
         source_route::{MediaRouteDestination, RemoteSourceRegistration},
         state::PacketLoopState,
     },
+    RouteSourceKind,
     control::{ensure_existing_route_src, ensure_local_producer_mid},
-    types::RouteSourceKind,
 };
 use crate::engine::{
     media_transport::{

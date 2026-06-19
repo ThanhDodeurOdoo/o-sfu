@@ -6,7 +6,9 @@ use str0m::media::{
     Mid, Rid as Str0mRid, Simulcast as Str0mSimulcast, SimulcastLayer as Str0mSimulcastLayer,
 };
 
-use crate::{Bitrate, VideoBitrateLimits};
+use crate::{
+    Bitrate, VideoBitrateLimits, engine::media_transport::rtc::route_control::PacketLayerGate,
+};
 
 pub(super) const DEFAULT_LOW_RID: &str = "lo";
 pub(super) const DEFAULT_HIGH_RID: &str = "hi";
@@ -93,6 +95,38 @@ pub(super) fn layers_from_rid_bindings(
         });
     }
     (layers.len() >= 2).then_some(layers)
+}
+
+pub(super) fn initial_packet_gate(
+    consumer_rtp_parameters: &RouterRtpParameters,
+) -> PacketLayerGate {
+    let mut first_rid = None;
+    let mut lowest_bitrate_rid = None;
+    let mut all_encodings_have_bitrate = true;
+    for encoding in consumer_rtp_parameters.bindings() {
+        let Some(rid) = encoding.rid().map(Str0mRid::from) else {
+            return PacketLayerGate::Open;
+        };
+        if first_rid.is_none() {
+            first_rid = Some(rid);
+        }
+        let bitrate = encoding.max_bitrate().map(Bitrate::from_bps);
+        all_encodings_have_bitrate &= bitrate.is_some();
+        if let Some(bitrate) = bitrate {
+            match lowest_bitrate_rid.as_mut() {
+                Some((selected_rid, selected_bitrate)) if bitrate < *selected_bitrate => {
+                    *selected_rid = rid;
+                    *selected_bitrate = bitrate;
+                }
+                Some(_) => {}
+                None => lowest_bitrate_rid = Some((rid, bitrate)),
+            }
+        }
+    }
+    if all_encodings_have_bitrate && let Some((rid, _bitrate)) = lowest_bitrate_rid {
+        return PacketLayerGate::Rid(rid);
+    }
+    first_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
 }
 
 pub(super) fn send_rids_for_mid(
@@ -270,3 +304,7 @@ fn resolution_scale_for_index(index: usize) -> u16 {
         DEFAULT_HIGH_RESOLUTION_SCALE
     }
 }
+
+#[cfg(test)]
+#[path = "TESTS/consumer.rs"]
+mod consumer_tests;

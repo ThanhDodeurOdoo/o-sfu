@@ -35,7 +35,6 @@
 //! worker dispatcher. The lower worker functions keep the ownership checks close
 //! to the state they protect.
 
-mod remote_source;
 mod responses;
 mod routes;
 mod selected_rid;
