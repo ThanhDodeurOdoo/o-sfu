@@ -16,7 +16,6 @@ pub use catalog::{
 };
 pub use o_sfu_model::{PeerSnapshot, RecordingOptions, WebSocketCloseCode};
 
-pub(crate) use self::wire_catalog::{EnvelopeKind, EnvelopeSpec};
 pub use self::{
     codec::{ClientEnvelope, ServerEnvelope},
     envelope::{
