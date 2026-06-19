@@ -1,18 +1,16 @@
 use std::slice;
 
-use o_sfu_router::{MediaKind, MediaStream as RouterRtpParameters};
+use o_sfu_router::MediaStream as RouterRtpParameters;
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
-    batch::RoomGaugeDelta, policy::RoomPolicyPlan, transport::execute_relay_route_effects,
+    RoomRouteEffects, batch::RoomGaugeDelta, policy::RoomPolicyPlan,
+    transport::execute_relay_route_effects,
 };
 use crate::engine::{
     diagnostics::DiagnosticsEventData,
-    media_transport::{
-        ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaTransport,
-        RouteControlPlan, TransportConsumerRoute,
-    },
+    media_transport::{ConsumerActivity, MediaTransport, TransportConsumerRoute},
     room::{
         Room, UserOutbound,
         cleanup::TransportCleanupOperation,
@@ -22,15 +20,13 @@ use crate::engine::{
             ResolvedRelayRouteEffect,
         },
     },
-    source_model::UserStreamId,
 };
 
 #[derive(Debug, Default)]
 pub(super) struct ReceiverRoutePlan {
     relays: Vec<ResolvedRelayRouteEffect>,
-    activities: Vec<ReceiverRouteActivityEffect>,
+    routes: RoomRouteEffects,
     setups: Vec<ReceiverRouteSetup>,
-    keyframes: Vec<ConsumerRouteTarget>,
 }
 
 impl ReceiverRoutePlan {
@@ -42,19 +38,17 @@ impl ReceiverRoutePlan {
     ) {
         let (activities, setups, relays) = work.into_parts();
         self.relays.extend(relays);
-        self.activities
-            .extend(activities.into_iter().map(|activity| {
-                let event = diagnostics(&activity);
-                ReceiverRouteActivityEffect {
-                    activity,
-                    diagnostics: event,
-                }
-            }));
+        for activity in activities {
+            let event = diagnostics(&activity);
+            self.routes.push_activity(activity, event);
+        }
         self.push_setups(setups, origin);
     }
 
     pub(super) fn push_keyframes(&mut self, targets: Vec<ConsumerRouteTarget>) {
-        self.keyframes.extend(targets);
+        for target in targets {
+            self.routes.push_keyframe(target);
+        }
     }
 
     pub(super) fn push_setups(
@@ -81,7 +75,7 @@ impl ReceiverRoutePlan {
         execute_relay_route_effects(room, media_transport, &self.relays).await;
         outcome
             .diagnostics
-            .extend(execute_route_controls(media_transport, self.activities, self.keyframes).await);
+            .extend(self.routes.execute(media_transport).await.diagnostics);
         for setup in self.setups {
             let setup = setup.execute(room, media_transport).await;
             outcome.gauges.push(setup.gauge);
@@ -99,84 +93,6 @@ pub(super) struct ReceiverRouteOutcome {
     pub(super) gauges: Vec<RoomGaugeDelta>,
     pub(super) diagnostics: Vec<DiagnosticsEventData>,
     pub(super) policy: RoomPolicyPlan,
-}
-
-#[derive(Debug)]
-struct ReceiverRouteActivityEffect {
-    activity: ReceiverRouteActivity,
-    diagnostics: DiagnosticsEventData,
-}
-
-impl ReceiverRouteActivityEffect {
-    fn control(&self) -> ConsumerRouteControl {
-        let target = self.activity.target();
-        let active = self.activity.active();
-        ConsumerRouteControl::new(target.transport_route().clone())
-            .activity(ConsumerActivity::from_active(active))
-            .keyframe(target.request_keyframe_after_activity(active))
-    }
-
-    fn finish(self, outcome: ConsumerRouteControlOutcome) -> DiagnosticsEventData {
-        let target = self.activity.target();
-        let active = self.activity.active();
-        if outcome.activity_failed() {
-            warn!(
-                route = ?target.transport_route(),
-                stream_id = %target.stream_id(),
-                active,
-                "media transport failed to update consumer route activity"
-            );
-        } else if outcome.keyframe_failed() {
-            warn!(
-                route = ?target.transport_route(),
-                stream_id = %target.stream_id(),
-                "media transport failed to request a consumer keyframe refresh"
-            );
-        }
-        self.diagnostics
-    }
-}
-
-async fn execute_route_controls(
-    media_transport: &MediaTransport,
-    activities: Vec<ReceiverRouteActivityEffect>,
-    keyframes: Vec<ConsumerRouteTarget>,
-) -> Vec<DiagnosticsEventData> {
-    if activities.is_empty() && keyframes.is_empty() {
-        return Vec::new();
-    }
-    let mut plan = RouteControlPlan::new();
-    for activity in &activities {
-        plan.push_consumer(activity.control());
-    }
-    for target in &keyframes {
-        plan.push_consumer(
-            ConsumerRouteControl::new(target.transport_route().clone()).keyframe(true),
-        );
-    }
-    let mut outcomes = media_transport
-        .apply_route_control(plan.ready())
-        .await
-        .consumers
-        .into_iter();
-    let expected_outcomes = activities.len() + keyframes.len();
-    debug_assert_eq!(outcomes.len(), expected_outcomes);
-    let mut diagnostics = Vec::with_capacity(activities.len());
-    for (activity, outcome) in activities.into_iter().zip(&mut outcomes) {
-        diagnostics.push(activity.finish(outcome));
-    }
-    for (target, outcome) in keyframes.into_iter().zip(outcomes) {
-        if outcome.keyframe_failed() {
-            warn!(
-                consumer_user_id = ?target.transport_route().consumer_session_key().user_id(),
-                consumer_transport_media_id = ?target.transport_route().consumer_transport_media_id(),
-                producer_user_id = ?target.producer_user_id(),
-                source_transport_media_id = ?target.source_media_id(),
-                "media transport failed to request a refreshed consumer keyframe"
-            );
-        }
-    }
-    diagnostics
 }
 
 #[derive(Debug)]
@@ -296,7 +212,9 @@ async fn finish_setup(
             transport_activity_update,
         } => {
             if let Some(active) = transport_activity_update {
-                sync_activity(media_transport, &route, &target.stream, target.kind, active).await;
+                let mut routes = RoomRouteEffects::default();
+                routes.push_setup_activity(route.clone(), target.kind, active);
+                routes.execute(media_transport).await;
             }
             let diagnostics = setup_diagnostics(room.uuid(), &target, origin, &route);
             let _ = sender.send(UserOutbound::SetupRemoteTrack(Box::new(track)));
@@ -340,41 +258,6 @@ fn setup_diagnostics(
         .insert_field("source_transport_media_id", target.media.as_u64())
         .insert_field("stream_id", target.stream.to_string())
         .insert_field("origin", origin.as_diagnostic_str())
-}
-
-async fn sync_activity(
-    media_transport: &MediaTransport,
-    route: &TransportConsumerRoute,
-    stream: &UserStreamId,
-    kind: MediaKind,
-    active: bool,
-) {
-    let mut plan = RouteControlPlan::new();
-    plan.push_consumer(
-        ConsumerRouteControl::new(route.clone())
-            .activity(ConsumerActivity::from_active(active))
-            .keyframe(active && kind == MediaKind::Video),
-    );
-    let outcome = media_transport.apply_route_control(plan.ready()).await;
-    let Some(outcome) = outcome.consumers.into_iter().next() else {
-        return;
-    };
-    if outcome.activity_failed() {
-        warn!(
-            ?route,
-            stream_id = %stream,
-            active,
-            "media transport failed to correct in-flight consumer setup activity"
-        );
-        return;
-    }
-    if outcome.keyframe_failed() {
-        warn!(
-            ?route,
-            stream_id = %stream,
-            "media transport failed to request keyframe after consumer setup activity correction"
-        );
-    }
 }
 
 async fn release_failed_setup(

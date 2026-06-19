@@ -2,11 +2,8 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 
 pub use super::observability::RoomGaugeDelta;
 use super::{
-    observability::RoomObservabilityPlan,
-    output::RoomOutputPlan,
-    policy::RoomPolicyPlan,
-    receiver_routes::ReceiverRoutePlan,
-    transport::{ProducerActivityEffect, RoomTransportPlan},
+    observability::RoomObservabilityPlan, output::RoomOutputPlan, policy::RoomPolicyPlan,
+    receiver_routes::ReceiverRoutePlan, transport::RoomTransportPlan,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
@@ -214,12 +211,7 @@ pub fn build_publication_activity(
         .insert_field("active", active)
         .insert_field("stream_id", stream.to_string());
     let mut batch = RoomEffects::default();
-    batch.transport.push_producer(ProducerActivityEffect::new(
-        source,
-        active,
-        stream,
-        diagnostics,
-    ));
+    batch.transport.push_producer(source, active, diagnostics);
     batch.output.push_track_binding(recipients, update);
     batch.policy.fanout_pressure_changed();
     batch
@@ -351,7 +343,7 @@ impl RoomEffects {
         observability.record_gauges(room);
         let transport_diagnostics = self
             .transport
-            .execute(room, context.media_transport(), context.route_transport())
+            .execute(room, context.route_transport())
             .await;
         observability.extend_records(transport_diagnostics);
         let receiver_routes = self

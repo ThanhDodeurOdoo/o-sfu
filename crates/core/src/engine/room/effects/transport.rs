@@ -5,22 +5,22 @@ use crate::{
     engine::{
         diagnostics::DiagnosticsEventData,
         media_transport::{
-            MediaTransport, ProducerActivity, RouteControlPlan, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSourceKey,
+            MediaTransport, TransportRelayRouteAction, TransportRelayRouteEffect,
+            TransportSourceKey,
         },
         room::{
             Room,
             cleanup::TransportCleanupOperation,
+            effects::RoomRouteEffects,
             media_graph::{MediaTopologyEffects, ResolvedRelayRouteEffect},
         },
-        source_model::UserStreamId,
     },
 };
 
 #[derive(Debug, Default)]
 pub(super) struct RoomTransportPlan {
     topology: MediaTopologyEffects,
-    producers: Vec<ProducerActivityEffect>,
+    routes: RoomRouteEffects,
 }
 
 impl RoomTransportPlan {
@@ -36,90 +36,32 @@ impl RoomTransportPlan {
         self.topology.push_cleanup(operation);
     }
 
-    pub(super) fn push_producer(&mut self, producer: ProducerActivityEffect) {
-        self.producers.push(producer);
+    pub(super) fn push_producer(
+        &mut self,
+        source: TransportSourceKey,
+        active: bool,
+        diagnostics: DiagnosticsEventData,
+    ) {
+        self.routes.push_producer(source, active, diagnostics);
     }
 
     pub(super) async fn execute(
         self,
         room: &Room,
-        media_transport: Option<&MediaTransport>,
         route_transport: Option<&MediaTransport>,
     ) -> Vec<DiagnosticsEventData> {
         let (relays, cleanup) = self.topology.into_parts();
-        if let Some(media_transport) = route_transport {
-            execute_relay_route_effects(room, media_transport, &relays).await;
+        let Some(media_transport) = route_transport else {
+            return Vec::new();
+        };
+        execute_relay_route_effects(room, media_transport, &relays).await;
+        let diagnostics = self.routes.execute(media_transport).await.diagnostics;
+        if !cleanup.is_empty() {
+            room.execute_transport_cleanup_operations(media_transport, &cleanup)
+                .await;
         }
-        let diagnostics = execute_producer_activity(media_transport, self.producers).await;
-        execute_cleanup(room, route_transport, cleanup).await;
         diagnostics
     }
-}
-
-#[derive(Debug)]
-pub(super) struct ProducerActivityEffect {
-    source: TransportSourceKey,
-    active: bool,
-    stream: UserStreamId,
-    diagnostics: DiagnosticsEventData,
-}
-
-impl ProducerActivityEffect {
-    pub(super) const fn new(
-        source: TransportSourceKey,
-        active: bool,
-        stream: UserStreamId,
-        diagnostics: DiagnosticsEventData,
-    ) -> Self {
-        Self {
-            source,
-            active,
-            stream,
-            diagnostics,
-        }
-    }
-}
-
-async fn execute_cleanup(
-    room: &Room,
-    media_transport: Option<&MediaTransport>,
-    cleanup: Vec<TransportCleanupOperation>,
-) {
-    if cleanup.is_empty() {
-        return;
-    }
-    let Some(media_transport) = media_transport else {
-        return;
-    };
-    room.execute_transport_cleanup_operations(media_transport, &cleanup)
-        .await;
-}
-
-async fn execute_producer_activity(
-    media_transport: Option<&MediaTransport>,
-    producers: Vec<ProducerActivityEffect>,
-) -> Vec<DiagnosticsEventData> {
-    if producers.is_empty() {
-        return Vec::new();
-    }
-    if let Some(media_transport) = media_transport {
-        let mut plan = RouteControlPlan::new();
-        for op in &producers {
-            plan.push_producer(op.source.clone(), ProducerActivity::from_active(op.active));
-        }
-        let outcome = media_transport.apply_route_control(plan.ready()).await;
-        for (op, result) in producers.iter().zip(&outcome.producers) {
-            if result.is_err() {
-                warn!(
-                    source = ?op.source,
-                    stream_id = %op.stream,
-                    active = op.active,
-                    "media transport failed to update producer route activity"
-                );
-            }
-        }
-    }
-    producers.into_iter().map(|op| op.diagnostics).collect()
 }
 
 pub(super) async fn execute_relay_route_effects(
