@@ -532,7 +532,10 @@ impl RoomMediaGraph {
         relay_effects
     }
 
-    pub fn consumer_keys_for_source(&self, source_id: PublishedSourceId) -> Vec<ConsumerKey> {
+    pub fn consumer_keys_for_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> impl Iterator<Item = &ConsumerKey> {
         self.routes.keys_for_source(source_id)
     }
 
@@ -562,7 +565,10 @@ impl RoomMediaGraph {
         source_id: PublishedSourceId,
     ) -> Option<(PublishedProducer, Vec<RelayRouteEffect>)> {
         self.sources.source(source_id)?;
-        let consumer_keys = self.consumer_keys_for_source(source_id);
+        let consumer_keys = self
+            .consumer_keys_for_source(source_id)
+            .cloned()
+            .collect::<Vec<_>>();
         let mut relay_effects = Vec::new();
         for key in consumer_keys {
             relay_effects.extend(self.remove_consumer_key_state(&key));

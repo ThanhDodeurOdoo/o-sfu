@@ -249,6 +249,12 @@ pub struct RoutingCommitReceipt {
     pub media_worker_id: MediaWorkerId,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutingPlacementCommit {
+    pub receipt: RoutingCommitReceipt,
+    pub displaced_connection: Option<ConnectionId>,
+}
+
 #[derive(Debug, Clone)]
 struct CommittedSessionPlacement {
     connection_id: ConnectionId,
@@ -326,6 +332,8 @@ impl RoutingTopology {
 
     /// commit one user connection to a resolved router placement
     ///
+    /// the routing state is unchanged when the selected placement is rejected
+    ///
     /// # Errors
     ///
     /// returns [`RoutingError::MissingRouterForSession`] if the selected router
@@ -337,7 +345,21 @@ impl RoutingTopology {
         connection_id: ConnectionId,
         placement: RouterPlacement,
         affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
-    ) -> Result<(RoutingCommitReceipt, Option<ConnectionId>), RoutingError> {
+    ) -> Result<RoutingPlacementCommit, RoutingError> {
+        let mut next = self.clone();
+        let commit =
+            next.apply_session_placement(user_id, connection_id, placement, affected_consumers)?;
+        *self = next;
+        Ok(commit)
+    }
+
+    fn apply_session_placement(
+        &mut self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        placement: RouterPlacement,
+        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
+    ) -> Result<RoutingPlacementCommit, RoutingError> {
         let displaced_connection = self
             .sessions
             .active(user_id)
@@ -355,12 +377,14 @@ impl RoutingTopology {
             router_session_seed,
             runtime: placement,
         };
-        let receipt = RoutingCommitReceipt {
-            connection_id,
-            media_worker_id: placement.media_worker,
-        };
         self.sessions.insert(user_id.clone(), session);
-        Ok((receipt, displaced_connection))
+        Ok(RoutingPlacementCommit {
+            receipt: RoutingCommitReceipt {
+                connection_id,
+                media_worker_id: placement.media_worker,
+            },
+            displaced_connection,
+        })
     }
 
     pub fn unregister_committed_placement(
@@ -390,25 +414,6 @@ impl RoutingTopology {
         self.router_placements
             .as_ref()
             .map(|router_placements| router_placements.primary().media_worker)
-    }
-
-    #[expect(
-        clippy::unreachable,
-        reason = "source fanout planning requires committed connection placement and must not synthesize worker identity"
-    )]
-    pub fn worker_lookup(&self) -> impl Fn(ConnectionId) -> MediaWorkerId + use<> {
-        let media_worker_by_connection = self
-            .sessions
-            .by_connection
-            .iter()
-            .map(|(connection_id, session)| (*connection_id, session.runtime.media_worker))
-            .collect::<BTreeMap<_, _>>();
-        move |connection_id| {
-            let Some(media_worker) = media_worker_by_connection.get(&connection_id).copied() else {
-                unreachable!("worker lookup requires committed connection placement");
-            };
-            media_worker
-        }
     }
 
     #[must_use]

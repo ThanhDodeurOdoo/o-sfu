@@ -136,11 +136,15 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     );
     assert!(
         state
-            .apply_join(
+            .apply_join_on_placement(
                 &subscriber,
                 UserPermissions::default(),
                 test_sender(),
                 false,
+                RouterPlacement {
+                    router: RouterId(2),
+                    media_worker: MediaWorkerId::from_raw(1),
+                },
             )
             .is_ok()
     );
@@ -192,13 +196,7 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
             source_media,
         )
     };
-    let mut setups = state.plan_consumers(vec![target], |connection| {
-        if connection == subscriber_connection {
-            MediaWorkerId::from_raw(1)
-        } else {
-            MediaWorkerId::from_raw(0)
-        }
-    });
+    let mut setups = state.plan_consumers(vec![target]);
     let setup = setups
         .pop()
         .expect("relay consumer setup should be planned");

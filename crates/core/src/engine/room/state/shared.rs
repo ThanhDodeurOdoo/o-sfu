@@ -176,10 +176,6 @@ impl RoomState {
         self.topology.routing().assigned_primary_media_worker_id()
     }
 
-    pub fn worker_lookup(&self) -> impl Fn(ConnectionId) -> MediaWorkerId + use<> {
-        self.topology.routing().worker_lookup()
-    }
-
     pub fn transport_consumer_entries(&self) -> Vec<(UserId, ConnectionId)> {
         let media = self.topology.media();
         let mut entries = media
@@ -193,11 +189,7 @@ impl RoomState {
         entries
     }
 
-    pub fn source_fanout_pressure(
-        &self,
-        max_fanout_per_source: usize,
-        media_worker_for_connection: impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> bool {
+    pub fn source_fanout_pressure(&self, max_fanout_per_source: usize) -> bool {
         if max_fanout_per_source == 0 {
             return false;
         }
@@ -211,11 +203,11 @@ impl RoomState {
             }
             let mut deliveries_by_worker = BTreeMap::new();
             for key in media.consumer_keys_for_source(source.source_id()) {
-                if !media.has_consumer_setup_or_route(&key) {
+                if !media.has_consumer_setup_or_route(key) {
                     continue;
                 }
                 if media
-                    .consumer_source_selection(&key)
+                    .consumer_source_selection(key)
                     .is_some_and(|selection| !selection.delivery_active())
                 {
                     continue;
@@ -223,7 +215,12 @@ impl RoomState {
                 let Some(user) = self.users.get(&key.consumer_user_id) else {
                     continue;
                 };
-                let media_worker = media_worker_for_connection(user.connection_id);
+                let Some(media_worker) = self
+                    .topology
+                    .committed_media_worker_id(&key.consumer_user_id, user.connection_id)
+                else {
+                    continue;
+                };
                 deliveries_by_worker
                     .entry(media_worker)
                     .and_modify(|count: &mut usize| *count = count.saturating_add(1))

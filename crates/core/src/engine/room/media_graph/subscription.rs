@@ -97,18 +97,12 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Option<ReceiverRouteCommit> {
         self.user_for_connection(user_id, connection_id)?;
         let before = self.media_counts();
         let media_worker_id = self.media_worker_id_for_connection(connection_id);
-        let work = self.plan_receiver_intent_change(
-            user_id,
-            connection_id,
-            target_user_id,
-            intents,
-            worker_for,
-        );
+        let work =
+            self.plan_receiver_intent_change(user_id, connection_id, target_user_id, intents);
         let after = self.media_counts();
         Some(ReceiverRouteCommit {
             before,
@@ -125,18 +119,11 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> ReceiverRouteWork {
         if self.user_for_connection(user_id, connection_id).is_none() {
             return ReceiverRouteWork::default();
         }
-        self.plan_receiver_intent_change(
-            user_id,
-            connection_id,
-            target_user_id,
-            intents,
-            worker_for,
-        )
+        self.plan_receiver_intent_change(user_id, connection_id, target_user_id, intents)
     }
 
     fn plan_receiver_intent_change(
@@ -145,15 +132,15 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> ReceiverRouteWork {
         self.persist_intents(user_id, target_user_id, intents);
         let (updates, relays) =
             self.apply_route_updates(user_id, connection_id, target_user_id, intents);
-        let setups = self.plan_consumers(
-            self.missing_targets_for_peer(user_id, connection_id, target_user_id),
-            worker_for,
-        );
+        let setups = self.plan_consumers(self.missing_targets_for_peer(
+            user_id,
+            connection_id,
+            target_user_id,
+        ));
         ReceiverRouteWork::new(updates, setups, relays)
     }
 
@@ -196,8 +183,7 @@ impl RoomState {
         };
         let before = self.media_counts();
         let setups = if can_consume {
-            let worker_for = self.worker_lookup();
-            self.plan_consumers(self.missing_targets(user_id, connection_id), worker_for)
+            self.plan_consumers(self.missing_targets(user_id, connection_id))
         } else {
             Vec::new()
         };
@@ -215,7 +201,6 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
     ) -> Option<Vec<PendingConsumerSetup>> {
         let user = self.users.get(user_id)?;
         if user.connection_id != connection_id {
@@ -224,20 +209,18 @@ impl RoomState {
         if !user.negotiation.can_consume() {
             return Some(Vec::new());
         }
-        Some(self.plan_consumers(self.missing_targets(user_id, connection_id), worker_for))
+        Some(self.plan_consumers(self.missing_targets(user_id, connection_id)))
     }
 
     pub fn plan_consumers(
         &mut self,
-        targets: Vec<ConsumerSetupTarget>,
-        worker_for: impl Fn(ConnectionId) -> MediaWorkerId,
+        mut targets: Vec<ConsumerSetupTarget>,
     ) -> Vec<PendingConsumerSetup> {
-        let mut targets = targets;
         let active_speakers = BTreeSet::new();
         targets.sort_by_key(|target| self.setup_rank(target, &active_speakers));
         targets
             .into_iter()
-            .filter_map(|target| self.plan_consumer(target, &worker_for))
+            .filter_map(|target| self.plan_consumer(target))
             .collect()
     }
 
@@ -375,11 +358,7 @@ impl RoomState {
         ))
     }
 
-    fn plan_consumer(
-        &mut self,
-        target: ConsumerSetupTarget,
-        worker_for: &impl Fn(ConnectionId) -> MediaWorkerId,
-    ) -> Option<PendingConsumerSetup> {
+    fn plan_consumer(&mut self, target: ConsumerSetupTarget) -> Option<PendingConsumerSetup> {
         let (sender, client_caps) = {
             let user = self.users.get(&target.user)?;
             if user.connection_id != target.connection || !user.negotiation.can_consume() {
@@ -404,8 +383,6 @@ impl RoomState {
         let selection = self.setup_selection(&target, producer_active);
         let rtp = negotiate_consumer_rtp_parameters(producer_rtp, client_caps).ok()?;
         let consumer = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
-        let source_worker = worker_for(target.producer_connection);
-        let target_worker = worker_for(target.connection);
         let track = RemoteTrackSetup {
             consumer,
             kind: target.kind,
@@ -419,14 +396,8 @@ impl RoomState {
             active: producer_active,
             stream: target.stream.clone(),
         };
-        self.topology.reserve_consumer_setup(
-            target,
-            selection,
-            source_worker,
-            target_worker,
-            sender,
-            track,
-        )
+        self.topology
+            .reserve_consumer_setup(target, selection, sender, track)
     }
 
     pub(super) fn setup_selection(

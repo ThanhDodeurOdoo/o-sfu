@@ -54,8 +54,8 @@ pub use self::{
     session::{Session, SessionState},
     topology::{
         RoutedConsumerId, RoutedProducerId, RouterPlacement, RouterPlacements,
-        RouterPlacementsError, RoutingCommitReceipt, RoutingError, RoutingPlacementSnapshot,
-        RoutingRepairReport, RoutingTopology,
+        RouterPlacementsError, RoutingCommitReceipt, RoutingError, RoutingPlacementCommit,
+        RoutingPlacementSnapshot, RoutingRepairReport, RoutingTopology,
     },
     transport::TransportDirection,
 };
