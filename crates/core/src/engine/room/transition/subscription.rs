@@ -1,31 +1,8 @@
 //! subscription transitions bind receiver intent to negotiated consumer routes
 //!
-//! ```text
-//! subscribe intent
-//!   |
-//!   v
-//! remembered receiver state
-//!   |
-//!   +-- existing route -------> activity update ----> effects after lock
-//!   |
-//!   +-- route missing
-//!         |
-//!         +-- producer missing -> wait for publish commit
-//!         |
-//!         +-- consumer pending -> wait for session answer
-//!         |
-//!         +-- consumer ready --> setup reservation
-//!                               |
-//!                               +-- same worker  --> effects after lock
-//!                               |
-//!                               +-- cross-worker -> relay setup -> effects after lock
-//!
-//! initial answer ----> mark consumer-ready ---> setup missing consumers
-//! refresh answer ----> keyframes required ----> setup missing consumers
-//! ```
-//!
-//! intent stays remembered even when no producer is routable
-//! keyframes are requested only after live video consumer routes are known
+//! receiver intent stays remembered even when no producer is routable
+//! the readiness transition owns missing consumer setup plus active video
+//! keyframe refresh once the accepted answer makes the receiver consumable
 
 use std::collections::BTreeMap;
 
@@ -34,7 +11,6 @@ use o_sfu_router::MediaCapabilities;
 use super::super::{
     RoomUserOperation,
     effects::{self, batch::RoomEffectContext},
-    media_graph::ConsumerRouteTarget,
     user_negotiation::UserNegotiationUpdate,
 };
 use crate::engine::{
@@ -53,7 +29,7 @@ impl RoomUserOperation<'_> {
         };
         match update {
             Some(UserNegotiationUpdate::BecameConsumerReady) => {
-                self.refresh_after_initial_answer().await
+                self.apply_receiver_readiness().await
             }
             Some(UserNegotiationUpdate::Applied) => Some(()),
             None => None,
@@ -61,16 +37,12 @@ impl RoomUserOperation<'_> {
     }
 
     pub(crate) async fn apply_session_refreshed(self) -> Option<()> {
-        let targets = self.video_keyframe_targets().await?;
-        self.request_video_keyframes(targets).await;
-        self.setup_missing_consumers().await
+        self.apply_receiver_readiness().await
     }
 
-    async fn refresh_after_initial_answer(self) -> Option<()> {
+    async fn apply_receiver_readiness(self) -> Option<()> {
         self.setup_missing_consumers().await?;
-        if let Some(targets) = self.video_keyframe_targets().await {
-            self.request_video_keyframes(targets).await;
-        }
+        self.request_active_video_keyframes().await;
         Some(())
     }
 
@@ -115,19 +87,18 @@ impl RoomUserOperation<'_> {
         Some(())
     }
 
-    async fn video_keyframe_targets(self) -> Option<Vec<ConsumerRouteTarget>> {
+    async fn request_active_video_keyframes(self) {
         let room = self.room;
-        {
+        let Some(targets) = ({
             let state = room.state.read().await;
             let targets = state.active_video_keyframe_targets(self.user_id, self.connection_id);
             drop(state);
             targets
-        }
-    }
-
-    async fn request_video_keyframes(self, targets: Vec<ConsumerRouteTarget>) {
+        }) else {
+            return;
+        };
         effects::batch::build_keyframe_refresh(targets)
-            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
+            .execute(room, RoomEffectContext::runtime(self.media_transport))
             .await;
     }
 }

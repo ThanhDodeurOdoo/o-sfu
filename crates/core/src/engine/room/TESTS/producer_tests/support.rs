@@ -16,7 +16,7 @@ pub(super) use crate::{
         },
         media_transport::{
             SessionOffer, TransportMediaId, TransportSessionKey,
-            test_support::test_media_transport_builder,
+            test_support::{test_media_transport_builder, test_media_transport_deps},
         },
         room::Room,
     },
@@ -214,6 +214,7 @@ pub(super) async fn assert_receiver_bwe_target(
 pub(super) struct RealRtcRefreshScenario {
     pub(super) room: Arc<Room>,
     pub(super) media_transport: MediaTransport,
+    pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) publisher_user_id: UserId,
     pub(super) subscriber_user_id: UserId,
     pub(super) publisher_initial_offer: SessionOffer,
@@ -254,7 +255,8 @@ pub(super) async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario 
         )
         .await
         .expect("subscriber should join");
-    let media_transport = build_real_rtc_media_transport();
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let media_transport = build_real_rtc_media_transport_with_metrics(Arc::clone(&metrics));
     let publisher_session_key = room
         .transport_user_key(&publisher_user_id, publisher_connection_id)
         .await;
@@ -299,6 +301,7 @@ pub(super) async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario 
     RealRtcRefreshScenario {
         room,
         media_transport,
+        metrics,
         publisher_user_id,
         subscriber_user_id,
         publisher_initial_offer,
@@ -330,12 +333,19 @@ pub(super) async fn settle_refresh_offer(
             .await
     );
 }
+pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
+    build_real_rtc_media_transport_with_metrics(Arc::new(RuntimeMetrics::default()))
+}
+
 #[allow(
     clippy::panic,
     reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
 )]
-pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
+fn build_real_rtc_media_transport_with_metrics(metrics: Arc<RuntimeMetrics>) -> MediaTransport {
+    let mut deps = test_media_transport_deps();
+    deps.metrics = metrics;
     match test_media_transport_builder(RtcPortRange::new(46_200, 46_299))
+        .deps(deps)
         .worker_count(1)
         .build()
     {

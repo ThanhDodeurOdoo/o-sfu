@@ -89,7 +89,12 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
         "no second setup should be emitted before the first refresh answer lands"
     );
 
+    let requests_before_refresh = keyframe_request_count(&scenario);
     settle_refresh_offer(&mut scenario, first_refresh_offer).await;
+    assert!(
+        keyframe_request_count(&scenario) >= requests_before_refresh + 2,
+        "refresh answer should keyframe every active video route after setup"
+    );
 
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 2);
     assert_remote_track_setup_for_stream(
@@ -113,6 +118,11 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
         drain_outbound(&mut scenario.subscriber_rx).is_empty(),
         "no new setup should be emitted once every consumer already exists"
     );
+}
+
+fn keyframe_request_count(scenario: &RealRtcRefreshScenario) -> u64 {
+    let snapshot = scenario.metrics.snapshot();
+    snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed()
 }
 
 #[tokio::test]
