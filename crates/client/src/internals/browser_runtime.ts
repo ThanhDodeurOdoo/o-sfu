@@ -9,7 +9,7 @@ import {
     type StreamType
 } from "../public_api.js";
 import { WS_CLOSE_CODE } from "../protocol_contract.js";
-import { CommandKind, type HostCommand, type ProtocolCoreBindings } from "../runtime_contract.js";
+import { COMMAND_KIND, type HostCommand, type ProtocolCoreBindings } from "../runtime_contract.js";
 import type { NegotiationUploadSlot } from "../protocol.js";
 import type {
     ClientPeerConnection,
@@ -150,23 +150,23 @@ export class BrowserRuntime {
 
     private async executeCommand(command: HostCommand): Promise<HostCommand[]> {
         switch (command.kind) {
-            case CommandKind.SEND_WEB_SOCKET:
+            case COMMAND_KIND.SEND_WEB_SOCKET:
                 if (!this._webSocket || this._webSocket.readyState !== 1) {
                     throw new Error("cannot send websocket frame while socket is not open");
                 }
                 this._webSocket.send(command.frame);
                 return [];
-            case CommandKind.SET_LOCAL_UPLOAD_INTENT:
+            case COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT:
                 this._context.localUploads.setUploadIntent(command.streamType, command.active);
                 return [];
-            case CommandKind.APPLY_NEGOTIATION:
+            case COMMAND_KIND.APPLY_NEGOTIATION:
                 return this.applyNegotiation(
                     command.requestId,
                     command.negotiationKind,
                     command.sdp,
                     command.uploadSlots
                 );
-            case CommandKind.ATTACH_TRACK:
+            case COMMAND_KIND.ATTACH_TRACK:
                 emitRuntimeLog(
                     this._context,
                     CLIENT_LOG_LEVEL.INFO,
@@ -174,7 +174,7 @@ export class BrowserRuntime {
                 );
                 await this.attachTrack(command.mid, command.streamType);
                 return [];
-            case CommandKind.DETACH_TRACK:
+            case COMMAND_KIND.DETACH_TRACK:
                 emitRuntimeLog(
                     this._context,
                     CLIENT_LOG_LEVEL.INFO,
@@ -182,13 +182,13 @@ export class BrowserRuntime {
                 );
                 await this.detachTrack(command.streamType);
                 return [];
-            case CommandKind.CREATE_PEER_CONNECTION:
+            case COMMAND_KIND.CREATE_PEER_CONNECTION:
                 this.createPeerConnection();
                 return [];
-            case CommandKind.CLOSE_PEER_CONNECTION:
+            case COMMAND_KIND.CLOSE_PEER_CONNECTION:
                 this.closePeerConnection();
                 return [];
-            case CommandKind.CLOSE_WEB_SOCKET:
+            case COMMAND_KIND.CLOSE_WEB_SOCKET:
                 if (this._webSocket && this._webSocket.readyState < 2) {
                     emitRuntimeLog(
                         this._context,
@@ -198,10 +198,10 @@ export class BrowserRuntime {
                     this._webSocket.close(command.code);
                 }
                 return [];
-            case CommandKind.EMIT_STATE_CHANGE:
+            case COMMAND_KIND.EMIT_STATE_CHANGE:
                 this._context.onStateChange(command.state, command.cause);
                 return [];
-            case CommandKind.REPLACE_TRACK_BINDINGS:
+            case COMMAND_KIND.REPLACE_TRACK_BINDINGS:
                 emitRuntimeLog(
                     this._context,
                     CLIENT_LOG_LEVEL.DEBUG,
@@ -212,7 +212,7 @@ export class BrowserRuntime {
                     this._context.onUpdate
                 );
                 return [];
-            case CommandKind.REPLACE_SOURCE_DESCRIPTORS:
+            case COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS:
                 emitRuntimeLog(
                     this._context,
                     CLIENT_LOG_LEVEL.DEBUG,
@@ -225,7 +225,7 @@ export class BrowserRuntime {
                     }
                 });
                 return [];
-            case CommandKind.REMOVE_SESSION_TRACKS:
+            case COMMAND_KIND.REMOVE_SESSION_TRACKS:
                 emitRuntimeLog(
                     this._context,
                     CLIENT_LOG_LEVEL.INFO,
@@ -233,24 +233,24 @@ export class BrowserRuntime {
                 );
                 this._context.remoteTracks.removeSessionTracks(command.sessionId);
                 return [];
-            case CommandKind.EMIT_UPDATE:
+            case COMMAND_KIND.EMIT_UPDATE:
                 this._context.onUpdate(command.update);
                 return [];
-            case CommandKind.BEGIN_PENDING_REQUEST:
+            case COMMAND_KIND.BEGIN_PENDING_REQUEST:
                 if (this._context.pendingRequests.has(command.requestId)) {
                     this.scheduleTimer(command.timeoutTimerId, command.timeoutMs);
                 }
                 return [];
-            case CommandKind.RESOLVE_PENDING_REQUEST:
+            case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
                 this._context.pendingRequests.resolve(command.requestId, command.ok);
                 return [];
-            case CommandKind.SCHEDULE_TIMER:
+            case COMMAND_KIND.SCHEDULE_TIMER:
                 this.scheduleTimer(command.id, command.ms);
                 return [];
-            case CommandKind.CANCEL_TIMER:
+            case COMMAND_KIND.CANCEL_TIMER:
                 this.cancelTimer(command.id);
                 return [];
-            case CommandKind.CONNECT:
+            case COMMAND_KIND.CONNECT:
                 this.openWebSocket(command.url);
                 return [];
         }

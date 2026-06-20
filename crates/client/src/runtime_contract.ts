@@ -49,7 +49,7 @@ const SESSION_INFO_BOOLEAN_FIELDS = [
     "isDeaf",
     "isRaisingHand"
 ] as const satisfies readonly (keyof SessionInfo)[];
-export { NEGOTIATION_KIND, PENDING_REQUEST_KIND };
+export { COMMAND_KIND, NEGOTIATION_KIND, PENDING_REQUEST_KIND };
 
 const CONNECTION_STATES = Object.values(SFU_CLIENT_STATE);
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
@@ -60,45 +60,43 @@ const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
 
 export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
 
-export const CommandKind = COMMAND_KIND;
-
-export type HostCommandKind = (typeof CommandKind)[keyof typeof CommandKind];
+export type HostCommandKind = (typeof COMMAND_KIND)[keyof typeof COMMAND_KIND];
 
 export type HostCommand =
-    | { kind: typeof CommandKind.SEND_WEB_SOCKET; frame: string }
+    | { kind: typeof COMMAND_KIND.SEND_WEB_SOCKET; frame: string }
     | {
-          kind: typeof CommandKind.SET_LOCAL_UPLOAD_INTENT;
+          kind: typeof COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT;
           streamType: StreamType;
           active: boolean;
       }
     | {
-          kind: typeof CommandKind.APPLY_NEGOTIATION;
+          kind: typeof COMMAND_KIND.APPLY_NEGOTIATION;
           requestId: string;
           negotiationKind: NegotiationKind;
           sdp: string;
           uploadSlots: NegotiationUploadSlot[];
       }
-    | { kind: typeof CommandKind.ATTACH_TRACK; mid: string; streamType: StreamType }
-    | { kind: typeof CommandKind.DETACH_TRACK; streamType: StreamType }
-    | { kind: typeof CommandKind.CREATE_PEER_CONNECTION }
-    | { kind: typeof CommandKind.CLOSE_PEER_CONNECTION }
-    | { kind: typeof CommandKind.CLOSE_WEB_SOCKET; code: number }
-    | { kind: typeof CommandKind.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
-    | { kind: typeof CommandKind.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
-    | { kind: typeof CommandKind.REPLACE_SOURCE_DESCRIPTORS; sources: SourceDescriptor[] }
-    | { kind: typeof CommandKind.REMOVE_SESSION_TRACKS; sessionId: SessionId }
-    | { kind: typeof CommandKind.EMIT_UPDATE; update: ClientUpdateDetail }
+    | { kind: typeof COMMAND_KIND.ATTACH_TRACK; mid: string; streamType: StreamType }
+    | { kind: typeof COMMAND_KIND.DETACH_TRACK; streamType: StreamType }
+    | { kind: typeof COMMAND_KIND.CREATE_PEER_CONNECTION }
+    | { kind: typeof COMMAND_KIND.CLOSE_PEER_CONNECTION }
+    | { kind: typeof COMMAND_KIND.CLOSE_WEB_SOCKET; code: number }
+    | { kind: typeof COMMAND_KIND.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
+    | { kind: typeof COMMAND_KIND.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
+    | { kind: typeof COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS; sources: SourceDescriptor[] }
+    | { kind: typeof COMMAND_KIND.REMOVE_SESSION_TRACKS; sessionId: SessionId }
+    | { kind: typeof COMMAND_KIND.EMIT_UPDATE; update: ClientUpdateDetail }
     | {
-          kind: typeof CommandKind.BEGIN_PENDING_REQUEST;
+          kind: typeof COMMAND_KIND.BEGIN_PENDING_REQUEST;
           requestId: string;
           requestKind: PendingRequestKind;
           timeoutTimerId: number;
           timeoutMs: number;
       }
-    | { kind: typeof CommandKind.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
-    | { kind: typeof CommandKind.SCHEDULE_TIMER; id: number; ms: number }
-    | { kind: typeof CommandKind.CANCEL_TIMER; id: number }
-    | { kind: typeof CommandKind.CONNECT; url: string };
+    | { kind: typeof COMMAND_KIND.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
+    | { kind: typeof COMMAND_KIND.SCHEDULE_TIMER; id: number; ms: number }
+    | { kind: typeof COMMAND_KIND.CANCEL_TIMER; id: number }
+    | { kind: typeof COMMAND_KIND.CONNECT; url: string };
 
 export interface ProtocolCoreBindings {
     readonly state: ConnectionState;
@@ -128,11 +126,11 @@ export interface ProtocolCoreBindings {
 
 export type ProtocolCoreProvider = () => ProtocolCoreBindings;
 
-let defaultProtocolCoreProvider: ProtocolCoreProvider | undefined;
+let defaultWasmProtocolCoreProvider: ProtocolCoreProvider | undefined;
 let protocolCoreProvider: ProtocolCoreProvider | undefined;
 
-export function configureDefaultProtocolCoreProvider(provider: ProtocolCoreProvider): void {
-    defaultProtocolCoreProvider = provider;
+export function configureDefaultWasmProtocolCoreProvider(provider: ProtocolCoreProvider): void {
+    defaultWasmProtocolCoreProvider = provider;
 }
 
 export function configureProtocolCoreProvider(provider: ProtocolCoreProvider): void {
@@ -140,6 +138,13 @@ export function configureProtocolCoreProvider(provider: ProtocolCoreProvider): v
 }
 
 export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): ProtocolCoreBindings {
+    return wrapProtocolCoreBindingsWith(bindings, validateHostCommandBatch);
+}
+
+function wrapProtocolCoreBindingsWith(
+    bindings: ProtocolCoreBindings,
+    validateCommands: (value: unknown, context: string) => HostCommand[]
+): ProtocolCoreBindings {
     return {
         get state(): ConnectionState {
             return validateConnectionState(bindings.state, "protocol core state");
@@ -151,65 +156,62 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
             return validateRecordingState(bindings.recordingState, "protocol core recordingState");
         },
         connect(url: string, jwt: string, room?: string | null): HostCommand[] {
-            return validateHostCommands(
-                bindings.connect(url, jwt, room),
-                "protocol core connect()"
-            );
+            return validateCommands(bindings.connect(url, jwt, room), "protocol core connect()");
         },
         onWsOpen(): HostCommand[] {
-            return validateHostCommands(bindings.onWsOpen(), "protocol core onWsOpen()");
+            return validateCommands(bindings.onWsOpen(), "protocol core onWsOpen()");
         },
         onWsMessage(frame: string): HostCommand[] {
-            return validateHostCommands(bindings.onWsMessage(frame), "protocol core onWsMessage()");
+            return validateCommands(bindings.onWsMessage(frame), "protocol core onWsMessage()");
         },
         onTransportReady(): HostCommand[] {
-            return validateHostCommands(
+            return validateCommands(
                 bindings.onTransportReady(),
                 "protocol core onTransportReady()"
             );
         },
         onWsClose(code: number): HostCommand[] {
-            return validateHostCommands(bindings.onWsClose(code), "protocol core onWsClose()");
+            return validateCommands(bindings.onWsClose(code), "protocol core onWsClose()");
         },
         onTimer(timerId: number): HostCommand[] {
-            return validateHostCommands(bindings.onTimer(timerId), "protocol core onTimer()");
+            return validateCommands(bindings.onTimer(timerId), "protocol core onTimer()");
         },
         publish(type: StreamType, active: boolean): HostCommand[] {
-            return validateHostCommands(bindings.publish(type, active), "protocol core publish()");
+            return validateCommands(bindings.publish(type, active), "protocol core publish()");
         },
         subscribe(sessionId: SessionId, states: DownloadStates): HostCommand[] {
-            return validateHostCommands(
+            return validateCommands(
                 bindings.subscribe(sessionId, states),
                 "protocol core subscribe()"
             );
         },
         updateInfo(info: SessionInfo): HostCommand[] {
-            return validateHostCommands(bindings.updateInfo(info), "protocol core updateInfo()");
+            return validateCommands(bindings.updateInfo(info), "protocol core updateInfo()");
         },
         broadcast(message: unknown): HostCommand[] {
-            return validateHostCommands(bindings.broadcast(message), "protocol core broadcast()");
+            return validateCommands(bindings.broadcast(message), "protocol core broadcast()");
         },
         startRecording(options?: RecordingOptions): HostCommand[] {
-            return validateHostCommands(
+            return validateCommands(
                 bindings.startRecording(options),
                 "protocol core startRecording()"
             );
         },
         stopRecording(): HostCommand[] {
-            return validateHostCommands(bindings.stopRecording(), "protocol core stopRecording()");
+            return validateCommands(bindings.stopRecording(), "protocol core stopRecording()");
         },
         submitNegotiationAnswer(
             requestId: string,
             negotiationKind: NegotiationKind,
             sdp: string
         ): HostCommand[] {
-            return validateHostCommands(
+            return validateCommands(
                 bindings.submitNegotiationAnswer(requestId, negotiationKind, sdp),
                 "protocol core submitNegotiationAnswer()"
             );
         },
         disconnect(): HostCommand[] {
-            return validateHostCommands(bindings.disconnect(), "protocol core disconnect()");
+            return validateCommands(bindings.disconnect(), "protocol core disconnect()");
         },
         trackBinding(mid: string): TrackBinding | null | undefined {
             return validateOptionalTrackBinding(
@@ -221,27 +223,33 @@ export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): Protoc
 }
 
 export function createProtocolCore(): ProtocolCoreBindings {
-    return wrapProtocolCoreBindings(
-        (protocolCoreProvider ?? requireDefaultProtocolCoreProvider())()
+    const provider = protocolCoreProvider;
+    return wrapProtocolCoreBindingsWith(
+        (provider ?? requireDefaultWasmProtocolCoreProvider())(),
+        provider ? validateHostCommandBatch : validateHostCommandShapes
     );
 }
 
-function requireDefaultProtocolCoreProvider(): ProtocolCoreProvider {
-    if (!defaultProtocolCoreProvider) {
+function requireDefaultWasmProtocolCoreProvider(): ProtocolCoreProvider {
+    if (!defaultWasmProtocolCoreProvider) {
         throw new Error(
-            "default protocol core provider is not configured; import the package entrypoint or configure one explicitly"
+            "default WASM protocol core provider is not configured; import the package entrypoint or configure one explicitly"
         );
     }
-    return defaultProtocolCoreProvider;
+    return defaultWasmProtocolCoreProvider;
 }
 
-function validateHostCommands(value: unknown, context: string): HostCommand[] {
+function validateHostCommandShapes(value: unknown, context: string): HostCommand[] {
     if (!Array.isArray(value)) {
         throw new Error(`${context} must return an array of host commands`);
     }
-    const commands = value.map((command, index) =>
+    return value.map((command, index) =>
         validateHostCommand(command, `${context} command #${index}`)
     );
+}
+
+function validateHostCommandBatch(value: unknown, context: string): HostCommand[] {
+    const commands = validateHostCommandShapes(value, context);
     validateHostCommandOrder(commands, context);
     return commands;
 }
@@ -254,38 +262,38 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
     let unknownResolvedRequestId = "";
     for (let index = 0; index < commands.length; index += 1) {
         const command = commands[index];
-        if (command.kind === CommandKind.CLOSE_WEB_SOCKET && closeWebSocketIndex < 0) {
+        if (command.kind === COMMAND_KIND.CLOSE_WEB_SOCKET && closeWebSocketIndex < 0) {
             closeWebSocketIndex = index;
         }
-        if (command.kind === CommandKind.CLOSE_PEER_CONNECTION && closePeerConnectionIndex < 0) {
+        if (command.kind === COMMAND_KIND.CLOSE_PEER_CONNECTION && closePeerConnectionIndex < 0) {
             closePeerConnectionIndex = index;
         }
         if (
-            command.kind === CommandKind.SCHEDULE_TIMER &&
+            command.kind === COMMAND_KIND.SCHEDULE_TIMER &&
             command.id === 1 &&
             recoveryTimerIndex < 0
         ) {
             recoveryTimerIndex = index;
         }
         if (
-            command.kind === CommandKind.RESOLVE_PENDING_REQUEST &&
+            command.kind === COMMAND_KIND.RESOLVE_PENDING_REQUEST &&
             unknownResolvedRequestIndex < 0 &&
             !hasPendingRequestResolutionEvidence(commands, command.requestId, index)
         ) {
             unknownResolvedRequestIndex = index;
             unknownResolvedRequestId = command.requestId;
         }
-        if (command.kind !== CommandKind.APPLY_NEGOTIATION) {
+        if (command.kind !== COMMAND_KIND.APPLY_NEGOTIATION) {
             continue;
         }
         const previous = commands[index - 1];
         if (command.negotiationKind === NEGOTIATION_KIND.OFFER) {
-            if (!previous || previous.kind !== CommandKind.CREATE_PEER_CONNECTION) {
+            if (!previous || previous.kind !== COMMAND_KIND.CREATE_PEER_CONNECTION) {
                 throw new Error(
                     `${context} command #${index} initial negotiation must immediately follow createPeerConnection`
                 );
             }
-        } else if (previous?.kind === CommandKind.CREATE_PEER_CONNECTION) {
+        } else if (previous?.kind === COMMAND_KIND.CREATE_PEER_CONNECTION) {
             throw new Error(
                 `${context} command #${index} renegotiation must not recreate the peer connection`
             );
@@ -324,26 +332,31 @@ function hasPendingRequestResolutionEvidence(
 ): boolean {
     for (let index = 0; index < resolveIndex; index += 1) {
         const command = commands[index];
-        if (command.kind === CommandKind.BEGIN_PENDING_REQUEST && command.requestId === requestId) {
+        if (
+            command.kind === COMMAND_KIND.BEGIN_PENDING_REQUEST &&
+            command.requestId === requestId
+        ) {
             return true;
         }
     }
     const previous = resolveIndex > 0 ? commands[resolveIndex - 1] : undefined;
-    return previous?.kind === CommandKind.CANCEL_TIMER && previous.id >= REQUEST_TIMEOUT_TIMER_BASE;
+    return (
+        previous?.kind === COMMAND_KIND.CANCEL_TIMER && previous.id >= REQUEST_TIMEOUT_TIMER_BASE
+    );
 }
 
 function validateHostCommand(value: unknown, context: string): HostCommand {
     const command = asRecord(value, context);
     const kind = requireString(command.kind, `${context}.kind`);
     switch (kind) {
-        case CommandKind.SEND_WEB_SOCKET:
+        case COMMAND_KIND.SEND_WEB_SOCKET:
             requireString(command.frame, `${context}.frame`);
             return command as HostCommand;
-        case CommandKind.SET_LOCAL_UPLOAD_INTENT:
+        case COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT:
             validateStreamType(command.streamType, `${context}.streamType`);
             requireBoolean(command.active, `${context}.active`);
             return command as HostCommand;
-        case CommandKind.APPLY_NEGOTIATION:
+        case COMMAND_KIND.APPLY_NEGOTIATION:
             requireString(command.requestId, `${context}.requestId`);
             validateStringEnum(
                 command.negotiationKind,
@@ -357,38 +370,38 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
                 validateNegotiationUploadSlot
             );
             return command as HostCommand;
-        case CommandKind.ATTACH_TRACK:
+        case COMMAND_KIND.ATTACH_TRACK:
             requireString(command.mid, `${context}.mid`);
             validateStreamType(command.streamType, `${context}.streamType`);
             return command as HostCommand;
-        case CommandKind.DETACH_TRACK:
+        case COMMAND_KIND.DETACH_TRACK:
             validateStreamType(command.streamType, `${context}.streamType`);
             return command as HostCommand;
-        case CommandKind.CREATE_PEER_CONNECTION:
-        case CommandKind.CLOSE_PEER_CONNECTION:
+        case COMMAND_KIND.CREATE_PEER_CONNECTION:
+        case COMMAND_KIND.CLOSE_PEER_CONNECTION:
             return command as HostCommand;
-        case CommandKind.CLOSE_WEB_SOCKET:
+        case COMMAND_KIND.CLOSE_WEB_SOCKET:
             requireNonNegativeInteger(command.code, `${context}.code`);
             return command as HostCommand;
-        case CommandKind.EMIT_STATE_CHANGE:
+        case COMMAND_KIND.EMIT_STATE_CHANGE:
             validateConnectionState(command.state, `${context}.state`);
             requireOptionalString(command.cause, `${context}.cause`);
             return command as HostCommand;
-        case CommandKind.REPLACE_TRACK_BINDINGS:
+        case COMMAND_KIND.REPLACE_TRACK_BINDINGS:
             validateArray(command.bindings, `${context}.bindings`, validateTrackBinding);
             return command as HostCommand;
-        case CommandKind.REPLACE_SOURCE_DESCRIPTORS:
+        case COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS:
             validateArray(command.sources, `${context}.sources`, validateSourceDescriptor);
             return command as HostCommand;
-        case CommandKind.REMOVE_SESSION_TRACKS:
+        case COMMAND_KIND.REMOVE_SESSION_TRACKS:
             validateSessionId(command.sessionId, `${context}.sessionId`);
             return command as HostCommand;
-        case CommandKind.EMIT_UPDATE:
+        case COMMAND_KIND.EMIT_UPDATE:
             return {
                 kind,
                 update: validateClientUpdate(command.update, `${context}.update`)
             };
-        case CommandKind.BEGIN_PENDING_REQUEST: {
+        case COMMAND_KIND.BEGIN_PENDING_REQUEST: {
             requireString(command.requestId, `${context}.requestId`);
             validateStringEnum(
                 command.requestKind,
@@ -407,18 +420,18 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             }
             return command as HostCommand;
         }
-        case CommandKind.RESOLVE_PENDING_REQUEST:
+        case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
             requireBoolean(command.ok, `${context}.ok`);
             return command as HostCommand;
-        case CommandKind.SCHEDULE_TIMER:
+        case COMMAND_KIND.SCHEDULE_TIMER:
             requireNonNegativeInteger(command.id, `${context}.id`);
             requireNonNegativeInteger(command.ms, `${context}.ms`);
             return command as HostCommand;
-        case CommandKind.CANCEL_TIMER:
+        case COMMAND_KIND.CANCEL_TIMER:
             requireNonNegativeInteger(command.id, `${context}.id`);
             return command as HostCommand;
-        case CommandKind.CONNECT:
+        case COMMAND_KIND.CONNECT:
             requireString(command.url, `${context}.url`);
             return command as HostCommand;
         default:
