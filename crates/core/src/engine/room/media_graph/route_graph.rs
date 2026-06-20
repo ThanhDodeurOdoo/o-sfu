@@ -224,11 +224,14 @@ impl RouteGraph {
             .unwrap_or_default()
     }
 
-    pub(super) fn keys_for_source(&self, source_id: PublishedSourceId) -> Vec<ConsumerKey> {
+    pub(super) fn keys_for_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> impl Iterator<Item = &ConsumerKey> {
         self.by_source
             .get(&source_id)
-            .map(|keys| keys.iter().cloned().collect())
-            .unwrap_or_default()
+            .into_iter()
+            .flat_map(BTreeSet::iter)
     }
 
     pub(super) fn affected_keys_for_user(

@@ -8,7 +8,7 @@ use o_sfu_model::UserId;
 use super::super::{
     ConnectionId, ConsumerCapability, MediaKind as RouterMediaKind, MediaWorkerId,
     ProducerId as RouterProducerId, RoutedProducerId, RouterError, RouterId, RouterPlacement,
-    RouterPlacements, RouterPlacementsError, RoutingError, RoutingTopology,
+    RouterPlacements, RouterPlacementsError, RoutingError, RoutingTopology, SessionId,
 };
 use crate::model::topology::router_state::RouterAdapterError;
 
@@ -122,6 +122,46 @@ fn topology_replacement_rehomes_from_the_new_connection_seed() {
         Some(RouterId(10))
     );
     assert_eq!(topology.user_count(), 1);
+}
+
+#[test]
+fn topology_rolls_back_replacement_after_duplicate_session_failure() {
+    let mut topology = RoutingTopology::new_for_test(RouterId(9));
+    let first_user_id = UserId::Integer(10);
+    let second_user_id = UserId::Integer(20);
+    let colliding_connection = 1;
+
+    assert!(join_on_router(&mut topology, &first_user_id, colliding_connection, 9, 0).is_ok());
+    assert!(join_on_router(&mut topology, &second_user_id, 2, 10, 1).is_ok());
+
+    assert_eq!(
+        topology.commit_session_placement(
+            &second_user_id,
+            ConnectionId::from_raw(colliding_connection),
+            placement(9, 0),
+            [],
+        ),
+        Err(RoutingError::RouterState(RouterAdapterError::Router(
+            RouterError::DuplicateSession(SessionId(colliding_connection)),
+        )))
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&first_user_id),
+        Some(RouterId(9))
+    );
+    assert_eq!(
+        topology.home_router_id_for_user(&second_user_id),
+        Some(RouterId(10))
+    );
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(1)
+    );
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(10)),
+        Some(1)
+    );
+    assert_eq!(topology.user_count(), 2);
 }
 
 #[test]

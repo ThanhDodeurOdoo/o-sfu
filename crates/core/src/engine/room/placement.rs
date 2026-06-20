@@ -191,9 +191,7 @@ impl Room {
         let policy = policy.parts();
         let pressured = {
             let state = self.state.read().await;
-            state.source_fanout_pressure(policy.max_fanout_per_source, |connection_id| {
-                state.media_worker_id_for_connection(connection_id)
-            })
+            state.source_fanout_pressure(policy.max_fanout_per_source)
         };
         lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
     }

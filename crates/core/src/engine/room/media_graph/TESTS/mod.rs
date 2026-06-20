@@ -426,9 +426,7 @@ fn pending_consumer_setup() -> (
         22_222,
     );
     let mut planned_setups = state
-        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id, |_| {
-            MediaWorkerId::from_raw(0)
-        })
+        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id)
         .expect("subscriber session should exist");
     assert_eq!(planned_setups.len(), 1);
     let setup = planned_setups.pop().expect("setup should be planned");
@@ -461,7 +459,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
         two_user_consumer_route();
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
 
-    assert!(state.source_fanout_pressure(1, |_| MediaWorkerId::from_raw(0)));
+    assert!(state.source_fanout_pressure(1));
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Active)
@@ -476,7 +474,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
 
     set_test_consumer_policy_pause(&mut state, &key);
 
-    assert!(!state.source_fanout_pressure(1, |_| MediaWorkerId::from_raw(0)));
+    assert!(!state.source_fanout_pressure(1));
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Inactive)
@@ -566,7 +564,6 @@ fn stale_replaced_connection_cannot_update_download_state() {
         stale_connection_id,
         &producer_user_id,
         &intents,
-        |_| MediaWorkerId::from_raw(0),
     );
     let (activities, setups, relays) = change.into_parts();
 
@@ -612,7 +609,6 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
         subscriber_connection_id,
         &publisher_user_id,
         &intents,
-        |_| MediaWorkerId::from_raw(0),
     );
     let (activities, setups, relays) = change.into_parts();
 
@@ -662,7 +658,6 @@ fn consumer_setup_commit_uses_latest_room_state() {
         subscriber_connection_id,
         &publisher_user_id,
         &intents,
-        |_| MediaWorkerId::from_raw(0),
     );
     let (_, setups, _) = change.into_parts();
     assert!(setups.is_empty());
@@ -820,9 +815,7 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
     }
 
     let planned_setups = state
-        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id, |_| {
-            MediaWorkerId::from_raw(0)
-        })
+        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id)
         .expect("subscriber session should still exist");
 
     assert_eq!(planned_setups.len(), 2);
@@ -1174,7 +1167,10 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
             .is_some()
     );
     assert_eq!(
-        media.consumer_keys_for_source(other_source_id),
+        media
+            .consumer_keys_for_source(other_source_id)
+            .cloned()
+            .collect::<Vec<_>>(),
         vec![surviving_consumer_key.clone()]
     );
     state

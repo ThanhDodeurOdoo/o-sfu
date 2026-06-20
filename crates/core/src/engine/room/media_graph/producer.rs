@@ -224,8 +224,7 @@ impl RoomState {
         let consumers = self.publish_consumer_targets(producer_id, &producer, transport_media_id);
         let publish_after = self.media_counts();
         let setup_before = self.media_counts();
-        let worker_lookup = self.worker_lookup();
-        let setups = self.plan_consumers(consumers, worker_lookup);
+        let setups = self.plan_consumers(consumers);
         let setup_after = self.media_counts();
         Some(PublishCommit {
             user: owner_user_id,

@@ -54,13 +54,11 @@ impl RoomUserOperation<'_> {
         let room = self.room;
         let commit = {
             let mut state = room.state.write().await;
-            let worker_lookup = state.worker_lookup();
             let commit = state.apply_receiver_intent(
                 self.user_id,
                 self.connection_id,
                 target_user_id,
                 intents,
-                worker_lookup,
             );
             drop(state);
             commit

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use o_sfu_router::{
     ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, MediaCapabilities,
     MediaStream as RouterRtpParameters, ProducerRouteState, RoutedConsumerId, RoutingError,
-    RoutingTopology,
+    RoutingPlacementCommit, RoutingTopology,
 };
 use tracing::{error, warn};
 
@@ -141,6 +141,18 @@ impl RoomTopology {
         self.transport_session_by_connection
             .get(&connection_id)
             .cloned()
+    }
+
+    pub(in crate::engine::room) fn committed_media_worker_id(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> Option<MediaWorkerId> {
+        self.routing
+            .committed_media_worker_id(user_id, connection_id)?;
+        self.transport_session_by_connection
+            .get(&connection_id)
+            .map(TransportSessionKey::media_worker_id)
     }
 
     #[must_use]
@@ -409,8 +421,11 @@ impl RoomTopology {
         } else {
             Vec::new()
         };
-        let mut routing = self.routing.clone();
-        let (router_receipt, displaced_connection) = routing
+        let RoutingPlacementCommit {
+            receipt: router_receipt,
+            displaced_connection,
+        } = self
+            .routing
             .commit_session_placement(user_id, connection_id, home_placement, affected_consumers)
             .map_err(SessionPlacementRejection::Router)?;
         let session_key = self.transport_session_key(
@@ -418,7 +433,6 @@ impl RoomTopology {
             router_receipt.connection_id,
             router_receipt.media_worker_id,
         );
-        self.routing = routing;
         if let Some(connection_id) = displaced_connection {
             self.transport_session_by_connection.remove(&connection_id);
         }
@@ -428,18 +442,13 @@ impl RoomTopology {
             connection_id: router_receipt.connection_id,
             transport_session_key: session_key,
         };
-        let replacement_effects = if previous_connection.is_some() {
-            let transport_cleanup = previous_session_key.as_ref().map_or_else(Vec::new, |key| {
-                vec![TransportCleanupOperation::CloseUser {
-                    session_key: key.clone(),
-                }]
-            });
+        let replacement_effects = if let Some(key) = previous_session_key.as_ref() {
+            let transport_cleanup = vec![TransportCleanupOperation::CloseUser {
+                session_key: key.clone(),
+            }];
             let relay_effects = self.media.remove_user_media(user_id);
-            let relay_effects = if let Some(key) = previous_session_key.as_ref() {
-                self.resolved_relay_route_effects_with_displaced(relay_effects, user_id, key)
-            } else {
-                self.resolved_relay_route_effects(relay_effects)
-            };
+            let relay_effects =
+                self.resolved_relay_route_effects_with_displaced(relay_effects, user_id, key);
             MediaTopologyEffects::new(relay_effects, transport_cleanup)
         } else {
             MediaTopologyEffects::default()
@@ -564,14 +573,14 @@ impl RoomTopology {
         &mut self,
         target: ConsumerSetupTarget,
         selection: ConsumerSourceSelection,
-        source_worker: MediaWorkerId,
-        target_worker: MediaWorkerId,
         sender: OutboundSender,
         track: RemoteTrackSetup,
     ) -> Option<PendingConsumerSetup> {
         let key = target.consumer_key();
         let active = selection.delivery_active();
         let reservation = self.media.routes.reserve_consumer_setup(key, selection)?;
+        let source_worker = target.producer_session.media_worker_id();
+        let target_worker = target.user_session.media_worker_id();
         let relays = if source_worker == target_worker {
             Vec::new()
         } else {
