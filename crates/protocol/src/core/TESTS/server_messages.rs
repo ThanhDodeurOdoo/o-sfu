@@ -147,7 +147,7 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
 }
 
 #[test]
-fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
+fn protocol_core_accepts_first_class_source_snapshots() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
@@ -179,36 +179,17 @@ fn protocol_core_tracks_source_descriptors_from_track_snapshot() {
             },
         ],
     };
-    let tracks = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
-        TrackBinding {
-            mid: String::from("cam-0"),
-            user_id: String::from("peer-1").into(),
-            stream_type: StreamType::Camera,
-            active: true,
-            source: Some(source.clone()),
-        },
+    let sources = encode_server_batch(ServerEnvelope::Message(ServerMessage::Sources(vec![
+        source.clone(),
     ])));
 
     assert_eq!(
-        core.on_ws_message(&tracks),
-        vec![
-            Command::EmitEvent {
-                event: ProtocolEvent::TrackSnapshot {
-                    bindings: vec![TrackBinding {
-                        mid: String::from("cam-0"),
-                        user_id: String::from("peer-1").into(),
-                        stream_type: StreamType::Camera,
-                        active: true,
-                        source: Some(source.clone()),
-                    }],
-                },
+        core.on_ws_message(&sources),
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::SourceSnapshot {
+                sources: vec![source],
             },
-            Command::EmitEvent {
-                event: ProtocolEvent::SourceSnapshot {
-                    sources: vec![source],
-                },
-            },
-        ]
+        }]
     );
 }
 

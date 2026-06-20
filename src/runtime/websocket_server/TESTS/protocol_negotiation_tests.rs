@@ -1,4 +1,4 @@
-use o_sfu_protocol::wire::{ServerMessage, ServerRequest, TrackBinding};
+use o_sfu_protocol::wire::{ServerMessage, ServerRequest, SourceDescriptor, TrackBinding};
 use o_sfu_router::{MediaKind, test_support::rtp_samples::sample_simulcast_video_rtp_parameters};
 
 use super::fixtures::*;
@@ -132,35 +132,25 @@ async fn assert_track_snapshot(
 ) -> Option<Option<(RequestId, ServerRequest)>> {
     let batch = read_protocol_server_batch(websocket).await?;
     let request = first_protocol_server_request(&batch);
-    let mut track_messages = track_messages_in_batch(&batch)?;
-    let Some(actual_bindings) = track_messages.pop() else {
-        panic!("expected track snapshot");
-    };
-    assert!(track_messages.is_empty());
+    let (actual_bindings, actual_sources) = media_snapshots_in_batch(batch)?;
     assert_eq!(actual_bindings.len(), bindings.len());
+    assert_eq!(actual_sources.len(), bindings.len());
     for expected in &bindings {
         let Some(actual) = actual_bindings.iter().find(|binding| {
-            binding.user_id == expected.user_id
-                && binding.stream_type == expected.stream_type
-                && binding
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.mid.as_deref())
-                    == Some(expected.mid.as_str())
+            binding.user_id == expected.user_id && binding.stream_type == expected.stream_type
         }) else {
-            panic!("expected track snapshot source {}", expected.mid);
+            panic!("expected track snapshot binding {}", expected.mid);
         };
         assert!(!actual.mid.is_empty());
-        assert_eq!(actual.user_id, expected.user_id);
-        assert_eq!(actual.stream_type, expected.stream_type);
         assert_eq!(actual.active, expected.active);
-        let Some(source) = actual.source.as_ref() else {
-            panic!("track snapshot should carry source descriptors");
+        let Some(source) = actual_sources.iter().find(|source| {
+            source.user_id == expected.user_id
+                && source.stream_type == expected.stream_type
+                && source.mid.as_deref() == Some(expected.mid.as_str())
+        }) else {
+            panic!("expected source snapshot descriptor {}", expected.mid);
         };
-        assert_eq!(source.user_id, expected.user_id);
-        assert_eq!(source.stream_type, expected.stream_type);
         assert_eq!(source.active, expected.active);
-        assert_eq!(source.mid.as_deref(), Some(expected.mid.as_str()));
         assert_eq!(
             source
                 .encodings
@@ -182,19 +172,31 @@ async fn expect_renegotiation_request(
     Some((request_id, request))
 }
 
-fn track_messages_in_batch(batch: &EnvelopeBatch) -> Option<Vec<Vec<TrackBinding>>> {
-    let mut messages = Vec::new();
-    for envelope in batch.clone() {
+fn media_snapshots_in_batch(
+    batch: EnvelopeBatch,
+) -> Option<(Vec<TrackBinding>, Vec<SourceDescriptor>)> {
+    let mut tracks = None;
+    let mut sources = None;
+    for envelope in batch {
         match ServerEnvelope::decode(envelope).ok()? {
             ServerEnvelope::Message(ServerMessage::Tracks(track_bindings)) => {
-                messages.push(track_bindings);
+                assert!(tracks.replace(track_bindings).is_none());
+            }
+            ServerEnvelope::Message(ServerMessage::Sources(snapshot)) => {
+                assert!(sources.replace(snapshot).is_none());
             }
             ServerEnvelope::Message(_)
             | ServerEnvelope::Request { .. }
             | ServerEnvelope::Response { .. } => {}
         }
     }
-    Some(messages)
+    let Some(tracks) = tracks else {
+        panic!("expected track snapshot");
+    };
+    let Some(sources) = sources else {
+        panic!("expected source snapshot");
+    };
+    Some((tracks, sources))
 }
 
 fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {

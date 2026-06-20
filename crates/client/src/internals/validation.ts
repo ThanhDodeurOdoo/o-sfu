@@ -8,7 +8,9 @@ import {
 import { STREAM_KIND } from "./browser_types.js";
 
 const STREAM_TYPE_SET = new Set<StreamType>(STREAM_TYPES);
-const VIDEO_LAYOUT_INTENT_SET = new Set(VIDEO_LAYOUT_INTENTS);
+const DOWNLOAD_LAYOUT_FIELDS = ["cameraLayout", "screenLayout"] as const;
+const DOWNLOAD_STATE_FIELDS = [...STREAM_TYPES, ...DOWNLOAD_LAYOUT_FIELDS] as const;
+const DOWNLOAD_STATE_FIELD_SET = new Set<string>(DOWNLOAD_STATE_FIELDS);
 
 export function normalizeWebSocketUrl(url: string): string {
     return url.replace(/^http(s?):/i, (_match, secure) => (secure ? "wss:" : "ws:"));
@@ -46,19 +48,34 @@ export function cloneIceServers(iceServers?: RTCIceServer[]): RTCIceServer[] | u
 }
 
 export function validateDownloadStates(states: DownloadStates): void {
-    for (const value of [states.audio, states.camera, states.screen]) {
-        if (value !== undefined && typeof value !== "boolean") {
-            throw new Error("download state flags must be booleans when provided");
+    for (const field of Object.keys(states)) {
+        if (!DOWNLOAD_STATE_FIELD_SET.has(field)) {
+            throw new Error(`download state field ${field} is invalid`);
         }
     }
-    for (const [name, value] of [
-        ["cameraLayout", states.cameraLayout],
-        ["screenLayout", states.screenLayout]
-    ] as const) {
-        if (value !== undefined && !VIDEO_LAYOUT_INTENT_SET.has(value)) {
-            throw new Error(`${name} must be a valid video layout intent when provided`);
+    if (
+        STREAM_TYPES.some((type) => states[type] !== undefined && typeof states[type] !== "boolean")
+    ) {
+        throw new Error("download state flags must be booleans when provided");
+    }
+    for (const field of DOWNLOAD_LAYOUT_FIELDS) {
+        const value = states[field];
+        if (value !== undefined && !VIDEO_LAYOUT_INTENTS.includes(value)) {
+            throw new Error(`${field} must be a valid video layout intent when provided`);
         }
     }
+}
+
+export function mergeDownloadStates(
+    previous: DownloadStates | undefined,
+    next: DownloadStates
+): DownloadStates {
+    return Object.fromEntries(
+        DOWNLOAD_STATE_FIELDS.flatMap((field) => {
+            const value = next[field] ?? previous?.[field];
+            return value === undefined ? [] : [[field, value]];
+        })
+    ) as DownloadStates;
 }
 
 export function validateTrackForStreamType(

@@ -50,9 +50,11 @@ pub(crate) async fn assert_camera_unpublish_updates_snapshot_and_info(
             .is_some()
     );
     assert!(publisher.complete_next_negotiation().await.is_some());
-    let first_message = next_server_message(subscriber, "first camera unpublish update").await;
-    let second_message = next_server_message(subscriber, "second camera unpublish update").await;
-    let messages = [first_message, second_message];
+    let messages = [
+        next_server_message(subscriber, "first camera unpublish update").await,
+        next_server_message(subscriber, "second camera unpublish update").await,
+        next_server_message(subscriber, "third camera unpublish update").await,
+    ];
     let Some(track_snapshot) = messages.iter().find_map(|message| match message {
         ServerMessage::Tracks(snapshot) => Some(snapshot),
         _ => None,
@@ -62,6 +64,13 @@ pub(crate) async fn assert_camera_unpublish_updates_snapshot_and_info(
     assert!(
         track_snapshot.is_empty(),
         "protocol unpublish should clear the authoritative camera track snapshot"
+    );
+
+    assert!(
+        messages.iter().any(
+            |message| matches!(message, ServerMessage::Sources(snapshot) if snapshot.is_empty())
+        ),
+        "protocol unpublish should clear the authoritative camera source snapshot"
     );
 
     let Some(peer_info) = messages.iter().find_map(|message| match message {
@@ -102,12 +111,18 @@ pub(crate) async fn assert_departure_message_protocol(
     subscriber: &mut ProtocolFakePeer,
     user_id: UserId,
 ) {
-    let ServerMessage::PeerLeft(departure) =
-        next_server_message(subscriber, "protocol peer departure notification").await
-    else {
-        panic!("expected protocol peer departure notification");
-    };
-    assert_eq!(departure.user_id, user_id);
+    for _ in 0..3 {
+        match next_server_message(subscriber, "protocol peer departure notification").await {
+            ServerMessage::PeerLeft(departure) => {
+                assert_eq!(departure.user_id, user_id);
+                return;
+            }
+            ServerMessage::Sources(snapshot) if snapshot.is_empty() => {}
+            ServerMessage::Tracks(snapshot) if snapshot.is_empty() => {}
+            message => panic!("expected protocol peer departure notification, got {message:?}"),
+        }
+    }
+    panic!("expected protocol peer departure notification");
 }
 
 pub(crate) async fn assert_peer_joined_message_protocol(
@@ -133,13 +148,13 @@ pub(crate) async fn assert_track_snapshot(
     else {
         panic!("expected protocol track snapshot");
     };
-    assert_eq!(track_bindings.len(), 1);
-    let Some(track_binding) = track_bindings.first() else {
+    let [track_binding] = track_bindings.as_slice() else {
         panic!("expected one protocol track binding");
     };
     assert_eq!(track_binding.user_id, user_id);
     assert_eq!(track_binding.stream_type, stream_type);
     assert_eq!(track_binding.active, active);
+    assert_source_snapshot(subscriber, Some(track_binding)).await;
     track_binding.clone()
 }
 
@@ -150,6 +165,7 @@ pub(crate) async fn assert_empty_track_snapshot(subscriber: &mut ProtocolFakePee
         panic!("expected protocol track snapshot");
     };
     assert!(track_bindings.is_empty());
+    assert_source_snapshot(subscriber, None).await;
 }
 
 pub(crate) async fn assert_peer_info_update(
@@ -178,8 +194,34 @@ pub(crate) async fn assert_no_server_message_protocol(subscriber: &mut ProtocolF
 }
 
 async fn next_server_message(subscriber: &mut ProtocolFakePeer, expected: &str) -> ServerMessage {
-    let Some(message) = subscriber.read_next_server_message().await else {
+    let Some(message) = subscriber
+        .read_server_message_with_timeout(Duration::from_secs(1))
+        .await
+    else {
         panic!("expected {expected}");
     };
     message
+}
+
+async fn assert_source_snapshot(
+    subscriber: &mut ProtocolFakePeer,
+    track_binding: Option<&TrackBinding>,
+) {
+    let ServerMessage::Sources(sources) =
+        next_server_message(subscriber, "protocol source snapshot").await
+    else {
+        panic!("expected protocol source snapshot");
+    };
+    let Some(track_binding) = track_binding else {
+        assert!(sources.is_empty());
+        return;
+    };
+    let [source] = sources.as_slice() else {
+        panic!("expected one protocol source descriptor");
+    };
+    assert_eq!(source.user_id, track_binding.user_id);
+    assert_eq!(source.stream_type, track_binding.stream_type);
+    assert_eq!(source.active, track_binding.active);
+    assert!(source.mid.as_deref().is_some_and(|mid| !mid.is_empty()));
+    assert!(!source.source_id.is_empty());
 }

@@ -30,5 +30,4 @@ configureDefaultProtocolCoreProvider(() => {
 
 export * from "../src/protocol.ts";
 export * from "../src/public_api.ts";
-export * from "../src/runtime_contract.ts";
 export * from "../src/sfu_client.ts";

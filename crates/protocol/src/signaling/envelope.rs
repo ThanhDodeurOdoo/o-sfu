@@ -3,6 +3,8 @@ use serde_json::Value;
 
 pub type EnvelopeBatch = Vec<Envelope>;
 
+pub const MAX_ENVELOPE_BATCH_LEN: usize = 64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvelopeBatchDecodeError {
     InvalidJson,

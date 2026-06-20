@@ -140,7 +140,7 @@ export const COMMAND_KIND = {
     REMOVE_SESSION_TRACKS: "removeSessionTracks",
     EMIT_STATE_CHANGE: "emitStateChange",
     EMIT_UPDATE: "emitUpdate",
-    REGISTER_PENDING_REQUEST: "registerPendingRequest",
+    BEGIN_PENDING_REQUEST: "beginPendingRequest",
     RESOLVE_PENDING_REQUEST: "resolvePendingRequest",
     SCHEDULE_TIMER: "scheduleTimer",
     CANCEL_TIMER: "cancelTimer"
@@ -198,6 +198,7 @@ export type ClientOutboundEnvelope =
 export type ServerMessageEnvelope =
     | MessageEnvelope<"welcome", WelcomePayload>
     | MessageEnvelope<"tracks", TrackBinding[]>
+    | MessageEnvelope<"sources", SourceDescriptor[]>
     | MessageEnvelope<"peerinfo", PeerInfoPayload>
     | MessageEnvelope<"peerjoined", PeerInfoPayload>
     | MessageEnvelope<"peerleft", PeerLeftPayload>

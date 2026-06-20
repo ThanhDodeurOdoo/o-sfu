@@ -1,30 +1,32 @@
 use std::collections::BTreeMap;
 
 use super::{Command, Commands, ProtocolCore, ProtocolEvent};
-use crate::{
-    shared::UserId,
-    signaling::{
-        PeerInfoPayload, ServerBroadcastPayload, ServerMessage, SourceDescriptor, TrackBinding,
-    },
+use crate::signaling::{
+    PeerInfoPayload, ServerBroadcastPayload, ServerMessage, SourceDescriptor, TrackBinding,
 };
 
 pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMessage) -> Commands {
     match message {
         ServerMessage::Welcome(payload) => core.accept_welcome(payload),
         ServerMessage::Tracks(bindings) => replace_track_snapshot(core, bindings),
+        ServerMessage::Sources(sources) => replace_source_snapshot(core, sources),
         ServerMessage::PeerInfo(payload) | ServerMessage::PeerJoined(payload) => {
             peer_info_commands(payload)
         }
         ServerMessage::PeerLeft(payload) => {
-            let source_snapshot_changed = remove_peer_bindings(core, &payload.user_id);
-            let mut commands = if source_snapshot_changed {
+            let source_count = core.source_descriptors.len();
+            core.track_bindings
+                .retain(|_, binding| binding.user_id != payload.user_id);
+            core.source_descriptors
+                .retain(|_, source| source.user_id != payload.user_id);
+            let mut commands = if core.source_descriptors.len() == source_count {
+                Vec::new()
+            } else {
                 vec![Command::EmitEvent {
                     event: ProtocolEvent::SourceSnapshot {
-                        sources: source_descriptors_from_track_bindings(core),
+                        sources: core.source_descriptors.values().cloned().collect(),
                     },
                 }]
-            } else {
-                Vec::new()
             };
             commands.push(Command::EmitEvent {
                 event: ProtocolEvent::PeerLeft {
@@ -44,36 +46,37 @@ pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMess
 }
 
 fn replace_track_snapshot(core: &mut ProtocolCore, bindings: Vec<TrackBinding>) -> Commands {
-    let had_source_descriptors = core
-        .track_bindings
-        .values()
-        .any(|binding| binding.source.is_some());
-    let next_sources = source_descriptors_from_bindings(&bindings);
+    let legacy_sources = source_descriptors_from_bindings(&bindings);
     core.track_bindings = bindings
         .iter()
         .cloned()
         .map(|binding| (binding.mid.clone(), binding))
-        .collect::<BTreeMap<_, _>>();
+        .collect();
     let mut commands = vec![Command::EmitEvent {
         event: ProtocolEvent::TrackSnapshot { bindings },
     }];
-    if had_source_descriptors || !next_sources.is_empty() {
-        let sources = next_sources.values().cloned().collect();
+    if !legacy_sources.is_empty() || core.source_descriptors_from_legacy_tracks {
+        core.source_descriptors = legacy_sources;
+        core.source_descriptors_from_legacy_tracks = !core.source_descriptors.is_empty();
         commands.push(Command::EmitEvent {
-            event: ProtocolEvent::SourceSnapshot { sources },
+            event: ProtocolEvent::SourceSnapshot {
+                sources: core.source_descriptors.values().cloned().collect(),
+            },
         });
     }
     commands
 }
 
-fn remove_peer_bindings(core: &mut ProtocolCore, user_id: &UserId) -> bool {
-    let mut removed_source = false;
-    core.track_bindings.retain(|_, binding| {
-        let remove = &binding.user_id == user_id;
-        removed_source |= remove && binding.source.is_some();
-        !remove
-    });
-    removed_source
+fn replace_source_snapshot(core: &mut ProtocolCore, sources: Vec<SourceDescriptor>) -> Commands {
+    core.source_descriptors_from_legacy_tracks = false;
+    core.source_descriptors = sources
+        .iter()
+        .cloned()
+        .map(|source| (source.source_id.clone(), source))
+        .collect();
+    vec![Command::EmitEvent {
+        event: ProtocolEvent::SourceSnapshot { sources },
+    }]
 }
 
 fn source_descriptors_from_bindings(
@@ -86,16 +89,6 @@ fn source_descriptors_from_bindings(
             Some((source.source_id.clone(), source))
         })
         .collect()
-}
-
-fn source_descriptors_from_track_bindings(core: &ProtocolCore) -> Vec<SourceDescriptor> {
-    let mut sources = BTreeMap::new();
-    for binding in core.track_bindings.values() {
-        if let Some(source) = binding.source.clone() {
-            sources.insert(source.source_id.clone(), source);
-        }
-    }
-    sources.into_values().collect()
 }
 
 fn peer_info_commands(payload: PeerInfoPayload) -> Commands {

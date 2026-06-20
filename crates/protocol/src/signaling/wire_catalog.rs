@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::{
     AuthPayload, ClientBroadcastPayload, Envelope, PeerInfoPayload, PeerLeftPayload,
     RecordingActionResult, RequestId, ServerBroadcastPayload, SessionDescriptionPayload,
-    StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
+    SourceDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
 };
 use crate::shared::{RecordingStateUpdate, UserInfo};
 
@@ -24,6 +24,7 @@ enum WireTag {
     StartRecording,
     StopRecording,
     Subscribe,
+    Sources,
     Tracks,
     Unpublish,
     Welcome,
@@ -45,6 +46,7 @@ impl WireTag {
             Self::StartRecording => "startrecording",
             Self::StopRecording => "stoprecording",
             Self::Subscribe => "subscribe",
+            Self::Sources => "sources",
             Self::Tracks => "tracks",
             Self::Unpublish => "unpublish",
             Self::Welcome => "welcome",
@@ -233,6 +235,7 @@ impl ClientResponse {
 pub enum ServerMessage {
     Welcome(WelcomePayload),
     Tracks(Vec<TrackBinding>),
+    Sources(Vec<SourceDescriptor>),
     PeerInfo(PeerInfoPayload),
     PeerJoined(PeerInfoPayload),
     PeerLeft(PeerLeftPayload),
@@ -247,6 +250,9 @@ impl ServerMessage {
         }),
         EnvelopeEntry::new(WireTag::Tracks, |tag, payload| {
             decode_payload(tag, payload, Self::Tracks)
+        }),
+        EnvelopeEntry::new(WireTag::Sources, |tag, payload| {
+            decode_payload(tag, payload, Self::Sources)
         }),
         EnvelopeEntry::new(WireTag::PeerInfo, |tag, payload| {
             decode_payload(tag, payload, Self::PeerInfo)
@@ -275,6 +281,7 @@ impl ServerMessage {
         match self {
             Self::Welcome(payload) => encode_message(WireTag::Welcome, payload),
             Self::Tracks(payload) => encode_message(WireTag::Tracks, payload),
+            Self::Sources(payload) => encode_message(WireTag::Sources, payload),
             Self::PeerInfo(payload) => encode_message(WireTag::PeerInfo, payload),
             Self::PeerJoined(payload) => encode_message(WireTag::PeerJoined, payload),
             Self::PeerLeft(payload) => encode_message(WireTag::PeerLeft, payload),

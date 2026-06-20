@@ -203,6 +203,7 @@ fn record_websocket_metrics(metrics: &RuntimeMetrics) {
     metrics.record_ws_bus_client_request();
     metrics.record_ws_bus_client_message();
     metrics.record_ws_bus_batch_sent(2);
+    metrics.record_ws_bus_batches_sent(2, 65);
     metrics.record_ws_bus_send_failure();
     metrics.record_ws_handshake_duration(Duration::from_millis(80));
     metrics.record_ws_auth_duration(Duration::from_millis(8));
@@ -238,8 +239,8 @@ fn assert_websocket_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.ws_bus_envelopes_received(), 3);
     assert_eq!(snapshot.ws_bus_client_requests(), 1);
     assert_eq!(snapshot.ws_bus_client_messages(), 1);
-    assert_eq!(snapshot.ws_bus_batches_sent(), 1);
-    assert_eq!(snapshot.ws_bus_envelopes_sent(), 2);
+    assert_eq!(snapshot.ws_bus_batches_sent(), 3);
+    assert_eq!(snapshot.ws_bus_envelopes_sent(), 67);
     assert_eq!(snapshot.ws_bus_send_failures(), 1);
 }
 

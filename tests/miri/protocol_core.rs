@@ -14,15 +14,14 @@ use o_sfu_tests::miri_support::{
 };
 
 fn extract_registered_request(commands: &[Command]) -> Option<(RequestId, u32)> {
-    let request_id = commands.iter().find_map(|command| match command {
-        Command::RegisterPendingRequest { request_id, .. } => Some(request_id.clone()),
+    commands.iter().find_map(|command| match command {
+        Command::BeginPendingRequest {
+            request_id,
+            timeout_timer_id,
+            ..
+        } => Some((request_id.clone(), *timeout_timer_id)),
         _ => None,
-    })?;
-    let timeout_timer_id = commands.iter().find_map(|command| match command {
-        Command::ScheduleTimer { id, .. } => Some(*id),
-        _ => None,
-    })?;
-    Some((request_id, timeout_timer_id))
+    })
 }
 
 #[test]
@@ -135,7 +134,7 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
     };
     assert!(matches!(
         start_commands.first(),
-        Some(Command::RegisterPendingRequest {
+        Some(Command::BeginPendingRequest {
             kind: PendingRequestKind::StartRecording,
             ..
         })
@@ -148,7 +147,7 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
     };
     assert!(matches!(
         stop_commands.first(),
-        Some(Command::RegisterPendingRequest {
+        Some(Command::BeginPendingRequest {
             kind: PendingRequestKind::StopRecording,
             ..
         })

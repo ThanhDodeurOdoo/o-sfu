@@ -44,15 +44,17 @@ impl StickyReplayState {
             .desired_subscriptions
             .entry(user_id.clone())
             .or_default();
-        merge_download_states(existing_states, states);
-        if download_states_are_empty(existing_states) {
+        existing_states.apply_partial_update(states);
+        if *existing_states == DownloadStates::default() {
             self.desired_subscriptions.remove(user_id);
         }
     }
 
     pub(super) fn remember_info(&mut self, info: &UserInfo) {
         let existing_info = self.desired_info.get_or_insert_with(UserInfo::default);
-        merge_session_info(existing_info, info);
+        let is_featured = existing_info.is_featured;
+        existing_info.apply_partial_update(info);
+        existing_info.is_featured = is_featured;
     }
 
     pub(super) fn replay_session_batch(&self) -> Option<EnvelopeBatch> {
@@ -84,52 +86,5 @@ impl StickyReplayState {
         } else {
             Some(replay_batch)
         }
-    }
-}
-
-fn merge_download_states(target: &mut DownloadStates, update: &DownloadStates) {
-    if let Some(audio) = update.audio {
-        target.audio = Some(audio);
-    }
-    if let Some(camera) = update.camera {
-        target.camera = Some(camera);
-    }
-    if let Some(screen) = update.screen {
-        target.screen = Some(screen);
-    }
-    if let Some(camera_layout) = update.camera_layout {
-        target.camera_layout = Some(camera_layout);
-    }
-    if let Some(screen_layout) = update.screen_layout {
-        target.screen_layout = Some(screen_layout);
-    }
-}
-
-fn download_states_are_empty(states: &DownloadStates) -> bool {
-    states.audio.is_none()
-        && states.camera.is_none()
-        && states.screen.is_none()
-        && states.camera_layout.is_none()
-        && states.screen_layout.is_none()
-}
-
-fn merge_session_info(target: &mut UserInfo, update: &UserInfo) {
-    if let Some(is_talking) = update.is_talking {
-        target.is_talking = Some(is_talking);
-    }
-    if let Some(is_camera_on) = update.is_camera_on {
-        target.is_camera_on = Some(is_camera_on);
-    }
-    if let Some(is_screen_sharing_on) = update.is_screen_sharing_on {
-        target.is_screen_sharing_on = Some(is_screen_sharing_on);
-    }
-    if let Some(is_self_muted) = update.is_self_muted {
-        target.is_self_muted = Some(is_self_muted);
-    }
-    if let Some(is_deaf) = update.is_deaf {
-        target.is_deaf = Some(is_deaf);
-    }
-    if let Some(is_raising_hand) = update.is_raising_hand {
-        target.is_raising_hand = Some(is_raising_hand);
     }
 }

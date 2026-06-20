@@ -251,27 +251,7 @@ impl ProtocolHarnessPeer {
                     kind,
                     sdp,
                     upload_slots: _,
-                } => {
-                    if !self.auto_answer_negotiation {
-                        self.pending_negotiations
-                            .push_back(PendingHarnessNegotiation {
-                                request_id,
-                                kind,
-                                sdp,
-                            });
-                        continue;
-                    }
-                    let answer_sdp = match self.rtc_peer.as_mut() {
-                        Some(rtc_peer) => rtc_peer.answer_offer(&sdp)?,
-                        None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
-                    };
-                    let follow_up =
-                        self.core
-                            .submit_negotiation_answer(&request_id, kind, &answer_sdp);
-                    let mut raw_follow_up = follow_up.into_vec();
-                    raw_follow_up.extend(self.core.on_transport_ready());
-                    raw_follow_up
-                }
+                } => self.handle_negotiation_command(request_id, kind, sdp)?,
                 Command::ScheduleTimer { id, ms } => {
                     self.timers.insert(id, ms);
                     Vec::new()
@@ -284,11 +264,19 @@ impl ProtocolHarnessPeer {
                     self.websocket.as_mut()?.close(None).await.ok()?;
                     Vec::new()
                 }
-                Command::RegisterPendingRequest { request_id, kind } => {
+                Command::BeginPendingRequest {
+                    request_id,
+                    kind,
+                    timeout_timer_id,
+                    timeout_ms,
+                } => {
+                    self.timers.insert(timeout_timer_id, timeout_ms);
                     self.pending_request_commands
-                        .push(HostCommand::RegisterPendingRequest {
+                        .push(HostCommand::BeginPendingRequest {
                             request_id,
                             request_kind: kind.into(),
+                            timeout_timer_id,
+                            timeout_ms,
                         });
                     Vec::new()
                 }
@@ -301,5 +289,32 @@ impl ProtocolHarnessPeer {
             pending.extend(follow_up);
         }
         Some(())
+    }
+
+    fn handle_negotiation_command(
+        &mut self,
+        request_id: RequestId,
+        kind: NegotiationKind,
+        sdp: String,
+    ) -> Option<Vec<Command>> {
+        if self.auto_answer_negotiation {
+            let answer_sdp = match self.rtc_peer.as_mut() {
+                Some(rtc_peer) => rtc_peer.answer_offer(&sdp)?,
+                None => String::from("v=0\r\ns=protocol-core-answer\r\n"),
+            };
+            let mut follow_up = self
+                .core
+                .submit_negotiation_answer(&request_id, kind, &answer_sdp)
+                .into_vec();
+            follow_up.extend(self.core.on_transport_ready());
+            return Some(follow_up);
+        }
+        self.pending_negotiations
+            .push_back(PendingHarnessNegotiation {
+                request_id,
+                kind,
+                sdp,
+            });
+        Some(Vec::new())
     }
 }

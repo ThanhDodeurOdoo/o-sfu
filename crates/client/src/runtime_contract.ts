@@ -27,6 +27,7 @@ import {
 
 const MIN_TEMPORAL_LAYER_ID = 0;
 const MAX_TEMPORAL_LAYER_ID = 7;
+const REQUEST_TIMEOUT_TIMER_BASE = 10_000;
 const FEATURE_BOOLEAN_FIELDS = [
     "rtc",
     "transcription",
@@ -88,9 +89,11 @@ export type HostCommand =
     | { kind: typeof CommandKind.REMOVE_SESSION_TRACKS; sessionId: SessionId }
     | { kind: typeof CommandKind.EMIT_UPDATE; update: ClientUpdateDetail }
     | {
-          kind: typeof CommandKind.REGISTER_PENDING_REQUEST;
+          kind: typeof CommandKind.BEGIN_PENDING_REQUEST;
           requestId: string;
           requestKind: PendingRequestKind;
+          timeoutTimerId: number;
+          timeoutMs: number;
       }
     | { kind: typeof CommandKind.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
     | { kind: typeof CommandKind.SCHEDULE_TIMER; id: number; ms: number }
@@ -247,6 +250,8 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
     let closeWebSocketIndex = -1;
     let closePeerConnectionIndex = -1;
     let recoveryTimerIndex = -1;
+    let unknownResolvedRequestIndex = -1;
+    let unknownResolvedRequestId = "";
     for (let index = 0; index < commands.length; index += 1) {
         const command = commands[index];
         if (command.kind === CommandKind.CLOSE_WEB_SOCKET && closeWebSocketIndex < 0) {
@@ -261,6 +266,14 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
             recoveryTimerIndex < 0
         ) {
             recoveryTimerIndex = index;
+        }
+        if (
+            command.kind === CommandKind.RESOLVE_PENDING_REQUEST &&
+            unknownResolvedRequestIndex < 0 &&
+            !hasPendingRequestResolutionEvidence(commands, command.requestId, index)
+        ) {
+            unknownResolvedRequestIndex = index;
+            unknownResolvedRequestId = command.requestId;
         }
         if (command.kind !== CommandKind.APPLY_NEGOTIATION) {
             continue;
@@ -296,6 +309,27 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
     ) {
         throw new Error(`${context} must close the peer connection before scheduling recovery`);
     }
+
+    if (closePeerConnectionIndex < 0 && unknownResolvedRequestIndex >= 0) {
+        throw new Error(
+            `${context} command #${unknownResolvedRequestIndex} resolves unknown pending request ${unknownResolvedRequestId}`
+        );
+    }
+}
+
+function hasPendingRequestResolutionEvidence(
+    commands: HostCommand[],
+    requestId: string,
+    resolveIndex: number
+): boolean {
+    for (let index = 0; index < resolveIndex; index += 1) {
+        const command = commands[index];
+        if (command.kind === CommandKind.BEGIN_PENDING_REQUEST && command.requestId === requestId) {
+            return true;
+        }
+    }
+    const previous = resolveIndex > 0 ? commands[resolveIndex - 1] : undefined;
+    return previous?.kind === CommandKind.CANCEL_TIMER && previous.id >= REQUEST_TIMEOUT_TIMER_BASE;
 }
 
 function validateHostCommand(value: unknown, context: string): HostCommand {
@@ -354,14 +388,25 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
                 kind,
                 update: validateClientUpdate(command.update, `${context}.update`)
             };
-        case CommandKind.REGISTER_PENDING_REQUEST:
+        case CommandKind.BEGIN_PENDING_REQUEST: {
             requireString(command.requestId, `${context}.requestId`);
             validateStringEnum(
                 command.requestKind,
                 PENDING_REQUEST_KINDS,
                 `${context}.requestKind`
             );
+            const timeoutTimerId = requireNonNegativeInteger(
+                command.timeoutTimerId,
+                `${context}.timeoutTimerId`
+            );
+            if (timeoutTimerId < REQUEST_TIMEOUT_TIMER_BASE) {
+                throw new Error(`${context}.timeoutTimerId must be a request timeout timer id`);
+            }
+            if (requireNonNegativeInteger(command.timeoutMs, `${context}.timeoutMs`) === 0) {
+                throw new Error(`${context}.timeoutMs must be a positive browser timer delay`);
+            }
             return command as HostCommand;
+        }
         case CommandKind.RESOLVE_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
             requireBoolean(command.ok, `${context}.ok`);

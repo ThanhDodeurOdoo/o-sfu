@@ -19,16 +19,13 @@ import {
     type UpdateInfoOptions
 } from "./public_api.js";
 import {
+    CommandKind,
     createProtocolCore,
     wrapProtocolCoreBindings,
     type HostCommand,
     type ProtocolCoreBindings
 } from "./runtime_contract.js";
-import {
-    BrowserRuntime,
-    CLIENT_RECOVERABLE_CLOSE_CODE,
-    type BrowserRuntimeHooks
-} from "./internals/browser_runtime.js";
+import { BrowserRuntime, CLIENT_RECOVERABLE_CLOSE_CODE } from "./internals/browser_runtime.js";
 import {
     EMPTY_FEATURES,
     type ConsumersCompat,
@@ -44,8 +41,6 @@ import {
     validateDownloadStates,
     validateTrackForStreamType
 } from "./internals/validation.js";
-
-export type { SfuClientDependencies } from "./internals/browser_types.js";
 
 const CLIENT_LOG_SOURCE = "sfu_client";
 
@@ -66,15 +61,28 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     private readonly _remoteTracks = new RemoteTracks();
     private readonly _runtime: BrowserRuntime;
 
-    private _iceServers?: RTCIceServer[];
     private _state: ConnectionState = SFU_CLIENT_STATE.DISCONNECTED;
 
+    constructor();
     constructor(dependencies: SfuClientDependencies = {}) {
         super();
         this._protocolCore = dependencies.createProtocolCore
             ? wrapProtocolCoreBindings(dependencies.createProtocolCore())
             : createProtocolCore();
-        this._runtime = new BrowserRuntime(dependencies);
+        this._runtime = new BrowserRuntime(
+            {
+                localUploads: this._localUploads,
+                onLog: (detail) => this._emitRuntimeLog(detail),
+                onRuntimeError: (error) => this._handleRuntimeError(error),
+                onStateChange: (state, cause) => this._emitStateChange(state, cause),
+                onUpdate: (update) => this._emitUpdate(update),
+                pendingRequests: this._pendingRequests,
+                protocolCore: this._protocolCore,
+                remoteTracks: this._remoteTracks,
+                syncPublicState: () => this._syncPublicState()
+            },
+            dependencies
+        );
         this._consumers = this._remoteTracks.consumers;
         this._syncPublicState();
     }
@@ -85,30 +93,29 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     connect(url: string, jwt: string, options: ConnectOptions = {}): void {
         validateConnectOptions(options);
+        const iceServers = cloneIceServers(options.iceServers);
         this.errors = [];
-        this._iceServers = cloneIceServers(options.iceServers);
         this._emitLog(
             CLIENT_LOG_LEVEL.INFO,
             `connect requested for ${options.channelUUID ? `room ${options.channelUUID}` : "implicit room"}`
         );
-        this._runtime.enqueueProtocolCommands(
-            () =>
-                this._protocolCore.connect(
-                    normalizeWebSocketUrl(url),
-                    jwt,
-                    options.channelUUID ?? null
-                ),
-            this._runtimeHooks()
-        );
+        this._runtime.enqueueProtocolCommands(() => {
+            const commands = this._protocolCore.connect(
+                normalizeWebSocketUrl(url),
+                jwt,
+                options.channelUUID ?? null
+            );
+            if (commands.some((command) => command.kind === CommandKind.CONNECT)) {
+                this._runtime.setIceServers(iceServers);
+            }
+            return commands;
+        });
     }
 
     disconnect(): void {
         this.errors = [];
         this._emitLog(CLIENT_LOG_LEVEL.INFO, "disconnect requested");
-        this._runtime.enqueueProtocolCommands(
-            () => this._protocolCore.disconnect(),
-            this._runtimeHooks()
-        );
+        this._runtime.enqueueProtocolCommands(() => this._protocolCore.disconnect());
     }
 
     publish(type: StreamType, track: MediaStreamTrack | null | undefined): void {
@@ -132,25 +139,24 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         if (transition.hadTrack && transition.hasTrack) {
             this._runtime.enqueueLocalOperation(async () => {
                 if (transition.knownMid) {
-                    await this._runtime.attachTrack(transition.knownMid, type, this._localUploads);
+                    await this._runtime.attachTrack(transition.knownMid, type);
                 }
-            }, this._runtimeHooks());
+            });
             return;
         }
 
         if (transition.hadTrack && !transition.hasTrack) {
             this._runtime.enqueueLocalOperation(async () => {
-                await this._runtime.detachTrack(type, this._localUploads);
-            }, this._runtimeHooks());
+                await this._runtime.detachTrack(type);
+            });
         }
 
         if (transition.hadTrack === transition.hasTrack) {
             return;
         }
 
-        this._runtime.enqueueProtocolCommands(
-            () => this._protocolCore.publish(type, transition.hasTrack),
-            this._runtimeHooks()
+        this._runtime.enqueueProtocolCommands(() =>
+            this._protocolCore.publish(type, transition.hasTrack)
         );
     }
 
@@ -160,49 +166,36 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             CLIENT_LOG_LEVEL.INFO,
             `updating download states for user ${sessionId}: ${JSON.stringify(states)}`
         );
-        this._runtime.enqueueLocalOperation(async () => {
+        this._runtime.enqueueLocalOperation(() => {
             this._remoteTracks.updateSubscriptionStates(sessionId, states, (update) => {
                 this._emitUpdate(update);
             });
-        }, this._runtimeHooks());
-        this._runtime.enqueueProtocolCommands(
-            () => this._protocolCore.subscribe(sessionId, states),
-            this._runtimeHooks()
+        });
+        this._runtime.enqueueProtocolCommands(() =>
+            this._protocolCore.subscribe(sessionId, states)
         );
     }
 
-    /**
-     * @deprecated Use `publish()` instead.
-     */
     updateUpload(type: StreamType, track: MediaStreamTrack | null | undefined): void {
         this.publish(type, track);
     }
 
-    /**
-     * @deprecated Use `subscribe()` instead.
-     */
     updateDownload(sessionId: SessionId, states: DownloadStates): void {
         this.subscribe(sessionId, states);
     }
 
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
         this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `updating user info: ${JSON.stringify(info)}`);
-        this._runtime.enqueueProtocolCommands(
-            () => this._protocolCore.updateInfo(info),
-            this._runtimeHooks()
-        );
+        this._runtime.enqueueProtocolCommands(() => this._protocolCore.updateInfo(info));
     }
 
     async getStats(): Promise<SfuStats> {
-        return this._runtime.getStats(this._localUploads);
+        return this._runtime.getStats();
     }
 
     broadcast(message: unknown): void {
         this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `broadcast requested: ${JSON.stringify(message)}`);
-        this._runtime.enqueueProtocolCommands(
-            () => this._protocolCore.broadcast(message),
-            this._runtimeHooks()
-        );
+        this._runtime.enqueueProtocolCommands(() => this._protocolCore.broadcast(message));
     }
 
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
@@ -216,7 +209,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     private _beginPendingRequest(getCommands: () => HostCommand[]): Promise<boolean> {
         return this._pendingRequests.begin(
             getCommands,
-            (commands) => this._runtime.enqueue(commands, this._runtimeHooks()),
+            (commands) => this._runtime.enqueue(commands),
             (error) => this._handleRuntimeError(error)
         );
     }
@@ -270,7 +263,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${resolvedError.message}`);
         this._protocolCore.disconnect();
         this._pendingRequests.rejectAll(resolvedError);
-        this._runtime.teardown(this._runtimeHooks(), CLIENT_RECOVERABLE_CLOSE_CODE);
+        this._runtime.teardown(CLIENT_RECOVERABLE_CLOSE_CODE);
         this._syncPublicState();
         this.dispatchEvent(
             new CustomEvent("handledError", {
@@ -279,21 +272,6 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 }
             })
         );
-    }
-
-    private _runtimeHooks(): BrowserRuntimeHooks {
-        return {
-            iceServers: this._iceServers,
-            localUploads: this._localUploads,
-            onLog: (detail) => this._emitRuntimeLog(detail),
-            onRuntimeError: (error) => this._handleRuntimeError(error),
-            onStateChange: (state, cause) => this._emitStateChange(state, cause),
-            onUpdate: (update) => this._emitUpdate(update),
-            pendingRequests: this._pendingRequests,
-            protocolCore: this._protocolCore,
-            remoteTracks: this._remoteTracks,
-            syncPublicState: () => this._syncPublicState()
-        };
     }
 
     private _emitRuntimeLog(detail: ClientLogDetail): void {

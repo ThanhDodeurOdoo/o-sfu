@@ -7,7 +7,7 @@ use futures_util::{
 };
 use o_sfu_protocol::wire::{
     ClientEnvelope, Envelope, EnvelopeBatch, EnvelopeBatchDecodeError, EnvelopeDecodeError,
-    ServerEnvelope, WebSocketCloseCode, decode_envelope_batch,
+    MAX_ENVELOPE_BATCH_LEN, ServerEnvelope, WebSocketCloseCode, decode_envelope_batch,
 };
 use tokio::time::timeout;
 
@@ -18,7 +18,7 @@ pub(crate) type WsReader = SplitStream<WebSocket>;
 
 pub const MAX_CLIENT_FRAME_BYTES: usize = 256 * 1024;
 
-pub const MAX_CLIENT_BATCH_ENVELOPES: usize = 64;
+pub const MAX_CLIENT_BATCH_ENVELOPES: usize = MAX_ENVELOPE_BATCH_LEN;
 
 const OUTBOUND_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -130,8 +130,8 @@ pub(super) async fn send_user_signals(
     if signals.is_empty() {
         return Ok(0);
     }
-    let signal_count = signals.len();
-    let mut pending_messages = Vec::new();
+    let mut batch_count = 0;
+    let mut pending_messages = Vec::with_capacity(signals.len().min(MAX_ENVELOPE_BATCH_LEN));
     for signal in signals {
         match signal {
             ServerEnvelope::Message(_) => {
@@ -142,28 +142,33 @@ pub(super) async fn send_user_signals(
                 );
             }
             ServerEnvelope::Request { .. } | ServerEnvelope::Response { .. } => {
-                send_pending_messages(writer, &mut pending_messages).await?;
+                batch_count += send_pending_messages(writer, &mut pending_messages).await?;
                 let envelope = signal
                     .into_envelope()
                     .map_err(|_error| WebSocketCloseCode::Error)?;
                 send_serialized_batch(writer, &[envelope]).await?;
+                batch_count += 1;
             }
         }
     }
-    send_pending_messages(writer, &mut pending_messages).await?;
-    Ok(signal_count)
+    batch_count += send_pending_messages(writer, &mut pending_messages).await?;
+    Ok(batch_count)
 }
 
 async fn send_pending_messages(
     writer: &mut WsWriter,
     pending_messages: &mut EnvelopeBatch,
-) -> Result<(), WebSocketCloseCode> {
+) -> Result<usize, WebSocketCloseCode> {
     if pending_messages.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
-    send_serialized_batch(writer, pending_messages).await?;
+    let mut batch_count = 0;
+    for batch in pending_messages.chunks(MAX_ENVELOPE_BATCH_LEN) {
+        send_serialized_batch(writer, batch).await?;
+        batch_count += 1;
+    }
     pending_messages.clear();
-    Ok(())
+    Ok(batch_count)
 }
 
 async fn send_serialized_batch(

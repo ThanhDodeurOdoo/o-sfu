@@ -2,7 +2,7 @@ use std::{error::Error, fmt, ops::Deref, slice, vec::IntoIter};
 
 use super::{
     Command, Commands, NegotiationKind, RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS,
-    request_tracker::RequestRegistration,
+    request_tracker::PendingRequestStart, timers::RequestTimeoutId,
 };
 use crate::signaling::{RequestId, SessionDescriptionPayload, WebSocketCloseCode};
 
@@ -42,20 +42,16 @@ impl CommandBatch {
         )])
     }
 
-    pub(super) fn start_pending_request(
-        registration: RequestRegistration,
+    pub(super) fn begin_pending_request(
+        request_start: PendingRequestStart,
         outbound: Commands,
     ) -> Self {
-        let mut commands = vec![
-            Command::RegisterPendingRequest {
-                request_id: registration.request_id,
-                kind: registration.kind,
-            },
-            Command::ScheduleTimer {
-                id: registration.timeout_timer_id.raw(),
-                ms: REQUEST_TIMEOUT_MS,
-            },
-        ];
+        let mut commands = vec![Command::BeginPendingRequest {
+            request_id: request_start.request_id,
+            kind: request_start.kind,
+            timeout_timer_id: request_start.timeout_timer_id.raw(),
+            timeout_ms: REQUEST_TIMEOUT_MS,
+        }];
         commands.extend(outbound);
         Self::from_core_commands(commands)
     }
@@ -73,16 +69,6 @@ impl CommandBatch {
     pub fn try_from_vec(commands: Vec<Command>) -> Result<Self, CommandBatchError> {
         Self::validate_commands(&commands)?;
         Ok(Self { commands })
-    }
-
-    /// validates this batch using the canonical Rust command-order contract
-    ///
-    /// # Errors
-    ///
-    /// returns [`CommandBatchError`] when the batch violates a host side-effect
-    /// ordering rule
-    pub fn validate(&self) -> Result<(), CommandBatchError> {
-        Self::validate_commands(&self.commands)
     }
 
     #[must_use]
@@ -133,6 +119,18 @@ impl CommandBatch {
                     ..
                 } => {
                     recovery_index.get_or_insert(index);
+                }
+                Command::BeginPendingRequest {
+                    timeout_timer_id,
+                    timeout_ms,
+                    ..
+                } => {
+                    if RequestTimeoutId::try_from_raw(*timeout_timer_id).is_none() {
+                        return Err(CommandBatchError::InvalidPendingRequestTimeout { index });
+                    }
+                    if *timeout_ms == 0 {
+                        return Err(CommandBatchError::InvalidPendingRequestTimeout { index });
+                    }
                 }
                 _ => {}
             }
@@ -222,6 +220,9 @@ pub enum CommandBatchError {
         request_id: RequestId,
         index: usize,
     },
+    InvalidPendingRequestTimeout {
+        index: usize,
+    },
 }
 
 impl fmt::Display for CommandBatchError {
@@ -252,6 +253,10 @@ impl fmt::Display for CommandBatchError {
             Self::UnknownResolvedRequest { request_id, index } => write!(
                 formatter,
                 "request resolution at index {index} references unknown pending request {request_id:?}"
+            ),
+            Self::InvalidPendingRequestTimeout { index } => write!(
+                formatter,
+                "pending request start at index {index} uses invalid timeout configuration"
             ),
         }
     }
@@ -296,12 +301,19 @@ fn has_prior_resolution_evidence(
     request_id: &RequestId,
     resolve_index: usize,
 ) -> bool {
-    commands
-        .iter()
-        .take(resolve_index)
-        .any(|command| match command {
-            Command::CancelTimer { .. } => true,
-            Command::RegisterPendingRequest { request_id: id, .. } => id == request_id,
-            _ => false,
-        })
+    if commands.iter().take(resolve_index).any(|command| {
+        matches!(
+            command,
+            Command::BeginPendingRequest { request_id: id, .. } if id == request_id
+        )
+    }) {
+        return true;
+    }
+    let Some(previous_index) = resolve_index.checked_sub(1) else {
+        return false;
+    };
+    matches!(
+        commands.get(previous_index),
+        Some(Command::CancelTimer { id }) if RequestTimeoutId::try_from_raw(*id).is_some()
+    )
 }

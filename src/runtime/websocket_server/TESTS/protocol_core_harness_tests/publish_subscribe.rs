@@ -32,26 +32,11 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         track_bindings.into_iter().find(|binding| {
             binding.user_id == ProtocolSessionId::Integer(51)
                 && binding.stream_type == ProtocolStreamType::Camera
-                && binding
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.mid.as_deref())
-                    == Some("cam-0")
         }),
         "subscriber should keep the camera track binding",
     )?;
-    assert_eq!(track_binding.user_id, ProtocolSessionId::Integer(51));
-    assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
+    assert!(!track_binding.mid.is_empty());
     assert!(track_binding.active);
-    let source = require_some(
-        track_binding.source.as_ref(),
-        "track binding should carry the additive source descriptor",
-    )?;
-    assert_eq!(source.source_id, "source-1");
-    assert_eq!(source.user_id, ProtocolSessionId::Integer(51));
-    assert_eq!(source.stream_type, ProtocolStreamType::Camera);
-    assert_eq!(source.mid.as_deref(), Some("cam-0"));
-    assert_eq!(source.encodings.len(), 1);
     let track_mid = track_binding.mid.clone();
     require_some(
         bob.read_server_frame().await,
@@ -66,10 +51,11 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         alice.read_server_frame().await,
         "publisher should receive the removal renegotiation request",
     )?;
-    require_some(
-        bob.read_server_frame().await,
+    let removed_tracks = require_some(
+        read_track_snapshot(&mut bob).await,
         "bob should consume the translated track-removal snapshot",
     )?;
+    assert!(removed_tracks.is_empty());
     assert_eq!(bob.core.track_binding(&track_mid), None);
     require_some(
         bob.read_server_frame().await,

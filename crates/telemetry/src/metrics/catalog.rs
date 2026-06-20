@@ -228,7 +228,14 @@ impl RuntimeMetrics {
     }
 
     pub fn record_ws_bus_batch_sent(&self, envelope_count: usize) {
-        self.ws_bus_batches.increment(WsBusDirection::Sent);
+        self.record_ws_bus_batches_sent(1, envelope_count);
+    }
+
+    pub fn record_ws_bus_batches_sent(&self, batch_count: usize, envelope_count: usize) {
+        if batch_count == 0 {
+            return;
+        }
+        self.ws_bus_batches.add(WsBusDirection::Sent, batch_count);
         self.ws_bus_envelopes
             .add(WsBusDirection::Sent, envelope_count);
     }

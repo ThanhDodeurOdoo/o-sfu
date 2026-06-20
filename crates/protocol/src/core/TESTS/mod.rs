@@ -7,7 +7,7 @@ pub(super) use super::{
 pub(super) use crate::{
     shared::{
         AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, StopCode,
-        StreamType, UserInfo,
+        StreamType, UserInfo, VideoLayoutIntent,
     },
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,

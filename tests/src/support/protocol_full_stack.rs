@@ -3,7 +3,7 @@
     reason = "the protocol full-stack harness is shared by multiple RTC integration scenarios"
 )]
 
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{collections::VecDeque, future::Future, pin::Pin, time::Duration};
 
 use futures_util::SinkExt;
 use o_sfu_protocol::wire::{
@@ -86,6 +86,7 @@ pub fn connect_fake_peer<'a>(
             websocket,
             welcome,
             rtc_peer,
+            pending_server_messages: VecDeque::new(),
         };
         peer.complete_next_negotiation().await?;
         Some(peer)
@@ -97,6 +98,7 @@ pub struct ProtocolFakePeer {
     websocket: TestWebSocket,
     welcome: WelcomePayload,
     rtc_peer: FakeRtcPeer,
+    pending_server_messages: VecDeque<ServerMessage>,
 }
 
 impl ProtocolFakePeer {
@@ -148,10 +150,15 @@ impl ProtocolFakePeer {
 
     pub async fn read_next_server_message(&mut self) -> Option<ServerMessage> {
         loop {
+            if let Some(message) = self.pending_server_messages.pop_front() {
+                return Some(message);
+            }
             let batch = read_protocol_batch(&mut self.websocket).await?;
             for envelope in batch {
                 match ServerEnvelope::decode(envelope).ok()? {
-                    ServerEnvelope::Message(message) => return Some(message),
+                    ServerEnvelope::Message(message) => {
+                        self.pending_server_messages.push_back(message);
+                    }
                     ServerEnvelope::Request {
                         request_id,
                         request,
@@ -173,7 +180,10 @@ impl ProtocolFakePeer {
                         request_id,
                         request,
                     } => return Some((request_id, request)),
-                    ServerEnvelope::Message(_) | ServerEnvelope::Response { .. } => {}
+                    ServerEnvelope::Message(message) => {
+                        self.pending_server_messages.push_back(message);
+                    }
+                    ServerEnvelope::Response { .. } => {}
                 }
             }
         }

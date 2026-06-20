@@ -11,13 +11,11 @@ fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
         transcription: None,
     });
     let [
-        Command::RegisterPendingRequest {
+        Command::BeginPendingRequest {
             request_id,
             kind: PendingRequestKind::StartRecording,
-        },
-        Command::ScheduleTimer {
-            id: timeout_timer_id,
-            ms: REQUEST_TIMEOUT_MS,
+            timeout_timer_id,
+            timeout_ms: REQUEST_TIMEOUT_MS,
         },
         Command::ScheduleTimer {
             id: flush_timer_id,
@@ -26,7 +24,7 @@ fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
     ] = start_commands.as_slice()
     else {
         return Err(format!(
-            "expected recording request registration, got {start_commands:?}"
+            "expected recording request start, got {start_commands:?}"
         ));
     };
     let request_id = request_id.clone();
@@ -223,11 +221,20 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
         DownloadStates {
             audio: Some(false),
             camera: Some(true),
+            camera_layout: Some(VideoLayoutIntent::Pinned),
             screen: None,
             ..DownloadStates::default()
         },
     );
+    let _ = core.subscribe(
+        String::from("peer-7").into(),
+        DownloadStates {
+            screen_layout: Some(VideoLayoutIntent::Hidden),
+            ..DownloadStates::default()
+        },
+    );
     let _ = core.update_info(UserInfo {
+        is_featured: Some(true),
         is_self_muted: Some(true),
         ..UserInfo::default()
     });
@@ -244,11 +251,13 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
                 states: DownloadStates {
                     audio: Some(false),
                     camera: Some(true),
+                    camera_layout: Some(VideoLayoutIntent::Pinned),
+                    screen_layout: Some(VideoLayoutIntent::Hidden),
                     screen: None,
-                    ..DownloadStates::default()
                 },
             })),
             ClientEnvelope::Message(ClientMessage::Info(UserInfo {
+                is_featured: None,
                 is_self_muted: Some(true),
                 ..UserInfo::default()
             })),

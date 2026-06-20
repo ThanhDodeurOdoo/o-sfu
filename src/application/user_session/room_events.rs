@@ -30,6 +30,9 @@ impl User {
                 }
                 RoomEventMessage::UserDeparted { user_id } => {
                     needs_renegotiation = self.tracks.remove_user(&user_id);
+                    if needs_renegotiation {
+                        output.extend(self.tracks.snapshot_messages().map(ServerEnvelope::Message));
+                    }
                     output.push(ServerEnvelope::Message(ServerMessage::PeerLeft(
                         PeerLeftPayload { user_id },
                     )));
@@ -43,7 +46,7 @@ impl User {
                         }))
                     }));
                     if tracks_changed {
-                        output.push(ServerEnvelope::Message(self.tracks.message()));
+                        output.extend(self.tracks.snapshot_messages().map(ServerEnvelope::Message));
                     }
                 }
                 RoomEventMessage::RecordingStateChanged(state) => {
@@ -54,12 +57,12 @@ impl User {
             },
             UserOutbound::SetupRemoteTrack(track) => {
                 self.tracks.add_remote(&track);
-                output.push(ServerEnvelope::Message(self.tracks.message()));
+                output.extend(self.tracks.snapshot_messages().map(ServerEnvelope::Message));
                 needs_renegotiation = true;
             }
             UserOutbound::TrackBindingUpdate(update) => {
                 if self.tracks.apply_update(&update) {
-                    output.push(ServerEnvelope::Message(self.tracks.message()));
+                    output.extend(self.tracks.snapshot_messages().map(ServerEnvelope::Message));
                     needs_renegotiation |= update.active.is_none();
                 }
             }

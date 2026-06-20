@@ -4,7 +4,6 @@ import { CLIENT_UPDATE } from "../../dist/index.js";
 import {
     audioMedia,
     audioUploadSlot,
-    negotiationCommand,
     sdp,
     videoMedia,
     videoUploadSlot
@@ -17,28 +16,13 @@ export const EMPTY_FEATURES = {
     videoRecording: false
 };
 
-const initialOfferCommand = (requestId) =>
-    negotiationCommand({
-        negotiationKind: "offer",
-        requestId,
-        sdp: sdp(audioMedia("0"), videoMedia("1")),
-        uploadSlots: [audioUploadSlot("0"), videoUploadSlot("1")]
-    });
-
-const videoRenegotiationCommand = ({
-    codecs,
-    mid,
-    payloadType = 96,
+const initialOfferCommand = (requestId) => ({
+    kind: "applyNegotiation",
+    negotiationKind: "offer",
     requestId,
-    rtpmap = null,
-    simulcastEncodings
-}) =>
-    negotiationCommand({
-        negotiationKind: "renegotiate",
-        requestId,
-        sdp: sdp(videoMedia(mid, { payloadType, rtpmap })),
-        uploadSlots: [videoUploadSlot(mid, { codecs, simulcastEncodings })]
-    });
+    sdp: sdp(audioMedia("0"), videoMedia("1")),
+    uploadSlots: [audioUploadSlot("0"), videoUploadSlot("1")]
+});
 
 export class FakeProtocolCore {
     constructor() {
@@ -62,8 +46,7 @@ export class FakeProtocolCore {
         return [];
     }
 
-    connect(url, jwt, channel) {
-        this.connectCall = { channel, jwt, url };
+    connect(url) {
         this.state = "connecting";
         return [{ kind: "connect", url }];
     }
@@ -75,7 +58,10 @@ export class FakeProtocolCore {
         this.recordingState = {};
         this.sourceDescriptors.clear();
         this.trackBindings.clear();
-        return [{ kind: "emitStateChange", state: "disconnected" }];
+        return [
+            { kind: "replaceSourceDescriptors", sources: [] },
+            { kind: "emitStateChange", state: "disconnected" }
+        ];
     }
 
     onTimer() {
@@ -127,76 +113,6 @@ export class FakeProtocolCore {
                         streamType: "camera"
                     },
                     ...this._replaceTrackBindings()
-                ]);
-            case "renegotiate-with-unbound-camera":
-                return this._withPendingNegotiationKind([
-                    videoRenegotiationCommand({
-                        mid: "2",
-                        requestId: "9",
-                        simulcastEncodings: []
-                    })
-                ]);
-            case "renegotiate-with-pending-camera-and-screen":
-                return this._withPendingNegotiationKind([
-                    negotiationCommand({
-                        negotiationKind: "renegotiate",
-                        requestId: "11",
-                        sdp: sdp(videoMedia("2"), videoMedia("3")),
-                        uploadSlots: [
-                            videoUploadSlot("2", { simulcastEncodings: [] }),
-                            videoUploadSlot("3", { simulcastEncodings: [] })
-                        ]
-                    })
-                ]);
-            case "renegotiate-with-pending-simulcast-camera":
-                return this._withPendingNegotiationKind([
-                    videoRenegotiationCommand({
-                        mid: "2",
-                        requestId: "12",
-                        rtpmap: "VP8/90000"
-                    })
-                ]);
-            case "renegotiate-with-pending-h264-simulcast-camera":
-                return this._withPendingNegotiationKind([
-                    videoRenegotiationCommand({
-                        codecs: ["H264"],
-                        mid: "2",
-                        payloadType: 102,
-                        requestId: "13",
-                        rtpmap: "H264/90000"
-                    })
-                ]);
-            case "renegotiate-with-invalid-simulcast-camera":
-                return this._withPendingNegotiationKind([
-                    videoRenegotiationCommand({
-                        mid: "2",
-                        requestId: "14",
-                        rtpmap: "VP8/90000",
-                        simulcastEncodings: [
-                            {
-                                maxBitrate: 150000,
-                                rid: "lo",
-                                resolutionScale: 0
-                            },
-                            {
-                                maxBitrate: 900000,
-                                rid: "hi",
-                                resolutionScale: 1
-                            }
-                        ]
-                    })
-                ]);
-            case "renegotiate-with-pending-audio":
-                return this._withPendingNegotiationKind([
-                    negotiationCommand({
-                        negotiationKind: "renegotiate",
-                        requestId: "10",
-                        sdp: sdp(
-                            audioMedia("consumer-audio", "sendonly"),
-                            audioMedia("producer-audio")
-                        ),
-                        uploadSlots: [audioUploadSlot("producer-audio")]
-                    })
                 ]);
             case "info-change-map":
                 return [
@@ -266,10 +182,6 @@ export class FakeProtocolCore {
                 ];
             case "close-peer-connection":
                 return [{ kind: "closePeerConnection" }];
-            case "recording-ok":
-                return [{ kind: "resolvePendingRequest", ok: true, requestId: "record-1" }];
-            case "recording-refused":
-                return [{ kind: "resolvePendingRequest", ok: false, requestId: "record-1" }];
             case "explode":
                 throw new Error("boom");
             default:
@@ -282,23 +194,11 @@ export class FakeProtocolCore {
     }
 
     startRecording() {
-        return [
-            {
-                kind: "registerPendingRequest",
-                requestId: "record-1",
-                requestKind: "startRecording"
-            }
-        ];
+        return beginRecordingRequest("startRecording");
     }
 
     stopRecording() {
-        return [
-            {
-                kind: "registerPendingRequest",
-                requestId: "record-1",
-                requestKind: "stopRecording"
-            }
-        ];
+        return beginRecordingRequest("stopRecording");
     }
 
     submitNegotiationAnswer(requestId, negotiationKind, sdp) {
@@ -348,6 +248,16 @@ export class FakeProtocolCore {
         ];
     }
 }
+
+const beginRecordingRequest = (requestKind) => [
+    {
+        kind: "beginPendingRequest",
+        requestId: "record-1",
+        requestKind,
+        timeoutMs: 5000,
+        timeoutTimerId: 10000
+    }
+];
 
 export const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 

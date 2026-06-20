@@ -369,9 +369,12 @@ impl ActiveWebSocketSession {
         output: UserOutput,
         log_send_failure: bool,
     ) -> Option<WsSessionLoopExitReason> {
+        let envelope_count = output.len();
         match send_user_output_bounded(&mut self.writer, output).await {
-            Ok(batch_len) => {
-                self.services.metrics.record_ws_bus_batch_sent(batch_len);
+            Ok(batch_count) => {
+                self.services
+                    .metrics
+                    .record_ws_bus_batches_sent(batch_count, envelope_count);
                 None
             }
             Err(code) => {

@@ -13,13 +13,11 @@ fn protocol_core_tracks_recording_request_until_matching_response() -> Result<()
     });
 
     let [
-        Command::RegisterPendingRequest {
+        Command::BeginPendingRequest {
             request_id,
             kind: PendingRequestKind::StartRecording,
-        },
-        Command::ScheduleTimer {
-            id: timeout_timer_id,
-            ms: REQUEST_TIMEOUT_MS,
+            timeout_timer_id,
+            timeout_ms: REQUEST_TIMEOUT_MS,
         },
         Command::ScheduleTimer {
             id: flush_timer_id,
@@ -28,7 +26,7 @@ fn protocol_core_tracks_recording_request_until_matching_response() -> Result<()
     ] = commands.as_slice()
     else {
         return Err(format!(
-            "expected recording request registration, got {commands:?}"
+            "expected recording request start, got {commands:?}"
         ));
     };
     let request_id = request_id.clone();
@@ -80,17 +78,15 @@ fn protocol_core_request_timeout_resolves_pending_request_as_failed() -> Result<
     let _ = core.on_welcome(sample_welcome_payload());
 
     let commands = core.stop_recording();
-    let Some(Command::RegisterPendingRequest { request_id, .. }) = commands.first() else {
+    let Some(Command::BeginPendingRequest {
+        request_id,
+        timeout_timer_id,
+        ..
+    }) = commands.first()
+    else {
         return Err(format!("expected pending request, got {commands:?}"));
     };
     let request_id = request_id.clone();
-    let Some(Command::ScheduleTimer {
-        id: timeout_timer_id,
-        ..
-    }) = commands.get(1)
-    else {
-        return Err(format!("expected request timeout timer, got {commands:?}"));
-    };
 
     let timeout_commands = core.on_timer(*timeout_timer_id);
 
