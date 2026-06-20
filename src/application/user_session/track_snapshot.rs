@@ -16,7 +16,7 @@ use crate::{
 
 #[derive(Debug, Default)]
 pub struct TrackSnapshot {
-    by_mid: BTreeMap<String, TrackBinding>,
+    by_mid: BTreeMap<String, SourceDescriptor>,
 }
 
 impl TrackSnapshot {
@@ -24,41 +24,45 @@ impl TrackSnapshot {
         let Some(stream_type) = stream_type_for_stream_id(&track.stream) else {
             return;
         };
-        self.insert(
+        self.by_mid.insert(
             track.mid.clone(),
-            track.user.clone(),
-            stream_type,
-            track.active,
-            &track.source,
+            wire_source_descriptor(&track.source, track.user.clone(), stream_type, track.active),
         );
     }
 
-    pub fn message(&self) -> ServerMessage {
-        ServerMessage::Tracks(self.by_mid.values().cloned().collect())
+    pub fn snapshot_messages(&self) -> [ServerMessage; 2] {
+        [
+            ServerMessage::Tracks(
+                self.by_mid
+                    .iter()
+                    .map(|(mid, source)| track_binding(mid, source))
+                    .collect(),
+            ),
+            ServerMessage::Sources(self.by_mid.values().cloned().collect()),
+        ]
     }
 
     pub fn remove_user(&mut self, user_id: &UserId) -> bool {
         let count = self.by_mid.len();
         self.by_mid
-            .retain(|_mid, binding| &binding.user_id != user_id);
+            .retain(|_mid, source| &source.user_id != user_id);
         self.by_mid.len() != count
     }
 
     pub fn apply_infos(&mut self, snapshot: &BTreeMap<UserId, UserInfo>) -> bool {
         let mut changed = false;
-        for binding in self.by_mid.values_mut() {
-            let Some(info) = snapshot.get(&binding.user_id) else {
+        for source in self.by_mid.values_mut() {
+            let Some(info) = snapshot.get(&source.user_id) else {
                 continue;
             };
-            let active = match binding.stream_type {
+            let Some(active) = (match source.stream_type {
                 StreamType::Camera => info.is_camera_on,
                 StreamType::Screen => info.is_screen_sharing_on,
                 StreamType::Audio => None,
-            };
-            let Some(active) = active else {
+            }) else {
                 continue;
             };
-            changed |= Self::set_active(binding, active);
+            changed |= set_active(&mut source.active, active);
         }
         changed
     }
@@ -71,31 +75,11 @@ impl TrackSnapshot {
             self.set_track_active(&update.user_id, stream_type, active)
         } else {
             let count = self.by_mid.len();
-            self.by_mid.retain(|_mid, binding| {
-                binding.user_id != update.user_id || binding.stream_type != stream_type
+            self.by_mid.retain(|_mid, source| {
+                source.user_id != update.user_id || source.stream_type != stream_type
             });
             self.by_mid.len() != count
         }
-    }
-
-    fn insert(
-        &mut self,
-        mid: String,
-        user_id: UserId,
-        stream_type: StreamType,
-        active: bool,
-        source: &PublishedSourceDescriptor,
-    ) {
-        self.by_mid.insert(
-            mid.clone(),
-            TrackBinding {
-                mid,
-                user_id: user_id.clone(),
-                stream_type,
-                active,
-                source: Some(wire_source_descriptor(source, user_id, stream_type, active)),
-            },
-        );
     }
 
     fn set_track_active(
@@ -105,25 +89,32 @@ impl TrackSnapshot {
         active: bool,
     ) -> bool {
         let mut changed = false;
-        for binding in self.by_mid.values_mut() {
-            if &binding.user_id != user_id || binding.stream_type != stream_type {
+        for source in self.by_mid.values_mut() {
+            if &source.user_id != user_id || source.stream_type != stream_type {
                 continue;
             }
-            changed |= Self::set_active(binding, active);
+            changed |= set_active(&mut source.active, active);
         }
         changed
     }
+}
 
-    fn set_active(binding: &mut TrackBinding, active: bool) -> bool {
-        if binding.active == active {
-            return false;
-        }
-        binding.active = active;
-        if let Some(source) = binding.source.as_mut() {
-            source.active = active;
-        }
-        true
+fn track_binding(mid: &str, source: &SourceDescriptor) -> TrackBinding {
+    TrackBinding {
+        mid: mid.to_owned(),
+        user_id: source.user_id.clone(),
+        stream_type: source.stream_type,
+        active: source.active,
+        source: None,
     }
+}
+
+fn set_active(active: &mut bool, next: bool) -> bool {
+    if *active == next {
+        return false;
+    }
+    *active = next;
+    true
 }
 
 fn wire_source_descriptor(

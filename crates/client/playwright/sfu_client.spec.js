@@ -179,18 +179,23 @@ test("default browser runtime negotiates and emits remote track updates", async 
                             active: true,
                             mid: "0",
                             sessionId: 42,
-                            type: "camera",
-                            source: {
-                                active: true,
-                                encodings: [
-                                    { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
-                                    { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
-                                ],
-                                mid: "0",
-                                sessionId: 42,
-                                sourceId: "source-1",
-                                type: "camera"
-                            }
+                            type: "camera"
+                        }
+                    ]
+                },
+                {
+                    t: "sources",
+                    p: [
+                        {
+                            active: true,
+                            encodings: [
+                                { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
+                                { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
+                            ],
+                            mid: "0",
+                            sessionId: 42,
+                            sourceId: "source-1",
+                            type: "camera"
                         }
                     ]
                 }
@@ -315,16 +320,13 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
                 harness.fetchCalls.push(args.map((arg) => String(arg)));
                 return Promise.reject(new Error("unexpected Odoo bundle fetch"));
             };
-            const { CLIENT_UPDATE, SFU_CLIENT_STATE, SfuClient, createProtocolCore } =
+            const { CLIENT_UPDATE, SFU_CLIENT_STATE, SfuClient } =
                 await import("/dist/odoo_sfu.js");
             if (CLIENT_UPDATE.TRACK !== "track") {
                 throw new Error("unexpected client update export");
             }
             if (SFU_CLIENT_STATE.CONNECTED !== "connected") {
                 throw new Error("unexpected state export");
-            }
-            if (createProtocolCore().state !== "disconnected") {
-                throw new Error("embedded protocol core did not initialize");
             }
             const client = new SfuClient();
             harness.client = client;

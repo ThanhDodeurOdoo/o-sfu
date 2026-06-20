@@ -758,7 +758,9 @@ fn process_followups(core: &mut ProtocolCore, commands: &[Command], followups: F
             } if matches!(followups.negotiation, NegotiationFollowup::Answer) => {
                 let _ = core.submit_negotiation_answer(request_id, *kind, ANSWER_SDP);
             }
-            Command::RegisterPendingRequest { request_id, kind }
+            Command::BeginPendingRequest {
+                request_id, kind, ..
+            }
                 if !matches!(followups.pending_request, PendingRequestFollowup::Ignore) =>
             {
                 if let Some(frame) =

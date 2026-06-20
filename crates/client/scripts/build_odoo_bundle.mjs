@@ -81,7 +81,7 @@ assert.equal(
 const bundleModule = await import(`${pathToFileURL(outputPath).href}?t=${Date.now()}`);
 assert.equal(typeof bundleModule.SfuClient, "function");
 assert.equal(bundleModule.SFU_CLIENT_STATE.CONNECTED, "connected");
-assert.equal(bundleModule.createProtocolCore().state, "disconnected");
+assert.equal(bundleModule.createProtocolCore, undefined);
 assert.deepEqual(bundleModule.__info__, bundleInfo);
 
 console.log(`Built Odoo SFU bundle at ${outputPath}`);

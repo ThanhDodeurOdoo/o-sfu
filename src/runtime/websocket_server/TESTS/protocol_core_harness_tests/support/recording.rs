@@ -34,8 +34,8 @@ async fn drain_peer_until_pending_request_resolution(
 ) -> Option<RequestId> {
     timeout(Duration::from_secs(1), async {
         loop {
-            let Some(request_id) =
-                matching_request_id(&peer.pending_request_commands, request_kind)
+            let Some((request_id, ..)) =
+                pending_request_start(&peer.pending_request_commands, request_kind)
             else {
                 peer.read_server_frame().await?;
                 continue;
@@ -66,15 +66,20 @@ pub(crate) async fn connect_protocol_recording_peer(
     Some(peer)
 }
 
-fn matching_request_id(
+fn pending_request_start(
     commands: &[HostCommand],
     request_kind: HostPendingRequestKind,
-) -> Option<RequestId> {
+) -> Option<(RequestId, u32, u32)> {
     commands.iter().find_map(|command| match command {
-        HostCommand::RegisterPendingRequest {
+        HostCommand::BeginPendingRequest {
             request_id,
             request_kind: pending_kind,
-        } if *pending_kind == request_kind => Some(request_id.clone()),
+            timeout_timer_id,
+            timeout_ms,
+            ..
+        } if *pending_kind == request_kind => {
+            Some((request_id.clone(), *timeout_timer_id, *timeout_ms))
+        }
         _ => None,
     })
 }
@@ -83,6 +88,11 @@ pub(crate) async fn assert_recording_request_rejected(
     peer: &mut ProtocolHarnessPeer,
     request_kind: HostPendingRequestKind,
 ) -> Option<RequestId> {
+    let (_, timer_id, timeout_ms) =
+        pending_request_start(&peer.pending_request_commands, request_kind)?;
+    if peer.timers.get(&timer_id) != Some(&timeout_ms) {
+        return None;
+    }
     let request_id = drain_peer_until_pending_request_resolution(peer, request_kind, false).await?;
     (!has_channel_info_update(&peer.updates)).then_some(request_id)
 }

@@ -1,7 +1,6 @@
 import type { TrackBinding } from "../protocol.js";
 import {
     CLIENT_UPDATE,
-    STREAM_TYPES,
     type ClientUpdateDetail,
     type DownloadStates,
     type SessionId,
@@ -14,6 +13,7 @@ import {
     type MediaTrack,
     type PeerConnectionTrackEvent
 } from "./browser_types.js";
+import { mergeDownloadStates } from "./validation.js";
 
 type TrackUpdateEmitter = (update: ClientUpdateDetail) => void;
 
@@ -69,8 +69,8 @@ export class RemoteTracks {
         emitUpdate: TrackUpdateEmitter
     ): void {
         const previousStates = this._subscriptionStates.get(sessionId);
-        const nextStates = this.mergeSubscriptionStates(previousStates, states);
-        if (this.downloadStatesAreEmpty(nextStates)) {
+        const nextStates = mergeDownloadStates(previousStates, states);
+        if (Object.keys(nextStates).length === 0) {
             this._subscriptionStates.delete(sessionId);
         } else {
             this._subscriptionStates.set(sessionId, nextStates);
@@ -204,36 +204,6 @@ export class RemoteTracks {
             sessionId: binding.sessionId,
             type: binding.type
         };
-    }
-
-    private mergeSubscriptionStates(
-        previous: DownloadStates | undefined,
-        next: DownloadStates
-    ): DownloadStates {
-        const merged = { ...(previous ?? {}) };
-        for (const streamType of STREAM_TYPES) {
-            if (next[streamType] === undefined) {
-                continue;
-            }
-            merged[streamType] = next[streamType];
-        }
-        if (next.cameraLayout !== undefined) {
-            merged.cameraLayout = next.cameraLayout;
-        }
-        if (next.screenLayout !== undefined) {
-            merged.screenLayout = next.screenLayout;
-        }
-        return merged;
-    }
-
-    private downloadStatesAreEmpty(states: DownloadStates): boolean {
-        return (
-            states.audio === undefined &&
-            states.camera === undefined &&
-            states.screen === undefined &&
-            states.cameraLayout === undefined &&
-            states.screenLayout === undefined
-        );
     }
 
     private removeBinding(mid: string): void {

@@ -68,13 +68,7 @@ function validCore(overrides = {}) {
             return [];
         },
         startRecording() {
-            return [
-                {
-                    kind: "registerPendingRequest",
-                    requestId: "request-1",
-                    requestKind: PENDING_REQUEST_KIND.START_RECORDING
-                }
-            ];
+            return [beginPendingRequest()];
         },
         stopRecording() {
             return [];
@@ -110,6 +104,27 @@ function assertWrappedCoreThrows(overrides, read) {
     assertThrowsError(() => read(core));
 }
 
+function beginPendingRequest(overrides = {}) {
+    return {
+        kind: "beginPendingRequest",
+        requestId: "request-1",
+        requestKind: PENDING_REQUEST_KIND.START_RECORDING,
+        timeoutMs: 5000,
+        timeoutTimerId: 10_000,
+        ...overrides
+    };
+}
+
+function negotiationCommand(negotiationKind) {
+    return {
+        kind: "applyNegotiation",
+        requestId: negotiationKind,
+        negotiationKind,
+        sdp: "v=0\r\n",
+        uploadSlots: []
+    };
+}
+
 function validSourceDescriptor(encodingOverrides = {}) {
     return {
         active: true,
@@ -132,70 +147,50 @@ test("wrapped protocol core rejects malformed host commands", () => {
     assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
-test("wrapped protocol core requires initial negotiation after peer connection creation", () => {
-    const core = wrapProtocolCoreBindings(
-        validCore({
-            onWsMessage() {
-                return [
-                    {
-                        kind: "applyNegotiation",
-                        requestId: "offer-1",
-                        negotiationKind: NEGOTIATION_KIND.OFFER,
-                        sdp: "v=0\r\n",
-                        uploadSlots: []
-                    }
-                ];
-            }
-        })
-    );
-
-    assertThrowsError(() => core.onWsMessage("offer"));
+test("wrapped protocol core validates host command ordering", () => {
+    for (const [method, commands, args = []] of [
+        ["onWsMessage", [negotiationCommand(NEGOTIATION_KIND.OFFER)], ["offer"]],
+        [
+            "onWsMessage",
+            [{ kind: "createPeerConnection" }, negotiationCommand(NEGOTIATION_KIND.RENEGOTIATE)],
+            ["renegotiate"]
+        ],
+        ["disconnect", [{ kind: "closePeerConnection" }, { kind: "closeWebSocket", code: 1000 }]],
+        [
+            "onWsClose",
+            [{ kind: "scheduleTimer", id: 1, ms: 1000 }, { kind: "closePeerConnection" }],
+            [1011]
+        ]
+    ]) {
+        assertWrappedCoreThrows(
+            {
+                [method]() {
+                    return commands;
+                }
+            },
+            (core) => core[method](...args)
+        );
+    }
 });
 
-test("wrapped protocol core rejects peer connection recreation during renegotiation", () => {
-    const core = wrapProtocolCoreBindings(
-        validCore({
-            onWsMessage() {
-                return [
-                    { kind: "createPeerConnection" },
-                    {
-                        kind: "applyNegotiation",
-                        requestId: "renegotiate-1",
-                        negotiationKind: NEGOTIATION_KIND.RENEGOTIATE,
-                        sdp: "v=0\r\n",
-                        uploadSlots: []
-                    }
-                ];
-            }
-        })
-    );
-
-    assertThrowsError(() => core.onWsMessage("renegotiate"));
-});
-
-test("wrapped protocol core validates close and recovery ordering", () => {
-    const closeOrderCore = wrapProtocolCoreBindings(
-        validCore({
-            disconnect() {
-                return [{ kind: "closePeerConnection" }, { kind: "closeWebSocket", code: 1000 }];
-            }
-        })
-    );
-
-    assertThrowsError(() => closeOrderCore.disconnect());
-
-    const recoveryOrderCore = wrapProtocolCoreBindings(
-        validCore({
-            onWsClose() {
-                return [
-                    { kind: "scheduleTimer", id: 1, ms: 1000 },
-                    { kind: "closePeerConnection" }
-                ];
-            }
-        })
-    );
-
-    assertThrowsError(() => recoveryOrderCore.onWsClose(1011));
+test("wrapped protocol core validates pending request lifecycle commands", () => {
+    for (const commands of [
+        [beginPendingRequest({ timeoutTimerId: 1 })],
+        [{ kind: "resolvePendingRequest", requestId: "missing", ok: false }],
+        [
+            beginPendingRequest({ requestId: "request-1" }),
+            { kind: "resolvePendingRequest", requestId: "request-2", ok: false }
+        ]
+    ]) {
+        assertWrappedCoreThrows(
+            {
+                startRecording() {
+                    return commands;
+                }
+            },
+            (core) => core.startRecording()
+        );
+    }
 });
 
 test("wrapped protocol core rejects malformed track bindings", () => {

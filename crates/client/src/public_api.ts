@@ -204,11 +204,11 @@ export interface SfuClientSurface extends EventTarget {
     publish(type: StreamType, track: MediaStreamTrack | null | undefined): void;
     subscribe(sessionId: SessionId, states: DownloadStates): void;
     /**
-     * @deprecated Use `publish()` instead.
+     * @deprecated Odoo compatibility alias. Use `publish()` for new code.
      */
     updateUpload(type: StreamType, track: MediaStreamTrack | null | undefined): void;
     /**
-     * @deprecated Use `subscribe()` instead.
+     * @deprecated Odoo compatibility alias. Use `subscribe()` for new code.
      */
     updateDownload(sessionId: SessionId, states: DownloadStates): void;
     updateInfo(info: SessionInfo, options?: UpdateInfoOptions): void;

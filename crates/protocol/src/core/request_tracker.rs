@@ -26,12 +26,8 @@ struct PendingRequestState {
     timeout_timer_id: RequestTimeoutId,
 }
 
-/// pending request registration returned to the caller
-///
-/// callers keep this only long enough to build the host registration and timer
-/// commands for the matching outbound request
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RequestRegistration {
+pub(super) struct PendingRequestStart {
     pub(super) request_id: RequestId,
     pub(super) kind: PendingRequestKind,
     pub(super) timeout_timer_id: RequestTimeoutId,
@@ -75,11 +71,7 @@ impl RequestTracker {
             .any(|pending_request| pending_request.kind == kind)
     }
 
-    /// registers a new pending request and allocates its timeout timer id
-    ///
-    /// callers use the returned ids together to send the request under
-    /// `request_id` and schedule the timeout under `timeout_timer_id`
-    pub(super) fn register_request(&mut self, kind: PendingRequestKind) -> RequestRegistration {
+    pub(super) fn begin_request(&mut self, kind: PendingRequestKind) -> PendingRequestStart {
         let request_id = self.next_request_id();
         let timeout_timer_id = self.next_timeout_timer_id();
         self.pending_requests.insert(
@@ -91,7 +83,7 @@ impl RequestTracker {
         );
         self.request_timeouts
             .insert(timeout_timer_id, request_id.clone());
-        RequestRegistration {
+        PendingRequestStart {
             request_id,
             kind,
             timeout_timer_id,

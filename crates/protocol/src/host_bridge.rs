@@ -114,11 +114,15 @@ pub enum HostCommand {
     EmitUpdate {
         update: BundleUpdate,
     },
-    RegisterPendingRequest {
+    BeginPendingRequest {
         #[serde(rename = "requestId")]
         request_id: RequestId,
         #[serde(rename = "requestKind")]
         request_kind: HostPendingRequestKind,
+        #[serde(rename = "timeoutTimerId")]
+        timeout_timer_id: u32,
+        #[serde(rename = "timeoutMs")]
+        timeout_ms: u32,
     },
     ResolvePendingRequest {
         #[serde(rename = "requestId")]
@@ -220,10 +224,17 @@ pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
             Command::EmitEvent { event } => {
                 push_commands_for_event(&mut project_commands, event);
             }
-            Command::RegisterPendingRequest { request_id, kind } => {
-                project_commands.push(HostCommand::RegisterPendingRequest {
+            Command::BeginPendingRequest {
+                request_id,
+                kind,
+                timeout_timer_id,
+                timeout_ms,
+            } => {
+                project_commands.push(HostCommand::BeginPendingRequest {
                     request_id,
                     request_kind: kind.into(),
+                    timeout_timer_id,
+                    timeout_ms,
                 });
             }
             Command::ResolvePendingRequest { request_id, ok } => {

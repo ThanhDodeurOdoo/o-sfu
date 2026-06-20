@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-    CLIENT_UPDATE,
-    CommandKind,
-    PENDING_REQUEST_KIND,
-    createProtocolCore
-} from "../dist/index.js";
+import { CLIENT_UPDATE } from "../dist/index.js";
+import { WS_CLOSE_CODE } from "../dist/protocol_contract.js";
+import { PENDING_REQUEST_KIND, createProtocolCore } from "../dist/runtime_contract.js";
 import { PendingRequests } from "../dist/internals/pending_requests.js";
 import { FakeMediaTrack, FakePeerConnection, FakeSender } from "./support/browser_fakes.mjs";
 import {
@@ -22,17 +19,22 @@ import {
     createSfuClientHarness,
     createScreenTrack
 } from "./support/sfu_client_harness.mjs";
-import { audioMedia, sdp, videoMedia, videoUploadSlot } from "./support/negotiation_fixtures.mjs";
+import {
+    audioMedia,
+    audioUploadSlot,
+    sdp,
+    videoMedia,
+    videoUploadSlot
+} from "./support/negotiation_fixtures.mjs";
 
 test("connect normalizes the URL and sends auth on WebSocket open", async () => {
-    const { core, sockets, connect, open } = createSfuClientHarness();
+    const { sockets, connect, open } = createSfuClientHarness();
 
     await connect("https://example.test/ws", "jwt-token", {
         channelUUID: "channel-a",
         iceServers: [{ urls: "stun:stun.example.test" }]
     });
 
-    assert.equal(core.connectCall.url, "wss://example.test/ws");
     assert.equal(sockets[0].url, "wss://example.test/ws");
 
     await open();
@@ -67,41 +69,69 @@ test("connect emits public client and runtime log events", async () => {
     );
 });
 
-test("startRecording resolves through the protocol request lifecycle", async () => {
-    const { client, emitMessage, connectWithWelcome } = createSfuClientHarness();
+test("ignored duplicate connect keeps the accepted ICE server config", async () => {
+    const harness = createRecoveryHarness();
+    const { client, connect, emitMessage, open, peerConnections } = harness;
+    const iceServers = [{ urls: "stun:first.example.test" }];
 
-    await connectWithWelcome();
-
-    const resultPromise = client.startRecording({ audio: true });
+    await connect("ws://example.test/ws", "jwt-token", {
+        channelUUID: "channel-a",
+        iceServers
+    });
+    client.connect("ws://example.test/ws", "jwt-token", {
+        channelUUID: "channel-a",
+        iceServers: [{ urls: "stun:second.example.test" }]
+    });
     await tick();
-    await emitMessage("recording-ok");
+    await open();
+    await emitMessage(buildWelcomeFrame());
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
 
-    assert.equal(await resultPromise, true);
+    assert.deepEqual(peerConnections[0].config.iceServers, iceServers);
 });
 
-test("stopRecording resolves through the protocol request lifecycle", async () => {
-    const { client, emitMessage, connectWithWelcome } = createSfuClientHarness();
+test("oversized server text frames close before protocol decoding", async () => {
+    const core = new FakeProtocolCore();
+    let decoded = false;
+    core.onWsMessage = () => {
+        decoded = true;
+        return [];
+    };
+    const { connect, open, sockets } = createSfuClientHarness({ protocolCore: core });
 
-    await connectWithWelcome();
+    await connect();
+    await open();
 
-    const resultPromise = client.stopRecording();
-    await tick();
-    await emitMessage("recording-ok");
+    sockets[0].emitMessage("x".repeat(256 * 1024 + 1));
 
-    assert.equal(await resultPromise, true);
+    assert.equal(decoded, false);
+    assert.equal(sockets[0].closeCode, WS_CLOSE_CODE.PROTOCOL_ERROR);
 });
 
-test("recording request refusal resolves false", async () => {
-    const { client, emitMessage, connectWithWelcome } = createSfuClientHarness();
-
-    await connectWithWelcome();
-
-    const resultPromise = client.startRecording({ audio: true });
-    await tick();
-    await emitMessage("recording-refused");
-
-    assert.equal(await resultPromise, false);
-});
+for (const [name, startRequest, ok, expected] of [
+    [
+        "startRecording resolves through the protocol request lifecycle",
+        (client) => client.startRecording({ audio: true }),
+        true,
+        true
+    ],
+    [
+        "stopRecording resolves through the protocol request lifecycle",
+        (client) => client.stopRecording(),
+        true,
+        true
+    ],
+    [
+        "recording request refusal resolves false",
+        (client) => client.startRecording({ audio: true }),
+        false,
+        false
+    ]
+]) {
+    test(name, async () => {
+        assert.equal(await resolveRealRecordingRequest(startRequest, ok), expected);
+    });
+}
 
 test("recording requests without protocol registration resolve false", async () => {
     const core = new FakeProtocolCore();
@@ -113,19 +143,11 @@ test("recording requests without protocol registration resolve false", async () 
     assert.equal(await client.stopRecording(), false);
 });
 
-test("duplicate recording request registration is handled as a runtime error", async () => {
+test("duplicate recording request begin is handled as a runtime error", async () => {
     const core = new FakeProtocolCore();
     core.startRecording = () => [
-        {
-            kind: "registerPendingRequest",
-            requestId: "record-1",
-            requestKind: "startRecording"
-        },
-        {
-            kind: "registerPendingRequest",
-            requestId: "record-2",
-            requestKind: "startRecording"
-        }
+        beginPendingRequest("record-1", PENDING_REQUEST_KIND.START_RECORDING, 10000),
+        beginPendingRequest("record-2", PENDING_REQUEST_KIND.START_RECORDING, 10001)
     ];
     const { client, handledErrors } = createSfuClientHarness({ protocolCore: core });
 
@@ -158,36 +180,24 @@ test("runtime errors reject registered recording requests", async () => {
     await recordingRejection;
 });
 
-test("pending request rejection includes queued recording waiters", async () => {
+test("pending request rejection includes registered recordings", async () => {
     const pendingRequests = new PendingRequests();
     const registeredPromise = pendingRequests.begin(
         () => [
             {
-                kind: CommandKind.REGISTER_PENDING_REQUEST,
-                requestId: "registered-recording",
-                requestKind: PENDING_REQUEST_KIND.START_RECORDING
+                ...beginPendingRequest(
+                    "start-recording",
+                    PENDING_REQUEST_KIND.START_RECORDING,
+                    10000
+                )
             }
         ],
         () => undefined,
         () => undefined
     );
-    pendingRequests.register("registered-recording", PENDING_REQUEST_KIND.START_RECORDING);
-    const queuedPromise = pendingRequests.begin(
-        () => [
-            {
-                kind: CommandKind.REGISTER_PENDING_REQUEST,
-                requestId: "queued-recording",
-                requestKind: PENDING_REQUEST_KIND.STOP_RECORDING
-            }
-        ],
-        () => undefined,
-        () => undefined
-    );
-
     pendingRequests.rejectAll(new Error("recording runtime failure"));
 
     await assert.rejects(registeredPromise, Error);
-    await assert.rejects(queuedPromise, Error);
 });
 
 test("default runtime creates the protocol core from generated wasm bindings", () => {
@@ -213,16 +223,50 @@ test("default runtime creates the protocol core from generated wasm bindings", (
     ]);
 });
 
-function createRecoveryHarness() {
+function createRecoveryHarness(options = {}) {
     const timers = createManualTimers();
     return {
         ...createSfuClientHarness({
             clearTimer: timers.clearTimer,
             createProtocolCore: () => createProtocolCore(),
-            setTimer: timers.setTimer
+            setTimer: timers.setTimer,
+            ...options
         }),
         timers
     };
+}
+
+function beginPendingRequest(requestId, requestKind, timeoutTimerId) {
+    return {
+        kind: "beginPendingRequest",
+        requestId,
+        requestKind,
+        timeoutTimerId,
+        timeoutMs: 5000
+    };
+}
+
+async function resolveRealRecordingRequest(startRequest, ok) {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, sockets, timers } = harness;
+
+    await connectRealWithWelcome(harness);
+
+    const resultPromise = startRequest(client);
+    await tick();
+    timers.fireByDelay(100);
+    await tick();
+    assert.equal(timers.hasDelay(5000), true);
+
+    const [request] = decodeSentFrame(sockets[0], sockets[0].sent.length - 1);
+    await emitMessage(JSON.stringify([{ t: request.t, r: request.q, p: { ok } }]));
+    return resultPromise;
+}
+
+async function connectRealWithWelcome(harness) {
+    await harness.connect("ws://example.test/ws", "jwt-token", { channelUUID: "channel-a" });
+    await harness.open();
+    await harness.emitMessage(buildWelcomeFrame());
 }
 
 async function finishRecovery({ emitMessage, open, sockets, timers }) {
@@ -234,17 +278,56 @@ async function finishRecovery({ emitMessage, open, sockets, timers }) {
     await emitMessage(buildWelcomeFrame(), 1);
 }
 
-function buildNegotiationFrame(tag, requestId, uploadMid) {
+function buildNegotiationFrame(tag, requestId, payloadOrUploadMid) {
+    const payload =
+        typeof payloadOrUploadMid === "string"
+            ? {
+                  sdp: sdp(audioMedia("0"), videoMedia(payloadOrUploadMid)),
+                  uploadSlots: [videoUploadSlot(payloadOrUploadMid)]
+              }
+            : payloadOrUploadMid;
     return JSON.stringify([
         {
             t: tag,
             q: requestId,
-            p: {
-                sdp: sdp(audioMedia("0"), videoMedia(uploadMid)),
-                uploadSlots: [videoUploadSlot(uploadMid)]
-            }
+            p: payload
         }
     ]);
+}
+
+function buildVideoRenegotiationFrame(
+    requestId,
+    { codecs, mid = "2", payloadType = 96, rtpmap = null, simulcastEncodings } = {}
+) {
+    return buildNegotiationFrame("renegotiate", requestId, {
+        sdp: sdp(videoMedia(mid, { payloadType, rtpmap })),
+        uploadSlots: [videoUploadSlot(mid, { codecs, simulcastEncodings })]
+    });
+}
+
+function lastSentEnvelope(socket) {
+    return decodeSentFrame(socket, socket.sent.length - 1).at(-1);
+}
+
+function assertLastNegotiationResponse(socket, tag, responseTo) {
+    assert.deepEqual(lastSentEnvelope(socket), {
+        t: tag,
+        r: responseTo,
+        p: {
+            sdp: "answer-sdp"
+        }
+    });
+}
+
+async function emitOfferWithBinding({ core, emitMessage }, binding = {}) {
+    core.trackBindings.set("0", {
+        active: true,
+        mid: "0",
+        sessionId: 42,
+        type: "camera",
+        ...binding
+    });
+    await emitMessage("offer");
 }
 
 test("real protocol core replays sticky publish after recovery transport readiness", async () => {
@@ -430,13 +513,7 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
         }
     });
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     assert.equal(peerConnections.length, 1);
     assert.deepEqual(peerConnections[0].config, {
@@ -549,14 +626,19 @@ test("source descriptor updates are exposed as additive client state", async () 
         }
     ]);
     assert.deepEqual(client.sourceDescriptors, expectedSources);
+
+    client.disconnect();
+    await tick();
+
+    assert.deepEqual(client.sourceDescriptors, []);
 });
 
 test("renegotiation attaches pending audio only to upload-eligible mids", async () => {
-    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
-        createSfuClientHarness();
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections, sockets } = harness;
 
-    await connectWithWelcome();
-    await emitMessage("offer");
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
 
     const localAudioTrack = new FakeMediaTrack({
         id: "local-audio",
@@ -565,7 +647,14 @@ test("renegotiation attaches pending audio only to upload-eligible mids", async 
     client.publish("audio", localAudioTrack);
     await tick();
 
-    await emitMessage("renegotiate-with-pending-audio");
+    await emitMessage(
+        buildNegotiationFrame("renegotiate", "10", {
+            sdp: sdp(audioMedia("consumer-audio", "sendonly"), audioMedia("producer-audio")),
+            uploadSlots: [audioUploadSlot("producer-audio")]
+        })
+    );
+
+    assertLastNegotiationResponse(sockets[0], "renegotiate", "10");
 
     const producerTransceiver = peerConnections[0].transceivers.find(
         (transceiver) => transceiver.mid === "producer-audio"
@@ -577,11 +666,6 @@ test("renegotiation attaches pending audio only to upload-eligible mids", async 
     assert.ok(consumerTransceiver);
     assert.equal(producerTransceiver.sender.track, localAudioTrack);
     assert.equal(consumerTransceiver.sender.track, null);
-    assert.deepEqual(core.submittedAnswers.at(-1), {
-        negotiationKind: "renegotiate",
-        requestId: "10",
-        sdp: "answer-sdp"
-    });
 });
 
 test("track metadata updates re-emit track state for existing remote tracks", async () => {
@@ -590,13 +674,7 @@ test("track metadata updates re-emit track state for existing remote tracks", as
 
     await connectWithWelcome();
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
@@ -633,19 +711,16 @@ test("subscribe overlays local download state onto existing remote tracks", asyn
 
     await connectWithWelcome();
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
     await tick();
 
     client.subscribe(42, { camera: false });
+    await tick();
+    await tick();
+    client.subscribe(42, { camera: undefined });
     await tick();
     await tick();
     client.subscribe(42, { camera: true });
@@ -704,10 +779,12 @@ test("subscribe forwards additive video layout intent to the protocol core", asy
     ]);
 });
 
-test("subscribe rejects invalid video layout intent", () => {
+test("subscribe rejects invalid download state fields", () => {
     const { client, core } = createSfuClientHarness();
 
-    assert.throws(() => client.subscribe(42, { cameraLayout: "floating" }), Error);
+    for (const states of [{ cameraLayout: "floating" }, { camera: true, video: false }]) {
+        assert.throws(() => client.subscribe(42, states), Error);
+    }
     assert.deepEqual(core.subscriptionUpdates, []);
 });
 
@@ -721,13 +798,7 @@ test("subscribe preferences apply to future remote track bindings", async () => 
     await tick();
     await tick();
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
@@ -860,13 +931,7 @@ test("stale peer connection callbacks cannot affect the active session", async (
     await open();
     await emitMessage("welcome");
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     const stalePeerConnection = peerConnections[0];
     assert.equal(client.state, "connected");
@@ -901,13 +966,7 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
 
     await connectWithWelcome();
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     const firstTrack = createCameraTrack("track-1");
     peerConnections[0].emitTrack(firstTrack, "0");
@@ -962,13 +1021,7 @@ test("peer departure clears remote-track state through the host cleanup command"
 
     await connectWithWelcome();
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     const track = createCameraTrack("track-1");
     peerConnections[0].emitTrack(track, "0");
@@ -991,13 +1044,7 @@ test("peer connection teardown clears stale remote consumer state", async () => 
 
     await connectWithWelcome();
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     peerConnections[0].emitTrack(createCameraTrack("track-1"), "0");
     await tick();
@@ -1016,13 +1063,7 @@ test("remote track lifecycle updates re-emit when the browser unmutes the track"
 
     await connectWithWelcome();
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 42,
-        type: "camera"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage });
 
     const track = new FakeMediaTrack({
         id: "track-1",
@@ -1102,17 +1143,10 @@ test("publish detaches the local sender before signaling unpublish", async () =>
 });
 
 test("renegotiation binds a newly published local track before answering", async () => {
-    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
-        createSfuClientHarness();
-
-    const track = createCameraTrack("camera-track-1");
-
-    await connectWithWelcome();
-    await emitMessage("offer");
-
-    client.publish("camera", track);
-    await tick();
-    await emitMessage("renegotiate-with-unbound-camera");
+    const { peerConnections, track } = await renegotiateCamera(
+        buildVideoRenegotiationFrame("9", { simulcastEncodings: [] }),
+        "camera-track-1"
+    );
 
     assert.equal(peerConnections[0].transceivers[2].sender.track, track);
     assert.equal(peerConnections[0].transceivers[2].direction, "sendonly");
@@ -1121,11 +1155,6 @@ test("renegotiation binds a newly published local track before answering", async
         track,
         "the browser must bind the track before generating the renegotiation answer"
     );
-    assert.deepEqual(core.submittedAnswers.at(-1), {
-        negotiationKind: "renegotiate",
-        requestId: "9",
-        sdp: "answer-sdp"
-    });
 });
 
 const EXPECTED_RID_ENCODINGS = [
@@ -1144,11 +1173,11 @@ const EXPECTED_RID_ENCODINGS = [
 ];
 
 async function renegotiateCamera(frame, trackId, harnessOptions = {}) {
-    const harness = createSfuClientHarness(harnessOptions);
+    const harness = createRecoveryHarness(harnessOptions);
     const track = createCameraTrack(trackId);
 
-    await harness.connectWithWelcome();
-    await harness.emitMessage("offer");
+    await connectRealWithWelcome(harness);
+    await harness.emitMessage(buildNegotiationFrame("offer", "7", "1"));
 
     harness.client.publish("camera", track);
     await tick();
@@ -1157,6 +1186,7 @@ async function renegotiateCamera(frame, trackId, harnessOptions = {}) {
         (candidate) => candidate.mid === "2"
     );
     assert.ok(transceiver);
+    assertLastNegotiationResponse(harness.sockets[0], "renegotiate", JSON.parse(frame)[0].q);
 
     return {
         ...harness,
@@ -1175,39 +1205,49 @@ function assertSenderEncodings(peerConnection, transceiver, expected) {
     });
 }
 
-function assertSubmittedRenegotiation(core, requestId) {
-    assert.deepEqual(core.submittedAnswers.at(-1), {
-        negotiationKind: "renegotiate",
-        requestId,
-        sdp: "answer-sdp"
-    });
-}
-
 test("renegotiation configures RID simulcast before answering supported video publishes", async () => {
-    const { core, peerConnections, track, transceiver } = await renegotiateCamera(
-        "renegotiate-with-pending-simulcast-camera",
+    const { peerConnections, track, transceiver } = await renegotiateCamera(
+        buildVideoRenegotiationFrame("12", {
+            rtpmap: "VP8/90000"
+        }),
         "camera-track-simulcast"
     );
 
     assert.equal(transceiver.sender.track, track);
     assertSenderEncodings(peerConnections[0], transceiver, EXPECTED_RID_ENCODINGS);
-    assertSubmittedRenegotiation(core, "12");
 });
 
 test("renegotiation configures RID simulcast from server-defined upload slots", async () => {
-    const { core, peerConnections, track, transceiver } = await renegotiateCamera(
-        "renegotiate-with-pending-h264-simulcast-camera",
+    const { peerConnections, track, transceiver } = await renegotiateCamera(
+        buildVideoRenegotiationFrame("13", {
+            codecs: ["H264"],
+            payloadType: 102,
+            rtpmap: "H264/90000"
+        }),
         "camera-track-single"
     );
 
     assert.equal(transceiver.sender.track, track);
     assertSenderEncodings(peerConnections[0], transceiver, EXPECTED_RID_ENCODINGS);
-    assertSubmittedRenegotiation(core, "13");
 });
 
 test("renegotiation falls back to single encoding when the server ladder is invalid", async () => {
     const { peerConnections, transceiver } = await renegotiateCamera(
-        "renegotiate-with-invalid-simulcast-camera",
+        buildVideoRenegotiationFrame("14", {
+            rtpmap: "VP8/90000",
+            simulcastEncodings: [
+                {
+                    maxBitrate: 150000,
+                    rid: "lo",
+                    resolutionScale: 0
+                },
+                {
+                    maxBitrate: 900000,
+                    rid: "hi",
+                    resolutionScale: 1
+                }
+            ]
+        }),
         "camera-track-invalid-profile"
     );
 
@@ -1216,7 +1256,9 @@ test("renegotiation falls back to single encoding when the server ladder is inva
 
 test("renegotiation falls back to single encoding when sender parameters are rejected", async () => {
     const { peerConnections, transceiver } = await renegotiateCamera(
-        "renegotiate-with-pending-simulcast-camera",
+        buildVideoRenegotiationFrame("12", {
+            rtpmap: "VP8/90000"
+        }),
         "camera-track-rejected-profile",
         {
             peerConnectionOptions: {
@@ -1273,19 +1315,28 @@ test("offer waits for ice gathering completion before submitting the final answe
 });
 
 test("renegotiation binds pending camera and screen tracks to distinct offer-ordered mids", async () => {
-    const { client, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness();
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections } = harness;
 
     const cameraTrack = createCameraTrack("camera-track-distinct-mid");
     const screenTrack = createScreenTrack("screen-track-distinct-mid");
 
-    await connectWithWelcome();
-    await emitMessage("offer");
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
 
     client.publish("camera", cameraTrack);
     await tick();
     client.publish("screen", screenTrack);
     await tick();
-    await emitMessage("renegotiate-with-pending-camera-and-screen");
+    await emitMessage(
+        buildNegotiationFrame("renegotiate", "11", {
+            sdp: sdp(videoMedia("2"), videoMedia("3")),
+            uploadSlots: [
+                videoUploadSlot("2", { simulcastEncodings: [] }),
+                videoUploadSlot("3", { simulcastEncodings: [] })
+            ]
+        })
+    );
 
     assert.equal(peerConnections[0].transceivers[2].sender.track, cameraTrack);
     assert.equal(peerConnections[0].transceivers[3].sender.track, screenTrack);
@@ -1338,20 +1389,16 @@ test("updateInfo keeps the legacy needRefresh option as a compatibility no-op", 
 });
 
 test("fatal runtime errors reset the public client surface", async () => {
-    const { client, core, emitMessage, handledErrors, open, sockets, connect } =
+    const { client, core, emitMessage, handledErrors, open, peerConnections, sockets, connect } =
         createSfuClientHarness();
 
     await connect();
     await open();
     await emitMessage("welcome");
 
-    client._consumers.set(42, {
-        audio: null,
-        camera: {
-            track: { id: "track-1", kind: "video" }
-        },
-        screen: null
-    });
+    await emitOfferWithBinding({ core, emitMessage });
+    peerConnections[0].emitTrack(createCameraTrack("track-1"), "0");
+    await emitMessage("source-descriptors");
 
     await emitMessage("explode");
 
@@ -1359,6 +1406,7 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.equal(client.state, "disconnected");
     assert.deepEqual(client.availableFeatures, EMPTY_FEATURES);
     assert.deepEqual(client.recordingState, {});
+    assert.deepEqual(client.sourceDescriptors, []);
     assert.equal(client._consumers.size, 0);
     assert.equal(client.errors.length, 1);
     assert.equal(client.errors[0] instanceof Error, true);

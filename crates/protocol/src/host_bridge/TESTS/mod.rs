@@ -54,9 +54,11 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                 state: BundleConnectionState::Connected,
                 cause: Some(String::from("recovered")),
             },
-            Command::RegisterPendingRequest {
+            Command::BeginPendingRequest {
                 request_id: RequestId::new("11"),
                 kind: PendingRequestKind::StartRecording,
+                timeout_timer_id: 10_000,
+                timeout_ms: 5_000,
             },
             Command::EmitEvent {
                 event: ProtocolEvent::TrackSnapshot {
@@ -98,9 +100,11 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                 "cause": "recovered"
             },
             {
-                "kind": "registerPendingRequest",
+                "kind": "beginPendingRequest",
                 "requestId": "11",
-                "requestKind": "startRecording"
+                "requestKind": "startRecording",
+                "timeoutTimerId": 10_000,
+                "timeoutMs": 5_000
             },
             {
                 "kind": "replaceTrackBindings",

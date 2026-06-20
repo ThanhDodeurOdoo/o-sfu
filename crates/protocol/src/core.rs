@@ -51,9 +51,9 @@ use crate::{
     },
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
-        EnvelopeBatch, NegotiationUploadSlot, PeerSnapshot, RecordingOptions, RequestId,
+        MAX_ENVELOPE_BATCH_LEN, NegotiationUploadSlot, PeerSnapshot, RecordingOptions, RequestId,
         ServerEnvelope, SourceDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
-        WelcomePayload,
+        WelcomePayload, decode_envelope_batch,
     },
 };
 
@@ -112,9 +112,11 @@ pub enum Command {
     EmitEvent {
         event: ProtocolEvent,
     },
-    RegisterPendingRequest {
+    BeginPendingRequest {
         request_id: RequestId,
         kind: PendingRequestKind,
+        timeout_timer_id: u32,
+        timeout_ms: u32,
     },
     ResolvePendingRequest {
         request_id: RequestId,
@@ -329,9 +331,12 @@ pub struct ProtocolCore {
     /// Current server-maintained mapping from SDP mid to stream binding metadata.
     ///
     /// The map is replaced by track snapshots and trimmed when peers leave. It
-    /// is the core's authoritative source for host track and source projection,
-    /// but it is runtime state only and is cleared on disconnect or socket loss.
+    /// is runtime state only and is cleared on disconnect or socket loss.
     track_bindings: BTreeMap<String, TrackBinding>,
+    /// Current server-maintained source descriptor snapshot keyed by source id.
+    source_descriptors: BTreeMap<String, SourceDescriptor>,
+    /// Whether the current source snapshot was derived from legacy track data.
+    source_descriptors_from_legacy_tracks: bool,
     /// Latest client intent that must be replayed after a recovered socket is
     /// authenticated.
     ///
@@ -386,6 +391,8 @@ impl ProtocolCore {
             features: empty_features(),
             recording_state: RecordingState::default(),
             track_bindings: BTreeMap::new(),
+            source_descriptors: BTreeMap::new(),
+            source_descriptors_from_legacy_tracks: false,
             sticky_replay: StickyReplayState::new(),
             connect_context: None,
             recovery_delay_ms: INITIAL_RECOVERY_DELAY_MS,
@@ -462,7 +469,7 @@ impl ProtocolCore {
     /// The whole batch is decoded before any envelope is applied so partially
     /// applied server state cannot survive after a later decode error.
     pub fn on_ws_message(&mut self, frame: &str) -> CommandBatch {
-        let Ok(batch) = serde_json::from_str::<EnvelopeBatch>(frame) else {
+        let Ok(batch) = decode_envelope_batch(frame, MAX_ENVELOPE_BATCH_LEN) else {
             return CommandBatch::close_for_protocol_error();
         };
         let Ok(envelopes) = batch
@@ -678,6 +685,8 @@ impl ProtocolCore {
 
     fn clear_runtime_state(&mut self) {
         self.track_bindings.clear();
+        self.source_descriptors.clear();
+        self.source_descriptors_from_legacy_tracks = false;
         self.outbound_batch.clear();
         self.request_tracker.clear();
     }
@@ -690,10 +699,6 @@ impl ProtocolCore {
     fn clear_runtime_state_with_commands(&mut self) -> Commands {
         let mut commands = self.outbound_batch.clear_with_commands();
         commands.extend(self.request_tracker.clear_with_commands());
-        let had_source_descriptors = self
-            .track_bindings
-            .values()
-            .any(|binding| binding.source.is_some());
         if !self.track_bindings.is_empty() {
             self.track_bindings.clear();
             commands.push(Command::EmitEvent {
@@ -702,7 +707,9 @@ impl ProtocolCore {
                 },
             });
         }
-        if had_source_descriptors {
+        if !self.source_descriptors.is_empty() {
+            self.source_descriptors.clear();
+            self.source_descriptors_from_legacy_tracks = false;
             commands.push(Command::EmitEvent {
                 event: ProtocolEvent::SourceSnapshot {
                     sources: Vec::new(),

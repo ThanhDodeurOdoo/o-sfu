@@ -118,9 +118,9 @@ fn begin_request(
     if !core.can_send_client_messages() || core.request_tracker.has_pending_kind(kind) {
         return Vec::new();
     }
-    let registration = core.request_tracker.register_request(kind);
+    let request_start = core.request_tracker.begin_request(kind);
     let Some(envelope) = ClientEnvelope::Request {
-        request_id: registration.request_id.clone(),
+        request_id: request_start.request_id.clone(),
         request,
     }
     .into_envelope()
@@ -128,8 +128,8 @@ fn begin_request(
         return Vec::new();
     };
 
-    CommandBatch::start_pending_request(
-        registration,
+    CommandBatch::begin_pending_request(
+        request_start,
         core.enqueue_envelope(envelope, FlushMode::Batched),
     )
     .into_vec()

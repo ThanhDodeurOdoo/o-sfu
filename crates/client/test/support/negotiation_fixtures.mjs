@@ -48,11 +48,3 @@ export const videoUploadSlot = (
     mid,
     simulcastEncodings
 });
-
-export const negotiationCommand = ({ negotiationKind, requestId, sdp, uploadSlots }) => ({
-    kind: "applyNegotiation",
-    negotiationKind,
-    requestId,
-    sdp,
-    uploadSlots
-});

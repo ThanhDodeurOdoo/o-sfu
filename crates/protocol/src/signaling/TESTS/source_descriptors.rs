@@ -3,7 +3,7 @@ use serde_json::json;
 use super::*;
 
 #[test]
-fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::Result<()> {
+fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Result<()> {
     let source = SourceDescriptor {
         source_id: String::from("source-7"),
         user_id: UserId::Integer(5),
@@ -31,49 +31,36 @@ fn protocol_track_binding_can_carry_additive_source_descriptor() -> serde_json::
             },
         ],
     };
-    let track_update = ServerMessage::Tracks(vec![TrackBinding {
-        mid: String::from("0"),
-        user_id: UserId::Integer(5),
-        stream_type: StreamType::Camera,
-        active: true,
-        source: Some(source),
-    }])
-    .into_envelope()?;
+    let source_update = ServerMessage::Sources(vec![source]).into_envelope()?;
 
     assert_eq!(
-        serde_json::to_value(&track_update)?,
+        serde_json::to_value(&source_update)?,
         json!({
-            "t": "tracks",
+            "t": "sources",
             "p": [{
-                "mid": "0",
+                "sourceId": "source-7",
                 "sessionId": 5,
                 "type": "camera",
                 "active": true,
-                "source": {
-                    "sourceId": "source-7",
-                    "sessionId": 5,
-                    "type": "camera",
-                    "active": true,
-                    "mid": "0",
-                    "encodings": [
-                        {
-                            "encodingId": "encoding-1",
-                            "rid": "lo",
-                            "maxBitrate": 150_000,
-                            "resolutionScale": 4,
-                            "policyRole": "thumbnail",
-                            "maxTemporalLayerId": 0,
-                        },
-                        {
-                            "encodingId": "encoding-2",
-                            "rid": "hi",
-                            "maxBitrate": 900_000,
-                            "resolutionScale": 1,
-                            "policyRole": "featured",
-                            "maxTemporalLayerId": 2,
-                        },
-                    ],
-                },
+                "mid": "0",
+                "encodings": [
+                    {
+                        "encodingId": "encoding-1",
+                        "rid": "lo",
+                        "maxBitrate": 150_000,
+                        "resolutionScale": 4,
+                        "policyRole": "thumbnail",
+                        "maxTemporalLayerId": 0,
+                    },
+                    {
+                        "encodingId": "encoding-2",
+                        "rid": "hi",
+                        "maxBitrate": 900_000,
+                        "resolutionScale": 1,
+                        "policyRole": "featured",
+                        "maxTemporalLayerId": 2,
+                    },
+                ],
             }],
         })
     );

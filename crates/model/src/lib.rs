@@ -296,6 +296,16 @@ pub struct DownloadStates {
 }
 
 impl DownloadStates {
+    pub fn apply_partial_update(&mut self, update: &Self) {
+        *self = Self {
+            audio: update.audio.or(self.audio),
+            camera: update.camera.or(self.camera),
+            screen: update.screen.or(self.screen),
+            camera_layout: update.camera_layout.or(self.camera_layout),
+            screen_layout: update.screen_layout.or(self.screen_layout),
+        };
+    }
+
     /// iterate over explicit stream toggles in this update
     ///
     /// layout preferences are not yielded because they do not map one-to-one to
