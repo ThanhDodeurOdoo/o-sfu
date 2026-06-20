@@ -399,7 +399,7 @@ async fn transport_consume_failure_releases_pending_setup_for_retry() {
 
     assert_eq!(
         room.user_operation(&subscriber_id, subscriber_connection_id, &media_transport)
-            .refresh_after_initial_answer()
+            .apply_session_refreshed()
             .await,
         Some(())
     );
