@@ -8,10 +8,11 @@ use o_sfu_router::{
 use tracing::{error, warn};
 
 use super::{
-    ConsumerKey, ConsumerRouteTransportRef, ConsumerSetupOutcome, ConsumerSetupTarget,
-    PendingConsumerSetup, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer,
-    PublishedSourceInstall, ReceiverRouteActivity, RemoteTrackSetup, ResolvedRelayRouteEffect,
-    RoomMediaGraph, TransportMediaRemoval, ValidatedPublish, route_graph::RelayRouteEffect,
+    ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerSetupOutcome,
+    ConsumerSetupTarget, PendingConsumerSetup, ProducerRouteTarget, ProducerRuntimeId,
+    PublishedProducer, PublishedSourceInstall, ReceiverRouteActivity, RemoteTrackSetup,
+    ResolvedRelayRouteEffect, RoomMediaGraph, TransportMediaRemoval, ValidatedPublish,
+    route_graph::RelayRouteEffect,
 };
 use crate::{
     RoomSpilloverMode,
@@ -273,17 +274,24 @@ impl RoomTopology {
         Ok(producer)
     }
 
-    pub fn transport_consumer_route(
+    pub(in crate::engine::room) fn consumer_route_target_for_source(
         &self,
-        route: &ConsumerRouteTransportRef,
-    ) -> TransportConsumerRoute {
-        TransportConsumerRoute::new(
+        route: ConsumerRouteTransportRef,
+        source: &PublishedSourceDescriptor,
+    ) -> ConsumerRouteTarget {
+        let transport_route = TransportConsumerRoute::new(
             self.transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
             route.consumer_media,
             TransportSourceKey::new(
                 self.transport_user_key(&route.source_user_id, route.source_connection_id),
                 route.source_media,
             ),
+        );
+        ConsumerRouteTarget::new(
+            route,
+            transport_route,
+            source.stream_id().clone(),
+            source.media_kind(),
         )
     }
 
@@ -641,12 +649,8 @@ impl RoomTopology {
                 routing_error: None,
             });
         }
-        let (routed, target) = {
-            let routed = route.state.routed_consumer_id;
-            let route_ref = route.transport_ref();
-            let transport_route = self.transport_consumer_route(&route_ref);
-            (routed, route.target(transport_route))
-        };
+        let routed = route.state.routed_consumer_id;
+        let target = self.consumer_route_target_for_source(route.transport_ref(), route.source);
         let route_state = if active {
             RouterConsumerRouteState::Active
         } else {

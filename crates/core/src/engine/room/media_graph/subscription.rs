@@ -100,7 +100,10 @@ impl RoomState {
     ) -> Option<ReceiverRouteCommit> {
         self.user_for_connection(user_id, connection_id)?;
         let before = self.media_counts();
-        let media_worker_id = self.media_worker_id_for_connection(connection_id);
+        let media_worker_id = self
+            .topology
+            .routing()
+            .media_worker_id_for_connection(connection_id);
         let work =
             self.plan_receiver_intent_change(user_id, connection_id, target_user_id, intents);
         let after = self.media_counts();
@@ -191,7 +194,10 @@ impl RoomState {
         Some(ReceiverRouteCommit {
             before,
             after,
-            media_worker_id: self.media_worker_id_for_connection(connection_id),
+            media_worker_id: self
+                .topology
+                .routing()
+                .media_worker_id_for_connection(connection_id),
             work: ReceiverRouteWork::new(Vec::new(), setups, Vec::new()),
         })
     }
@@ -440,7 +446,7 @@ impl RoomState {
 
     fn active_video_count(&self, consumer_user_id: &UserId) -> usize {
         let committed = self
-            .current_live_consumer_routes()
+            .live_consumer_routes()
             .filter(|route| route.consumer_user_id == *consumer_user_id)
             .filter(|route| route.source.media_kind() == RouterMediaKind::Video)
             .filter(|route| route.producer.active)
@@ -528,7 +534,7 @@ impl RoomState {
             return None;
         }
         Some(
-            self.current_live_consumer_routes()
+            self.live_consumer_routes()
                 .filter_map(|route| {
                     if route.consumer_user_id != *consumer_user_id
                         || route.state.consumer_connection_id != consumer_connection_id
@@ -539,9 +545,10 @@ impl RoomState {
                     if !route.producer.active || !route.selection_or_open(true).delivery_active() {
                         return None;
                     }
-                    let route_ref = route.transport_ref();
-                    let transport_route = self.transport_consumer_route(&route_ref);
-                    Some(route.target(transport_route))
+                    Some(
+                        self.topology
+                            .consumer_route_target_for_source(route.transport_ref(), route.source),
+                    )
                 })
                 .collect(),
         )

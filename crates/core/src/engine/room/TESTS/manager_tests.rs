@@ -17,7 +17,12 @@ use super::{
 };
 use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
-    engine::{MediaWorkerId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
+    engine::{
+        MediaWorkerId,
+        diagnostics::DiagnosticsStore,
+        media_transport::{TransportConsumerRoute, TransportSourceKey},
+        metrics::RuntimeMetrics,
+    },
     prelude::LocalSpilloverPolicyParts,
 };
 
@@ -163,9 +168,20 @@ async fn apply_subscription_route_activity(
     );
     let commit = {
         let state = room.state.read().await;
-        let transport_route = state.transport_consumer_route(&route);
-        let target =
-            ConsumerRouteTarget::new(route, transport_route, stream_id.clone(), MediaKind::Audio);
+        let transport_route = TransportConsumerRoute::new(
+            state.transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
+            route.consumer_media,
+            TransportSourceKey::new(
+                state.transport_user_key(&route.source_user_id, route.source_connection_id),
+                route.source_media,
+            ),
+        );
+        let target = ConsumerRouteTarget::for_test(
+            route.clone(),
+            transport_route,
+            stream_id.clone(),
+            MediaKind::Audio,
+        );
         let route_update = ReceiverRouteActivity::new(target, false);
         let counts = state.media_counts();
         let work = ReceiverRouteWork::new(vec![route_update], Vec::new(), Vec::new());

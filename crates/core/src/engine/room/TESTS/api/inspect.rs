@@ -153,6 +153,8 @@ impl RoomTestInspect<'_> {
         let connection_id = state.user_connection_id(user_id)?;
         Some(
             state
+                .topology
+                .routing()
                 .media_worker_id_for_connection(connection_id)
                 .as_usize(),
         )

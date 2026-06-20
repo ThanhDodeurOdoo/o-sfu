@@ -12,7 +12,7 @@ use crate::{
             ActiveSpeakerSource, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
             TransportMediaId,
         },
-        room::state::RoomState,
+        room::{media_graph::ConsumerRouteTransportRef, state::RoomState},
         source_model::{
             ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
         },
@@ -35,10 +35,10 @@ pub struct SourcePolicyInput<'a> {
     pub(super) media_limits: RoomMediaLimits,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SourcePolicyRouteInput<'a> {
     pub(super) source: &'a PublishedSourceDescriptor,
-    pub(super) route: super::super::media_graph::ConsumerRouteTransportRef,
+    pub(super) transport_ref: ConsumerRouteTransportRef,
     pub(super) current_selection: ConsumerSourceSelection,
 }
 
@@ -78,7 +78,7 @@ impl<'a> SourcePolicyInput<'a> {
 }
 
 fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRouteInput<'_>> {
-    let live_routes = state.current_live_consumer_routes();
+    let live_routes = state.live_consumer_routes();
     let mut routes = Vec::with_capacity(live_routes.size_hint().1.unwrap_or_default());
     for route in live_routes {
         if !route.producer.active {
@@ -96,7 +96,7 @@ fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRouteInput<'_>> {
         }
         routes.push(SourcePolicyRouteInput {
             source,
-            route: route.transport_ref(),
+            transport_ref: route.transport_ref(),
             current_selection,
         });
     }

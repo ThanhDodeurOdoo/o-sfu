@@ -1,11 +1,15 @@
 use o_sfu_router::MediaKind;
 
-use super::{action::ConsumerPacketSelectionUpdate, input::SourcePolicyInput};
-use crate::engine::source_model::PolicyPauseReason;
+use super::{
+    action::{ConsumerPacketSelectionUpdate, TransportPacketSelectionUpdate},
+    input::SourcePolicyInput,
+};
+use crate::engine::{room::media_graph::RoomTopology, source_model::PolicyPauseReason};
 
 pub(super) fn audio_route_activity_updates(
+    topology: &RoomTopology,
     input: &SourcePolicyInput<'_>,
-) -> Vec<ConsumerPacketSelectionUpdate> {
+) -> Vec<TransportPacketSelectionUpdate> {
     let mut updates = Vec::with_capacity(input.routes.len());
     for route in &input.routes {
         if route.source.media_kind() != MediaKind::Audio {
@@ -13,10 +17,10 @@ pub(super) fn audio_route_activity_updates(
         }
         let active_speaker = input
             .active_speaker_media_ids
-            .contains(&route.route.source_media);
+            .contains(&route.transport_ref.source_media);
         let admitted = input
             .admitted_audio_media_ids
-            .contains(&route.route.source_media);
+            .contains(&route.transport_ref.source_media);
         let next_reason =
             (active_speaker && !admitted).then_some(PolicyPauseReason::AudioSpeakerLimit);
         if next_reason.is_none()
@@ -26,12 +30,14 @@ pub(super) fn audio_route_activity_updates(
             continue;
         }
         if let Some(update) = ConsumerPacketSelectionUpdate::route_activity(
-            route.route.clone(),
+            route.transport_ref.clone(),
             route.source.source_id(),
             route.current_selection,
             next_reason,
         ) {
-            updates.push(update);
+            let target = topology
+                .consumer_route_target_for_source(update.transport_ref.clone(), route.source);
+            updates.push(TransportPacketSelectionUpdate { update, target });
         }
     }
     updates

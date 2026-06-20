@@ -10,7 +10,7 @@ use crate::engine::{
     },
     room::{
         media_graph::{ConsumerRouteTarget, ReceiverRouteActivity},
-        source_policy::ConsumerPacketSelectionUpdate,
+        source_policy::{ConsumerPacketSelectionUpdate, TransportPacketSelectionUpdate},
     },
 };
 
@@ -62,13 +62,8 @@ impl RoomRouteEffects {
         });
     }
 
-    pub fn push_source_selection(
-        &mut self,
-        update: ConsumerPacketSelectionUpdate,
-        route: TransportConsumerRoute,
-    ) {
-        self.consumers
-            .push(ConsumerEffect::SourceSelection(update, route));
+    pub fn push_source_selection(&mut self, update: TransportPacketSelectionUpdate) {
+        self.consumers.push(ConsumerEffect::SourceSelection(update));
     }
 
     pub fn set_receiver_bwe_targets(&mut self, updates: Vec<ReceiverBweTargetUpdate>) {
@@ -145,7 +140,7 @@ enum ConsumerEffect {
         active: bool,
         keyframe: bool,
     },
-    SourceSelection(ConsumerPacketSelectionUpdate, TransportConsumerRoute),
+    SourceSelection(TransportPacketSelectionUpdate),
 }
 
 impl ConsumerEffect {
@@ -168,12 +163,14 @@ impl ConsumerEffect {
             } => ConsumerRouteControl::new(route.clone())
                 .activity(ConsumerActivity::from_active(*active))
                 .keyframe(*keyframe),
-            Self::SourceSelection(update, route) => {
+            Self::SourceSelection(selection) => {
+                let update = &selection.update;
                 let mut control =
-                    ConsumerRouteControl::new(route.clone()).keyframe(update.request_keyframe);
-                if update.route_activity_update {
-                    control =
-                        control.activity(ConsumerActivity::from_active(update.route_active()));
+                    ConsumerRouteControl::new(selection.target.transport_route().clone())
+                        .keyframe(update.request_keyframe);
+                if update.route_activity_changed {
+                    let active = update.policy_pause_reason.is_none();
+                    control = control.activity(ConsumerActivity::from_active(active));
                 }
                 if let Some(packet_gate) = &update.packet_gate {
                     control = control.packet_gate(packet_gate.clone());
@@ -190,7 +187,10 @@ impl ConsumerEffect {
             }
             Self::Keyframe(target) => finish_keyframe(&target, result),
             Self::Setup { route, active, .. } => finish_setup(&route, active, result),
-            Self::SourceSelection(update, _) => finish_source_selection(update, result, outcome),
+            Self::SourceSelection(selection) => {
+                let TransportPacketSelectionUpdate { update, target } = selection;
+                finish_source_selection(update, &target, result, outcome);
+            }
         }
     }
 }
@@ -246,20 +246,21 @@ fn finish_setup(route: &TransportConsumerRoute, active: bool, result: ConsumerRo
 
 fn finish_source_selection(
     update: ConsumerPacketSelectionUpdate,
+    target: &ConsumerRouteTarget,
     result: ConsumerRouteControlOutcome,
     outcome: &mut RoomRouteEffectOutcome,
 ) {
     if result.packet_gate_failed() || result.activity_failed() {
         warn!(
-            route = ?update.route,
-            route_active = update.route_active(),
+            route = ?target.transport_route(),
+            route_active = update.policy_pause_reason.is_none(),
             "media transport rejected the receiver-driven packet selection update"
         );
         return;
     }
     if result.keyframe_failed() {
         warn!(
-            route = ?update.route,
+            route = ?target.transport_route(),
             "media transport failed to request an adaptation keyframe refresh"
         );
     }

@@ -1,15 +1,22 @@
+use o_sfu_router::RouterId;
+
 use super::*;
 use crate::{
-    Bitrate,
+    Bitrate, MediaCodecFlags,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
         media_transport::{ReceiverBweTargetUpdate, TransportSessionKey},
+        room::{
+            RoomRuntimeContext, RouterPlacement, media_graph::RoomTopology,
+            rtp_capabilities::router_rtp_capabilities,
+        },
     },
 };
 
 #[test]
 fn receiver_without_video_routes_gets_zero_bwe_target() {
     let plan = receiver_video_selection_plan(
+        &test_topology(),
         &[],
         [(
             UserId::Integer(42),
@@ -34,4 +41,19 @@ fn receiver_without_video_routes_gets_zero_bwe_target() {
             .map(ReceiverBweTargetUpdate::target),
         Some(Bitrate::zero())
     );
+}
+
+fn test_topology() -> RoomTopology {
+    let context = RoomRuntimeContext::new(
+        RoomInstanceId::from_raw(0),
+        RouterPlacement {
+            router: RouterId(1),
+            media_worker: MediaWorkerId::from_raw(0),
+        },
+        Vec::new(),
+    );
+    RoomTopology::new(
+        &context,
+        router_rtp_capabilities(MediaCodecFlags::default()),
+    )
 }

@@ -1,4 +1,4 @@
-use super::super::media_graph::ConsumerRouteTransportRef;
+use super::super::media_graph::{ConsumerRouteTarget, ConsumerRouteTransportRef};
 use crate::engine::{
     ConnectionId, UserId,
     media_transport::{ReceiverBweTargetUpdate, SourcePacketGate},
@@ -9,9 +9,16 @@ use crate::engine::{
 };
 
 #[derive(Debug)]
-pub struct ReceiverVideoPolicyPlan {
-    pub consumer_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
-    pub receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
+pub(super) struct ReceiverVideoPolicyPlan {
+    pub(super) state_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+    pub(super) transport_packet_updates: Vec<TransportPacketSelectionUpdate>,
+    pub(super) receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
+}
+
+#[derive(Debug)]
+pub(in crate::engine::room) struct TransportPacketSelectionUpdate {
+    pub(in crate::engine::room) update: ConsumerPacketSelectionUpdate,
+    pub(in crate::engine::room) target: ConsumerRouteTarget,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -63,10 +70,9 @@ impl BudgetSolverOutcomes {
     }
 }
 
-/// receiver-side source selection revalidated after transport effects
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumerPacketSelectionUpdate {
-    pub route: ConsumerRouteTransportRef,
+    pub transport_ref: ConsumerRouteTransportRef,
     pub source_id: PublishedSourceId,
     pub selector: SourceSelector,
     pub policy_pause_reason: Option<PolicyPauseReason>,
@@ -75,20 +81,19 @@ pub struct ConsumerPacketSelectionUpdate {
     pub pressure_observations: u8,
     pub upgrade_observations: u8,
     pub packet_gate: Option<SourcePacketGate>,
-    pub route_activity_update: bool,
+    pub route_activity_changed: bool,
     pub request_keyframe: bool,
 }
 
 impl ConsumerPacketSelectionUpdate {
     pub fn route_activity(
-        route: ConsumerRouteTransportRef,
+        transport_ref: ConsumerRouteTransportRef,
         source_id: PublishedSourceId,
         current_selection: ConsumerSourceSelection,
         policy_pause_reason: Option<PolicyPauseReason>,
     ) -> Option<Self> {
-        let route_activity_update = policy_pause_reason != current_selection.policy_pause_reason();
-        route_activity_update.then(|| Self {
-            route,
+        (policy_pause_reason != current_selection.policy_pause_reason()).then(|| Self {
+            transport_ref,
             source_id,
             selector: current_selection.selector(),
             policy_pause_reason,
@@ -97,13 +102,13 @@ impl ConsumerPacketSelectionUpdate {
             pressure_observations: current_selection.pressure_observations(),
             upgrade_observations: current_selection.upgrade_observations(),
             packet_gate: None,
-            route_activity_update,
+            route_activity_changed: true,
             request_keyframe: false,
         })
     }
 
-    pub const fn route_active(&self) -> bool {
-        self.policy_pause_reason.is_none()
+    pub(super) const fn requires_media_transport_effect(&self) -> bool {
+        self.packet_gate.is_some() || self.route_activity_changed || self.request_keyframe
     }
 }
 

@@ -36,8 +36,8 @@ struct RouteFixture {
     media_transport: MediaTransport,
     metrics: Arc<RuntimeMetrics>,
     route: TransportConsumerRoute,
+    route_ref: ConsumerRouteTransportRef,
     target: ConsumerRouteTarget,
-    source_update: ConsumerPacketSelectionUpdate,
 }
 
 impl RouteFixture {
@@ -87,22 +87,18 @@ impl RouteFixture {
             source_session.connection_id(),
             source_media,
         );
-        let target = ConsumerRouteTarget::new(
+        let target = ConsumerRouteTarget::for_test(
             transport_ref.clone(),
             route.clone(),
             UserStreamId::from("camera"),
             MediaKind::Video,
         );
-        let source_update = packet_update(
-            transport_ref,
-            SourcePacketGate::OperatingPoint(SourcePacketOperatingPoint::new(None, 0)),
-        )?;
         Ok(Self {
             media_transport,
             metrics,
             route,
+            route_ref: transport_ref,
             target,
-            source_update,
         })
     }
 
@@ -161,8 +157,24 @@ impl RouteFixture {
     }
 
     async fn apply_source_selection(&self) -> Result<(), io::Error> {
+        let mut current_selection = ConsumerSourceSelection::open(true);
+        current_selection.set_policy_pause_reason(Some(PolicyPauseReason::BudgetPressure));
+        let mut update = ConsumerPacketSelectionUpdate::route_activity(
+            self.route_ref.clone(),
+            PublishedSourceId::from_raw(42),
+            current_selection,
+            None,
+        )
+        .ok_or_else(|| io::Error::other("route activity update should be created"))?;
+        update.packet_gate = Some(SourcePacketGate::OperatingPoint(
+            SourcePacketOperatingPoint::new(None, 0),
+        ));
+        update.request_keyframe = true;
         let mut effects = RoomRouteEffects::default();
-        effects.push_source_selection(self.source_update.clone(), self.route.clone());
+        effects.push_source_selection(TransportPacketSelectionUpdate {
+            update: update.clone(),
+            target: self.target.clone(),
+        });
         effects.set_receiver_bwe_targets(vec![ReceiverBweTargetUpdate::new(
             self.route.consumer_session_key().clone(),
             Bitrate::from_kbps(600),
@@ -170,7 +182,7 @@ impl RouteFixture {
 
         let outcome = effects.execute(&self.media_transport).await;
 
-        assert_eq!(outcome.packet_updates, vec![self.source_update.clone()]);
+        assert_eq!(outcome.packet_updates, vec![update]);
         let snapshot = self.metrics.snapshot();
         assert_eq!(
             snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed(),
@@ -221,24 +233,6 @@ fn session_key(connection_id: u64, user_id: UserId) -> TransportSessionKey {
 fn sample_rtp_parameters(mid: &str, ssrc: u32) -> MediaStream {
     MediaStream::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(ssrc)])
         .with_mid(String::from(mid))
-}
-
-fn packet_update(
-    route: ConsumerRouteTransportRef,
-    packet_gate: SourcePacketGate,
-) -> Result<ConsumerPacketSelectionUpdate, io::Error> {
-    let mut current_selection = ConsumerSourceSelection::open(true);
-    current_selection.set_policy_pause_reason(Some(PolicyPauseReason::BudgetPressure));
-    let mut update = ConsumerPacketSelectionUpdate::route_activity(
-        route,
-        PublishedSourceId::from_raw(42),
-        current_selection,
-        None,
-    )
-    .ok_or_else(|| io::Error::other("route activity update should be created"))?;
-    update.packet_gate = Some(packet_gate);
-    update.request_keyframe = true;
-    Ok(update)
 }
 
 fn diagnostics(session: &TransportSessionKey, event: &'static str) -> DiagnosticsEventData {

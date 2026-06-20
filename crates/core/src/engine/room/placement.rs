@@ -149,17 +149,7 @@ impl Room {
     }
 
     pub async fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
-        let state = self.state.read().await;
-        for (user_id, connection_id) in state.transport_user_entries() {
-            loads.record_session(
-                state
-                    .transport_user_key(&user_id, connection_id)
-                    .media_worker_id(),
-            );
-        }
-        for (_, connection_id) in state.transport_consumer_entries() {
-            loads.record_consumer(state.media_worker_id_for_connection(connection_id));
-        }
+        self.state.read().await.record_worker_load(loads);
     }
 
     pub(super) async fn plan_join_placement(
@@ -194,6 +184,25 @@ impl Room {
             state.source_fanout_pressure(policy.max_fanout_per_source)
         };
         lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
+    }
+}
+
+impl RoomState {
+    fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
+        let media = self.topology.media();
+        let routing = self.topology.routing();
+        for user in self.users.values() {
+            loads.record_session(routing.media_worker_id_for_connection(user.connection_id));
+        }
+        for (_, connection_id) in media.committed_consumer_transport_entries() {
+            loads.record_consumer(routing.media_worker_id_for_connection(connection_id));
+        }
+        for user_id in media.pending_consumer_user_ids() {
+            let Some(user) = self.users.get(user_id) else {
+                continue;
+            };
+            loads.record_consumer(routing.media_worker_id_for_connection(user.connection_id));
+        }
     }
 }
 

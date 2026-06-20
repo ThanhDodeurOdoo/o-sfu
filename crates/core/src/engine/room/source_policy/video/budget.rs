@@ -20,7 +20,7 @@ pub(super) fn apply_overload_policy(
         return;
     }
     for route in routes.iter_mut().filter(|route| route_can_downgrade(route)) {
-        let Some((selector, bitrate)) = cheapest_useful_selector(route.route) else {
+        let Some((selector, bitrate)) = cheapest_useful_selector(route.input) else {
             let selected_bitrate = route.selected_bitrate;
             route.pause(PolicyPauseReason::MissingUsableLayer, RouteOutcome::Neutral);
             total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
@@ -82,7 +82,7 @@ fn selected_receiver_bitrate(routes: &[PlannedReceiverRoute<'_>]) -> Bitrate {
 }
 
 fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
-    let input = route.route;
+    let input = route.input;
     route.selection.policy_pause_reason.is_none()
         && input.adaptation_policy() == SourceAdaptationPolicy::ScalableVideo
         && matches!(
@@ -93,7 +93,7 @@ fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
 
 fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
     matches!(
-        route.route.layout_intent.priority(),
+        route.input.layout_intent.priority(),
         SourceRoutePriority::PinnedOrFeatured
             | SourceRoutePriority::ReadableDetail
             | SourceRoutePriority::ActiveSpeaker
@@ -101,7 +101,7 @@ fn route_is_protected(route: &PlannedReceiverRoute<'_>) -> bool {
 }
 
 fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
-    match route.route.layout_intent.priority() {
+    match route.input.layout_intent.priority() {
         SourceRoutePriority::HiddenOrOverflow => 0,
         SourceRoutePriority::VisibleThumbnail => 1,
         SourceRoutePriority::ActiveSpeaker => 2,
@@ -111,7 +111,7 @@ fn pause_rank(route: &PlannedReceiverRoute<'_>) -> u8 {
 }
 
 fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason {
-    let intent = route.route.layout_intent;
+    let intent = route.input.layout_intent;
     match intent.priority() {
         SourceRoutePriority::HiddenOrOverflow => match intent.role() {
             SourceRoomPolicySelector::Hidden => PolicyPauseReason::HiddenTile,
