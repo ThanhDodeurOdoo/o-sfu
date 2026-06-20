@@ -29,13 +29,13 @@ fn has_channel_info_update(updates: &[BundleUpdate]) -> bool {
 
 async fn drain_peer_until_pending_request_resolution(
     peer: &mut ProtocolHarnessPeer,
-    request_kind: HostPendingRequestKind,
+    kind: PendingRequestKind,
     ok: bool,
 ) -> Option<RequestId> {
     timeout(Duration::from_secs(1), async {
         loop {
             let Some((request_id, ..)) =
-                pending_request_start(&peer.pending_request_commands, request_kind)
+                pending_request_start(&peer.pending_request_commands, kind)
             else {
                 peer.read_server_frame().await?;
                 continue;
@@ -68,7 +68,7 @@ pub(crate) async fn connect_protocol_recording_peer(
 
 fn pending_request_start(
     commands: &[HostCommand],
-    request_kind: HostPendingRequestKind,
+    kind: PendingRequestKind,
 ) -> Option<(RequestId, u32, u32)> {
     commands.iter().find_map(|command| match command {
         HostCommand::BeginPendingRequest {
@@ -77,22 +77,19 @@ fn pending_request_start(
             timeout_timer_id,
             timeout_ms,
             ..
-        } if *pending_kind == request_kind => {
-            Some((request_id.clone(), *timeout_timer_id, *timeout_ms))
-        }
+        } if *pending_kind == kind => Some((request_id.clone(), *timeout_timer_id, *timeout_ms)),
         _ => None,
     })
 }
 
 pub(crate) async fn assert_recording_request_rejected(
     peer: &mut ProtocolHarnessPeer,
-    request_kind: HostPendingRequestKind,
+    kind: PendingRequestKind,
 ) -> Option<RequestId> {
-    let (_, timer_id, timeout_ms) =
-        pending_request_start(&peer.pending_request_commands, request_kind)?;
+    let (_, timer_id, timeout_ms) = pending_request_start(&peer.pending_request_commands, kind)?;
     if peer.timers.get(&timer_id) != Some(&timeout_ms) {
         return None;
     }
-    let request_id = drain_peer_until_pending_request_resolution(peer, request_kind, false).await?;
+    let request_id = drain_peer_until_pending_request_resolution(peer, kind, false).await?;
     (!has_channel_info_update(&peer.updates)).then_some(request_id)
 }

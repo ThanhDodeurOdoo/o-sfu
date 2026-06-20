@@ -25,6 +25,8 @@
 
 use std::{collections::BTreeMap, mem::replace};
 
+use serde::{Deserialize, Serialize};
+
 mod command_batch;
 mod connection_lifecycle;
 mod outbound_batch;
@@ -166,13 +168,15 @@ pub enum ProtocolEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum NegotiationKind {
     Offer,
     Renegotiate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PendingRequestKind {
     StartRecording,
     StopRecording,
