@@ -1,9 +1,9 @@
-import { CommandKind, type HostCommand } from "../runtime_contract.js";
+import { COMMAND_KIND, type HostCommand } from "../runtime_contract.js";
 import type { PendingRequestCallbacks } from "./browser_types.js";
 
 type BeginPendingRequestCommand = Extract<
     HostCommand,
-    { kind: typeof CommandKind.BEGIN_PENDING_REQUEST }
+    { kind: typeof COMMAND_KIND.BEGIN_PENDING_REQUEST }
 >;
 
 export class PendingRequests {
@@ -61,7 +61,7 @@ export class PendingRequests {
     private findBeginRequestCommand(commands: HostCommand[]): BeginPendingRequestCommand | null {
         let request: BeginPendingRequestCommand | null = null;
         for (const command of commands) {
-            if (command.kind !== CommandKind.BEGIN_PENDING_REQUEST) {
+            if (command.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
                 continue;
             }
             if (request) {

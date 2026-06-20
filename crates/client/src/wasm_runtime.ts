@@ -1,5 +1,5 @@
 import {
-    configureDefaultProtocolCoreProvider,
+    configureDefaultWasmProtocolCoreProvider,
     type ProtocolCoreBindings,
     type ProtocolCoreProvider
 } from "./runtime_contract.js";
@@ -21,10 +21,10 @@ const GENERATED_WASM_URL = new URL("../generated/o_sfu_protocol_bg.wasm", import
 
 const generatedProtocolModule = await initializeGeneratedProtocolModule();
 
-export const defaultProtocolCoreProvider: ProtocolCoreProvider = () =>
+export const defaultWasmProtocolCoreProvider: ProtocolCoreProvider = () =>
     new generatedProtocolModule.ProtocolCoreWasm();
 
-configureDefaultProtocolCoreProvider(defaultProtocolCoreProvider);
+configureDefaultWasmProtocolCoreProvider(defaultWasmProtocolCoreProvider);
 
 async function initializeGeneratedProtocolModule(): Promise<GeneratedProtocolModule> {
     const module = (await import(GENERATED_MODULE_URL.href)) as GeneratedProtocolModule;

@@ -68,6 +68,12 @@ fn try_from_vec_rejects_invalid_command_order() {
     );
 }
 
+#[test]
+#[should_panic(expected = "protocol core emitted an invalid command batch")]
+fn from_core_commands_panics_on_invalid_order() {
+    CommandBatch::from_core_commands(vec![apply_negotiation("offer-1", NegotiationKind::Offer)]);
+}
+
 const fn close_websocket() -> Command {
     Command::CloseWebSocket { code: 1000 }
 }

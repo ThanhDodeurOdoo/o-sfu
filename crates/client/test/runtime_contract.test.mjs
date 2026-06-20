@@ -7,6 +7,8 @@ import { CLIENT_UPDATE } from "../dist/index.js";
 import {
     NEGOTIATION_KIND,
     PENDING_REQUEST_KIND,
+    configureDefaultWasmProtocolCoreProvider,
+    createProtocolCore,
     wrapProtocolCoreBindings
 } from "../dist/runtime_contract.js";
 
@@ -101,7 +103,7 @@ function validCore(overrides = {}) {
     };
 }
 
-function assertWrappedCoreThrows(overrides, read) {
+function assertInjectedCoreThrows(overrides, read) {
     const core = wrapProtocolCoreBindings(validCore(overrides));
     assertThrowsError(() => read(core));
 }
@@ -145,19 +147,31 @@ test("source tree does not own generated protocol manifest", () => {
     assert.equal(existsSync(sourceManifestPath), false);
 });
 
-test("wrapped protocol core rejects malformed host commands", () => {
+test("default WASM protocol core validates host command shape only", () => {
+    const misorderedHostCommands = [negotiationCommand(NEGOTIATION_KIND.OFFER)];
+    configureDefaultWasmProtocolCoreProvider(() =>
+        validCore({
+            connect: () => [{ kind: "emitStateChange", state: "broken" }],
+            onWsMessage: () => misorderedHostCommands
+        })
+    );
+    const core = createProtocolCore();
+
+    assert.deepEqual(core.onWsMessage("offer"), misorderedHostCommands);
+    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
+});
+
+test("injected protocol core rejects malformed host commands", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
-            connect() {
-                return [{ kind: "emitStateChange", state: "broken" }];
-            }
+            connect: () => [{ kind: "emitStateChange", state: "broken" }]
         })
     );
 
     assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
-test("wrapped protocol core validates host command ordering", () => {
+test("injected protocol core validates host command ordering", () => {
     for (const [method, commands, args = []] of [
         ["onWsMessage", [negotiationCommand(NEGOTIATION_KIND.OFFER)], ["offer"]],
         [
@@ -172,18 +186,16 @@ test("wrapped protocol core validates host command ordering", () => {
             [1011]
         ]
     ]) {
-        assertWrappedCoreThrows(
+        assertInjectedCoreThrows(
             {
-                [method]() {
-                    return commands;
-                }
+                [method]: () => commands
             },
             (core) => core[method](...args)
         );
     }
 });
 
-test("wrapped protocol core validates pending request lifecycle commands", () => {
+test("injected protocol core validates pending request lifecycle commands", () => {
     for (const commands of [
         [beginPendingRequest({ timeoutTimerId: 1 })],
         [{ kind: "resolvePendingRequest", requestId: "missing", ok: false }],
@@ -192,79 +204,69 @@ test("wrapped protocol core validates pending request lifecycle commands", () =>
             { kind: "resolvePendingRequest", requestId: "request-2", ok: false }
         ]
     ]) {
-        assertWrappedCoreThrows(
+        assertInjectedCoreThrows(
             {
-                startRecording() {
-                    return commands;
-                }
+                startRecording: () => commands
             },
             (core) => core.startRecording()
         );
     }
 });
 
-test("wrapped protocol core rejects malformed track bindings", () => {
+test("injected protocol core rejects malformed track bindings", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
-            trackBinding() {
-                return {
-                    active: "yes",
-                    mid: "0",
-                    sessionId: 7,
-                    type: "camera"
-                };
-            }
+            trackBinding: () => ({
+                active: "yes",
+                mid: "0",
+                sessionId: 7,
+                type: "camera"
+            })
         })
     );
 
     assertThrowsError(() => core.trackBinding("0"));
 });
 
-test("wrapped protocol core validates replaceTrackBindings host commands", () => {
+test("injected protocol core validates replaceTrackBindings host commands", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
-            connect() {
-                return [
-                    {
-                        bindings: [{ active: "yes", mid: "0", sessionId: 7, type: "camera" }],
-                        kind: "replaceTrackBindings"
-                    }
-                ];
-            }
+            connect: () => [
+                {
+                    bindings: [{ active: "yes", mid: "0", sessionId: 7, type: "camera" }],
+                    kind: "replaceTrackBindings"
+                }
+            ]
         })
     );
 
     assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
-test("wrapped protocol core validates source descriptors", () => {
+test("injected protocol core validates source descriptors", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
-            connect() {
-                return [
-                    {
-                        kind: "replaceSourceDescriptors",
-                        sources: [validSourceDescriptor({ maxBitrate: -1 })]
-                    }
-                ];
-            }
+            connect: () => [
+                {
+                    kind: "replaceSourceDescriptors",
+                    sources: [validSourceDescriptor({ maxBitrate: -1 })]
+                }
+            ]
         })
     );
 
     assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
-test("wrapped protocol core accepts valid temporal layer ids", () => {
+test("injected protocol core accepts valid temporal layer ids", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
-            connect() {
-                return [
-                    {
-                        kind: "replaceSourceDescriptors",
-                        sources: [validSourceDescriptor({ maxTemporalLayerId: 7 })]
-                    }
-                ];
-            }
+            connect: () => [
+                {
+                    kind: "replaceSourceDescriptors",
+                    sources: [validSourceDescriptor({ maxTemporalLayerId: 7 })]
+                }
+            ]
         })
     );
 
@@ -272,17 +274,15 @@ test("wrapped protocol core accepts valid temporal layer ids", () => {
 });
 
 for (const maxTemporalLayerId of [-1, 8, 1.5, "2", Number.NaN]) {
-    test(`wrapped protocol core rejects invalid temporal layer id ${String(maxTemporalLayerId)}`, () => {
+    test(`injected protocol core rejects invalid temporal layer id ${String(maxTemporalLayerId)}`, () => {
         const core = wrapProtocolCoreBindings(
             validCore({
-                connect() {
-                    return [
-                        {
-                            kind: "replaceSourceDescriptors",
-                            sources: [validSourceDescriptor({ maxTemporalLayerId })]
-                        }
-                    ];
-                }
+                connect: () => [
+                    {
+                        kind: "replaceSourceDescriptors",
+                        sources: [validSourceDescriptor({ maxTemporalLayerId })]
+                    }
+                ]
             })
         );
 
@@ -290,12 +290,10 @@ for (const maxTemporalLayerId of [-1, 8, 1.5, "2", Number.NaN]) {
     });
 }
 
-test("wrapped protocol core rejects NaN and infinite numeric session IDs", () => {
+test("injected protocol core rejects NaN and infinite numeric session IDs", () => {
     const nanSessionIdCore = wrapProtocolCoreBindings(
         validCore({
-            connect() {
-                return [{ kind: "removeSessionTracks", sessionId: Number.NaN }];
-            }
+            connect: () => [{ kind: "removeSessionTracks", sessionId: Number.NaN }]
         })
     );
 
@@ -303,32 +301,30 @@ test("wrapped protocol core rejects NaN and infinite numeric session IDs", () =>
 
     const infiniteSessionIdCore = wrapProtocolCoreBindings(
         validCore({
-            connect() {
-                return [{ kind: "removeSessionTracks", sessionId: Number.POSITIVE_INFINITY }];
-            }
+            connect: () => [{ kind: "removeSessionTracks", sessionId: Number.POSITIVE_INFINITY }]
         })
     );
 
     assertThrowsError(() => infiniteSessionIdCore.connect("ws://example.test", "jwt", null));
 });
 
-test("wrapped protocol core validates boolean fields", () => {
+test("injected protocol core validates boolean fields", () => {
     for (const field of REQUIRED_FEATURE_FIELDS) {
-        assertWrappedCoreThrows(
+        assertInjectedCoreThrows(
             { features: { ...VALID_FEATURES, [field]: "yes" } },
             (core) => core.features
         );
     }
 
     for (const field of OPTIONAL_RECORDING_FIELDS) {
-        assertWrappedCoreThrows(
+        assertInjectedCoreThrows(
             { recordingState: { [field]: "yes" } },
             (core) => core.recordingState
         );
     }
 
     for (const field of OPTIONAL_SESSION_INFO_FIELDS) {
-        assertWrappedCoreThrows(
+        assertInjectedCoreThrows(
             {
                 connect: () => [
                     {

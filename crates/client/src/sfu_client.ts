@@ -19,7 +19,7 @@ import {
     type UpdateInfoOptions
 } from "./public_api.js";
 import {
-    CommandKind,
+    COMMAND_KIND,
     createProtocolCore,
     wrapProtocolCoreBindings,
     type HostCommand,
@@ -105,7 +105,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
                 jwt,
                 options.channelUUID ?? null
             );
-            if (commands.some((command) => command.kind === CommandKind.CONNECT)) {
+            if (commands.some((command) => command.kind === COMMAND_KIND.CONNECT)) {
                 this._runtime.setIceServers(iceServers);
             }
             return commands;

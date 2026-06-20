@@ -1,9 +1,9 @@
 /**
  * Odoo bundle entrypoint that initializes the generated WASM module once and
- * connect the bundle to the default protocol-core provider
+ * connects the bundle to the default WASM protocol-core provider
  */
 import {
-    configureDefaultProtocolCoreProvider,
+    configureDefaultWasmProtocolCoreProvider,
     type ProtocolCoreBindings
 } from "../src/runtime_contract.ts";
 import { ProtocolCoreWasm, initSync } from "../generated/o_sfu_protocol.js";
@@ -19,7 +19,7 @@ function ensureProtocolModuleInitialized() {
     protocolModuleInitialized = true;
 }
 
-configureDefaultProtocolCoreProvider(() => {
+configureDefaultWasmProtocolCoreProvider(() => {
     ensureProtocolModuleInitialized();
     // as unknown as cast:
     // wasm-bindgen widens `state` to `string` in the generated TS,

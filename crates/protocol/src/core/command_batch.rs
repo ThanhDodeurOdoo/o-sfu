@@ -14,7 +14,7 @@ pub struct CommandBatch {
 
 impl CommandBatch {
     pub(super) fn from_core_commands(commands: Vec<Command>) -> Self {
-        debug_assert!(
+        assert!(
             Self::validate_commands(&commands).is_ok(),
             "protocol core emitted an invalid command batch"
         );
