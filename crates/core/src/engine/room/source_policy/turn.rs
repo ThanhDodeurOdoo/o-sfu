@@ -1,7 +1,7 @@
 //! source-policy apply ownership without transport awaits under the room lock
 
 use super::{
-    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
+    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, TransportPacketSelectionUpdate},
     audio,
     input::SourcePolicyInput,
     video,
@@ -9,7 +9,6 @@ use super::{
 use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, MediaTransport, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
-        TransportConsumerRoute,
     },
     metrics::{self, BudgetSolverOutcome},
     room::{
@@ -133,13 +132,11 @@ mod test_support;
 
 #[derive(Debug, Default)]
 pub struct SourcePolicyPlan {
-    state_only_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
-    transport_effect_packet_updates: Vec<PacketUpdateWithRoute>,
+    state_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+    transport_packet_updates: Vec<TransportPacketSelectionUpdate>,
     receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
     featured_users: Vec<FeaturedUserUpdate>,
 }
-
-type PacketUpdateWithRoute = (ConsumerPacketSelectionUpdate, TransportConsumerRoute);
 
 impl SourcePolicyPlan {
     pub fn from_state(
@@ -148,41 +145,37 @@ impl SourcePolicyPlan {
         bandwidth: &ReceiverBandwidthSnapshot,
     ) -> Self {
         let input = SourcePolicyInput::from_state(state, active_speakers, bandwidth);
-        let audio_updates = audio::audio_route_activity_updates(&input);
+        let mut transport_packet_updates =
+            audio::audio_route_activity_updates(&state.topology, &input);
         let video_plan = video::receiver_video_policy_plan(state, &input);
-        let (state_only_packet_updates, transport_effect_packet_updates) = split_packet_updates(
-            state,
-            audio_updates
-                .into_iter()
-                .chain(video_plan.consumer_packet_updates),
-        );
+        transport_packet_updates.extend(video_plan.transport_packet_updates);
         Self {
-            state_only_packet_updates,
-            transport_effect_packet_updates,
+            state_packet_updates: video_plan.state_packet_updates,
+            transport_packet_updates,
             receiver_bwe_targets: video_plan.receiver_bwe_targets,
             featured_users: input.featured_user_updates,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.state_only_packet_updates.is_empty()
-            && self.transport_effect_packet_updates.is_empty()
+        self.state_packet_updates.is_empty()
+            && self.transport_packet_updates.is_empty()
             && self.receiver_bwe_targets.is_empty()
             && self.featured_users.is_empty()
     }
 
     pub async fn execute(self, room: &Room, media_transport: &MediaTransport) {
         let Self {
-            state_only_packet_updates,
-            transport_effect_packet_updates,
+            state_packet_updates,
+            transport_packet_updates,
             receiver_bwe_targets,
             featured_users,
         } = self;
-        let mut applied_packet_updates = state_only_packet_updates;
+        let mut applied_packet_updates = state_packet_updates;
         let mut routes = RoomRouteEffects::default();
         routes.set_receiver_bwe_targets(receiver_bwe_targets);
-        for (update, route) in transport_effect_packet_updates {
-            routes.push_source_selection(update, route);
+        for update in transport_packet_updates {
+            routes.push_source_selection(update);
         }
         applied_packet_updates.extend(routes.execute(media_transport).await.packet_updates);
         if applied_packet_updates.is_empty() && featured_users.is_empty() {
@@ -226,34 +219,10 @@ fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelecti
     }
 }
 
-fn split_packet_updates(
-    state: &RoomState,
-    updates: impl IntoIterator<Item = ConsumerPacketSelectionUpdate>,
-) -> (
-    Vec<ConsumerPacketSelectionUpdate>,
-    Vec<PacketUpdateWithRoute>,
-) {
-    let mut state_only_updates = Vec::new();
-    let mut transport_effect_updates = Vec::new();
-    for update in updates {
-        if requires_media_transport_effect(&update) {
-            let transport_route = state.topology.transport_consumer_route(&update.route);
-            transport_effect_updates.push((update, transport_route));
-        } else {
-            state_only_updates.push(update);
-        }
-    }
-    (state_only_updates, transport_effect_updates)
-}
-
-fn requires_media_transport_effect(update: &ConsumerPacketSelectionUpdate) -> bool {
-    update.packet_gate.is_some() || update.route_activity_update || update.request_keyframe
-}
-
 fn commit_packet_updates(state: &mut RoomState, updates: &[ConsumerPacketSelectionUpdate]) {
     for update in updates {
         state.topology.update_consumer_source_selection(
-            &update.route,
+            &update.transport_ref,
             update.source_id,
             |selection| {
                 selection.set_selector(update.selector);

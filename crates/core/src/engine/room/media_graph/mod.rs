@@ -164,15 +164,6 @@ impl ConsumerRouteView<'_> {
             && self.state.source_connection_id == route.source_connection_id
             && self.state.source_media == route.source_media
     }
-
-    pub fn target(&self, transport_route: TransportConsumerRoute) -> ConsumerRouteTarget {
-        ConsumerRouteTarget::new(
-            self.transport_ref(),
-            transport_route,
-            self.source.stream_id().clone(),
-            self.source.media_kind(),
-        )
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -221,7 +212,7 @@ impl ConsumerRouteTransportRef {
 }
 
 impl ConsumerRouteTarget {
-    pub fn new(
+    fn new(
         transport_ref: ConsumerRouteTransportRef,
         transport_route: TransportConsumerRoute,
         stream_id: UserStreamId,

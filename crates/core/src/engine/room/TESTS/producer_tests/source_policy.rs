@@ -521,7 +521,7 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
 }
 
 #[tokio::test]
-async fn source_policy_budget_only_update_does_not_capture_transport_route() {
+async fn source_policy_budget_only_update_stays_state_only() {
     let SourcePolicyScenario { room, adapter } =
         SourcePolicyScenario::with_ready_users(&[1, 2]).await;
     let receiver_user_id = UserId::Integer(2);
@@ -583,13 +583,17 @@ async fn source_policy_plan_captures_transport_route_before_execution() {
     let expected_route = {
         let state = scenario.room.state.read().await;
         let route = state
-            .current_live_consumer_routes()
+            .live_consumer_routes()
             .find(|route| {
                 route.consumer_user_id == UserId::Integer(2)
                     && route.source.source_id() == third_camera_source_id
             })
             .expect("third camera should have a live consumer route");
-        state.transport_consumer_route(&route.transport_ref())
+        state
+            .topology
+            .consumer_route_target_for_source(route.transport_ref(), route.source)
+            .transport_route()
+            .clone()
     };
     let plan = source_policy_plan_from_transport_snapshot(&scenario).await;
 

@@ -54,11 +54,11 @@ pub(super) fn source_packet_gate_for_selector(
 }
 
 pub(super) fn consumer_packet_selection_update(
-    route: PlannedReceiverRoute<'_>,
+    planned_route: &PlannedReceiverRoute<'_>,
     selection: ReceiverRouteSelection,
     budget: ReceiverVideoBudgetDiagnostics,
 ) -> Option<ConsumerPacketSelectionUpdate> {
-    let input = route.route;
+    let input = planned_route.input;
     let current_selection = input.current_selection;
     if selection.selector == current_selection.selector()
         && selection.policy_pause_reason == current_selection.policy_pause_reason()
@@ -72,16 +72,16 @@ pub(super) fn consumer_packet_selection_update(
     } else {
         Some(source_packet_gate_for_selector(input.source, selection.selector).ok()?)
     };
-    let route_activity_update =
+    let route_activity_changed =
         selection.policy_pause_reason != current_selection.policy_pause_reason();
     let request_keyframe = selection.policy_pause_reason.is_none()
         && (selection.request_keyframe || !current_selection.policy_allows_delivery());
-    let mut outcomes = route_outcomes(&route, selection);
+    let mut outcomes = route_outcomes(planned_route, selection);
     if budget.over_budget_exception_reason().is_some() {
         outcomes = outcomes.with_protected_over_budget();
     }
     Some(ConsumerPacketSelectionUpdate {
-        route: input.route.clone(),
+        transport_ref: input.transport_ref.clone(),
         source_id: input.source.source_id(),
         selector: selection.selector,
         policy_pause_reason: selection.policy_pause_reason,
@@ -90,7 +90,7 @@ pub(super) fn consumer_packet_selection_update(
         pressure_observations: selection.counts.pressure,
         upgrade_observations: selection.counts.upgrade,
         packet_gate,
-        route_activity_update,
+        route_activity_changed,
         request_keyframe: request_keyframe && input.source.media_kind() == MediaKind::Video,
     })
 }
@@ -101,7 +101,7 @@ fn route_outcomes(
 ) -> BudgetSolverOutcomes {
     match (
         selection.policy_pause_reason,
-        route.route.current_selection.policy_pause_reason(),
+        route.input.current_selection.policy_pause_reason(),
     ) {
         (None, Some(_reason)) => BudgetSolverOutcomes::resumed(),
         (Some(reason), current_reason) if current_reason != Some(reason) => {

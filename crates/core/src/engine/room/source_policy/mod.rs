@@ -8,6 +8,6 @@ mod video;
 pub(super) use self::turn::SourcePolicyPlan;
 pub use self::video::VideoAdmissionRank;
 pub(super) use self::{
-    action::ConsumerPacketSelectionUpdate,
+    action::{ConsumerPacketSelectionUpdate, TransportPacketSelectionUpdate},
     turn::{SourcePolicyTrigger, SourcePolicyWakeups, apply},
 };

@@ -37,18 +37,18 @@ pub(super) fn receiver_video_routes<'a>(
             continue;
         }
         let layout_intent = state.receiver_video_layout_intent(
-            &route.route.consumer_user_id,
+            &route.transport_ref.consumer_user_id,
             source,
             &input.featured_source_user_ids,
         );
         routes.push(ReceiverVideoRouteInput {
             user_count: input.user_count,
             source,
-            route: route.route.clone(),
+            transport_ref: route.transport_ref.clone(),
             current_selection: route.current_selection,
             layout_intent,
             visible_scalable_route_count: visible_scalable_route_counts
-                .get(&route.route.consumer_user_id)
+                .get(&route.transport_ref.consumer_user_id)
                 .copied()
                 .unwrap_or(1),
             active_speaker_rank: input
@@ -57,18 +57,18 @@ pub(super) fn receiver_video_routes<'a>(
                 .copied(),
             receiver_bandwidth: input
                 .receiver_bandwidth_by_connection
-                .get(&route.route.consumer_connection_id)
+                .get(&route.transport_ref.consumer_connection_id)
                 .copied(),
         });
     }
     routes
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ReceiverVideoRouteInput<'a> {
     pub user_count: usize,
     pub source: &'a PublishedSourceDescriptor,
-    pub route: ConsumerRouteTransportRef,
+    pub(super) transport_ref: ConsumerRouteTransportRef,
     pub current_selection: ConsumerSourceSelection,
     pub layout_intent: ReceiverVideoLayoutIntent,
     pub visible_scalable_route_count: usize,
@@ -83,10 +83,6 @@ impl ReceiverVideoRouteInput<'_> {
 
     pub const fn adaptation_policy(&self) -> SourceAdaptationPolicy {
         self.source.policy().adaptation()
-    }
-
-    pub fn consumer_user_id(&self) -> &UserId {
-        &self.route.consumer_user_id
     }
 
     pub fn encodings(&self) -> SelectableRouteEncodings<'_> {
@@ -134,7 +130,7 @@ fn visible_scalable_route_counts_by_consumer(
             continue;
         }
         let layout_intent = state.receiver_video_layout_intent(
-            &route.route.consumer_user_id,
+            &route.transport_ref.consumer_user_id,
             source,
             featured_source_user_ids,
         );
@@ -142,7 +138,7 @@ fn visible_scalable_route_counts_by_consumer(
             continue;
         }
         *counts
-            .entry(route.route.consumer_user_id.clone())
+            .entry(route.transport_ref.consumer_user_id.clone())
             .or_default() += 1;
     }
     counts

@@ -18,14 +18,15 @@ use o_sfu_router::{
 };
 
 use super::{
-    ConsumerKey, ConsumerRouteState, ConsumerSetupOutcome, ConsumerState, PendingConsumerSetup,
-    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
+    ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerRouteTransportRef,
+    ConsumerSetupOutcome, ConsumerState, PendingConsumerSetup, ProducerRuntimeId,
+    PublishedProducer, PublishedSourceInstall,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
-        media_transport::{SessionUploadEncoding, TransportMediaId},
+        media_transport::{SessionUploadEncoding, TransportConsumerRoute, TransportMediaId},
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
@@ -44,6 +45,17 @@ use crate::{
         },
     },
 };
+
+impl ConsumerRouteTarget {
+    pub(in crate::engine::room) fn for_test(
+        transport_ref: ConsumerRouteTransportRef,
+        transport_route: TransportConsumerRoute,
+        stream_id: UserStreamId,
+        kind: RouterMediaKind,
+    ) -> Self {
+        Self::new(transport_ref, transport_route, stream_id, kind)
+    }
+}
 
 fn test_state() -> RoomState {
     test_state_with_media_limits(RoomMediaLimits::default())

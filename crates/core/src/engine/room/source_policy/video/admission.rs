@@ -30,7 +30,7 @@ pub(super) fn active_route_count(routes: &[PlannedReceiverRoute<'_>]) -> usize {
 }
 
 fn video_download_rank(route: &PlannedReceiverRoute<'_>) -> VideoAdmissionRank {
-    let input = route.route;
+    let input = route.input;
     VideoAdmissionRank::new(
         input.layout_intent.priority(),
         input.active_speaker_rank,

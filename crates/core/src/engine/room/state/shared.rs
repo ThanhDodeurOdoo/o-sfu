@@ -4,7 +4,7 @@ use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities
 
 use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
-    media_graph::{ConsumerRouteTransportRef, ConsumerRouteView, RoomTopology},
+    media_graph::{ConsumerRouteView, RoomTopology},
     outbound::OutboundSender,
     user_negotiation::UserNegotiation,
 };
@@ -12,7 +12,7 @@ use crate::{
     RoomMediaLimits, RoomSpilloverMode,
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
-        media_transport::{TransportConsumerRoute, TransportSessionKey},
+        media_transport::TransportSessionKey,
         room::placement::{LoadTriggeredPlacementState, RoutingPlacementSnapshot},
         source_model::{SourceSubscriptionIntent, UserStreamId},
     },
@@ -155,38 +155,24 @@ impl RoomState {
             .committed_transport_user_key(user_id, connection_id)
     }
 
-    pub fn transport_consumer_route(
-        &self,
-        route: &ConsumerRouteTransportRef,
-    ) -> TransportConsumerRoute {
-        self.topology.transport_consumer_route(route)
-    }
-
     pub fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {
         self.topology.routing().usage_snapshot()
-    }
-
-    pub fn media_worker_id_for_connection(&self, connection_id: ConnectionId) -> MediaWorkerId {
-        self.topology
-            .routing()
-            .media_worker_id_for_connection(connection_id)
     }
 
     pub fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
         self.topology.routing().assigned_primary_media_worker_id()
     }
 
-    pub fn transport_consumer_entries(&self) -> Vec<(UserId, ConnectionId)> {
-        let media = self.topology.media();
-        let mut entries = media
-            .committed_consumer_transport_entries()
-            .collect::<Vec<_>>();
-        entries.extend(media.pending_consumer_user_ids().filter_map(|user_id| {
-            self.users
-                .get(user_id)
-                .map(|user| (user_id.clone(), user.connection_id))
-        }));
-        entries
+    pub(in crate::engine::room) fn live_consumer_routes(
+        &self,
+    ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
+        self.topology
+            .media()
+            .live_consumer_routes()
+            .filter(|route| {
+                self.user_connection_id(&route.consumer_user_id)
+                    == Some(route.state.consumer_connection_id)
+            })
     }
 
     pub fn source_fanout_pressure(&self, max_fanout_per_source: usize) -> bool {
@@ -289,16 +275,6 @@ impl RoomState {
             u64::try_from(self.users.len()).unwrap_or(u64::MAX),
             active_stream_counts,
         )
-    }
-
-    pub fn current_live_consumer_routes(&self) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.topology
-            .media()
-            .live_consumer_routes()
-            .filter(|route| {
-                self.user_connection_id(&route.consumer_user_id)
-                    == Some(route.state.consumer_connection_id)
-            })
     }
 
     pub fn media_counts(&self) -> RoomMediaCounts {

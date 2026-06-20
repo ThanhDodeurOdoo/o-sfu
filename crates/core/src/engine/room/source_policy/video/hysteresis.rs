@@ -8,7 +8,7 @@ pub(super) const DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
 pub(super) const UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
 
 pub(super) fn resolve(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelection {
-    let current = route.route.current_selection;
+    let current = route.input.current_selection;
     let current_pause_reason = current.policy_pause_reason();
     let selection = route.selection;
     match (selection.policy_pause_reason, current_pause_reason) {

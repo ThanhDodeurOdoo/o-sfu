@@ -1,10 +1,16 @@
 use super::{
-    super::action::ConsumerPacketSelectionUpdate, adaptation, admission, budget, hysteresis,
-    input::ReceiverVideoRouteInput, projection, selection::ReceiverRouteSelection,
+    super::action::{ConsumerPacketSelectionUpdate, TransportPacketSelectionUpdate},
+    adaptation, admission, budget, hysteresis,
+    input::ReceiverVideoRouteInput,
+    projection,
+    selection::ReceiverRouteSelection,
 };
 use crate::{
     Bitrate,
-    engine::source_model::{PolicyPauseReason, SourceSelector},
+    engine::{
+        room::media_graph::RoomTopology,
+        source_model::{PolicyPauseReason, SourceSelector},
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,24 +22,24 @@ pub(super) enum RouteOutcome {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PlannedReceiverRoute<'a> {
-    pub(super) route: &'a ReceiverVideoRouteInput<'a>,
+    pub(super) input: &'a ReceiverVideoRouteInput<'a>,
     pub(super) selected_bitrate: Bitrate,
     pub(super) selection: ReceiverRouteSelection,
     pub(super) outcome: RouteOutcome,
 }
 
 impl<'a> PlannedReceiverRoute<'a> {
-    fn new(route: &'a ReceiverVideoRouteInput<'a>, selection: ReceiverRouteSelection) -> Self {
-        let selected_bitrate = adaptation::selector_bitrate(route.encodings(), selection.selector);
+    fn new(input: &'a ReceiverVideoRouteInput<'a>, selection: ReceiverRouteSelection) -> Self {
+        let selected_bitrate = adaptation::selector_bitrate(input.encodings(), selection.selector);
         let current_bitrate =
-            adaptation::selector_bitrate(route.encodings(), route.current_selection.selector());
+            adaptation::selector_bitrate(input.encodings(), input.current_selection.selector());
         let outcome = if selected_bitrate < current_bitrate {
             RouteOutcome::Degraded
         } else {
             RouteOutcome::Neutral
         };
         Self {
-            route,
+            input,
             selected_bitrate,
             selection,
             outcome,
@@ -58,7 +64,7 @@ impl<'a> PlannedReceiverRoute<'a> {
     pub(super) fn pause(&mut self, reason: PolicyPauseReason, outcome: RouteOutcome) {
         self.selected_bitrate = Bitrate::zero();
         self.selection = ReceiverRouteSelection::pause(
-            self.route.current_selection,
+            self.input.current_selection,
             reason,
             self.selection.counts,
         );
@@ -68,11 +74,13 @@ impl<'a> PlannedReceiverRoute<'a> {
 
 #[derive(Debug)]
 pub(super) struct ReceiverRoutesPlan {
-    pub(super) selection_updates: Vec<ConsumerPacketSelectionUpdate>,
+    pub(super) state_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+    pub(super) transport_packet_updates: Vec<TransportPacketSelectionUpdate>,
     pub(super) receiver_bwe_target: Bitrate,
 }
 
 pub(super) fn plan<'a>(
+    topology: &RoomTopology,
     routes: &'a [ReceiverVideoRouteInput<'a>],
     max_video_downloads_per_receiver: usize,
 ) -> ReceiverRoutesPlan {
@@ -90,15 +98,28 @@ pub(super) fn plan<'a>(
     }
     let diagnostics = budget::diagnostics(&planned_routes, receiver_bandwidth);
     let receiver_bwe_target = diagnostics.selected_video_bitrate();
-    let selection_updates = planned_routes
-        .into_iter()
-        .filter_map(|route| {
-            let selection = hysteresis::resolve(&route);
-            projection::consumer_packet_selection_update(route, selection, diagnostics)
-        })
-        .collect();
+    let mut state_packet_updates = Vec::new();
+    let mut transport_packet_updates = Vec::new();
+    for planned in planned_routes {
+        let selection = hysteresis::resolve(&planned);
+        let Some(update) =
+            projection::consumer_packet_selection_update(&planned, selection, diagnostics)
+        else {
+            continue;
+        };
+        if update.requires_media_transport_effect() {
+            let target = topology.consumer_route_target_for_source(
+                update.transport_ref.clone(),
+                planned.input.source,
+            );
+            transport_packet_updates.push(TransportPacketSelectionUpdate { update, target });
+        } else {
+            state_packet_updates.push(update);
+        }
+    }
     ReceiverRoutesPlan {
-        selection_updates,
+        state_packet_updates,
+        transport_packet_updates,
         receiver_bwe_target,
     }
 }
