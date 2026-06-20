@@ -219,7 +219,7 @@ async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend
         "start recording command should run",
     )?;
     require_some(
-        assert_recording_request_rejected(&mut peer, HostPendingRequestKind::StartRecording).await,
+        assert_recording_request_rejected(&mut peer, PendingRequestKind::StartRecording).await,
         "start recording request should be rejected",
     )?;
 
@@ -231,7 +231,7 @@ async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend
         "stop recording command should run",
     )?;
     require_some(
-        assert_recording_request_rejected(&mut peer, HostPendingRequestKind::StopRecording).await,
+        assert_recording_request_rejected(&mut peer, PendingRequestKind::StopRecording).await,
         "stop recording request should be rejected",
     )?;
     Ok(())

@@ -31,38 +31,6 @@ impl From<&ProtocolCore> for CoreSnapshot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HostNegotiationKind {
-    Offer,
-    Renegotiate,
-}
-
-impl From<NegotiationKind> for HostNegotiationKind {
-    fn from(value: NegotiationKind) -> Self {
-        match value {
-            NegotiationKind::Offer => Self::Offer,
-            NegotiationKind::Renegotiate => Self::Renegotiate,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HostPendingRequestKind {
-    StartRecording,
-    StopRecording,
-}
-
-impl From<PendingRequestKind> for HostPendingRequestKind {
-    fn from(value: PendingRequestKind) -> Self {
-        match value {
-            PendingRequestKind::StartRecording => Self::StartRecording,
-            PendingRequestKind::StopRecording => Self::StopRecording,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HostCommand {
@@ -78,7 +46,7 @@ pub enum HostCommand {
         #[serde(rename = "requestId")]
         request_id: RequestId,
         #[serde(rename = "negotiationKind")]
-        negotiation_kind: HostNegotiationKind,
+        negotiation_kind: NegotiationKind,
         sdp: String,
         #[serde(rename = "uploadSlots")]
         upload_slots: Vec<NegotiationUploadSlot>,
@@ -118,7 +86,7 @@ pub enum HostCommand {
         #[serde(rename = "requestId")]
         request_id: RequestId,
         #[serde(rename = "requestKind")]
-        request_kind: HostPendingRequestKind,
+        request_kind: PendingRequestKind,
         #[serde(rename = "timeoutTimerId")]
         timeout_timer_id: u32,
         #[serde(rename = "timeoutMs")]
@@ -198,7 +166,7 @@ pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
                 upload_slots,
             } => project_commands.push(HostCommand::ApplyNegotiation {
                 request_id,
-                negotiation_kind: kind.into(),
+                negotiation_kind: kind,
                 sdp,
                 upload_slots,
             }),
@@ -232,7 +200,7 @@ pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
             } => {
                 project_commands.push(HostCommand::BeginPendingRequest {
                     request_id,
-                    request_kind: kind.into(),
+                    request_kind: kind,
                     timeout_timer_id,
                     timeout_ms,
                 });

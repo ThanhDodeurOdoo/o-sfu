@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { CLIENT_UPDATE } from "../dist/index.js";
 import {
@@ -134,6 +136,14 @@ function validSourceDescriptor(encodingOverrides = {}) {
         type: "camera"
     };
 }
+
+test("source tree does not own generated protocol manifest", () => {
+    const sourceManifestPath = fileURLToPath(
+        new URL("../src/generated/protocol_manifest.json", import.meta.url)
+    );
+
+    assert.equal(existsSync(sourceManifestPath), false);
+});
 
 test("wrapped protocol core rejects malformed host commands", () => {
     const core = wrapProtocolCoreBindings(

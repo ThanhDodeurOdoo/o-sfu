@@ -274,7 +274,7 @@ impl ProtocolHarnessPeer {
                     self.pending_request_commands
                         .push(HostCommand::BeginPendingRequest {
                             request_id,
-                            request_kind: kind.into(),
+                            request_kind: kind,
                             timeout_timer_id,
                             timeout_ms,
                         });

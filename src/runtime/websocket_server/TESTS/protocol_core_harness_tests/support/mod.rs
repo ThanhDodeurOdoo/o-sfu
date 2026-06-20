@@ -5,7 +5,7 @@ pub(super) use o_sfu_protocol::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate, BundleStateChange,
         BundleUpdate, bundle_session_info_key,
     },
-    host::HostPendingRequestKind,
+    host::PendingRequestKind,
     wire::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, EnvelopeBatch, RecordingState,
         RequestId, ServerMessage, StreamType as ProtocolStreamType, TrackBinding,

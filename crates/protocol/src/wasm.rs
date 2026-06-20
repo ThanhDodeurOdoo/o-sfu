@@ -80,8 +80,8 @@ impl WasmProtocolCore {
         to_js(&project_commands(self.inner.on_timer(timer_id)))
     }
 
-    pub fn publish(&mut self, stream_type: String, active: bool) -> Result<JsValue, JsValue> {
-        let stream_type = parse_stream_type(&stream_type)?;
+    pub fn publish(&mut self, stream_type: &str, active: bool) -> Result<JsValue, JsValue> {
+        let stream_type: StreamType = from_js(JsValue::from_str(stream_type))?;
         to_js(&project_commands(self.inner.publish(stream_type, active)))
     }
 
@@ -117,10 +117,10 @@ impl WasmProtocolCore {
     pub fn submit_negotiation_answer(
         &mut self,
         request_id: String,
-        negotiation_kind: String,
+        negotiation_kind: &str,
         sdp: String,
     ) -> Result<JsValue, JsValue> {
-        let kind = parse_negotiation_kind(&negotiation_kind)?;
+        let kind: NegotiationKind = from_js(JsValue::from_str(negotiation_kind))?;
         to_js(&project_commands(self.inner.submit_negotiation_answer(
             &crate::signaling::RequestId::new(request_id),
             kind,
@@ -130,23 +130,6 @@ impl WasmProtocolCore {
 
     pub fn disconnect(&mut self) -> Result<JsValue, JsValue> {
         to_js(&project_commands(self.inner.disconnect()))
-    }
-}
-
-fn parse_stream_type(value: &str) -> Result<StreamType, JsValue> {
-    match value {
-        "audio" => Ok(StreamType::Audio),
-        "camera" => Ok(StreamType::Camera),
-        "screen" => Ok(StreamType::Screen),
-        _ => Err(js_error(format!("invalid stream type: {value}"))),
-    }
-}
-
-fn parse_negotiation_kind(value: &str) -> Result<NegotiationKind, JsValue> {
-    match value {
-        "offer" => Ok(NegotiationKind::Offer),
-        "renegotiate" => Ok(NegotiationKind::Renegotiate),
-        _ => Err(js_error(format!("invalid negotiation kind: {value}"))),
     }
 }
 
