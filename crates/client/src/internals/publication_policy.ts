@@ -8,38 +8,28 @@ export type SimulcastEncodingOffer = {
     resolutionScale?: number;
 };
 
-export type UploadPublicationPolicy = {
-    kind: "single" | "simulcast";
-    reason?: string;
-};
-
-export type UploadPublicationPlan = {
-    codecs: readonly string[];
-    simulcastEncodings: readonly SimulcastEncodingOffer[];
-};
-
 const MIN_SIMULCAST_ENCODINGS = 2;
 
 export async function applyUploadPublicationPolicy(
     streamType: StreamType,
     transceiver: PeerConnectionTransceiver,
-    plan: UploadPublicationPlan | undefined
-): Promise<UploadPublicationPolicy> {
+    simulcastEncodings: readonly SimulcastEncodingOffer[]
+): Promise<void> {
     if (streamType === "audio") {
-        return singleEncodingPolicy("audio uploads do not use simulcast");
+        return;
     }
-    if (!plan || plan.simulcastEncodings.length < MIN_SIMULCAST_ENCODINGS) {
-        return singleEncodingPolicy("offer did not advertise multiple simulcast encodings");
+    if (simulcastEncodings.length < MIN_SIMULCAST_ENCODINGS) {
+        return;
     }
     if (!transceiver.sender.getParameters || !transceiver.sender.setParameters) {
-        return singleEncodingPolicy("sender parameter API is unavailable");
+        return;
     }
     const parameters = transceiver.sender.getParameters();
     const previousEncodings = Array.isArray(parameters.encodings) ? parameters.encodings : [];
     const encodings: RTCRtpEncodingParameters[] = [];
-    for (const [index, encoding] of plan.simulcastEncodings.entries()) {
+    for (const [index, encoding] of simulcastEncodings.entries()) {
         if (!isValidSimulcastEncodingOffer(encoding)) {
-            return singleEncodingPolicy("offer advertised an invalid simulcast encoding profile");
+            return;
         }
         encodings.push(buildSenderEncodingParameters(previousEncodings[index] ?? {}, encoding));
     }
@@ -49,22 +39,9 @@ export async function applyUploadPublicationPolicy(
             ...parameters,
             encodings
         });
-    } catch (error) {
-        return singleEncodingPolicy(
-            error instanceof Error
-                ? `sender rejected simulcast parameters: ${error.message}`
-                : "sender rejected simulcast parameters"
-        );
+    } catch {
+        return;
     }
-
-    return { kind: "simulcast" };
-}
-
-function singleEncodingPolicy(reason: string): UploadPublicationPolicy {
-    return {
-        kind: "single",
-        reason
-    };
 }
 
 function buildSenderEncodingParameters(

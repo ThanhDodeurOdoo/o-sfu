@@ -23,7 +23,7 @@ export class FakeWebSocket {
         this.onmessage?.({ data });
     }
 
-    close(code = 1000) {
+    emitClose(code) {
         if (this.readyState >= 2) {
             return;
         }
@@ -31,6 +31,17 @@ export class FakeWebSocket {
         this.readyState = 3;
         this.onclose?.({ code });
     }
+
+    close(code = 1000) {
+        if (this.readyState < 2 && !isBrowserCloseCode(code)) {
+            throw new DOMException(`invalid websocket close code ${code}`, "InvalidAccessError");
+        }
+        this.emitClose(code);
+    }
+}
+
+function isBrowserCloseCode(code) {
+    return Number.isInteger(code) && (code === 1000 || (code >= 3000 && code <= 4999));
 }
 
 export class FakeSender {

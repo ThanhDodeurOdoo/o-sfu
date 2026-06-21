@@ -1,10 +1,6 @@
 import { STREAM_TYPES, type StreamType } from "../public_api.js";
 import { STREAM_KIND, type ClientPeerConnection, type MediaTrack } from "./browser_types.js";
-import {
-    applyUploadPublicationPolicy,
-    type SimulcastEncodingOffer,
-    type UploadPublicationPolicy
-} from "./publication_policy.js";
+import { applyUploadPublicationPolicy, type SimulcastEncodingOffer } from "./publication_policy.js";
 
 type UploadTransition = {
     hadTrack: boolean;
@@ -12,19 +8,7 @@ type UploadTransition = {
     knownMid?: string;
 };
 
-export type PendingRenegotiationAttachment = {
-    mid: string;
-    publicationPolicy: UploadPublicationPolicy;
-    streamType: StreamType;
-};
-
-export type PendingRenegotiationAttachmentResult = {
-    attached: PendingRenegotiationAttachment[];
-    skipped: StreamType[];
-};
-
 export type UploadSlot = {
-    codecs?: readonly string[];
     kind: "audio" | "video";
     mid: string;
     simulcastEncodings?: readonly SimulcastEncodingOffer[];
@@ -70,7 +54,7 @@ export class LocalUploads {
         mid: string,
         streamType: StreamType,
         uploadSlot?: UploadSlot
-    ): Promise<UploadPublicationPolicy> {
+    ): Promise<void> {
         if (!peerConnection) {
             throw new Error("cannot attach track without an active peer connection");
         }
@@ -83,17 +67,14 @@ export class LocalUploads {
         }
         await transceiver.sender.replaceTrack(track);
         updateTransceiverDirection(transceiver, track);
-        const publicationPolicy = track
-            ? await applyUploadPublicationPolicy(streamType, transceiver, {
-                  codecs: uploadSlot?.codecs ?? [],
-                  simulcastEncodings: uploadSlot?.simulcastEncodings ?? []
-              })
-            : {
-                  kind: "single" as const,
-                  reason: "no local track is attached"
-              };
+        if (track) {
+            await applyUploadPublicationPolicy(
+                streamType,
+                transceiver,
+                uploadSlot?.simulcastEncodings ?? []
+            );
+        }
         this._senderMidByType.set(streamType, mid);
-        return publicationPolicy;
     }
 
     async detachTrack(
@@ -118,9 +99,9 @@ export class LocalUploads {
     async attachPendingTracks(
         peerConnection: ClientPeerConnection | null,
         uploadSlots: UploadSlot[]
-    ): Promise<PendingRenegotiationAttachmentResult> {
+    ): Promise<void> {
         if (!peerConnection) {
-            return { attached: [], skipped: [] };
+            return;
         }
         const pendingStreamTypes = STREAM_TYPES.filter(
             (streamType) =>
@@ -129,7 +110,7 @@ export class LocalUploads {
                 !this._senderMidByType.has(streamType)
         );
         if (pendingStreamTypes.length === 0) {
-            return { attached: [], skipped: [] };
+            return;
         }
         const knownMids = new Set(this._senderMidByType.values());
         const candidateTransceivers = peerConnection.getTransceivers().filter((transceiver) => {
@@ -154,27 +135,17 @@ export class LocalUploads {
             candidateTransceivers.map((transceiver) => transceiver.mid)
         );
         const remainingSlots = uploadSlots.filter((slot) => transceiverMidSet.has(slot.mid));
-        const attached: PendingRenegotiationAttachment[] = [];
-        const skipped: StreamType[] = [];
         for (const streamType of pendingStreamTypes) {
             const slotIndex = remainingSlots.findIndex(
                 (slot) => slot.kind === STREAM_KIND[streamType]
             );
             if (slotIndex < 0) {
-                skipped.push(streamType);
                 continue;
             }
             const [slot] = remainingSlots.splice(slotIndex, 1);
-            const publicationPolicy = await this.attachTrack(
-                peerConnection,
-                slot.mid,
-                streamType,
-                slot
-            );
+            await this.attachTrack(peerConnection, slot.mid, streamType, slot);
             this._uploadIntentByType.delete(streamType);
-            attached.push({ mid: slot.mid, publicationPolicy, streamType });
         }
-        return { attached, skipped };
     }
 }
 

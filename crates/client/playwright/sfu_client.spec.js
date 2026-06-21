@@ -41,6 +41,10 @@ test.beforeEach(async ({ page }) => {
             }
 
             close(code = 1000) {
+                this.emitClose(code);
+            }
+
+            emitClose(code) {
                 if (this.readyState >= 2) {
                     return;
                 }
@@ -421,7 +425,7 @@ test("default browser runtime reconnects and replays sticky intents", async ({ p
             isCameraOn: true,
             isRaisingHand: true
         });
-        globalThis.__browserHarness.state.sockets[0].close(1011);
+        globalThis.__browserHarness.state.sockets[0].emitClose(1011);
     });
 
     await expect
