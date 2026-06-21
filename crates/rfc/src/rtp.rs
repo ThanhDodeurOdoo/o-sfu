@@ -7,6 +7,7 @@
 //! - Video frame marking RTP header extension: <https://www.rfc-editor.org/rfc/rfc9626>
 //! - Layer Refresh Request feedback: <https://www.rfc-editor.org/rfc/rfc9627>
 //! - RTP payload format for VP8: <https://www.rfc-editor.org/rfc/rfc7741>
+//! - RTP payload format for H264: <https://www.rfc-editor.org/rfc/rfc6184>
 //!
 //! A complete RTP packet has this outer shape:
 //!
@@ -118,6 +119,55 @@ impl AvpStaticPayloadType {
     }
 }
 
+/// 7-bit RTP payload type value usable in RTP/RTCP muxed sessions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PayloadType(u8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidPayloadType;
+
+impl PayloadType {
+    #[must_use]
+    pub const fn try_new(value: u8) -> Option<Self> {
+        if is_rtcp_mux_payload_type(value) {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    /// builds a payload type for the muxed RTP sessions used by `o-sfu`
+    ///
+    /// # Panics
+    ///
+    /// panics when `value` does not fit the RTP payload type field or is in the
+    /// RTP/RTCP mux forbidden range from RFC 5761 section 4
+    #[must_use]
+    pub const fn new(value: u8) -> Self {
+        assert!(is_rtcp_mux_payload_type(value));
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
+impl TryFrom<u8> for PayloadType {
+    type Error = InvalidPayloadType;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::try_new(value).ok_or(InvalidPayloadType)
+    }
+}
+
+impl From<PayloadType> for u8 {
+    fn from(value: PayloadType) -> Self {
+        value.value()
+    }
+}
+
 /// RTP payload-format MIME subtype names commonly used by WebRTC endpoints.
 pub mod codec_name {
     /// Opus RTP payload-format subtype.
@@ -176,8 +226,8 @@ pub mod opus {
 ///
 /// RFC 7741 puts a VP8 payload descriptor in front of the VP8 payload header.
 /// The descriptor is also where simulcast and temporal-layer packet identity is
-/// carried. o-sfu rewrites only the descriptor bytes that already exist so a
-/// downstream browser receives one continuous stream after source switches.
+/// carried. o-sfu keeps the RFC constants here, while the runtime uses str0m's
+/// descriptor parser and patch support for local egress.
 ///
 /// ```text
 /// VP8 payload slice passed to this module
@@ -231,89 +281,6 @@ pub mod vp8 {
     /// Value mask for the two-bit VP8 temporal-layer identity.
     pub const TEMPORAL_LAYER_ID_MASK: u8 = 0b0000_0011;
 
-    /// Offset-carrying view of the VP8 descriptor fields that o-sfu may need
-    /// to rewrite before forwarding a packet to a browser consumer.
-    ///
-    /// The value borrows no packet data, but the stored offsets are only valid
-    /// for the payload slice that was passed to [`payload_descriptor`] or for a
-    /// byte-identical clone of that slice. Use it as a short-lived parse result
-    /// on the packet forwarding path.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PayloadDescriptor {
-        picture_id: Option<PictureId>,
-        tl0_pic_idx: Option<Tl0PicIdx>,
-    }
-
-    /// Replacement values for VP8 descriptor fields that already exist in the
-    /// source packet.
-    ///
-    /// The rewrite step does not add missing descriptor fields and does not
-    /// change the descriptor width. A short `PictureID` keeps its one-byte shape
-    /// and stores the low 7 bits of the requested value. A long `PictureID` keeps
-    /// its two-byte shape and stores the low 15 bits.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PayloadDescriptorRewrite {
-        /// Receiver-local `PictureID` value to write when the packet carried a
-        /// `PictureID` field.
-        pub picture_id: Option<u16>,
-        /// Receiver-local `TL0PICIDX` value to write when the packet carried a
-        /// `TL0PICIDX` field.
-        pub tl0_pic_idx: Option<u8>,
-    }
-
-    /// Parsed VP8 `PictureID` with the byte offset needed for in-place rewrite.
-    ///
-    /// Callers should use [`PayloadDescriptor::picture_id`] instead of relying
-    /// on this internal layout. Its fields stay private to keep offset handling
-    /// inside this module.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct PictureId {
-        value: u16,
-        encoding: PictureIdEncoding,
-        offset: usize,
-    }
-
-    /// Parsed VP8 `TL0PICIDX` with the byte offset needed for in-place rewrite.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Tl0PicIdx {
-        value: u8,
-        offset: usize,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum PictureIdEncoding {
-        Short,
-        Long,
-    }
-
-    impl PayloadDescriptor {
-        /// Returns the VP8 `PictureID` value carried by the packet descriptor.
-        ///
-        /// `None` means the payload descriptor did not advertise a `PictureID`.
-        /// It does not mean the packet is invalid because `PictureID` is optional
-        /// in RFC 7741.
-        #[must_use]
-        pub const fn picture_id(self) -> Option<u16> {
-            match self.picture_id {
-                Some(picture_id) => Some(picture_id.value),
-                None => None,
-            }
-        }
-
-        /// Returns the VP8 `TL0PICIDX` value carried by the packet descriptor.
-        ///
-        /// `TL0PICIDX` is present only when the descriptor extension sets `L=1`.
-        /// The forwarding path uses this value with `PictureID` to preserve
-        /// temporal-layer continuity after source switches.
-        #[must_use]
-        pub const fn tl0_pic_idx(self) -> Option<u8> {
-            match self.tl0_pic_idx {
-                Some(tl0_pic_idx) => Some(tl0_pic_idx.value),
-                None => None,
-            }
-        }
-    }
-
     /// Detects the first RTP packet of a VP8 keyframe.
     ///
     /// RFC 7741 section 4.2 defines the VP8 payload descriptor. A decodable
@@ -340,81 +307,6 @@ pub mod vp8 {
         payload_header.is_some_and(|header| header & INTERFRAME_BIT == 0)
     }
 
-    /// Parses the RFC 7741 VP8 payload descriptor fields that must stay
-    /// continuous when an SFU rewrites multiple publisher SSRCs into one
-    /// downstream browser stream.
-    ///
-    /// The input must start at the VP8 descriptor byte. `Some` means the
-    /// advertised descriptor shape was internally consistent enough to locate
-    /// the optional `PictureID` and `TL0PICIDX` fields. `None` means the packet was
-    /// truncated inside the advertised descriptor and must not be rewritten.
-    ///
-    /// The returned descriptor is an offset map for this exact payload shape.
-    /// Keep it with the packet that produced it and pass it to
-    /// [`rewrite_payload_descriptor`] before the payload bytes are handed to the
-    /// downstream sender.
-    #[must_use]
-    pub fn payload_descriptor(payload: &[u8]) -> Option<PayloadDescriptor> {
-        let (&descriptor, mut rest) = payload.split_first()?;
-        if descriptor & X_BIT == 0 {
-            return Some(PayloadDescriptor {
-                picture_id: None,
-                tl0_pic_idx: None,
-            });
-        }
-        let (&extension, remaining) = rest.split_first()?;
-        rest = remaining;
-        let mut offset = 2;
-        let picture_id = if extension & I_BIT != 0 {
-            let parsed = parse_picture_id(rest, offset)?;
-            offset += parsed.encoding.len();
-            rest = payload.get(offset..)?;
-            Some(parsed)
-        } else {
-            None
-        };
-        let tl0_pic_idx = if extension & L_BIT != 0 {
-            let value = *rest.first()?;
-            let parsed = Tl0PicIdx { value, offset };
-            offset += 1;
-            rest = payload.get(offset..)?;
-            Some(parsed)
-        } else {
-            None
-        };
-        if extension & (T_BIT | K_BIT) != 0 {
-            rest.first()?;
-        }
-        Some(PayloadDescriptor {
-            picture_id,
-            tl0_pic_idx,
-        })
-    }
-
-    /// Rewrites existing VP8 descriptor identity fields in place.
-    ///
-    /// This is the mutation half of [`payload_descriptor`]. It is used after the
-    /// forwarding adapter has selected receiver-local RTP identity, while the
-    /// payload buffer is still owned by the local send path. Missing rewrite
-    /// values and absent source fields are ignored. The function never grows the
-    /// payload, never converts short `PictureID` to long `PictureID` and never
-    /// panics if the caller hands it a shorter slice than the one that produced
-    /// the descriptor.
-    pub fn rewrite_payload_descriptor(
-        payload: &mut [u8],
-        descriptor: PayloadDescriptor,
-        rewrite: PayloadDescriptorRewrite,
-    ) {
-        if let (Some(picture_id), Some(value)) = (descriptor.picture_id, rewrite.picture_id) {
-            rewrite_picture_id(payload, picture_id, value);
-        }
-        if let (Some(tl0_pic_idx), Some(value)) = (descriptor.tl0_pic_idx, rewrite.tl0_pic_idx)
-            && let Some(byte) = payload.get_mut(tl0_pic_idx.offset)
-        {
-            *byte = value;
-        }
-    }
-
     /// Locates the VP8 payload header after an extended descriptor.
     ///
     /// `None` means the extension bits advertise fields that are not present in
@@ -436,66 +328,6 @@ pub mod vp8 {
             rest = rest.get(1..)?;
         }
         rest.first()
-    }
-
-    /// Parses the `PictureID` field and remembers where it starts in the payload
-    /// descriptor.
-    fn parse_picture_id(payload: &[u8], offset: usize) -> Option<PictureId> {
-        let (&first, remaining) = payload.split_first()?;
-        if first & LONG_PICTURE_ID_BIT == 0 {
-            return Some(PictureId {
-                value: u16::from(first) & SHORT_PICTURE_ID_MASK,
-                encoding: PictureIdEncoding::Short,
-                offset,
-            });
-        }
-        let second = *remaining.first()?;
-        Some(PictureId {
-            value: (u16::from(first & !LONG_PICTURE_ID_BIT) << 8) | u16::from(second),
-            encoding: PictureIdEncoding::Long,
-            offset,
-        })
-    }
-
-    /// Writes a receiver-local `PictureID` while preserving the source field
-    /// width.
-    fn rewrite_picture_id(payload: &mut [u8], picture_id: PictureId, value: u16) {
-        match picture_id.encoding {
-            PictureIdEncoding::Short => {
-                if let Some(byte) = payload.get_mut(picture_id.offset)
-                    && let Ok(value) = u8::try_from(value & SHORT_PICTURE_ID_MASK)
-                {
-                    *byte = value;
-                }
-            }
-            PictureIdEncoding::Long => {
-                let value = value & LONG_PICTURE_ID_MASK;
-                if let Some(bytes) = payload.get_mut(picture_id.offset..picture_id.offset + 2) {
-                    let Some((first, rest)) = bytes.split_first_mut() else {
-                        return;
-                    };
-                    let Some(second) = rest.first_mut() else {
-                        return;
-                    };
-                    let (Ok(high), Ok(low)) =
-                        (u8::try_from(value >> 8), u8::try_from(value & 0xff))
-                    else {
-                        return;
-                    };
-                    *first = LONG_PICTURE_ID_BIT | high;
-                    *second = low;
-                }
-            }
-        }
-    }
-
-    impl PictureIdEncoding {
-        const fn len(self) -> usize {
-            match self {
-                Self::Short => 1,
-                Self::Long => 2,
-            }
-        }
     }
 }
 
@@ -651,9 +483,22 @@ pub mod fmtp {
 /// | Type=28       | S E R Type  | first fragment if S=1 |
 /// +---------------+-------------+----------------------+
 /// ```
+///
+/// rfc 6184 maps `profile-level-id` to three bytes:
+///
+/// ```text
+/// profile_idc | profile-iop | level_idc
+///
+/// profile-iop bit layout:
+///  7   6   5   4   3   2   1   0
+/// +---+---+---+---+---+---+---+---+
+/// |c0 |c1 |c2 |c3 |c4 |c5 | r | r |
+/// +---+---+---+---+---+---+---+---+
+///
+/// cN = constraint_setN_flag
+/// r  = reserved_zero bit
+/// ```
 pub mod h264 {
-    use std::cmp::Ordering;
-
     /// Mask for the H264 NAL unit type field.
     pub const NAL_UNIT_TYPE_MASK: u8 = 0x1f;
 
@@ -682,6 +527,7 @@ pub mod h264 {
     pub enum PacketizationMode {
         SingleNalUnit,
         NonInterleaved,
+        Interleaved,
     }
 
     impl PacketizationMode {
@@ -690,6 +536,7 @@ pub mod h264 {
             match value {
                 0 => Some(Self::SingleNalUnit),
                 1 => Some(Self::NonInterleaved),
+                2 => Some(Self::Interleaved),
                 _ => None,
             }
         }
@@ -699,6 +546,7 @@ pub mod h264 {
             match self {
                 Self::SingleNalUnit => 0,
                 Self::NonInterleaved => 1,
+                Self::Interleaved => 2,
             }
         }
 
@@ -707,7 +555,13 @@ pub mod h264 {
         }
     }
 
-    /// Parsed H264 `profile-level-id` value.
+    /// parsed H264 `profile-level-id` capability
+    ///
+    /// `profile_idc` names the broad H264 profile family, `profile-iop`
+    /// carries constraint bits that narrow that family to a sub-profile and
+    /// `level_idc` carries the decoder capability level. [`ProfileLevelId`]
+    /// normalizes equivalent RFC 6184 profile encodings before router
+    /// negotiation compares [`Profile`] and [`LevelIdc`]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ProfileLevelId {
         profile: Profile,
@@ -715,6 +569,11 @@ pub mod h264 {
     }
 
     impl ProfileLevelId {
+        #[must_use]
+        pub const fn new(profile: Profile, level: LevelIdc) -> Self {
+            Self { profile, level }
+        }
+
         /// Parse the RFC 6184 `profile-level-id` hex token.
         #[must_use]
         pub fn parse(value: &str) -> Option<Self> {
@@ -739,9 +598,26 @@ pub mod h264 {
         pub const fn level(self) -> LevelIdc {
             self.level
         }
+
+        #[must_use]
+        pub const fn packed_value(self) -> u32 {
+            let (profile_idc, profile_iop, level_idc) =
+                profile_level_id_bytes(self.profile, self.level);
+            pack_profile_level_id(profile_idc, profile_iop, level_idc)
+        }
+
+        #[must_use]
+        pub fn fmtp_value(self) -> String {
+            let value = self.packed_value();
+            format!("{value:06x}")
+        }
     }
 
-    /// H264 profiles defined by RFC 6184 section 8.1.
+    /// H264 sub-profile after equivalent RFC 6184 encodings are normalized
+    ///
+    /// the same sub-profile may be advertised through different
+    /// `profile_idc` families when `profile-iop` constraints restrict them to
+    /// the same coding tools
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Profile {
         Baseline,
@@ -758,8 +634,16 @@ pub mod h264 {
         Cavlc444Intra,
     }
 
-    /// H264 level identifiers ordered by decoder capability.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    /// H264 decoder capability level
+    ///
+    /// all levels except [`LevelIdc::Level1B`] map directly to `level_idc`
+    /// level 1b was inserted between level 1 and level 1.1 after those byte
+    /// values existed, so RFC 6184 gives it profile-dependent encodings
+    ///
+    /// the variant order is the negotiation order
+    /// wire `level_idc` bytes are parsed and rendered explicitly because Level
+    /// 1b is encoded specially
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub enum LevelIdc {
         Level1,
         Level1B,
@@ -778,43 +662,6 @@ pub mod h264 {
         Level5,
         Level5_1,
         Level5_2,
-    }
-
-    impl LevelIdc {
-        #[must_use]
-        const fn ordinal(self) -> u8 {
-            match self {
-                Self::Level1 => 0,
-                Self::Level1B => 1,
-                Self::Level1_1 => 2,
-                Self::Level1_2 => 3,
-                Self::Level1_3 => 4,
-                Self::Level2 => 5,
-                Self::Level2_1 => 6,
-                Self::Level2_2 => 7,
-                Self::Level3 => 8,
-                Self::Level3_1 => 9,
-                Self::Level3_2 => 10,
-                Self::Level4 => 11,
-                Self::Level4_1 => 12,
-                Self::Level4_2 => 13,
-                Self::Level5 => 14,
-                Self::Level5_1 => 15,
-                Self::Level5_2 => 16,
-            }
-        }
-    }
-
-    impl PartialOrd for LevelIdc {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl Ord for LevelIdc {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.ordinal().cmp(&other.ordinal())
-        }
     }
 
     /// Detects an H264 RTP packet that starts an IDR access unit.
@@ -908,35 +755,251 @@ pub mod h264 {
         }
     }
 
-    const H264_LEVEL_1B_PROFILE_IDCS: [u8; 3] = [0x42, 0x4D, 0x58];
-    const H264_LEVEL_1B_OTHER_PROFILE_LEVEL_IDC: u8 = 9;
-    const H264_LEVEL_1_1_LEVEL_IDC: u8 = 11;
-    const H264_LEVEL_1B_CONSTRAINT_SET3_FLAG: u8 = 0x10;
-    const H264_PROFILE_PATTERNS: &[(Profile, u8, u8, u8)] = &[
-        (Profile::ConstrainedBaseline, 0x42, 0b0100_1111, 0b0100_0000),
-        (Profile::ConstrainedBaseline, 0x4D, 0b1000_1111, 0b1000_0000),
-        (Profile::ConstrainedBaseline, 0x58, 0b1100_1111, 0b1100_0000),
-        (Profile::Baseline, 0x42, 0b0100_1111, 0b0000_0000),
-        (Profile::Baseline, 0x58, 0b1100_1111, 0b1000_0000),
-        (Profile::Main, 0x4D, 0b1010_1111, 0b0000_0000),
-        (Profile::Extended, 0x58, 0b1100_1111, 0b0000_0000),
-        (Profile::High, 0x64, 0b1111_1111, 0b0000_0000),
-        (Profile::High10, 0x6E, 0b1111_1111, 0b0000_0000),
-        (Profile::High422, 0x7A, 0b1111_1111, 0b0000_0000),
-        (Profile::High444Predictive, 0xF4, 0b1111_1111, 0b0000_0000),
-        (Profile::High10Intra, 0x6E, 0b1111_1111, 0b0001_0000),
-        (Profile::High422Intra, 0x7A, 0b1111_1111, 0b0001_0000),
-        (Profile::High444Intra, 0xF4, 0b1111_1111, 0b0001_0000),
-        (Profile::Cavlc444Intra, 0x2C, 0b1111_1111, 0b0001_0000),
+    const BASELINE_IDC: u8 = 0x42;
+    const MAIN_IDC: u8 = 0x4d;
+    const EXTENDED_IDC: u8 = 0x58;
+    const HIGH_IDC: u8 = 0x64;
+    const HIGH_10_IDC: u8 = 0x6e;
+    const HIGH_422_IDC: u8 = 0x7a;
+    const HIGH_444_IDC: u8 = 0xf4;
+    const CAVLC_444_IDC: u8 = 0x2c;
+
+    // `profile-iop` is the middle byte of `profile-level-id`
+    // constraint flags are H264 compatibility bits that refine `profile_idc`
+    // into the sub-profile used for offer or answer matching
+    //
+    // bit 7 -> constraint_set0_flag -> `IOP_CONSTRAINT_SET0`
+    // bit 6 -> constraint_set1_flag -> `IOP_CONSTRAINT_SET1`
+    // bit 5 -> constraint_set2_flag -> `IOP_CONSTRAINT_SET2`
+    // bit 4 -> constraint_set3_flag -> `IOP_CONSTRAINT_SET3`
+    // bit 3 -> constraint_set4_flag -> fixed to 0 by profile-equivalence rows
+    // bit 2 -> constraint_set5_flag -> fixed to 0 by profile-equivalence rows
+    // bit 1..0 -> reserved_zero_2bits -> fixed to 0 by H264
+    const IOP_NONE: u8 = 0x00;
+    const IOP_CONSTRAINT_SET0: u8 = 0x80;
+    const IOP_CONSTRAINT_SET1: u8 = 0x40;
+    const IOP_CONSTRAINT_SET2: u8 = 0x20;
+    const IOP_CONSTRAINT_SET3: u8 = 0x10;
+    const IOP_PROFILE_PATTERN_LOW_ZERO_MASK: u8 =
+        !(IOP_CONSTRAINT_SET0 | IOP_CONSTRAINT_SET1 | IOP_CONSTRAINT_SET2 | IOP_CONSTRAINT_SET3);
+    const IOP_CONSTRAINED_BASELINE: u8 =
+        IOP_CONSTRAINT_SET0 | IOP_CONSTRAINT_SET1 | IOP_CONSTRAINT_SET2;
+
+    const LEVEL_1B_IDCS: [u8; 3] = [BASELINE_IDC, MAIN_IDC, EXTENDED_IDC];
+    const LEVEL_1B_OTHER_IDC: u8 = 9;
+    const LEVEL_1_1_IDC: u8 = 11;
+
+    /// one accepted RFC 6184 profile-equivalence row
+    ///
+    /// a row maps one concrete `profile_idc` family and one wildcarded
+    /// `profile-iop` bit pattern to the normalized [`Profile`] used by
+    /// negotiation
+    #[derive(Clone, Copy)]
+    struct ProfilePattern {
+        profile: Profile,
+        profile_idc: u8,
+        iop: ProfileIopPattern,
+    }
+
+    impl ProfilePattern {
+        const fn masked(profile: Profile, profile_idc: u8, iop: ProfileIopPattern) -> Self {
+            Self {
+                profile,
+                profile_idc,
+                iop,
+            }
+        }
+
+        const fn exact(profile: Profile, profile_idc: u8, value: u8) -> Self {
+            Self {
+                profile,
+                profile_idc,
+                iop: ProfileIopPattern::exact(value),
+            }
+        }
+
+        const fn matches(self, profile_idc: u8, profile_iop: u8) -> bool {
+            self.profile_idc == profile_idc && self.iop.matches(profile_iop)
+        }
+    }
+
+    /// masked `profile-iop` matcher for profile-equivalence wildcard bits
+    ///
+    /// `mask` selects bits that must equal `value`. unmasked bits are RFC
+    /// wildcards such as the `x` bits in `x1xx0000`
+    #[derive(Clone, Copy)]
+    struct ProfileIopPattern {
+        mask: u8,
+        value: u8,
+    }
+
+    impl ProfileIopPattern {
+        /// starts with the low four bits fixed to zero and high bits wildcarded
+        const fn wildcarded() -> Self {
+            Self {
+                mask: IOP_PROFILE_PATTERN_LOW_ZERO_MASK,
+                value: IOP_NONE,
+            }
+        }
+
+        const fn exact(value: u8) -> Self {
+            Self {
+                mask: u8::MAX,
+                value,
+            }
+        }
+
+        const fn one(self, bit: u8) -> Self {
+            Self {
+                mask: self.mask | bit,
+                value: self.value | bit,
+            }
+        }
+
+        const fn zero(self, bit: u8) -> Self {
+            Self {
+                mask: self.mask | bit,
+                value: self.value & !bit,
+            }
+        }
+
+        const fn matches(self, value: u8) -> bool {
+            value & self.mask == self.value
+        }
+    }
+
+    // rfc 6184 lists equivalent sub-profile encodings rather than one canonical byte
+    // example: `42 x1xx0000`, `4d 1xxx0000` and `58 11xx0000` all mean
+    // constrained baseline, so `x` bits must be ignored during matching
+    const PROFILE_PATTERNS: &[ProfilePattern] = &[
+        ProfilePattern::masked(
+            Profile::ConstrainedBaseline,
+            BASELINE_IDC,
+            ProfileIopPattern::wildcarded().one(IOP_CONSTRAINT_SET1),
+        ),
+        ProfilePattern::masked(
+            Profile::ConstrainedBaseline,
+            MAIN_IDC,
+            ProfileIopPattern::wildcarded().one(IOP_CONSTRAINT_SET0),
+        ),
+        ProfilePattern::masked(
+            Profile::ConstrainedBaseline,
+            EXTENDED_IDC,
+            ProfileIopPattern::wildcarded()
+                .one(IOP_CONSTRAINT_SET0)
+                .one(IOP_CONSTRAINT_SET1),
+        ),
+        ProfilePattern::masked(
+            Profile::Baseline,
+            BASELINE_IDC,
+            ProfileIopPattern::wildcarded().zero(IOP_CONSTRAINT_SET1),
+        ),
+        ProfilePattern::masked(
+            Profile::Baseline,
+            EXTENDED_IDC,
+            ProfileIopPattern::wildcarded()
+                .one(IOP_CONSTRAINT_SET0)
+                .zero(IOP_CONSTRAINT_SET1),
+        ),
+        ProfilePattern::masked(
+            Profile::Main,
+            MAIN_IDC,
+            ProfileIopPattern::wildcarded()
+                .zero(IOP_CONSTRAINT_SET0)
+                .zero(IOP_CONSTRAINT_SET2),
+        ),
+        ProfilePattern::masked(
+            Profile::Extended,
+            EXTENDED_IDC,
+            ProfileIopPattern::wildcarded()
+                .zero(IOP_CONSTRAINT_SET0)
+                .zero(IOP_CONSTRAINT_SET1),
+        ),
+        ProfilePattern::exact(Profile::High, HIGH_IDC, IOP_NONE),
+        ProfilePattern::exact(Profile::High10, HIGH_10_IDC, IOP_NONE),
+        ProfilePattern::exact(Profile::High422, HIGH_422_IDC, IOP_NONE),
+        ProfilePattern::exact(Profile::High444Predictive, HIGH_444_IDC, IOP_NONE),
+        ProfilePattern::exact(Profile::High10Intra, HIGH_10_IDC, IOP_CONSTRAINT_SET3),
+        ProfilePattern::exact(Profile::High422Intra, HIGH_422_IDC, IOP_CONSTRAINT_SET3),
+        ProfilePattern::exact(Profile::High444Intra, HIGH_444_IDC, IOP_CONSTRAINT_SET3),
+        ProfilePattern::exact(Profile::Cavlc444Intra, CAVLC_444_IDC, IOP_CONSTRAINT_SET3),
     ];
 
+    const fn profile_level_id_bytes(profile: Profile, level: LevelIdc) -> (u8, u8, u8) {
+        let (profile_idc, profile_iop) = profile_bytes(profile);
+        match level {
+            LevelIdc::Level1B => level_1b_profile_level_id_bytes(profile_idc, profile_iop),
+            _ => (profile_idc, profile_iop, level_idc_value(level)),
+        }
+    }
+
+    const fn profile_bytes(profile: Profile) -> (u8, u8) {
+        match profile {
+            Profile::Baseline => (BASELINE_IDC, IOP_NONE),
+            Profile::ConstrainedBaseline => (BASELINE_IDC, IOP_CONSTRAINED_BASELINE),
+            Profile::Main => (MAIN_IDC, IOP_NONE),
+            Profile::Extended => (EXTENDED_IDC, IOP_NONE),
+            Profile::High => (HIGH_IDC, IOP_NONE),
+            Profile::High10 => (HIGH_10_IDC, IOP_NONE),
+            Profile::High422 => (HIGH_422_IDC, IOP_NONE),
+            Profile::High444Predictive => (HIGH_444_IDC, IOP_NONE),
+            Profile::High10Intra => (HIGH_10_IDC, IOP_CONSTRAINT_SET3),
+            Profile::High422Intra => (HIGH_422_IDC, IOP_CONSTRAINT_SET3),
+            Profile::High444Intra => (HIGH_444_IDC, IOP_CONSTRAINT_SET3),
+            Profile::Cavlc444Intra => (CAVLC_444_IDC, IOP_CONSTRAINT_SET3),
+        }
+    }
+
+    // level 1b has no single `level_idc` byte
+    // baseline, main and extended borrow level 1.1's `level_idc=11` and set
+    // constraint_set3_flag, while other profiles use `level_idc=9`
+    const fn level_1b_profile_level_id_bytes(profile_idc: u8, profile_iop: u8) -> (u8, u8, u8) {
+        match profile_idc {
+            BASELINE_IDC | MAIN_IDC | EXTENDED_IDC => (
+                profile_idc,
+                profile_iop | IOP_CONSTRAINT_SET3,
+                LEVEL_1_1_IDC,
+            ),
+            _ => (profile_idc, profile_iop, LEVEL_1B_OTHER_IDC),
+        }
+    }
+
+    const fn level_idc_value(level: LevelIdc) -> u8 {
+        match level {
+            LevelIdc::Level1 => 10,
+            LevelIdc::Level1B => LEVEL_1B_OTHER_IDC,
+            LevelIdc::Level1_1 => 11,
+            LevelIdc::Level1_2 => 12,
+            LevelIdc::Level1_3 => 13,
+            LevelIdc::Level2 => 20,
+            LevelIdc::Level2_1 => 21,
+            LevelIdc::Level2_2 => 22,
+            LevelIdc::Level3 => 30,
+            LevelIdc::Level3_1 => 31,
+            LevelIdc::Level3_2 => 32,
+            LevelIdc::Level4 => 40,
+            LevelIdc::Level4_1 => 41,
+            LevelIdc::Level4_2 => 42,
+            LevelIdc::Level5 => 50,
+            LevelIdc::Level5_1 => 51,
+            LevelIdc::Level5_2 => 52,
+        }
+    }
+
+    #[expect(clippy::as_conversions, reason = "u8 to u32 widening is lossless")]
+    const fn pack_profile_level_id(profile_idc: u8, profile_iop: u8, level_idc: u8) -> u32 {
+        ((profile_idc as u32) << 16) | ((profile_iop as u32) << 8) | level_idc as u32
+    }
+
     fn normalized_level_idc(profile_idc: u8, profile_iop: u8, level_idc: u8) -> Option<LevelIdc> {
-        if H264_LEVEL_1B_PROFILE_IDCS.contains(&profile_idc) {
-            if level_idc == H264_LEVEL_1B_OTHER_PROFILE_LEVEL_IDC {
+        // reject the non-canonical level 1b form for baseline, main and extended
+        // those profile families must use `level_idc=11` plus constraint_set3_flag
+        if LEVEL_1B_IDCS.contains(&profile_idc) {
+            if level_idc == LEVEL_1B_OTHER_IDC {
                 return None;
             }
-            if level_idc == H264_LEVEL_1_1_LEVEL_IDC {
-                return if (profile_iop & H264_LEVEL_1B_CONSTRAINT_SET3_FLAG) != 0 {
+            if level_idc == LEVEL_1_1_IDC {
+                return if (profile_iop & IOP_CONSTRAINT_SET3) != 0 {
                     Some(LevelIdc::Level1B)
                 } else {
                     Some(LevelIdc::Level1_1)
@@ -947,12 +1010,11 @@ pub mod h264 {
     }
 
     fn profile_from_bytes(profile_idc: u8, profile_iop: u8) -> Option<Profile> {
-        H264_PROFILE_PATTERNS.iter().find_map(
-            |(profile, expected_profile_idc, mask, expected_bits)| {
-                (*expected_profile_idc == profile_idc && (profile_iop & *mask) == *expected_bits)
-                    .then_some(*profile)
-            },
-        )
+        PROFILE_PATTERNS.iter().copied().find_map(|pattern| {
+            pattern
+                .matches(profile_idc, profile_iop)
+                .then_some(pattern.profile)
+        })
     }
 
     fn parse_profile_level_id_bytes(value: &[u8]) -> Option<[u8; 3]> {

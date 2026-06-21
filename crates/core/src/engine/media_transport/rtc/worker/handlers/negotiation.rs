@@ -159,7 +159,7 @@ pub(super) fn worker_apply_session_answer(
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
     let client_capabilities =
-        negotiated_capabilities::client_rtp_capabilities_from_sdp_answer(&answer);
+        negotiated_capabilities::client_rtp_capabilities_from_sdp_answer(&answer)?;
     let producer_answer_projection = answer_producer_projection(&answer, &producer_mids);
     let rids_by_mid = producer_mids
         .iter()
@@ -196,7 +196,7 @@ pub(super) fn worker_apply_session_answer(
         producer_answer_projection,
         &rids_by_mid,
         max_bitrate_in,
-    );
+    )?;
     let refreshed_by_mid = refreshed_parameters.into_iter().collect::<BTreeMap<_, _>>();
     if let Some(session_state) = state.users.get_mut(session_key) {
         stage_queued_removal_offer(session_state);

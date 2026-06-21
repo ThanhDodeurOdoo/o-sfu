@@ -2,12 +2,12 @@ use o_sfu_rfc::{rtp, webrtc};
 
 use crate::{
     CodecSetting, HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaKind,
-    MediaStream, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
+    MediaStream, PayloadType, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
 };
 
-const AUDIO_PAYLOAD_TYPE_OPUS: u8 = 111;
-const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
-const VIDEO_PAYLOAD_TYPE_VP8_RTX: u8 = 97;
+const AUDIO_PAYLOAD_TYPE_OPUS: PayloadType = PayloadType::new(111);
+const VIDEO_PAYLOAD_TYPE_VP8: PayloadType = PayloadType::new(96);
+const VIDEO_PAYLOAD_TYPE_VP8_RTX: PayloadType = PayloadType::new(97);
 
 const HEADER_EXTENSION_ID_MID: u8 = 1;
 const HEADER_EXTENSION_ID_ABS_SEND_TIME: u8 = 4;
@@ -174,7 +174,7 @@ fn video_codec_capability_with_feedback(include_transport_cc: bool) -> MediaCode
 fn video_rtx_codec_capability() -> MediaCodecCapability {
     MediaCodecCapability::new(MediaKind::Video, rtp::CodecName::Rtx, 90_000)
         .with_payload_type(VIDEO_PAYLOAD_TYPE_VP8_RTX)
-        .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8.into()))
+        .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8))
 }
 
 fn opus_codec_parameters() -> MediaFormat {
@@ -196,5 +196,5 @@ fn video_rtx_codec_parameters() -> MediaFormat {
         VIDEO_PAYLOAD_TYPE_VP8_RTX,
         90_000,
     )
-    .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8.into()))
+    .with_setting(CodecSetting::RtxAssociation(VIDEO_PAYLOAD_TYPE_VP8))
 }

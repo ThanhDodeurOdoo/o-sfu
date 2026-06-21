@@ -16,7 +16,7 @@ use fixtures::{
     LocalVideoRoute, RemoteVideoRoute, prepare_pending_selected_rid_route,
     set_consumer_packet_gate_at,
 };
-use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
+use o_sfu_router::{MediaStream as RouterRtpParameters, PayloadType, StreamBinding};
 use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid};
 use tokio::sync::{mpsc, oneshot};
 
@@ -896,11 +896,11 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
             StreamBinding::new()
                 .with_ssrc(72_001)
                 .with_rid("lo")
-                .with_payload_type(96),
+                .with_payload_type(PayloadType::new(96)),
             StreamBinding::new()
                 .with_ssrc(72_002)
                 .with_rid("hi")
-                .with_payload_type(96),
+                .with_payload_type(PayloadType::new(96)),
         ],
     )
     .with_mid(consumer_mid.to_string());
@@ -993,7 +993,7 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
             StreamBinding::new()
                 .with_ssrc(72_101)
                 .with_rid("lo")
-                .with_payload_type(96),
+                .with_payload_type(PayloadType::new(96)),
         ],
     )
     .with_mid(consumer_mid.to_string());

@@ -582,6 +582,7 @@ fn synthetic_h264_fua_idr_start_payload(fragment_body: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use o_sfu_rfc::rtp::{h264, vp8};
+    use str0m::rtp::Vp8Descriptor;
 
     use super::*;
 
@@ -613,9 +614,9 @@ mod tests {
             return;
         };
 
-        let descriptor = vp8::payload_descriptor(&payload);
-        assert!(descriptor.is_some());
-        let Some(descriptor) = descriptor else {
+        let descriptor = Vp8Descriptor::parse(&payload);
+        assert!(descriptor.is_ok());
+        let Ok(descriptor) = descriptor else {
             return;
         };
 

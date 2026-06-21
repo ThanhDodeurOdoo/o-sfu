@@ -11,12 +11,12 @@
 //! lets them share media-engine state without making the server crate import
 //! RTC workers or room-state internals.
 
-pub mod h264_payloads;
 pub mod media_transport;
 mod observability;
 pub mod packet_sink_registry;
 pub mod recording;
 pub mod room;
+mod rtp;
 pub mod source_model;
 pub mod sync;
 

@@ -14,9 +14,13 @@ use o_sfu_rfc::{
 };
 use o_sfu_router::{
     HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaKind, MediaStream,
-    RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError, StreamBinding,
+    PayloadType, RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError, StreamBinding,
     derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
 };
+
+fn pt(value: u8) -> PayloadType {
+    PayloadType::new(value)
+}
 
 #[test]
 fn h264_profile_level_id_and_two_byte_profile_helpers_handle_edge_cases() {
@@ -42,13 +46,13 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
     let capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "H264", 90_000)
-                .with_payload_type(101)
+                .with_payload_type(pt(101))
                 .with_parameter(fmtp::H264_PACKETIZATION_MODE, "1")
                 .with_parameter(fmtp::H264_PROFILE_LEVEL_ID, "4d0032")
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),
             MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_payload_type(102)
+                .with_payload_type(pt(102))
                 .with_parameter(fmtp::RTX_ASSOCIATION, "101"),
         ],
         vec![
@@ -61,13 +65,13 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
     );
     let producer_parameters = MediaStream::new(
         vec![
-            MediaFormat::new(MediaKind::Video, "H264", 111, 90_000)
+            MediaFormat::new(MediaKind::Video, "H264", pt(111), 90_000)
                 .with_parameter(fmtp::H264_PACKETIZATION_MODE, "1")
                 .with_parameter(fmtp::H264_PROFILE_LEVEL_ID, "4d0032")
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),
-            MediaFormat::new(MediaKind::Video, "rtx", 112, 90_000)
+            MediaFormat::new(MediaKind::Video, "rtx", pt(112), 90_000)
                 .with_parameter(fmtp::RTX_ASSOCIATION, "111"),
         ],
         vec![
@@ -78,7 +82,7 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
             StreamBinding::new()
                 .with_rid("f")
                 .with_ssrc(1_234)
-                .with_payload_type(111),
+                .with_payload_type(pt(111)),
         ],
     )
     .with_mid("video-0");
@@ -128,17 +132,17 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
 fn derive_consumable_parameters_reject_invalid_rtx_apt_values() {
     let capabilities = MediaCapabilities::new(
         vec![
-            MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000).with_payload_type(100),
+            MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000).with_payload_type(pt(100)),
             MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_payload_type(101)
+                .with_payload_type(pt(101))
                 .with_parameter(fmtp::RTX_ASSOCIATION, "100"),
         ],
         vec![],
     );
     let producer_parameters = MediaStream::new(
         vec![
-            MediaFormat::new(MediaKind::Video, "VP8", 96, 90_000),
-            MediaFormat::new(MediaKind::Video, "rtx", 97, 90_000)
+            MediaFormat::new(MediaKind::Video, "VP8", pt(96), 90_000),
+            MediaFormat::new(MediaKind::Video, "rtx", pt(97), 90_000)
                 .with_parameter(fmtp::RTX_ASSOCIATION, "bad"),
         ],
         vec![],
@@ -158,11 +162,11 @@ fn derive_consumable_parameters_reject_invalid_rtx_apt_values() {
 fn consumer_negotiation_prunes_transport_cc_when_only_abs_send_time_survives() {
     let consumable_parameters = MediaStream::new(
         vec![
-            MediaFormat::new(MediaKind::Video, "VP8", 96, 90_000)
+            MediaFormat::new(MediaKind::Video, "VP8", pt(96), 90_000)
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None)),
-            MediaFormat::new(MediaKind::Video, "rtx", 97, 90_000)
+            MediaFormat::new(MediaKind::Video, "rtx", pt(97), 90_000)
                 .with_parameter(fmtp::RTX_ASSOCIATION, "96"),
         ],
         vec![HeaderExtension::new(
@@ -174,12 +178,12 @@ fn consumer_negotiation_prunes_transport_cc_when_only_abs_send_time_survives() {
     let consumer_capabilities = MediaCapabilities::new(
         vec![
             MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
-                .with_payload_type(100)
+                .with_payload_type(pt(100))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None)),
             MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-                .with_payload_type(101)
+                .with_payload_type(pt(101))
                 .with_parameter(fmtp::RTX_ASSOCIATION, "96"),
         ],
         vec![HeaderExtension::new(
@@ -222,7 +226,7 @@ fn consumer_negotiation_prunes_transport_cc_when_only_abs_send_time_survives() {
 fn consumer_negotiation_treats_missing_vp9_profile_id_as_profile_zero_only() {
     let profile_zero_parameters = MediaStream::new(
         vec![
-            MediaFormat::new(MediaKind::Video, "VP9", 98, 90_000)
+            MediaFormat::new(MediaKind::Video, "VP9", pt(98), 90_000)
                 .with_parameter(fmtp::VP9_PROFILE_ID, "0")
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
         ],
@@ -231,7 +235,7 @@ fn consumer_negotiation_treats_missing_vp9_profile_id_as_profile_zero_only() {
     );
     let profile_two_parameters = MediaStream::new(
         vec![
-            MediaFormat::new(MediaKind::Video, "VP9", 98, 90_000)
+            MediaFormat::new(MediaKind::Video, "VP9", pt(98), 90_000)
                 .with_parameter(fmtp::VP9_PROFILE_ID, "2")
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
         ],
@@ -260,15 +264,19 @@ fn consumer_negotiation_treats_missing_vp9_profile_id_as_profile_zero_only() {
 fn consumer_negotiation_filters_rtx_bindings_when_apt_does_not_match() {
     let consumable_parameters = MediaStream::new(
         vec![
-            MediaFormat::new(MediaKind::Video, "VP8", 96, 90_000)
+            MediaFormat::new(MediaKind::Video, "VP8", pt(96), 90_000)
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
-            MediaFormat::new(MediaKind::Video, "rtx", 97, 90_000)
+            MediaFormat::new(MediaKind::Video, "rtx", pt(97), 90_000)
                 .with_parameter(fmtp::RTX_ASSOCIATION, "96"),
         ],
         vec![],
         vec![
-            StreamBinding::new().with_ssrc(5_678).with_payload_type(96),
-            StreamBinding::new().with_ssrc(5_679).with_payload_type(97),
+            StreamBinding::new()
+                .with_ssrc(5_678)
+                .with_payload_type(pt(96)),
+            StreamBinding::new()
+                .with_ssrc(5_679)
+                .with_payload_type(pt(97)),
             StreamBinding::new().with_rid("fallback"),
         ],
     );

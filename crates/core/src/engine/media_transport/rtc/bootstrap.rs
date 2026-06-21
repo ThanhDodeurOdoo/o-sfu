@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_rfc::webrtc;
+use o_sfu_rfc::{rtp::h264::PacketizationMode, webrtc};
 use str0m::{
     Candidate, Rtc,
     bwe::Bitrate as Str0mBitrate,
@@ -33,12 +33,10 @@ use super::{
 use crate::{
     Bitrate, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend,
     engine::{
-        h264_payloads::H264_PAYLOAD_SPECS,
         media_transport::{TransportAdapterError, TransportSessionKey},
+        rtp::{h264::H264_PAYLOAD_SPECS, payload_type},
     },
 };
-
-const VIDEO_PAYLOAD_TYPE_VP8: u8 = 96;
 
 /// bind the shared worker UDP socket and return the advertised candidate tuple
 ///
@@ -197,7 +195,7 @@ fn rtc_builder(codec_flags: MediaCodecFlags, stats_interval: Option<Duration>) -
     }
     if codec_flags.vp8_enabled() {
         config.codec_config().add_config(
-            VIDEO_PAYLOAD_TYPE_VP8.into(),
+            payload_type::VP8.value().into(),
             None,
             Codec::Vp8,
             Frequency::NINETY_KHZ,
@@ -222,10 +220,10 @@ fn rtc_builder(codec_flags: MediaCodecFlags, stats_interval: Option<Duration>) -
 fn add_h264_codecs_without_rtx(codec_config: &mut CodecConfig) {
     for spec in H264_PAYLOAD_SPECS {
         codec_config.add_h264(
-            spec.payload_type().into(),
+            spec.payload_type().value().into(),
             None,
-            spec.packetization_mode().str0m_flag(),
-            spec.profile_level_id(),
+            matches!(spec.packetization_mode(), PacketizationMode::NonInterleaved),
+            spec.profile_level_id().packed_value(),
         );
     }
 }

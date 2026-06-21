@@ -8,7 +8,7 @@ fn h264_bootstrap_omits_rtx_for_receiver_safe_consumer_streams() {
         MediaCodecFlags::default().with_vp8(false).with_h264(true),
         None,
     );
-    let h264_payloads = config
+    let h264_codecs = config
         .codec_config()
         .params()
         .iter()
@@ -27,13 +27,13 @@ fn h264_bootstrap_omits_rtx_for_receiver_safe_consumer_streams() {
         .iter()
         .map(|spec| {
             (
-                spec.payload_type(),
+                spec.payload_type().value(),
                 None,
                 Some(spec.packetization_mode().fmtp_value()),
-                Some(spec.profile_level_id()),
+                Some(spec.profile_level_id().packed_value()),
             )
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(h264_payloads, expected);
+    assert_eq!(h264_codecs, expected);
 }

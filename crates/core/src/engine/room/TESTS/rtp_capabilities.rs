@@ -46,7 +46,7 @@ fn capabilities_include_enabled_optional_codecs() {
             let packetization_mode = codec
                 .settings()
                 .find_map(|setting| match setting {
-                    CodecSetting::H264PacketizationMode(mode) => Some(*mode),
+                    CodecSetting::H264PacketizationMode(mode) => Some(mode.fmtp_value()),
                     _ => None,
                 })
                 .unwrap_or(u8::MAX);

@@ -1,24 +1,25 @@
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
     HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodecCapability,
-    MediaKind as RouterMediaKind, RtcpFeedback, RtcpFeedbackKind,
+    MediaKind as RouterMediaKind, PayloadType, RtcpFeedback, RtcpFeedbackKind,
 };
 use str0m::{
     change::SdpAnswer,
     format::{Codec, PayloadParams},
 };
 
+use crate::engine::media_transport::TransportAdapterError;
+
 #[must_use]
 #[cfg(any(test, feature = "fuzzing"))]
 pub fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<MediaCapabilities> {
     let answer = SdpAnswer::from_sdp_string(answer_sdp).ok()?;
-    client_rtp_capabilities_from_sdp_answer(&answer)
+    client_rtp_capabilities_from_sdp_answer(&answer).unwrap_or_default()
 }
 
-#[must_use]
 pub(super) fn client_rtp_capabilities_from_sdp_answer(
     answer: &SdpAnswer,
-) -> Option<MediaCapabilities> {
+) -> Result<Option<MediaCapabilities>, TransportAdapterError> {
     let mut codecs = Vec::new();
     let mut header_extensions = Vec::new();
 
@@ -31,11 +32,11 @@ pub(super) fn client_rtp_capabilities_from_sdp_answer(
             continue;
         };
         for payload in &rtp_parameters {
-            let codec = project_codec_capability(media_kind, payload);
+            let codec = project_codec_capability(media_kind, payload)?;
             if !codecs.contains(&codec) {
                 codecs.push(codec);
             }
-            if let Some(rtx_codec) = project_rtx_capability(media_kind, payload)
+            if let Some(rtx_codec) = project_rtx_capability(media_kind, payload)?
                 && !codecs.contains(&rtx_codec)
             {
                 codecs.push(rtx_codec);
@@ -53,10 +54,10 @@ pub(super) fn client_rtp_capabilities_from_sdp_answer(
     }
 
     if codecs.is_empty() {
-        return None;
+        return Ok(None);
     }
 
-    Some(MediaCapabilities::new(codecs, header_extensions))
+    Ok(Some(MediaCapabilities::new(codecs, header_extensions)))
 }
 
 fn media_kind_label(payloads: &[PayloadParams]) -> Option<RouterMediaKind> {
@@ -76,11 +77,12 @@ fn media_kind_label(payloads: &[PayloadParams]) -> Option<RouterMediaKind> {
 fn project_codec_capability(
     media_kind: RouterMediaKind,
     payload: &PayloadParams,
-) -> MediaCodecCapability {
+) -> Result<MediaCodecCapability, TransportAdapterError> {
     let spec = payload.spec();
+    let pt = router_payload_type(*payload.pt())?;
     let mut codec =
         MediaCodecCapability::new(media_kind, spec.codec.to_string(), spec.clock_rate.get())
-            .with_payload_type(*payload.pt());
+            .with_payload_type(pt);
     if let Some(channels) = spec.channels {
         codec = codec.with_channels(u16::from(channels));
     }
@@ -88,23 +90,30 @@ fn project_codec_capability(
     for feedback in rtcp_feedback(payload) {
         codec = codec.with_rtcp_feedback(feedback);
     }
-    codec
+    Ok(codec)
 }
 
 fn project_rtx_capability(
     media_kind: RouterMediaKind,
     payload: &PayloadParams,
-) -> Option<MediaCodecCapability> {
-    let resend_payload_type = payload.resend()?;
-    Some(
+) -> Result<Option<MediaCodecCapability>, TransportAdapterError> {
+    let Some(resend_payload_type) = payload.resend() else {
+        return Ok(None);
+    };
+    let pt = router_payload_type(*resend_payload_type)?;
+    Ok(Some(
         MediaCodecCapability::new(
             media_kind,
-            Codec::Rtx.to_string(),
+            rfc_rtp::CodecName::Rtx,
             payload.spec().clock_rate.get(),
         )
-        .with_payload_type(*resend_payload_type)
+        .with_payload_type(pt)
         .with_parameter(rfc_rtp::fmtp::RTX_ASSOCIATION, payload.pt().to_string()),
-    )
+    ))
+}
+
+fn router_payload_type(value: u8) -> Result<PayloadType, TransportAdapterError> {
+    PayloadType::try_new(value).ok_or(TransportAdapterError::InvalidInput)
 }
 
 fn apply_codec_parameters(

@@ -1,5 +1,5 @@
 use super::{
-    fmtp, frame_marking,
+    PayloadType, fmtp, frame_marking,
     h264::{self, LevelIdc, PacketizationMode, Profile, ProfileLevelId},
     header_extension, rtcp_feedback_format,
 };
@@ -12,6 +12,54 @@ fn h264_profile_level_id_parses_profile_and_level() {
         Some(Profile::ConstrainedBaseline)
     );
     assert_eq!(parsed.map(ProfileLevelId::level), Some(LevelIdc::Level3_1));
+}
+
+#[test]
+fn h264_profile_level_id_builds_canonical_fmtp_values() {
+    let cases = [
+        (Profile::Baseline, LevelIdc::Level3_1, "42001f"),
+        (Profile::ConstrainedBaseline, LevelIdc::Level3_1, "42e01f"),
+        (Profile::Main, LevelIdc::Level3_1, "4d001f"),
+        (Profile::Extended, LevelIdc::Level3_1, "58001f"),
+        (Profile::High, LevelIdc::Level3_1, "64001f"),
+        (Profile::High10, LevelIdc::Level3_1, "6e001f"),
+        (Profile::High422, LevelIdc::Level3_1, "7a001f"),
+        (Profile::High444Predictive, LevelIdc::Level3_1, "f4001f"),
+        (Profile::High10Intra, LevelIdc::Level3_1, "6e101f"),
+        (Profile::High422Intra, LevelIdc::Level3_1, "7a101f"),
+        (Profile::High444Intra, LevelIdc::Level3_1, "f4101f"),
+        (Profile::Cavlc444Intra, LevelIdc::Level3_1, "2c101f"),
+        (Profile::ConstrainedBaseline, LevelIdc::Level1B, "42f00b"),
+        (Profile::High, LevelIdc::Level1B, "640009"),
+    ];
+
+    for (profile, level, fmtp) in cases {
+        let profile_level_id = ProfileLevelId::new(profile, level);
+        assert_eq!(profile_level_id.fmtp_value(), fmtp);
+        assert_eq!(ProfileLevelId::parse(fmtp), Some(profile_level_id));
+    }
+}
+
+#[test]
+fn h264_profile_level_id_matches_profile_iop_wildcards() {
+    let cases = [
+        ("42f01f", Profile::ConstrainedBaseline),
+        ("42801f", Profile::Baseline),
+        ("4d401f", Profile::Main),
+        ("58301f", Profile::Extended),
+        ("6e101f", Profile::High10Intra),
+    ];
+
+    for (token, profile) in cases {
+        assert_eq!(
+            ProfileLevelId::parse(token).map(ProfileLevelId::profile),
+            Some(profile)
+        );
+    }
+
+    for token in ["42e11f", "6e201f"] {
+        assert_eq!(ProfileLevelId::parse(token), None);
+    }
 }
 
 #[test]
@@ -58,6 +106,22 @@ fn h264_level_ordering_keeps_level_1b_between_level_1_and_level_1_1() {
 }
 
 #[test]
+fn h264_packetization_mode_parses_rfc_values() {
+    let cases = [
+        (0, PacketizationMode::SingleNalUnit),
+        (1, PacketizationMode::NonInterleaved),
+        (2, PacketizationMode::Interleaved),
+    ];
+
+    for (value, mode) in cases {
+        assert_eq!(PacketizationMode::from_fmtp_value(value), Some(mode));
+        assert_eq!(mode.fmtp_value(), value);
+    }
+
+    assert_eq!(PacketizationMode::from_fmtp_value(3), None);
+}
+
+#[test]
 fn h264_payload_keyframe_detection_covers_idr_packetizations() {
     assert!(h264::payload_starts_idr(
         &[0x65, 0x88],
@@ -95,12 +159,19 @@ fn h264_payload_keyframe_detection_covers_idr_packetizations() {
 
 #[test]
 fn rtcp_mux_payload_type_range_follows_rfc_5761() {
-    assert!(super::is_rtcp_mux_payload_type(63));
-    assert!(!super::is_rtcp_mux_payload_type(64));
-    assert!(!super::is_rtcp_mux_payload_type(95));
-    assert!(super::is_rtcp_mux_payload_type(96));
-    assert!(super::is_rtcp_mux_payload_type(127));
-    assert!(!super::is_rtcp_mux_payload_type(128));
+    for (value, allowed) in [
+        (63, true),
+        (64, false),
+        (95, false),
+        (96, true),
+        (127, true),
+        (128, false),
+    ] {
+        assert_eq!(super::is_rtcp_mux_payload_type(value), allowed);
+        assert_eq!(PayloadType::try_new(value).is_some(), allowed);
+    }
+    assert_eq!(PayloadType::try_from(96), Ok(PayloadType::new(96)));
+    assert_eq!(PayloadType::try_from(64), Err(super::InvalidPayloadType));
 }
 
 #[test]
@@ -152,64 +223,4 @@ fn vp8_payload_keyframe_detection_follows_payload_descriptor() {
         0x90, 0x80, 0x80, 0x42, 0x00,
     ]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x80]));
-}
-
-#[test]
-fn vp8_payload_descriptor_rewrite_updates_long_picture_id_and_tl0() {
-    let mut payload = vec![0x90, 0xc0, 0x80, 0x02, 0x09, 0x00];
-    let descriptor = super::vp8::payload_descriptor(&payload);
-    assert!(descriptor.is_some());
-    let Some(descriptor) = descriptor else {
-        return;
-    };
-
-    assert_eq!(descriptor.picture_id(), Some(2));
-    assert_eq!(descriptor.tl0_pic_idx(), Some(9));
-
-    super::vp8::rewrite_payload_descriptor(
-        &mut payload,
-        descriptor,
-        super::vp8::PayloadDescriptorRewrite {
-            picture_id: Some(0x1234),
-            tl0_pic_idx: Some(44),
-        },
-    );
-
-    let rewritten = super::vp8::payload_descriptor(&payload);
-    assert!(rewritten.is_some());
-    let Some(rewritten) = rewritten else {
-        return;
-    };
-    assert_eq!(rewritten.picture_id(), Some(0x1234));
-    assert_eq!(rewritten.tl0_pic_idx(), Some(44));
-    assert_eq!(payload, vec![0x90, 0xc0, 0x92, 0x34, 44, 0x00]);
-}
-
-#[test]
-fn vp8_payload_descriptor_rewrite_keeps_short_picture_id_width() {
-    let mut payload = vec![0x90, 0x80, 0x02, 0x00];
-    let descriptor = super::vp8::payload_descriptor(&payload);
-    assert!(descriptor.is_some());
-    let Some(descriptor) = descriptor else {
-        return;
-    };
-
-    assert_eq!(descriptor.picture_id(), Some(2));
-
-    super::vp8::rewrite_payload_descriptor(
-        &mut payload,
-        descriptor,
-        super::vp8::PayloadDescriptorRewrite {
-            picture_id: Some(0x1234),
-            tl0_pic_idx: None,
-        },
-    );
-
-    let rewritten = super::vp8::payload_descriptor(&payload);
-    assert!(rewritten.is_some());
-    let Some(rewritten) = rewritten else {
-        return;
-    };
-    assert_eq!(rewritten.picture_id(), Some(0x34));
-    assert_eq!(payload, vec![0x90, 0x80, 0x34, 0x00]);
 }
