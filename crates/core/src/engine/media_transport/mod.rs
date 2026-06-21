@@ -39,6 +39,7 @@ pub use policy_invalidation::{
 pub(crate) use route_control::{
     ConsumerRouteControl, ConsumerRouteControlOutcome, RouteControlPlan,
 };
+pub(crate) use types::ConsumerPacketGateUpdate;
 #[cfg(feature = "internal-benchmarks")]
 pub mod benchmark_support {
     pub use super::rtc::benchmark_support::*;
@@ -51,13 +52,13 @@ pub mod fuzz_support {
 }
 #[cfg(any(test, feature = "testing-transport"))]
 pub use rtc::ForwardedPacket;
-use rtc::{RouteControlRequest, RtcWorker, RtcWorkerCommand, RtcWorkerResponse};
-use tracing::{debug, warn};
+use rtc::{RtcWorker, RtcWorkerCommand, RtcWorkerResponse};
+use tracing::warn;
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
     ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
-    ConsumerPacketGateUpdate, ProducerActivity, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
-    RelayRouteActivity, SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
+    ProducerActivity, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate, RelayRouteActivity,
+    SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
     SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
     TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
     TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
@@ -98,7 +99,6 @@ enum TransportCommandOp {
     ConsumeMedia,
     SetProducerActive,
     SetConsumerActive,
-    SetConsumerPacketGate,
     RequestConsumerKeyframe,
 }
 
@@ -255,7 +255,7 @@ impl MediaTransport {
     ///
     /// Returns [`TransportAdapterError`] when the session cannot be addressed or
     /// the active backend cannot release its resources.
-    pub async fn close_session(
+    pub(crate) async fn close_session(
         &self,
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
@@ -284,7 +284,7 @@ impl MediaTransport {
     ///
     /// Returns [`TransportAdapterError`] when the session or media id is unknown
     /// or when the active backend cannot release the resource.
-    pub async fn remove_media(
+    pub(crate) async fn remove_media(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -417,7 +417,7 @@ impl MediaTransport {
     ///
     /// Returns [`TransportAdapterError`] when the referenced route cannot be
     /// addressed or the active backend cannot apply the relay mutation.
-    pub async fn apply_relay_route_effect(
+    pub(crate) async fn apply_relay_route_effect(
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
@@ -434,209 +434,11 @@ impl MediaTransport {
             })
     }
 
-    /// Updates whether a producer may forward packets.
-    ///
-    /// This is a transport-level switch. Removing the room source or changing
-    /// participant permissions remains the responsibility of room state.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportAdapterError`] when the session or media id is unknown
-    /// or the active backend cannot update producer activity.
-    pub async fn set_producer_active(
-        &self,
-        source: &TransportSourceKey,
-        activity: ProducerActivity,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_session_command(
-            source.session_key(),
-            |response| {
-                RtcWorkerCommand::media_control(
-                    RouteControlRequest::SetProducerActive {
-                        source: source.clone(),
-                        active: activity.is_active(),
-                    },
-                    response,
-                )
-            },
-            |error| {
-                warn!(
-                    ?source,
-                    op = ?TransportCommandOp::SetProducerActive,
-                    active = activity.is_active(),
-                    ?error,
-                    "media transport worker command failed"
-                );
-            },
-        )
-        .await
-    }
-
-    /// Updates whether a consumer route may receive packets.
-    ///
-    /// The route identifies the same path from both sides so cross-worker
-    /// backends can address the correct forwarding state.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportAdapterError`] when either session or media id is
-    /// unknown or the active backend cannot update consumer activity.
-    pub async fn set_consumer_active(
-        &self,
-        route: &TransportConsumerRoute,
-        activity: ConsumerActivity,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_consumer_route_command(
-            route,
-            |response| {
-                RtcWorkerCommand::media_control(
-                    RouteControlRequest::SetConsumerActive {
-                        route: route.clone(),
-                        active: activity.is_active(),
-                    },
-                    response,
-                )
-            },
-            |error| {
-                warn!(
-                    ?route,
-                    op = ?TransportCommandOp::SetConsumerActive,
-                    active = activity.is_active(),
-                    ?error,
-                    "media transport worker command failed"
-                );
-            },
-        )
-        .await
-    }
-
-    /// Applies source-policy packet gating to one consumer route.
-    ///
-    /// Packet gates are transport execution policy derived from room
-    /// source selection.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportAdapterError`] when either session or media id is
-    /// unknown, the route is invalid or the active backend cannot apply the
-    /// packet gate.
-    pub async fn set_consumer_packet_gate(
-        &self,
-        route: &TransportConsumerRoute,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_consumer_route_command(
-            route,
-            |response| {
-                RtcWorkerCommand::media_control(
-                    RouteControlRequest::set_consumer_packet_gate(route.clone(), &packet_gate),
-                    response,
-                )
-            },
-            |error| {
-                warn!(
-                    ?route,
-                    op = ?TransportCommandOp::SetConsumerPacketGate,
-                    ?packet_gate,
-                    ?error,
-                    "media transport worker command failed"
-                );
-            },
-        )
-        .await
-    }
-
-    /// Applies packet gates for multiple routes and preserves input order in
-    /// the returned results.
-    pub async fn set_consumer_packet_gates(
-        &self,
-        updates: &[ConsumerPacketGateUpdate],
-    ) -> Vec<Result<(), TransportAdapterError>> {
-        let results = self.apply_consumer_pkt_gate_batch(updates).await;
-        for (update, result) in updates.iter().zip(results.iter()) {
-            if let Err(error) = result {
-                warn!(
-                    ?error,
-                    route = ?update.route(),
-                    packet_gate = ?update.packet_gate(),
-                    "media transport failed to update a batched consumer packet gate"
-                );
-            }
-        }
-        results
-    }
-
-    /// Applies receiver-side desired BWE targets and preserves input order in
-    /// the returned results.
-    pub async fn set_receiver_bwe_targets(
-        &self,
-        updates: &[ReceiverBweTargetUpdate],
-    ) -> Vec<Result<(), TransportAdapterError>> {
-        let results = self.execute_receiver_bwe_target_batch(updates).await;
-        for (update, result) in updates.iter().zip(results.iter()) {
-            match result {
-                Ok(()) => {}
-                Err(TransportAdapterError::InvalidInput) => {
-                    debug!(
-                        session_key = ?update.session_key(),
-                        target = update.target().as_bps(),
-                        "media transport skipped a stale receiver BWE target"
-                    );
-                }
-                Err(error) => {
-                    warn!(
-                        ?error,
-                        session_key = ?update.session_key(),
-                        target = update.target().as_bps(),
-                        "media transport failed to update a receiver BWE target"
-                    );
-                }
-            }
-        }
-        results
-    }
-
-    /// Requests a keyframe for one consumer route.
-    ///
-    /// This is a best-effort transport command used after route changes or
-    /// visible layer changes. Failure means the backend could not address the
-    /// requested route at the time of the call.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportAdapterError`] when either session or media id is
-    /// unknown or the active backend cannot request a keyframe.
-    pub async fn request_consumer_keyframe(
-        &self,
-        route: &TransportConsumerRoute,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_consumer_route_command(
-            route,
-            |response| {
-                RtcWorkerCommand::media_control(
-                    RouteControlRequest::RequestConsumerKeyframe {
-                        route: route.clone(),
-                    },
-                    response,
-                )
-            },
-            |error| {
-                warn!(
-                    ?route,
-                    op = ?TransportCommandOp::RequestConsumerKeyframe,
-                    ?error,
-                    "media transport worker command failed"
-                );
-            },
-        )
-        .await
-    }
-
     /// Returns the negotiated MID for a transport media handle when known.
     ///
     /// `None` means the media id is unknown, no MID has been negotiated yet or
     /// the backend has already removed the handle.
-    pub async fn transport_media_mid(
+    pub(crate) async fn transport_media_mid(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,

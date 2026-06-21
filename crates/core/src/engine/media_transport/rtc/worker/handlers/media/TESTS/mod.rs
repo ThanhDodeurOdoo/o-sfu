@@ -12,7 +12,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fixtures::{LocalVideoRoute, RemoteVideoRoute, prepare_pending_selected_rid_route};
+use fixtures::{
+    LocalVideoRoute, RemoteVideoRoute, prepare_pending_selected_rid_route,
+    set_consumer_packet_gate_at,
+};
 use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
 use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid};
 use tokio::sync::{mpsc, oneshot};
@@ -75,7 +78,6 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
             rid: None,
             kind: KeyframeRequestKind::Pli,
         },
-        Instant::now(),
         None,
     );
 
@@ -112,7 +114,6 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
             rid: None,
             kind: KeyframeRequestKind::Pli,
         },
-        Instant::now(),
         None,
     );
     apply_route_control_request(
@@ -124,7 +125,6 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
             rid: None,
             kind: KeyframeRequestKind::Fir,
         },
-        Instant::now(),
         None,
     );
 
@@ -273,19 +273,12 @@ fn set_consumer_pkt_gate_updates_one_route_without_rewriting_the_source_gate() {
         first_consumer_media,
         TransportSourceKey::new(source_session.clone(), src_media),
     );
-    let (response_tx, response_rx) = oneshot::channel();
-    apply_route_control_request(
+    set_consumer_packet_gate_at(
         &mut state,
-        &RuntimeMetrics::default(),
-        RouteControlRequest::SetConsumerPacketGate {
-            route,
-            packet_gate: PacketLayerGate::Rid("lo".into()),
-        },
+        &route,
+        PacketLayerGate::Rid("lo".into()),
         observed_at + Duration::from_millis(20),
-        Some(response_tx),
     );
-
-    assert_eq!(expect_response(response_rx), Ok(()));
     assert!(matches!(
         state.routes.local_route(src_media),
         Some(route_entry) if route_entry.destinations.iter().any(|destination| {
@@ -368,19 +361,13 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     );
 
     let consumer_route = route.consumer_route();
-    let (live_response_tx, live_response_rx) = oneshot::channel();
-    apply_route_control_request(
+    set_consumer_packet_gate_at(
         &mut route.state,
-        &RuntimeMetrics::default(),
-        RouteControlRequest::SetConsumerPacketGate {
-            route: consumer_route.clone(),
-            packet_gate: PacketLayerGate::Rid(selected_rid),
-        },
+        &consumer_route,
+        PacketLayerGate::Rid(selected_rid),
         observed_at + Duration::from_millis(500),
-        Some(live_response_tx),
     );
 
-    assert_eq!(expect_response(live_response_rx), Ok(()));
     assert_consumer_packet_gate(
         &route.state,
         route.src_media,
@@ -389,19 +376,13 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
         None,
     );
 
-    let (stale_response_tx, stale_response_rx) = oneshot::channel();
-    apply_route_control_request(
+    set_consumer_packet_gate_at(
         &mut route.state,
-        &RuntimeMetrics::default(),
-        RouteControlRequest::SetConsumerPacketGate {
-            route: consumer_route,
-            packet_gate: PacketLayerGate::Rid(selected_rid),
-        },
+        &consumer_route,
+        PacketLayerGate::Rid(selected_rid),
         observed_at + Duration::from_secs(3),
-        Some(stale_response_tx),
     );
 
-    assert_eq!(expect_response(stale_response_rx), Ok(()));
     assert_consumer_packet_gate(
         &route.state,
         route.src_media,
@@ -1178,7 +1159,6 @@ fn remote_source_packet_gate_ignores_wrong_source_owner() {
             target_id: RelayTargetId::new(9),
             packet_gate: PacketLayerGate::Rid("hi".into()),
         },
-        Instant::now(),
         None,
     );
 

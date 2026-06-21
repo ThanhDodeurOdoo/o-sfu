@@ -160,29 +160,6 @@ impl RouteTable {
         packet_gate: PacketLayerGate,
         pending_gate: Option<PacketLayerGate>,
     ) -> Result<bool, TransportAdapterError> {
-        let changed = self.set_consumer_pkt_gate_without_refresh(
-            source_id,
-            dst_idx,
-            session_key,
-            media_id,
-            packet_gate,
-            pending_gate,
-        )?;
-        if changed {
-            self.refresh_src_pkt_gate(source_id);
-        }
-        Ok(changed)
-    }
-
-    pub(super) fn set_consumer_pkt_gate_without_refresh(
-        &mut self,
-        source_id: TransportMediaId,
-        dst_idx: usize,
-        session_key: &TransportSessionKey,
-        media_id: TransportMediaId,
-        packet_gate: PacketLayerGate,
-        pending_gate: Option<PacketLayerGate>,
-    ) -> Result<bool, TransportAdapterError> {
         self.sources
             .get_mut(&source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?

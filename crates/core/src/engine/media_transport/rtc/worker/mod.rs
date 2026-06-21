@@ -63,6 +63,8 @@ use tokio::sync::mpsc;
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use super::commands::CloseSessionState;
+#[cfg(test)]
+use super::commands::{ConsumerPacketGateCommand, RtcMediaControlCommand};
 use super::{
     bitrate::BitrateRegistry,
     commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
@@ -371,11 +373,18 @@ impl RtcWorker {
         route: &TransportConsumerRoute,
         packet_gate: SourcePacketGate,
     ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(RouteControlRequest::set_consumer_packet_gate(
-            route.clone(),
-            &packet_gate,
-        ))
-        .await
+        let mut results = self
+            .request_worker(|response| {
+                RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerPacketGateBatch {
+                    source: route.source().clone(),
+                    updates: vec![ConsumerPacketGateCommand::from_route(route, &packet_gate)],
+                    response,
+                })
+            })
+            .await?;
+        results
+            .pop()
+            .unwrap_or(Err(TransportAdapterError::InvalidInput))
     }
 
     #[cfg(test)]

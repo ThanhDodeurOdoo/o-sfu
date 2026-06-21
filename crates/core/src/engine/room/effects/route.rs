@@ -89,7 +89,7 @@ impl RoomRouteEffects {
             plan.push_consumer(consumer.control());
         }
 
-        let route_outcome = media_transport.apply_route_control(plan.ready()).await;
+        let route_outcome = media_transport.apply_route_control(plan.into_ready()).await;
         debug_assert_eq!(self.producers.len(), route_outcome.producers.len());
         debug_assert_eq!(self.consumers.len(), route_outcome.consumers.len());
 
@@ -151,10 +151,10 @@ impl ConsumerEffect {
                 let active = activity.active();
                 ConsumerRouteControl::new(target.transport_route().clone())
                     .activity(ConsumerActivity::from_active(active))
-                    .keyframe(target.request_keyframe_after_activity(active))
+                    .request_keyframe(target.request_keyframe_after_activity(active))
             }
             Self::Keyframe(target) => {
-                ConsumerRouteControl::new(target.transport_route().clone()).keyframe(true)
+                ConsumerRouteControl::new(target.transport_route().clone()).request_keyframe(true)
             }
             Self::Setup {
                 route,
@@ -162,12 +162,12 @@ impl ConsumerEffect {
                 keyframe,
             } => ConsumerRouteControl::new(route.clone())
                 .activity(ConsumerActivity::from_active(*active))
-                .keyframe(*keyframe),
+                .request_keyframe(*keyframe),
             Self::SourceSelection(selection) => {
                 let update = &selection.update;
                 let mut control =
                     ConsumerRouteControl::new(selection.target.transport_route().clone())
-                        .keyframe(update.request_keyframe);
+                        .request_keyframe(update.request_keyframe);
                 if update.route_activity_changed {
                     let active = update.policy_pause_reason.is_none();
                     control = control.activity(ConsumerActivity::from_active(active));

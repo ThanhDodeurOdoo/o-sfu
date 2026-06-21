@@ -148,12 +148,15 @@ async fn set_remote_relay_and_consumer_active(
         remote_consumer_media_id,
         TransportSourceKey::new(source_session.clone(), source_media_id),
     );
-    assert!(
-        adapter
-            .set_consumer_active(&route, ConsumerActivity::from_active(active))
-            .await
-            .is_ok()
+    let mut plan = RouteControlPlan::new();
+    plan.push_consumer(
+        ConsumerRouteControl::new(route).activity(ConsumerActivity::from_active(active)),
     );
+    let outcome = adapter.apply_route_control(plan.into_ready()).await;
+    let [consumer_outcome] = outcome.consumers.as_slice() else {
+        panic!("one consumer route-control outcome should be returned");
+    };
+    assert!(!consumer_outcome.activity_failed());
 }
 
 async fn assert_relay_target_counts(
@@ -321,13 +324,13 @@ async fn media_transport_route_control_plan_updates_source_route() {
         ConsumerRouteControl::new(route.clone())
             .packet_gate(SourcePacketGate::Rid("lo".into()))
             .activity(ConsumerActivity::Active)
-            .keyframe(true),
+            .request_keyframe(true),
     );
     plan.push_consumer(
         ConsumerRouteControl::new(missing_route).activity(ConsumerActivity::Inactive),
     );
 
-    let outcome = adapter.apply_route_control(plan.ready()).await;
+    let outcome = adapter.apply_route_control(plan.into_ready()).await;
 
     assert_eq!(
         outcome.receiver_bwe_targets,
