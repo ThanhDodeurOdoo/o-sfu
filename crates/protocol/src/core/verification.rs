@@ -7,41 +7,50 @@
 use super::{
     ConnectionState, INITIAL_RECOVERY_DELAY_MS, RECOVERY_TIMER_ID,
     connection_lifecycle::{
-        ConnectCommandSource, LifecycleCloseCause, LifecycleEffect, LifecycleEffects,
-        LifecycleModel, LifecyclePlan, RuntimeCleanupMode, connect_model, disconnect_model,
-        handle_recovery_timer_model, on_transport_ready_model, on_ws_close_model,
+        LifecycleAction, LifecycleCloseCause, LifecycleModel, LifecycleTransition, connect_model,
+        disconnect_model, handle_recovery_timer_model, on_transport_ready_model, on_ws_close_model,
     },
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VerificationLifecycleEffects {
-    connect_requested: bool,
+    connect_count: usize,
     recovery_timer_ms: Option<u32>,
+    recovery_timer_count: usize,
     close_websocket_code: Option<u16>,
     state_change: Option<(ConnectionState, Option<LifecycleCloseCause>)>,
-    close_peer_connection: bool,
+    close_peer_connection_count: usize,
     cancel_recovery_timer: bool,
 }
 
 impl VerificationLifecycleEffects {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        !self.connect_requested
-            && self.recovery_timer_ms.is_none()
+        self.connect_count == 0
+            && self.recovery_timer_count == 0
             && self.close_websocket_code.is_none()
             && self.state_change.is_none()
-            && !self.close_peer_connection
+            && self.close_peer_connection_count == 0
             && !self.cancel_recovery_timer
     }
 
     #[must_use]
     pub fn has_connect(&self) -> bool {
-        self.connect_requested
+        self.connect_count > 0
+    }
+
+    #[must_use]
+    pub fn connect_count(&self) -> usize {
+        self.connect_count
     }
 
     #[must_use]
     pub fn recovery_timer_count(&self, timer_id: u32) -> usize {
-        usize::from(timer_id == RECOVERY_TIMER_ID && self.recovery_timer_ms.is_some())
+        if timer_id == RECOVERY_TIMER_ID {
+            self.recovery_timer_count
+        } else {
+            0
+        }
     }
 
     #[must_use]
@@ -55,7 +64,12 @@ impl VerificationLifecycleEffects {
 
     #[must_use]
     pub fn has_close_peer_connection(&self) -> bool {
-        self.close_peer_connection
+        self.close_peer_connection_count > 0
+    }
+
+    #[must_use]
+    pub fn close_peer_connection_count(&self) -> usize {
+        self.close_peer_connection_count
     }
 }
 
@@ -83,13 +97,13 @@ impl VerificationConnectionLifecycle {
     }
 
     pub fn connect(&mut self) -> VerificationLifecycleEffects {
-        let plan = connect_model(&mut self.model);
-        self.apply_plan(&plan)
+        let transition = connect_model(&mut self.model);
+        self.apply_transition(&transition)
     }
 
     pub fn on_transport_ready(&mut self) -> VerificationLifecycleEffects {
-        let plan = on_transport_ready_model(&mut self.model);
-        self.apply_plan(&plan)
+        let transition = on_transport_ready_model(&mut self.model);
+        self.apply_transition(&transition)
     }
 
     pub fn on_welcome(&mut self) -> VerificationLifecycleEffects {
@@ -108,21 +122,21 @@ impl VerificationConnectionLifecycle {
     }
 
     pub fn disconnect(&mut self) -> VerificationLifecycleEffects {
-        let plan = disconnect_model(&mut self.model);
-        self.apply_plan(&plan)
+        let transition = disconnect_model(&mut self.model);
+        self.apply_transition(&transition)
     }
 
     pub fn on_ws_close(&mut self, close_code: u16) -> VerificationLifecycleEffects {
-        let plan = on_ws_close_model(&mut self.model, close_code);
-        self.apply_plan(&plan)
+        let transition = on_ws_close_model(&mut self.model, close_code);
+        self.apply_transition(&transition)
     }
 
     pub fn on_timer(&mut self, timer_id: u32) -> VerificationLifecycleEffects {
         if timer_id != RECOVERY_TIMER_ID {
             return VerificationLifecycleEffects::default();
         }
-        let plan = handle_recovery_timer_model(&mut self.model);
-        self.apply_plan(&plan)
+        let transition = handle_recovery_timer_model(&mut self.model);
+        self.apply_transition(&transition)
     }
 
     pub fn mark_sticky_state_present(&mut self) {
@@ -153,51 +167,44 @@ impl VerificationConnectionLifecycle {
         self.runtime_state_present
     }
 
-    fn apply_plan(&mut self, plan: &LifecyclePlan) -> VerificationLifecycleEffects {
-        if plan.clear_sticky_state {
-            self.sticky_state_present = false;
-        }
-        if !matches!(plan.runtime_cleanup_mode, RuntimeCleanupMode::None) {
-            self.runtime_state_present = false;
-        }
+    fn apply_transition(
+        &mut self,
+        transition: &LifecycleTransition,
+    ) -> VerificationLifecycleEffects {
         let mut effects = VerificationLifecycleEffects::default();
-        summarize_effects(&mut effects, &plan.effects_before_cleanup);
-        summarize_effects(&mut effects, &plan.effects_after_cleanup);
-        if !matches!(plan.connect_after_cleanup, ConnectCommandSource::None) {
-            effects.connect_requested = true;
+        for action in &transition.actions {
+            match *action {
+                LifecycleAction::StoreFreshConnectContext
+                | LifecycleAction::ClearConnectContext
+                | LifecycleAction::ClearWelcomeSnapshot => {}
+                LifecycleAction::ClearRuntimeStateSilently
+                | LifecycleAction::ClearRuntimeStateWithCommands => {
+                    self.runtime_state_present = false;
+                }
+                LifecycleAction::ClearStickyState => {
+                    self.sticky_state_present = false;
+                }
+                LifecycleAction::EmitStateChange { state, cause } => {
+                    effects.state_change = Some((state, cause));
+                }
+                LifecycleAction::ClosePeerConnection => {
+                    effects.close_peer_connection_count += 1;
+                }
+                LifecycleAction::CloseWebSocket { code } => {
+                    effects.close_websocket_code = Some(code);
+                }
+                LifecycleAction::ScheduleRecoveryTimer { ms } => {
+                    effects.recovery_timer_count += 1;
+                    effects.recovery_timer_ms = Some(ms);
+                }
+                LifecycleAction::CancelRecoveryTimer => {
+                    effects.cancel_recovery_timer = true;
+                }
+                LifecycleAction::EmitConnectCommand => {
+                    effects.connect_count += 1;
+                }
+            }
         }
         effects
-    }
-}
-
-fn summarize_effects(summary: &mut VerificationLifecycleEffects, effects: &LifecycleEffects) {
-    match effects {
-        LifecycleEffects::None => {}
-        LifecycleEffects::One(first) => summarize_effect(summary, *first),
-        LifecycleEffects::Three(first, second, third) => {
-            summarize_effect(summary, *first);
-            summarize_effect(summary, *second);
-            summarize_effect(summary, *third);
-        }
-    }
-}
-
-fn summarize_effect(summary: &mut VerificationLifecycleEffects, effect: LifecycleEffect) {
-    match effect {
-        LifecycleEffect::EmitStateChange { state, cause } => {
-            summary.state_change = Some((state, cause));
-        }
-        LifecycleEffect::ClosePeerConnection => {
-            summary.close_peer_connection = true;
-        }
-        LifecycleEffect::CloseWebSocket { code } => {
-            summary.close_websocket_code = Some(code);
-        }
-        LifecycleEffect::ScheduleRecoveryTimer { ms } => {
-            summary.recovery_timer_ms = Some(ms);
-        }
-        LifecycleEffect::CancelRecoveryTimer => {
-            summary.cancel_recovery_timer = true;
-        }
     }
 }

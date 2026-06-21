@@ -5,31 +5,7 @@ fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
-    let start_commands = core.start_recording(RecordingOptions {
-        audio: Some(true),
-        video: None,
-        transcription: None,
-    });
-    let [
-        Command::BeginPendingRequest {
-            request_id,
-            kind: PendingRequestKind::StartRecording,
-            timeout_timer_id,
-            timeout_ms: REQUEST_TIMEOUT_MS,
-        },
-        Command::ScheduleTimer {
-            id: flush_timer_id,
-            ms: 100,
-        },
-    ] = start_commands.as_slice()
-    else {
-        return Err(format!(
-            "expected recording request start, got {start_commands:?}"
-        ));
-    };
-    let request_id = request_id.clone();
-    let timeout_timer_id = *timeout_timer_id;
-    let _ = core.on_timer(*flush_timer_id);
+    let (request_id, timeout_timer_id) = start_flushed_recording_request(&mut core)?;
     let _ = core.on_transport_ready();
 
     let commands = core.disconnect();
@@ -68,6 +44,67 @@ fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
     let recording_state = serde_json::to_value(core.recording_state());
     assert_eq!(recording_state.unwrap_or_default(), empty_recording_json());
     Ok(())
+}
+
+#[test]
+fn protocol_core_terminal_close_resolves_request_before_recovery_cancel() -> Result<(), String> {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.on_welcome(sample_welcome_payload());
+    let (request_id, timeout_timer_id) = start_flushed_recording_request(&mut core)?;
+    let _ = core.on_transport_ready();
+
+    let commands = core.on_ws_close(u16::from(WebSocketCloseCode::ProtocolError));
+
+    assert_eq!(core.state(), ConnectionState::Closed);
+    assert_eq!(
+        commands,
+        vec![
+            Command::CancelTimer {
+                id: timeout_timer_id,
+            },
+            Command::ResolvePendingRequest {
+                request_id,
+                ok: false,
+            },
+            Command::CancelTimer {
+                id: RECOVERY_TIMER_ID,
+            },
+            Command::ClosePeerConnection,
+            Command::EmitStateChange {
+                state: ConnectionState::Closed,
+                cause: None,
+            },
+        ]
+    );
+    Ok(())
+}
+
+fn start_flushed_recording_request(core: &mut ProtocolCore) -> Result<(RequestId, u32), String> {
+    let start_commands = core.start_recording(RecordingOptions {
+        audio: Some(true),
+        video: None,
+        transcription: None,
+    });
+    let [
+        Command::BeginPendingRequest {
+            request_id,
+            kind: PendingRequestKind::StartRecording,
+            timeout_timer_id,
+            timeout_ms: REQUEST_TIMEOUT_MS,
+        },
+        Command::ScheduleTimer {
+            id: flush_timer_id,
+            ms: 100,
+        },
+    ] = start_commands.as_slice()
+    else {
+        return Err(format!(
+            "expected recording request start, got {start_commands:?}"
+        ));
+    };
+    let _ = core.on_timer(*flush_timer_id);
+    Ok((request_id.clone(), *timeout_timer_id))
 }
 
 #[test]
