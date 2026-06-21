@@ -198,15 +198,18 @@ impl DecoderRefreshCodec {
     }
 
     fn from_h264_format(format: &o_sfu_router::MediaFormat) -> Self {
-        let packetization_mode = format
+        let mode = format
             .settings()
             .find_map(|setting| match setting {
                 o_sfu_router::CodecSetting::H264PacketizationMode(mode) => Some(*mode),
                 _ => None,
             })
-            .unwrap_or(rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
-        rtp::h264::PacketizationMode::from_fmtp_value(packetization_mode)
-            .map_or(Self::Unsupported, Self::H264)
+            .unwrap_or(rtp::h264::PacketizationMode::SingleNalUnit);
+        match mode {
+            rtp::h264::PacketizationMode::SingleNalUnit
+            | rtp::h264::PacketizationMode::NonInterleaved => Self::H264(mode),
+            rtp::h264::PacketizationMode::Interleaved => Self::Unsupported,
+        }
     }
 }
 

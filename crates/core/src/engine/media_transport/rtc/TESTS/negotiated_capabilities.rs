@@ -25,7 +25,9 @@ fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
             let packetization_mode = codec
                 .settings()
                 .find_map(|setting| match setting {
-                    o_sfu_router::CodecSetting::H264PacketizationMode(mode) => Some(*mode),
+                    o_sfu_router::CodecSetting::H264PacketizationMode(mode) => {
+                        Some(mode.fmtp_value())
+                    }
                     _ => None,
                 })
                 .unwrap_or(u8::MAX);
@@ -85,4 +87,18 @@ fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
         })
         .collect::<BTreeSet<_>>();
     assert!(optional_payload_types.is_subset(&rtx_associations));
+}
+
+#[test]
+fn answer_projection_rejects_rtcp_mux_forbidden_payload_types() {
+    let invalid_answer = CHROMIUM_OPTIONAL_CODECS_ANSWER
+        .replace(
+            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+            "m=video 9 UDP/TLS/RTP/SAVPF 72",
+        )
+        .replace("a=rtpmap:96 VP8/90000", "a=rtpmap:72 VP8/90000")
+        .replace("a=rtcp-fb:96", "a=rtcp-fb:72")
+        .replace("a=fmtp:97 apt=96", "a=fmtp:97 apt=72");
+
+    assert!(client_rtp_capabilities_from_answer(&invalid_answer).is_none());
 }

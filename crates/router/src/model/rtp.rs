@@ -38,6 +38,7 @@
 use std::borrow::Cow;
 
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
+pub use rfc_rtp::PayloadType;
 
 use super::MediaKind;
 
@@ -88,53 +89,6 @@ impl RtcpFeedback {
     #[must_use]
     pub fn parameter(&self) -> Option<&str> {
         self.parameter.as_deref()
-    }
-}
-
-/// 7-bit identifier that maps an RTP packet to a specific negotiated codec format.
-///
-/// In modern WebRTC, these are usually "dynamic" (range 96-127), meaning their
-/// meaning is defined locally by the SDP for the duration of the session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PayloadType(u8);
-
-impl PayloadType {
-    #[must_use]
-    pub const fn try_new(value: u8) -> Option<Self> {
-        if rfc_rtp::is_rtcp_mux_payload_type(value) {
-            Some(Self(value))
-        } else {
-            None
-        }
-    }
-
-    /// Builds a payload type for the muxed RTP sessions used by `o-sfu`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `value` does not fit the RTP payload type field or is in the
-    /// RTP/RTCP mux forbidden range from RFC 5761 section 4.
-    #[must_use]
-    pub const fn new(value: u8) -> Self {
-        assert!(rfc_rtp::is_rtcp_mux_payload_type(value));
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn value(self) -> u8 {
-        self.0
-    }
-}
-
-impl From<u8> for PayloadType {
-    fn from(value: u8) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<PayloadType> for u8 {
-    fn from(value: PayloadType) -> Self {
-        value.value()
     }
 }
 
@@ -300,8 +254,8 @@ impl From<HeaderExtensionId> for u8 {
 pub enum CodecSetting {
     /// Associated payload type for RTX (RFC 4588)
     RtxAssociation(PayloadType),
-    /// H264-specific packetization mode (mode 0 or 1)
-    H264PacketizationMode(u8),
+    /// h264-specific packetization mode
+    H264PacketizationMode(rfc_rtp::h264::PacketizationMode),
     /// H264 profile and level (e.g. "42e01f" for Constrained Baseline Level 3.1)
     H264ProfileLevelId(String),
     /// VP9-specific profile identifier
@@ -329,7 +283,7 @@ impl CodecSetting {
     pub fn wire_value(&self) -> Cow<'_, str> {
         match self {
             Self::RtxAssociation(payload_type) => Cow::Owned(payload_type.value().to_string()),
-            Self::H264PacketizationMode(mode) => Cow::Owned(mode.to_string()),
+            Self::H264PacketizationMode(mode) => Cow::Owned(mode.fmtp_value().to_string()),
             Self::H264ProfileLevelId(profile_level_id) => Cow::Borrowed(profile_level_id.as_str()),
             Self::Vp9ProfileId(profile_id) => Cow::Owned(profile_id.to_string()),
             Self::UseInBandFec(enabled) => Cow::Borrowed(if *enabled {
@@ -432,8 +386,8 @@ impl MediaCodecCapability {
     }
 
     #[must_use]
-    pub fn with_payload_type(mut self, payload_type: impl Into<PayloadType>) -> Self {
-        self.payload_type = Some(payload_type.into());
+    pub fn with_payload_type(mut self, payload_type: PayloadType) -> Self {
+        self.payload_type = Some(payload_type);
         self
     }
 
@@ -569,13 +523,13 @@ impl MediaFormat {
     pub fn new(
         media_kind: MediaKind,
         codec: impl Into<MediaCodec>,
-        payload_type: impl Into<PayloadType>,
+        payload_type: PayloadType,
         clock_rate: u32,
     ) -> Self {
         Self {
             media_kind,
             codec: codec.into(),
-            payload_type: payload_type.into(),
+            payload_type,
             clock_rate,
             channels: None,
             settings: Vec::new(),
@@ -701,8 +655,8 @@ impl StreamBinding {
     }
 
     #[must_use]
-    pub fn with_payload_type(mut self, payload_type: impl Into<PayloadType>) -> Self {
-        self.payload_type = Some(payload_type.into());
+    pub fn with_payload_type(mut self, payload_type: PayloadType) -> Self {
+        self.payload_type = Some(payload_type);
         self
     }
 
@@ -814,10 +768,14 @@ fn codec_setting_from_wire(key: String, value: String) -> CodecSetting {
                 CodecSetting::Other { key, value },
                 CodecSetting::RtxAssociation,
             ),
-        rfc_rtp::fmtp::H264_PACKETIZATION_MODE => value.parse::<u8>().map_or(
-            CodecSetting::Other { key, value },
-            CodecSetting::H264PacketizationMode,
-        ),
+        rfc_rtp::fmtp::H264_PACKETIZATION_MODE => value
+            .parse::<u8>()
+            .ok()
+            .and_then(rfc_rtp::h264::PacketizationMode::from_fmtp_value)
+            .map_or_else(
+                || CodecSetting::Other { key, value },
+                CodecSetting::H264PacketizationMode,
+            ),
         rfc_rtp::fmtp::H264_PROFILE_LEVEL_ID => CodecSetting::H264ProfileLevelId(value),
         rfc_rtp::fmtp::VP9_PROFILE_ID => value.parse::<u8>().map_or(
             CodecSetting::Other { key, value },

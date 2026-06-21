@@ -5,13 +5,13 @@
 //! browser, and repair-mode support must pass through this boundary before the
 //! RTC edge exposes RID simulcast metadata for it.
 
-use o_sfu_rfc::rtp as rfc_rtp;
+use o_sfu_rfc::rtp::{self as rfc_rtp, h264::PacketizationMode};
 use o_sfu_router::{CodecSetting, MediaFormat, MediaStream as RouterRtpParameters};
 
 use super::common::{self, SimulcastLayerSpec};
 use crate::{VideoBitrateLimits, engine::media_transport::SessionUploadEncoding};
 
-const CHROMIUM_PACKETIZATION_MODE: u8 = 1;
+const CHROMIUM_PACKETIZATION_MODE: PacketizationMode = PacketizationMode::NonInterleaved;
 const CHROMIUM_CONSTRAINED_BASELINE_PROFILE_LEVEL_ID: &str = "42e01f";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

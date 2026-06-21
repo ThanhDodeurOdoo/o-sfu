@@ -1,9 +1,9 @@
 use std::net::SocketAddr;
 
-use o_sfu_rfc::rtp::CodecName;
+use o_sfu_rfc::rtp::{CodecName, h264::PacketizationMode};
 use o_sfu_router::{
     CodecSetting, MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
-    StreamBinding,
+    PayloadType, StreamBinding,
 };
 use str0m::media::{Mid, Rid};
 
@@ -114,7 +114,7 @@ fn forwarded_packet_facts_detect_h264_idr_for_decoder_refresh() {
         vec![MediaFormat::new(
             RouterMediaKind::Video,
             CodecName::H264,
-            102,
+            PayloadType::new(102),
             90_000,
         )],
         vec![],
@@ -146,8 +146,15 @@ fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
     let stap_a_idr = &[0x78, 0x00, 0x02, 0x65, 0x88];
     let mode_0_parameters = RouterRtpParameters::new(
         vec![
-            MediaFormat::new(RouterMediaKind::Video, CodecName::H264, 102, 90_000)
-                .with_setting(CodecSetting::H264PacketizationMode(0)),
+            MediaFormat::new(
+                RouterMediaKind::Video,
+                CodecName::H264,
+                PayloadType::new(102),
+                90_000,
+            )
+            .with_setting(CodecSetting::H264PacketizationMode(
+                PacketizationMode::SingleNalUnit,
+            )),
         ],
         vec![],
         vec![],
@@ -165,8 +172,15 @@ fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
 
     let mode_1_parameters = RouterRtpParameters::new(
         vec![
-            MediaFormat::new(RouterMediaKind::Video, CodecName::H264, 102, 90_000)
-                .with_setting(CodecSetting::H264PacketizationMode(1)),
+            MediaFormat::new(
+                RouterMediaKind::Video,
+                CodecName::H264,
+                PayloadType::new(102),
+                90_000,
+            )
+            .with_setting(CodecSetting::H264PacketizationMode(
+                PacketizationMode::NonInterleaved,
+            )),
         ],
         vec![],
         vec![],
@@ -194,7 +208,7 @@ fn forwarded_packet_facts_detect_relayed_h264_idr_from_source_media_id() {
             vec![MediaFormat::new(
                 RouterMediaKind::Video,
                 CodecName::H264,
-                102,
+                PayloadType::new(102),
                 90_000,
             )],
             vec![],

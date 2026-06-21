@@ -5,12 +5,15 @@
 //! into router-native RTP parameters and keeps the producer SSRC indexes aligned
 //! with those negotiated bindings.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem,
+};
 
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
     HeaderExtension as RouterHeaderExtension, MediaFormat as RouterMediaFormat,
-    MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, RtcpFeedback,
+    MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, PayloadType, RtcpFeedback,
     RtcpFeedbackKind, StreamBinding,
 };
 use str0m::{
@@ -32,9 +35,10 @@ use super::{
     },
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
-#[cfg(test)]
-use crate::engine::media_transport::TransportAdapterError;
-use crate::{Bitrate, engine::media_transport::TransportSessionKey};
+use crate::{
+    Bitrate,
+    engine::media_transport::{TransportAdapterError, TransportSessionKey},
+};
 
 pub(super) struct AnswerProducerProjection {
     mid: Mid,
@@ -78,12 +82,12 @@ pub(super) fn refresh_negotiated_producer_parameters(
     answer_projection: Vec<AnswerProducerProjection>,
     rids_by_mid: &BTreeMap<Mid, Vec<simulcast::NegotiatedRid>>,
     max_bitrate_in: Bitrate,
-) -> Vec<(Mid, RouterRtpParameters)> {
+) -> Result<Vec<(Mid, RouterRtpParameters)>, TransportAdapterError> {
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
     let producer_mid_set = producer_mids.iter().copied().collect::<BTreeSet<_>>();
     {
         let Some(session_state) = state.users.get_mut(session_key) else {
-            return refreshed_parameters;
+            return Ok(refreshed_parameters);
         };
         session_state
             .sdp_negotiation
@@ -104,11 +108,11 @@ pub(super) fn refresh_negotiated_producer_parameters(
             else {
                 continue;
             };
-            if media_line.payload_params.is_empty() {
+            let Some(primary_payload) = media_line.payload_params.first() else {
                 continue;
-            }
-            let primary_payload_type = media_line.payload_params.first().map(|params| *params.pt());
-            let formats = project_media_formats(media_kind, &media_line.payload_params);
+            };
+            let primary_payload_type = router_payload_type(*primary_payload.pt())?;
+            let formats = project_media_formats(media_kind, &media_line.payload_params)?;
             let rids = rids_by_mid.get(&mid).map(Vec::as_slice).unwrap_or_default();
             let bindings = project_bindings(
                 session_state,
@@ -136,7 +140,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
     for (mid, parameters) in &refreshed_parameters {
         state.refresh_producer_ssrcs(session_key, *mid, parameters);
     }
-    refreshed_parameters
+    Ok(refreshed_parameters)
 }
 
 fn build_projected_parameters(
@@ -230,12 +234,13 @@ pub(super) fn worker_resolve_negotiated_producer_parameters(
 fn project_media_format(
     media_kind: RouterMediaKind,
     payload_params: &PayloadParams,
-) -> RouterMediaFormat {
+) -> Result<RouterMediaFormat, TransportAdapterError> {
     let spec = payload_params.spec();
+    let pt = router_payload_type(*payload_params.pt())?;
     let mut format = RouterMediaFormat::new(
         media_kind,
         spec.codec.to_string(),
-        *payload_params.pt(),
+        pt,
         spec.clock_rate.get(),
     );
     if let Some(channels) = spec.channels {
@@ -245,29 +250,30 @@ fn project_media_format(
     for feedback in rtcp_feedback(payload_params) {
         format = format.with_rtcp_feedback(feedback);
     }
-    format
+    Ok(format)
 }
 
 fn project_media_formats(
     media_kind: RouterMediaKind,
     payload_params: &[PayloadParams],
-) -> Vec<RouterMediaFormat> {
+) -> Result<Vec<RouterMediaFormat>, TransportAdapterError> {
     let mut formats = Vec::with_capacity(payload_params.len().saturating_mul(2));
     for params in payload_params {
-        formats.push(project_media_format(media_kind, params));
+        formats.push(project_media_format(media_kind, params)?);
         if let Some(resend_payload_type) = params.resend() {
+            let pt = router_payload_type(*resend_payload_type)?;
             formats.push(
                 RouterMediaFormat::new(
                     media_kind,
                     rfc_rtp::codec_name::RTX,
-                    *resend_payload_type,
+                    pt,
                     params.spec().clock_rate.get(),
                 )
                 .with_parameter(rfc_rtp::fmtp::RTX_ASSOCIATION, params.pt().to_string()),
             );
         }
     }
-    formats
+    Ok(formats)
 }
 
 fn apply_codec_parameters(mut format: RouterMediaFormat, format_params: &str) -> RouterMediaFormat {
@@ -314,7 +320,7 @@ fn project_header_extension((id, extension): (u8, &Extension)) -> RouterHeaderEx
 fn project_bindings(
     session_state: &mut RtcSessionState,
     mid: Mid,
-    primary_payload_type: Option<u8>,
+    primary_payload_type: PayloadType,
     rids: &[simulcast::NegotiatedRid],
     primary_ssrcs: &[u32],
 ) -> Vec<StreamBinding> {
@@ -322,10 +328,9 @@ fn project_bindings(
         let mut bindings = rids
             .iter()
             .map(|rid| {
-                let mut binding = StreamBinding::new().with_rid(rid.rid.to_string());
-                if let Some(payload_type) = primary_payload_type {
-                    binding = binding.with_payload_type(payload_type);
-                }
+                let mut binding = StreamBinding::new()
+                    .with_rid(rid.rid.to_string())
+                    .with_payload_type(primary_payload_type);
                 if let Some(max_bitrate) = rid.max_bitrate {
                     binding = binding.with_max_bitrate(max_bitrate.as_bps());
                 }
@@ -343,7 +348,7 @@ fn project_bindings(
             if let Some(ssrc) = fallback_ssrc
                 && let Some(first_binding) = bindings.first_mut()
             {
-                *first_binding = first_binding.clone().with_ssrc(ssrc);
+                *first_binding = mem::take(first_binding).with_ssrc(ssrc);
             }
         }
         return bindings;
@@ -353,21 +358,19 @@ fn project_bindings(
         .iter()
         .copied()
         .map(|ssrc| {
-            let mut binding = StreamBinding::new().with_ssrc(ssrc);
-            if let Some(payload_type) = primary_payload_type {
-                binding = binding.with_payload_type(payload_type);
-            }
-            binding
+            StreamBinding::new()
+                .with_ssrc(ssrc)
+                .with_payload_type(primary_payload_type)
         })
         .collect::<Vec<_>>();
     if bindings.is_empty()
         && let Some(ssrc) = stream_rx_ssrc(session_state, mid, None)
     {
-        let mut binding = StreamBinding::new().with_ssrc(ssrc);
-        if let Some(payload_type) = primary_payload_type {
-            binding = binding.with_payload_type(payload_type);
-        }
-        bindings.push(binding);
+        bindings.push(
+            StreamBinding::new()
+                .with_ssrc(ssrc)
+                .with_payload_type(primary_payload_type),
+        );
     }
     bindings
 }
@@ -385,4 +388,8 @@ fn to_router_media_kind(media_kind: Str0mMediaKind) -> RouterMediaKind {
         Str0mMediaKind::Audio => RouterMediaKind::Audio,
         Str0mMediaKind::Video => RouterMediaKind::Video,
     }
+}
+
+fn router_payload_type(value: u8) -> Result<PayloadType, TransportAdapterError> {
+    PayloadType::try_new(value).ok_or(TransportAdapterError::InvalidInput)
 }

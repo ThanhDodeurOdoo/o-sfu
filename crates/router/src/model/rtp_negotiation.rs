@@ -440,20 +440,13 @@ fn h264_critical_settings_match(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
 ) -> bool {
-    let format_packetization_mode = format
-        .settings()
-        .find_map(|setting| match setting {
-            CodecSetting::H264PacketizationMode(mode) => Some(*mode),
-            _ => None,
-        })
-        .unwrap_or(rfc_rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
-    let capability_packetization_mode = capability_format
-        .settings()
-        .find_map(|setting| match setting {
-            CodecSetting::H264PacketizationMode(mode) => Some(*mode),
-            _ => None,
-        })
-        .unwrap_or(rfc_rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE);
+    let Some(format_packetization_mode) = h264_packetization_mode(format.settings()) else {
+        return false;
+    };
+    let Some(capability_packetization_mode) = h264_packetization_mode(capability_format.settings())
+    else {
+        return false;
+    };
     // RFC 6184 section 8.2.2 requires packetization-mode compatibility, mismatched packetization
     // modes describe different wire behaviors and are therefore rejected.
     if format_packetization_mode != capability_packetization_mode {
@@ -485,6 +478,23 @@ fn h264_critical_settings_match(
     };
     parsed_format_profile_level_id.profile() == parsed_capability_profile_level_id.profile()
         && parsed_format_profile_level_id.level() <= parsed_capability_profile_level_id.level()
+}
+
+fn h264_packetization_mode<'a>(
+    settings: impl Iterator<Item = &'a CodecSetting>,
+) -> Option<rfc_rtp::h264::PacketizationMode> {
+    for setting in settings {
+        match setting {
+            CodecSetting::H264PacketizationMode(mode) => return Some(*mode),
+            CodecSetting::Other { key, .. } if key == rfc_rtp::fmtp::H264_PACKETIZATION_MODE => {
+                return None;
+            }
+            _ => {}
+        }
+    }
+    rfc_rtp::h264::PacketizationMode::from_fmtp_value(
+        rfc_rtp::fmtp::H264_DEFAULT_PACKETIZATION_MODE,
+    )
 }
 
 fn vp9_critical_settings_match(

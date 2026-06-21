@@ -1,5 +1,7 @@
-use o_sfu_rfc::{rtp as rfc_rtp, webrtc};
-use o_sfu_router::{CodecSetting, MediaFormat, MediaKind as RouterMediaKind, StreamBinding};
+use o_sfu_rfc::{rtp as rfc_rtp, rtp::h264::PacketizationMode, webrtc};
+use o_sfu_router::{
+    CodecSetting, MediaFormat, MediaKind as RouterMediaKind, PayloadType, StreamBinding,
+};
 use str0m::media::{MediaKind, Rid as Str0mRid};
 
 use super::*;
@@ -236,7 +238,7 @@ fn answer_send_rid_projection_rejects_extra_simulcast_streams() {
 
 #[test]
 fn h264_and_vp8_profiles_are_promoted_simulcast_publication_paths() {
-    let h264 = h264_parameters(1, "42e01f");
+    let h264 = h264_parameters(PacketizationMode::NonInterleaved, "42e01f");
 
     assert!(publish_recv_simulcast(MediaKind::Video, &h264).is_some());
     assert_eq!(
@@ -281,7 +283,7 @@ fn h264_and_vp8_profiles_are_promoted_simulcast_publication_paths() {
 
 #[test]
 fn h264_profile_accepts_only_the_promoted_chromium_matrix() {
-    let parameters = h264_parameters(1, "42E01F");
+    let parameters = h264_parameters(PacketizationMode::NonInterleaved, "42E01F");
     let profile = SimulcastCodecProfile::publish(
         MediaKind::Video,
         &parameters,
@@ -300,10 +302,10 @@ fn h264_profile_accepts_only_the_promoted_chromium_matrix() {
         common::default_layer_specs(VideoBitrateLimits::default())
     );
     for parameters in [
-        h264_parameters(0, "42e01f"),
-        h264_parameters(1, "42001f"),
-        h264_parameters(1, "4d001f"),
-        h264_parameters(1, "4de01f"),
+        h264_parameters(PacketizationMode::SingleNalUnit, "42e01f"),
+        h264_parameters(PacketizationMode::NonInterleaved, "42001f"),
+        h264_parameters(PacketizationMode::NonInterleaved, "4d001f"),
+        h264_parameters(PacketizationMode::NonInterleaved, "4de01f"),
     ] {
         assert!(
             publish_upload_encodings(MediaKind::Video, &parameters).is_empty(),
@@ -344,17 +346,20 @@ fn vp8_parameters() -> RouterRtpParameters {
     video_parameters(MediaFormat::new(
         RouterMediaKind::Video,
         rfc_rtp::CodecName::Vp8,
-        96,
+        PayloadType::new(96),
         90_000,
     ))
 }
 
-fn h264_parameters(packetization_mode: u8, profile_level_id: &str) -> RouterRtpParameters {
+fn h264_parameters(
+    packetization_mode: PacketizationMode,
+    profile_level_id: &str,
+) -> RouterRtpParameters {
     video_parameters(
         MediaFormat::new(
             RouterMediaKind::Video,
             rfc_rtp::CodecName::H264,
-            102,
+            PayloadType::new(102),
             90_000,
         )
         .with_setting(CodecSetting::H264PacketizationMode(packetization_mode))
