@@ -166,10 +166,14 @@ pub struct ConsumerPacketGateCommand {
 
 impl ConsumerPacketGateCommand {
     pub fn from_update(update: &ConsumerPacketGateUpdate) -> Self {
+        Self::from_route(update.route(), update.packet_gate())
+    }
+
+    pub fn from_route(route: &TransportConsumerRoute, packet_gate: &SourcePacketGate) -> Self {
         Self::new(
-            update.route().consumer_session_key().clone(),
-            update.route().consumer_transport_media_id(),
-            packet_layer_gate(update.packet_gate()),
+            route.consumer_session_key().clone(),
+            route.consumer_transport_media_id(),
+            packet_layer_gate(packet_gate),
         )
     }
 
@@ -213,10 +217,6 @@ pub enum RouteControlRequest {
         route: TransportConsumerRoute,
         active: bool,
     },
-    SetConsumerPacketGate {
-        route: TransportConsumerRoute,
-        packet_gate: PacketLayerGate,
-    },
     RequestConsumerKeyframe {
         route: TransportConsumerRoute,
     },
@@ -245,18 +245,6 @@ pub enum RouteControlRequest {
         target_id: RelayTargetId,
         packet_gate: PacketLayerGate,
     },
-}
-
-impl RouteControlRequest {
-    pub fn set_consumer_packet_gate(
-        route: TransportConsumerRoute,
-        packet_gate: &SourcePacketGate,
-    ) -> Self {
-        Self::SetConsumerPacketGate {
-            route,
-            packet_gate: packet_layer_gate(packet_gate),
-        }
-    }
 }
 
 fn packet_layer_gate(packet_gate: &SourcePacketGate) -> PacketLayerGate {

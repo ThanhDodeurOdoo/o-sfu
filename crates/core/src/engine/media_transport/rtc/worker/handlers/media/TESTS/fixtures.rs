@@ -8,12 +8,14 @@ use std::time::Instant;
 use str0m::media::{Mid, Rid};
 use tokio::sync::{mpsc, oneshot};
 
-use super::super::{apply_route_control_request, observe_src_rid_ready};
+use super::super::{
+    apply_route_control_request, observe_src_rid_ready, respond_set_consumer_pkt_gates,
+};
 use crate::engine::{
     media_transport::{
         TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
         rtc::{
-            commands::{RouteControlRequest, RtcWorkerCommand},
+            commands::{ConsumerPacketGateCommand, RouteControlRequest, RtcWorkerCommand},
             relay_registry::RelayTargetId,
             route_control::PacketLayerGate,
             state::PacketLoopState,
@@ -50,10 +52,30 @@ pub(super) fn request_consumer_keyframe(
         state,
         metrics,
         RouteControlRequest::RequestConsumerKeyframe { route },
-        Instant::now(),
         Some(response_tx),
     );
     assert_eq!(expect_response(response_rx), Ok(()));
+}
+
+pub(super) fn set_consumer_packet_gate_at(
+    state: &mut PacketLoopState,
+    route: &TransportConsumerRoute,
+    packet_gate: PacketLayerGate,
+    now: Instant,
+) {
+    let (response_tx, response_rx) = oneshot::channel();
+    respond_set_consumer_pkt_gates(
+        state,
+        route.source(),
+        vec![ConsumerPacketGateCommand::new(
+            route.consumer_session_key().clone(),
+            route.consumer_transport_media_id(),
+            packet_gate,
+        )],
+        now,
+        response_tx,
+    );
+    assert_eq!(expect_response(response_rx), Ok(vec![Ok(())]));
 }
 
 pub(super) struct LocalVideoRoute {
@@ -318,19 +340,12 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
         consumer_media,
         TransportSourceKey::new(source_session.clone(), src_media),
     );
-    let command_now = Instant::now();
-    let (response_tx, response_rx) = oneshot::channel();
-    apply_route_control_request(
+    set_consumer_packet_gate_at(
         &mut state,
-        &metrics,
-        RouteControlRequest::SetConsumerPacketGate {
-            route,
-            packet_gate: PacketLayerGate::Rid(selected_rid),
-        },
-        command_now,
-        Some(response_tx),
+        &route,
+        PacketLayerGate::Rid(selected_rid),
+        Instant::now(),
     );
-    assert_eq!(expect_response(response_rx), Ok(()));
     PendingSelectedRidRoute {
         state,
         metrics,

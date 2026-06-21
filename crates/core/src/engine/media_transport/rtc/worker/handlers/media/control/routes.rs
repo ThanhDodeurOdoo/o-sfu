@@ -270,24 +270,6 @@ pub(super) fn worker_set_consumer_active(
     update_consumer_route(state, route, ConsumerRouteMutation::Active(active)).map(|_| ())
 }
 
-pub(super) fn worker_set_consumer_pkt_gate(
-    state: &mut PacketLoopState,
-    route: &TransportConsumerRoute,
-    packet_gate: PacketLayerGate,
-    now: Instant,
-) -> Result<(), TransportAdapterError> {
-    update_consumer_route(
-        state,
-        route,
-        ConsumerRouteMutation::PacketGate {
-            packet_gate,
-            now,
-            refresh: ConsumerGateRefresh::Immediate,
-        },
-    )
-    .map(|_| ())
-}
-
 pub(super) fn worker_set_consumer_pkt_gates(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
@@ -303,11 +285,7 @@ pub(super) fn worker_set_consumer_pkt_gates(
         match update_consumer_route(
             state,
             &route,
-            ConsumerRouteMutation::PacketGate {
-                packet_gate,
-                now,
-                refresh: ConsumerGateRefresh::Deferred,
-            },
+            ConsumerRouteMutation::PacketGate { packet_gate, now },
         ) {
             Ok(route_changed) => {
                 changed |= route_changed;
@@ -338,14 +316,7 @@ enum ConsumerRouteMutation {
     PacketGate {
         packet_gate: PacketLayerGate,
         now: Instant,
-        refresh: ConsumerGateRefresh,
     },
-}
-
-#[derive(Clone, Copy)]
-enum ConsumerGateRefresh {
-    Immediate,
-    Deferred,
 }
 
 fn update_consumer_route(
@@ -382,33 +353,17 @@ fn update_consumer_route(
             consumer_media,
             active,
         ),
-        ConsumerRouteMutation::PacketGate {
-            packet_gate,
-            now,
-            refresh,
-        } => {
+        ConsumerRouteMutation::PacketGate { packet_gate, now } => {
             let (packet_gate, pending_gate) =
                 selected_rid::guarded_pkt_gate(state, src_media, packet_gate, now);
-            match refresh {
-                ConsumerGateRefresh::Immediate => state.routes.set_consumer_pkt_gate(
-                    src_media,
-                    dst_idx,
-                    consumer_key,
-                    consumer_media,
-                    packet_gate,
-                    pending_gate,
-                ),
-                ConsumerGateRefresh::Deferred => {
-                    state.routes.set_consumer_pkt_gate_without_refresh(
-                        src_media,
-                        dst_idx,
-                        consumer_key,
-                        consumer_media,
-                        packet_gate,
-                        pending_gate,
-                    )
-                }
-            }
+            state.routes.set_consumer_pkt_gate(
+                src_media,
+                dst_idx,
+                consumer_key,
+                consumer_media,
+                packet_gate,
+                pending_gate,
+            )
         }
     }
 }

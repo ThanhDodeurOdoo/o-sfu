@@ -2,17 +2,15 @@
 
 use std::time::Instant;
 
-use tokio::sync::oneshot;
-
 use super::{
     super::keyframe::{worker_request_consumer_kf, worker_request_remote_kf},
     routes,
 };
 use crate::engine::{
     media_transport::{
-        TransportAdapterError, TransportResult, TransportSourceKey,
+        TransportResult, TransportSourceKey,
         rtc::{
-            commands::{ConsumerPacketGateCommand, RouteControlRequest},
+            commands::{ConsumerPacketGateCommand, RouteControlRequest, RtcWorkerResponse},
             state::PacketLoopState,
         },
     },
@@ -23,8 +21,7 @@ pub fn apply_route_control_request(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,
     request: RouteControlRequest,
-    now: Instant,
-    response: Option<oneshot::Sender<Result<(), TransportAdapterError>>>,
+    response: Option<RtcWorkerResponse<()>>,
 ) {
     let result = match request {
         RouteControlRequest::SetProducerActive { source, active } => {
@@ -32,9 +29,6 @@ pub fn apply_route_control_request(
         }
         RouteControlRequest::SetConsumerActive { route, active } => {
             routes::worker_set_consumer_active(state, &route, active)
-        }
-        RouteControlRequest::SetConsumerPacketGate { route, packet_gate } => {
-            routes::worker_set_consumer_pkt_gate(state, &route, packet_gate, now)
         }
         RouteControlRequest::RequestConsumerKeyframe { route } => {
             worker_request_consumer_kf(state, metrics, &route)
@@ -84,7 +78,7 @@ pub fn respond_set_consumer_pkt_gates(
     source: &TransportSourceKey,
     updates: Vec<ConsumerPacketGateCommand>,
     now: Instant,
-    response: oneshot::Sender<TransportResult<Vec<TransportResult<()>>>>,
+    response: RtcWorkerResponse<Vec<TransportResult<()>>>,
 ) {
     let _ = response.send(Ok(routes::worker_set_consumer_pkt_gates(
         state, source, updates, now,

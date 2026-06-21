@@ -288,7 +288,7 @@ fn handle_media_route_control_command(
 ) {
     match command {
         RtcMediaControlCommand::Apply { request, response } => {
-            media::apply_route_control_request(state, metrics, request, now, response);
+            media::apply_route_control_request(state, metrics, request, response);
         }
         RtcMediaControlCommand::SetConsumerPacketGateBatch {
             source,

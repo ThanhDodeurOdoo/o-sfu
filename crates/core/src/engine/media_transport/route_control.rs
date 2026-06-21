@@ -1,9 +1,12 @@
 use std::marker::PhantomData;
 
+use tracing::{debug, warn};
+
 use super::{
     ConsumerActivity, ConsumerPacketGateUpdate, MediaTransport, ProducerActivity,
-    ReceiverBweTargetUpdate, SourcePacketGate, TransportAdapterError, TransportConsumerRoute,
-    TransportResult, TransportSourceKey,
+    ReceiverBweTargetUpdate, SourcePacketGate, TransportAdapterError, TransportCommandOp,
+    TransportConsumerRoute, TransportResult, TransportSourceKey,
+    rtc::{RouteControlRequest, RtcWorkerCommand},
 };
 
 #[derive(Debug)]
@@ -44,7 +47,7 @@ impl RouteControlPlan<Draft> {
         self.receiver_bwe_targets = updates;
     }
 
-    pub(crate) fn ready(self) -> RouteControlPlan<Ready> {
+    pub(crate) fn into_ready(self) -> RouteControlPlan<Ready> {
         RouteControlPlan {
             producers: self.producers,
             consumers: self.consumers,
@@ -54,18 +57,18 @@ impl RouteControlPlan<Draft> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ProducerRouteControl {
     source: TransportSourceKey,
     activity: ProducerActivity,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ConsumerRouteControl {
     route: TransportConsumerRoute,
     packet_gate: Option<SourcePacketGate>,
     activity: Option<ConsumerActivity>,
-    keyframe: bool,
+    request_keyframe: bool,
 }
 
 impl ConsumerRouteControl {
@@ -74,7 +77,7 @@ impl ConsumerRouteControl {
             route,
             packet_gate: None,
             activity: None,
-            keyframe: false,
+            request_keyframe: false,
         }
     }
 
@@ -88,8 +91,8 @@ impl ConsumerRouteControl {
         self
     }
 
-    pub(crate) const fn keyframe(mut self, keyframe: bool) -> Self {
-        self.keyframe = keyframe;
+    pub(crate) const fn request_keyframe(mut self, request: bool) -> Self {
+        self.request_keyframe = request;
         self
     }
 }
@@ -123,6 +126,136 @@ impl ConsumerRouteControlOutcome {
 }
 
 impl MediaTransport {
+    async fn set_producer_active(
+        &self,
+        source: &TransportSourceKey,
+        activity: ProducerActivity,
+    ) -> Result<(), TransportAdapterError> {
+        self.request_session_command(
+            source.session_key(),
+            |response| {
+                RtcWorkerCommand::media_control(
+                    RouteControlRequest::SetProducerActive {
+                        source: source.clone(),
+                        active: activity.is_active(),
+                    },
+                    response,
+                )
+            },
+            |error| {
+                warn!(
+                    ?source,
+                    op = ?TransportCommandOp::SetProducerActive,
+                    active = activity.is_active(),
+                    ?error,
+                    "media transport worker command failed"
+                );
+            },
+        )
+        .await
+    }
+
+    async fn set_consumer_active(
+        &self,
+        route: &TransportConsumerRoute,
+        activity: ConsumerActivity,
+    ) -> Result<(), TransportAdapterError> {
+        self.request_consumer_route_command(
+            route,
+            |response| {
+                RtcWorkerCommand::media_control(
+                    RouteControlRequest::SetConsumerActive {
+                        route: route.clone(),
+                        active: activity.is_active(),
+                    },
+                    response,
+                )
+            },
+            |error| {
+                warn!(
+                    ?route,
+                    op = ?TransportCommandOp::SetConsumerActive,
+                    active = activity.is_active(),
+                    ?error,
+                    "media transport worker command failed"
+                );
+            },
+        )
+        .await
+    }
+
+    async fn set_consumer_packet_gates(
+        &self,
+        updates: &[ConsumerPacketGateUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let results = self.apply_consumer_pkt_gate_batch(updates).await;
+        for (update, result) in updates.iter().zip(results.iter()) {
+            if let Err(error) = result {
+                warn!(
+                    ?error,
+                    route = ?update.route(),
+                    packet_gate = ?update.packet_gate(),
+                    "media transport failed to update a batched consumer packet gate"
+                );
+            }
+        }
+        results
+    }
+
+    async fn set_receiver_bwe_targets(
+        &self,
+        updates: &[ReceiverBweTargetUpdate],
+    ) -> Vec<Result<(), TransportAdapterError>> {
+        let results = self.execute_receiver_bwe_target_batch(updates).await;
+        for (update, result) in updates.iter().zip(results.iter()) {
+            match result {
+                Ok(()) => {}
+                Err(TransportAdapterError::InvalidInput) => {
+                    debug!(
+                        session_key = ?update.session_key(),
+                        target = update.target().as_bps(),
+                        "media transport skipped a stale receiver BWE target"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        session_key = ?update.session_key(),
+                        target = update.target().as_bps(),
+                        "media transport failed to update a receiver BWE target"
+                    );
+                }
+            }
+        }
+        results
+    }
+
+    async fn request_consumer_keyframe(
+        &self,
+        route: &TransportConsumerRoute,
+    ) -> Result<(), TransportAdapterError> {
+        self.request_consumer_route_command(
+            route,
+            |response| {
+                RtcWorkerCommand::media_control(
+                    RouteControlRequest::RequestConsumerKeyframe {
+                        route: route.clone(),
+                    },
+                    response,
+                )
+            },
+            |error| {
+                warn!(
+                    ?route,
+                    op = ?TransportCommandOp::RequestConsumerKeyframe,
+                    ?error,
+                    "media transport worker command failed"
+                );
+            },
+        )
+        .await
+    }
+
     pub(crate) async fn apply_route_control(
         &self,
         plan: RouteControlPlan<Ready>,
@@ -130,18 +263,18 @@ impl MediaTransport {
         let RouteControlPlan {
             producers,
             consumers,
-            receiver_bwe_targets,
+            receiver_bwe_targets: receiver_bwe_updates,
             _state,
         } = plan;
-        let receiver_bwe_targets = if receiver_bwe_targets.is_empty() {
+        let receiver_bwe_results = if receiver_bwe_updates.is_empty() {
             Vec::new()
         } else {
-            self.set_receiver_bwe_targets(&receiver_bwe_targets).await
+            self.set_receiver_bwe_targets(&receiver_bwe_updates).await
         };
         let mut outcome = RouteControlOutcome {
             producers: Vec::with_capacity(producers.len()),
             consumers: Vec::with_capacity(consumers.len()),
-            receiver_bwe_targets,
+            receiver_bwe_targets: receiver_bwe_results,
         };
         for control in producers {
             outcome.producers.push(
@@ -149,7 +282,14 @@ impl MediaTransport {
                     .await,
             );
         }
-        let packet_gates = consumer_packet_gates(&consumers);
+        let packet_gates: Vec<_> = consumers
+            .iter()
+            .filter_map(|control| {
+                control.packet_gate.clone().map(|packet_gate| {
+                    ConsumerPacketGateUpdate::new(control.route.clone(), packet_gate)
+                })
+            })
+            .collect();
         let mut packet_gate_results = if packet_gates.is_empty() {
             Vec::new()
         } else {
@@ -157,8 +297,10 @@ impl MediaTransport {
         }
         .into_iter();
         for control in consumers {
+            let packet_gate_failed = control.packet_gate.is_some()
+                && !matches!(packet_gate_results.next(), Some(Ok(())));
             outcome.consumers.push(
-                self.apply_consumer_route_control(control, &mut packet_gate_results)
+                self.apply_consumer_route_control(control, packet_gate_failed)
                     .await,
             );
         }
@@ -168,13 +310,8 @@ impl MediaTransport {
     async fn apply_consumer_route_control(
         &self,
         control: ConsumerRouteControl,
-        packet_gate_results: &mut impl Iterator<Item = TransportResult<()>>,
+        packet_gate_failed: bool,
     ) -> ConsumerRouteControlOutcome {
-        let packet_gate_failed = control.packet_gate.is_some()
-            && packet_gate_results
-                .next()
-                .unwrap_or(Err(TransportAdapterError::TransportUnavailable))
-                .is_err();
         if packet_gate_failed {
             return ConsumerRouteControlOutcome {
                 packet_gate_failed,
@@ -195,7 +332,7 @@ impl MediaTransport {
                 ..Default::default()
             };
         }
-        let keyframe_failed = control.keyframe
+        let keyframe_failed = control.request_keyframe
             && self
                 .request_consumer_keyframe(&control.route)
                 .await
@@ -206,15 +343,4 @@ impl MediaTransport {
             keyframe_failed,
         }
     }
-}
-
-fn consumer_packet_gates(controls: &[ConsumerRouteControl]) -> Vec<ConsumerPacketGateUpdate> {
-    controls
-        .iter()
-        .filter_map(|control| {
-            control.packet_gate.clone().map(|packet_gate| {
-                ConsumerPacketGateUpdate::new(control.route.clone(), packet_gate)
-            })
-        })
-        .collect()
 }
