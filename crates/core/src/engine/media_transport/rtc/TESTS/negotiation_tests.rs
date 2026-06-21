@@ -466,6 +466,136 @@ async fn rtc_simulcast_answer_rejects_unoffered_rid_alternatives() {
 }
 
 #[tokio::test]
+async fn rtc_simulcast_answer_rejects_unoffered_plain_rid() {
+    let adapter =
+        rtc_with_bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333));
+    let session_key = transport_key(1, 336, UserId::Integer(336));
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_036).await;
+
+    let transport_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_simulcast_video_rtp_parameters(Some("simulcast-up")),
+        )
+        .await
+        .expect("simulcast publish intent should stage a renegotiation offer");
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
+        .await
+        .expect("simulcast publish should expose the staged mid");
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("staged simulcast renegotiation offer should be available")
+        .into_sdp();
+    let answer_sdp = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
+        )
+        .expect("remote simulcast answer should build")
+        .to_sdp_string();
+    let answer_sdp = answer_with_simulcast_send_rids(
+        &answer_sdp,
+        &negotiated_mid,
+        &[("lo", Some(150_000)), ("backup", Some(450_000))],
+    );
+
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &answer_sdp)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+}
+
+#[tokio::test]
+async fn rtc_simulcast_answer_rejects_larger_max_br_than_offer() {
+    let adapter =
+        rtc_with_bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333));
+    let session_key = transport_key(1, 337, UserId::Integer(337));
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_037).await;
+
+    let transport_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_simulcast_video_rtp_parameters(Some("simulcast-up")),
+        )
+        .await
+        .expect("simulcast publish intent should stage a renegotiation offer");
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
+        .await
+        .expect("simulcast publish should expose the staged mid");
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("staged simulcast renegotiation offer should be available")
+        .into_sdp();
+    let answer_sdp = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
+        )
+        .expect("remote simulcast answer should build")
+        .to_sdp_string();
+    let answer_sdp = answer_with_simulcast_send_rids(
+        &answer_sdp,
+        &negotiated_mid,
+        &[("lo", Some(150_001)), ("hi", Some(900_000))],
+    );
+
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &answer_sdp)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+}
+
+#[tokio::test]
+async fn rtc_producer_answer_rejects_non_one_byte_extmap_id() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 338, UserId::Integer(338));
+    let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_038).await;
+
+    let transport_media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("compat-producer-extmap", 93_000),
+        )
+        .await
+        .expect("protocol producer media should stage a renegotiation offer");
+    let negotiated_mid = adapter
+        .debug_resolve_mid(transport_media_id)
+        .await
+        .expect("producer media should expose its staged mid");
+    let renegotiation_offer = adapter
+        .create_session_renegotiation_offer(&session_key)
+        .await
+        .expect("staged renegotiation offer should be available")
+        .into_sdp();
+    let answer_sdp = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&renegotiation_offer).expect("producer offer should parse"),
+        )
+        .expect("remote producer answer should build")
+        .to_sdp_string();
+    let answer_sdp = answer_with_extmap_id(&answer_sdp, &negotiated_mid, 15);
+
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &answer_sdp)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+}
+
+#[tokio::test]
 async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 35, UserId::Integer(35));
@@ -1077,6 +1207,22 @@ fn answer_with_mid_direction(answer_sdp: &str, mid: &str, direction: &str) -> St
             break;
         }
     }
+    answer_sdp.replacen(section, &updated_section, 1)
+}
+
+fn answer_with_extmap_id(answer_sdp: &str, mid: &str, id: u8) -> String {
+    let section = media_section_for_mid(answer_sdp, mid)
+        .expect("test answer should contain the target MID section");
+    let extmap_start = section
+        .find("a=extmap:")
+        .expect("test answer section should contain an extmap line");
+    let id_start = extmap_start + "a=extmap:".len();
+    let id_end_offset = section[id_start..]
+        .find(' ')
+        .expect("test extmap line should separate id and URI");
+    let id_end = id_start + id_end_offset;
+    let mut updated_section = section.to_owned();
+    updated_section.replace_range(id_start..id_end, &id.to_string());
     answer_sdp.replacen(section, &updated_section, 1)
 }
 

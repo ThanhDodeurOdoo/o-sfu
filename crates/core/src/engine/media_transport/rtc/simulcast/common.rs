@@ -7,7 +7,8 @@ use str0m::media::{
 };
 
 use crate::{
-    Bitrate, VideoBitrateLimits, engine::media_transport::rtc::route_control::PacketLayerGate,
+    Bitrate, VideoBitrateLimits,
+    engine::media_transport::{SessionUploadEncoding, rtc::route_control::PacketLayerGate},
 };
 
 pub(super) const DEFAULT_LOW_RID: &str = "lo";
@@ -132,28 +133,38 @@ pub(super) fn initial_packet_gate(
 pub(super) fn send_rids_for_mid(
     answer_sdp: &str,
     mid: Mid,
+    offered_encodings: &[SessionUploadEncoding],
 ) -> Result<Vec<NegotiatedRid>, SimulcastAnswerError> {
     let Some(section) = media_section_for_mid(answer_sdp, mid) else {
         return Ok(Vec::new());
     };
-    let declarations = section
-        .lines()
-        .filter_map(parse_send_rid)
-        .collect::<Vec<_>>();
     let mut rids = Vec::with_capacity(MAX_SEND_STREAMS);
     for rid in accepted_send_simulcast_rids(section)? {
-        let Some(declaration) = declarations
-            .iter()
-            .find(|declaration| declaration.rid == rid)
-        else {
-            return Err(SimulcastAnswerError);
-        };
+        let declaration = send_rid_declaration(section, rid)?;
+        let max_bitrate = negotiated_rid_max_bitrate(declaration, offered_encodings)?;
         rids.push(NegotiatedRid {
             rid: Str0mRid::from(declaration.rid),
-            max_bitrate: declaration.max_bitrate,
+            max_bitrate,
         });
     }
     Ok(rids)
+}
+
+fn negotiated_rid_max_bitrate(
+    declaration: SendRidDeclaration<'_>,
+    offered_encodings: &[SessionUploadEncoding],
+) -> Result<Option<Bitrate>, SimulcastAnswerError> {
+    let Some(offered) = offered_encodings
+        .iter()
+        .find(|encoding| encoding.rid == declaration.rid)
+    else {
+        return Err(SimulcastAnswerError);
+    };
+    match (declaration.max_bitrate, offered.max_bitrate) {
+        (RidMaxBitrate::Absent, offered) => Ok(offered),
+        (RidMaxBitrate::Value(answer), Some(offer)) if answer <= offer => Ok(Some(answer)),
+        (RidMaxBitrate::Value(_) | RidMaxBitrate::Valueless, _) => Err(SimulcastAnswerError),
+    }
 }
 
 fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
@@ -196,29 +207,61 @@ fn find_next_media_section_start(sdp: &str, start: usize, media_prefix: &str) ->
 #[derive(Debug, Clone, Copy)]
 struct SendRidDeclaration<'a> {
     rid: &'a str,
-    max_bitrate: Option<Bitrate>,
+    max_bitrate: RidMaxBitrate,
 }
 
-fn parse_send_rid(line: &str) -> Option<SendRidDeclaration<'_>> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RidMaxBitrate {
+    Absent,
+    Valueless,
+    Value(Bitrate),
+}
+
+fn send_rid_declaration<'a>(
+    section: &'a str,
+    rid: &str,
+) -> Result<SendRidDeclaration<'a>, SimulcastAnswerError> {
+    let mut found = None;
+    for line in section.lines() {
+        let Some(declaration) = parse_send_rid(line.trim_end_matches('\r'))? else {
+            continue;
+        };
+        if declaration.rid != rid {
+            continue;
+        }
+        if found.replace(declaration).is_some() {
+            return Err(SimulcastAnswerError);
+        }
+    }
+    found.ok_or(SimulcastAnswerError)
+}
+
+fn parse_send_rid(line: &str) -> Result<Option<SendRidDeclaration<'_>>, SimulcastAnswerError> {
     let rid_prefix = format!(
         "{}{}:",
         webrtc::sdp::ATTRIBUTE_PREFIX,
         webrtc::sdp::attribute::RID
     );
-    let rid_value = line.trim_end_matches('\r').strip_prefix(&rid_prefix)?;
+    let Some(rid_value) = line.strip_prefix(&rid_prefix) else {
+        return Ok(None);
+    };
     let mut parts = rid_value.splitn(3, ' ');
-    let rid = parts.next()?;
+    let Some(rid) = parts.next() else {
+        return Ok(None);
+    };
     if !webrtc::sdp::rid::is_id(rid) {
-        return None;
+        return Ok(None);
     }
-    let direction = parts.next()?;
+    let Some(direction) = parts.next() else {
+        return Ok(None);
+    };
     if webrtc::RtpStreamDirection::parse(direction) != Some(webrtc::RtpStreamDirection::Send) {
-        return None;
+        return Ok(None);
     }
-    Some(SendRidDeclaration {
+    Ok(Some(SendRidDeclaration {
         rid,
-        max_bitrate: parts.next().and_then(parse_max_bitrate),
-    })
+        max_bitrate: parse_rid_restrictions(parts.next())?,
+    }))
 }
 
 fn accepted_send_simulcast_rids(section: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
@@ -286,15 +329,39 @@ fn parse_simulcast_rid_list(value: &str) -> Result<Vec<&str>, SimulcastAnswerErr
     Ok(rids)
 }
 
-fn parse_max_bitrate(restrictions: &str) -> Option<Bitrate> {
-    restrictions
-        .split(';')
-        .filter_map(|restriction| restriction.split_once('='))
-        .find_map(|(key, value)| {
-            (key.trim() == webrtc::sdp::rid_restriction::MAX_BITRATE)
-                .then(|| value.trim().parse::<u64>().ok().map(Bitrate::from_bps))
-                .flatten()
-        })
+fn parse_rid_restrictions(
+    restrictions: Option<&str>,
+) -> Result<RidMaxBitrate, SimulcastAnswerError> {
+    let Some(restrictions) = restrictions else {
+        return Ok(RidMaxBitrate::Absent);
+    };
+    let mut max_bitrate = RidMaxBitrate::Absent;
+    for restriction in restrictions.split(';') {
+        let restriction = restriction.trim();
+        if restriction.is_empty() {
+            return Err(SimulcastAnswerError);
+        }
+        let (key, value) = restriction
+            .split_once('=')
+            .map_or((restriction, None), |(key, value)| {
+                (key.trim(), Some(value.trim()))
+            });
+        if key != webrtc::sdp::rid_restriction::MAX_BITRATE || max_bitrate != RidMaxBitrate::Absent
+        {
+            return Err(SimulcastAnswerError);
+        }
+        max_bitrate = match value {
+            Some(value) if !value.is_empty() => RidMaxBitrate::Value(
+                value
+                    .parse::<u64>()
+                    .map(Bitrate::from_bps)
+                    .map_err(|_error| SimulcastAnswerError)?,
+            ),
+            Some(_) => return Err(SimulcastAnswerError),
+            None => RidMaxBitrate::Valueless,
+        };
+    }
+    Ok(max_bitrate)
 }
 
 fn resolution_scale_for_index(index: usize) -> u16 {

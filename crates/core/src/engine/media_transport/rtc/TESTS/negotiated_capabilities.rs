@@ -102,3 +102,18 @@ fn answer_projection_rejects_rtcp_mux_forbidden_payload_types() {
 
     assert!(client_rtp_capabilities_from_answer(&invalid_answer).is_none());
 }
+
+#[test]
+fn answer_projection_rejects_non_one_byte_extmap_ids() {
+    for id in [15, 16, 255] {
+        let invalid_answer = CHROMIUM_OPTIONAL_CODECS_ANSWER.replace(
+            "a=extmap:13 urn:3gpp:video-orientation",
+            &format!("a=extmap:{id} urn:3gpp:video-orientation"),
+        );
+
+        assert!(
+            client_rtp_capabilities_from_answer(&invalid_answer).is_none(),
+            "answer extmap id {id} must fail at the SDP edge"
+        );
+    }
+}
