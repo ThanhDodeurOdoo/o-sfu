@@ -308,7 +308,7 @@ export async function updateInfo(page, info, options = { needRefresh: true }) {
 
 export async function forceRecoverableClose(page) {
     await page.evaluate((closeCode) => {
-        const websocket = globalThis.__liveHarness.client?._runtime?._webSocket;
+        const websocket = globalThis.__liveHarness.client?._runtime?._socketSession?._activeSocket;
         if (!websocket || websocket.readyState >= WebSocket.CLOSING) {
             throw new Error("browser harness websocket is not open");
         }
@@ -435,7 +435,7 @@ export async function roomUserInfo({ httpBaseUrl = TEST_SFU_HTTP_BASE_URL, roomI
 
 export async function peerLocalDescriptionSdp(page) {
     return page.evaluate(() => {
-        const peerConnection = globalThis.__liveHarness.client?._runtime?._peerConnection;
+        const peerConnection = globalThis.__liveHarness.client?._runtime?._peerSession?._activePeer;
         return peerConnection?.localDescription?.sdp ?? null;
     });
 }
@@ -444,7 +444,7 @@ export async function localSenderEncodings(page, streamType) {
     assertStreamType(streamType);
     return page.evaluate((targetStreamType) => {
         const harness = globalThis.__liveHarness;
-        const peerConnection = harness.client?._runtime?._peerConnection;
+        const peerConnection = harness.client?._runtime?._peerSession?._activePeer;
         const localTrack =
             harness.localMedia?.[targetStreamType]?.track ??
             (targetStreamType === "camera" ? harness.localTrack : null);
@@ -467,7 +467,7 @@ export async function localSenderTrackId(page, streamType) {
     assertStreamType(streamType);
     return page.evaluate((targetStreamType) => {
         const harness = globalThis.__liveHarness;
-        const peerConnection = harness.client?._runtime?._peerConnection;
+        const peerConnection = harness.client?._runtime?._peerSession?._activePeer;
         const localTrack = harness.localMedia?.[targetStreamType]?.track ?? null;
         if (!peerConnection || !localTrack) {
             return null;

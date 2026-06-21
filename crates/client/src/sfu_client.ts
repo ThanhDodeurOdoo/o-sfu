@@ -25,7 +25,7 @@ import {
     type HostCommand,
     type ProtocolCoreBindings
 } from "./runtime_contract.js";
-import { BrowserRuntime, CLIENT_RECOVERABLE_CLOSE_CODE } from "./internals/browser_runtime.js";
+import { BrowserRuntime } from "./internals/browser_runtime.js";
 import {
     EMPTY_FEATURES,
     type ConsumersCompat,
@@ -137,18 +137,14 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         );
 
         if (transition.hadTrack && transition.hasTrack) {
-            this._runtime.enqueueLocalOperation(async () => {
-                if (transition.knownMid) {
-                    await this._runtime.attachTrack(transition.knownMid, type);
-                }
-            });
+            if (transition.knownMid) {
+                this._runtime.replaceLocalTrack(transition.knownMid, type);
+            }
             return;
         }
 
         if (transition.hadTrack && !transition.hasTrack) {
-            this._runtime.enqueueLocalOperation(async () => {
-                await this._runtime.detachTrack(type);
-            });
+            this._runtime.detachLocalTrack(type);
         }
 
         if (transition.hadTrack === transition.hasTrack) {
@@ -263,7 +259,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${resolvedError.message}`);
         this._protocolCore.disconnect();
         this._pendingRequests.rejectAll(resolvedError);
-        this._runtime.teardown(CLIENT_RECOVERABLE_CLOSE_CODE);
+        this._runtime.abort();
         this._syncPublicState();
         this.dispatchEvent(
             new CustomEvent("handledError", {

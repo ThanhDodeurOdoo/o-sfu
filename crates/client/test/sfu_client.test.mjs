@@ -105,7 +105,9 @@ test("oversized server text frames close before protocol decoding", async () => 
     sockets[0].emitMessage("x".repeat(256 * 1024 + 1));
 
     assert.equal(decoded, false);
-    assert.equal(sockets[0].closeCode, WS_CLOSE_CODE.PROTOCOL_ERROR);
+    assert.notEqual(sockets[0].closeCode, WS_CLOSE_CODE.PROTOCOL_ERROR);
+    assert.equal(sockets[0].closeCode >= 3000 && sockets[0].closeCode <= 4999, true);
+    assert.deepEqual(core.wsCloseCodes, [WS_CLOSE_CODE.PROTOCOL_ERROR]);
 });
 
 for (const [name, startRequest, ok, expected] of [
@@ -351,7 +353,7 @@ test("real protocol core replays sticky publish after recovery transport readine
     client.updateInfo({ isCameraOn: true, isRaisingHand: true });
     await tick();
 
-    sockets[0].close(1011);
+    sockets[0].emitClose(1011);
     await tick();
     await finishRecovery(harness);
 
@@ -414,7 +416,7 @@ test("real protocol core replays the latest sticky intents changed while recover
     client.subscribe(7, { audio: true });
     await tick();
 
-    sockets[0].close(1011);
+    sockets[0].emitClose(1011);
     await tick();
 
     client.publish("camera", null);
@@ -450,7 +452,7 @@ test("explicit disconnect neutralizes a stale recovery timer", async () => {
     await open();
     await emitMessage(buildWelcomeFrame());
 
-    sockets[0].close(1011);
+    sockets[0].emitClose(1011);
     await tick();
     assert.equal(timers.hasDelay(1000), true);
 
@@ -472,7 +474,7 @@ test("new connect neutralizes a stale recovery timer", async () => {
     await open();
     await emitMessage(buildWelcomeFrame());
 
-    sockets[0].close(1011);
+    sockets[0].emitClose(1011);
     await tick();
     assert.equal(timers.hasDelay(1000), true);
 
@@ -1413,6 +1415,31 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.equal(handledErrors[0], client.errors[0]);
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
+    assert.deepEqual(core.wsCloseCodes, []);
+});
+
+test("fatal runtime errors drop already queued browser commands", async () => {
+    const { client, connect, handledErrors, open, peerConnections, sockets } =
+        createSfuClientHarness({
+            createPeerConnection(config) {
+                const peerConnection = new FakePeerConnection(config);
+                peerConnection.setRemoteDescription = async () => {
+                    throw new Error("broken remote offer");
+                };
+                return peerConnection;
+            }
+        });
+
+    await connect();
+    await open();
+
+    sockets[0].emitMessage("offer");
+    sockets[0].emitMessage("source-descriptors");
+    await tick();
+
+    assert.equal(handledErrors.length, 1);
+    assert.equal(peerConnections[0].closed, true);
+    assert.deepEqual(client.sourceDescriptors, []);
 });
 
 test("publish rejects stream-kind mismatches", () => {
