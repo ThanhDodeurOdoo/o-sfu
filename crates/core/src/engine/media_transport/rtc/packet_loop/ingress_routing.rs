@@ -17,6 +17,7 @@
 //! recovery must stay a subset of `str0m` demux behavior so this module never
 //! recovers traffic that `str0m` would reject downstream
 
+use core::hint::cold_path;
 use std::{
     fmt,
     net::SocketAddr,
@@ -37,7 +38,6 @@ use super::super::{
     state::{PacketLoopState, RtcSnapshotState},
 };
 use crate::engine::{
-    hot_path::unlikely,
     media_transport::TransportSessionKey,
     metrics::{RtcDatagramDropReason, RtcDatagramRoutePath, RtcMetricsRecorder},
 };
@@ -264,7 +264,8 @@ fn route_cached_pkt(
         return CachedRouteOutcome::NotMatched;
     }
     let handle_result = session_state.rtc.handle_input(input);
-    if unlikely(handle_result.is_err()) {
+    if handle_result.is_err() {
+        cold_path();
         // routing answers ownership, not packet validity
         warn!(
             user_id = ?session_key.user_id(),

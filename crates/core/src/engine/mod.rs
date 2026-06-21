@@ -12,7 +12,6 @@
 //! RTC workers or room-state internals.
 
 pub mod h264_payloads;
-mod hot_path;
 pub mod media_transport;
 mod observability;
 pub mod packet_sink_registry;

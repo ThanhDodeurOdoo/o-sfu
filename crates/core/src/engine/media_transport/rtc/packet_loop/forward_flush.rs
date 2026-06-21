@@ -16,6 +16,7 @@
 //! This module observes packets and executes planned sends. It does not decide
 //! subscriptions or room membership.
 
+use core::hint::cold_path;
 use std::{mem::take, time::Instant};
 
 use str0m::media::{KeyframeRequestKind, MediaKind};
@@ -36,7 +37,6 @@ use super::{
     buffers::PacketLoopBuffers,
 };
 use crate::engine::{
-    hot_path::unlikely,
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
     metrics::{
         RtcKeyframeRequestOutcome, RtcMetricsRecorder, RtcRouteControlMetrics,
@@ -85,7 +85,8 @@ pub(super) fn record_incoming_stats(
                     metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
                 }
             }
-            if unlikely(audio_policy_changed) {
+            if audio_policy_changed {
+                cold_path();
                 buffers
                     .dirty_source_policy_channel_ids
                     .push(facts.room_instance_id);
@@ -123,7 +124,8 @@ pub(super) fn record_incoming_stats(
                     facts.payload_len,
                 )
                 .unwrap_or(false);
-            if unlikely(first_ingress) {
+            if first_ingress {
+                cold_path();
                 let Some(src_key) = packet.src_key(state) else {
                     continue;
                 };
