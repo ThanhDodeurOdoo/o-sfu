@@ -181,8 +181,9 @@ pub(super) fn publish_upload_encodings_or_default(
 pub(super) fn send_rids_for_mid(
     answer_sdp: &str,
     mid: Mid,
+    offered_encodings: &[SessionUploadEncoding],
 ) -> Result<Vec<NegotiatedRid>, SimulcastAnswerError> {
-    common::send_rids_for_mid(answer_sdp, mid)
+    common::send_rids_for_mid(answer_sdp, mid, offered_encodings)
 }
 
 pub(super) fn initial_consumer_packet_gate(

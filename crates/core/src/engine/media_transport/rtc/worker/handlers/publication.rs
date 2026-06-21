@@ -12,7 +12,7 @@ use std::{
 
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
-    HeaderExtension as RouterHeaderExtension, MediaFormat as RouterMediaFormat,
+    HeaderExtension as RouterHeaderExtension, HeaderExtensionId, MediaFormat as RouterMediaFormat,
     MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, PayloadType, RtcpFeedback,
     RtcpFeedbackKind, StreamBinding,
 };
@@ -51,26 +51,28 @@ pub(super) struct AnswerProducerProjection {
 pub(super) fn answer_producer_projection(
     answer: &SdpAnswer,
     producer_mids: &[Mid],
-) -> Vec<AnswerProducerProjection> {
+) -> Result<Vec<AnswerProducerProjection>, TransportAdapterError> {
     answer
         .media_lines
         .iter()
         .filter(|media_line| producer_mids.contains(&media_line.mid()))
-        .map(|media_line| AnswerProducerProjection {
-            mid: media_line.mid(),
-            direction: media_line.direction(),
-            payload_params: media_line.rtp_params(),
-            header_extensions: media_line
-                .extmaps()
-                .into_iter()
-                .map(project_header_extension)
-                .collect(),
-            primary_ssrcs: media_line
-                .ssrc_info()
-                .into_iter()
-                .filter(|info| info.repairs.is_none())
-                .map(|info| *info.ssrc)
-                .collect(),
+        .map(|media_line| {
+            Ok(AnswerProducerProjection {
+                mid: media_line.mid(),
+                direction: media_line.direction(),
+                payload_params: media_line.rtp_params(),
+                header_extensions: media_line
+                    .extmaps()
+                    .into_iter()
+                    .map(project_header_extension)
+                    .collect::<Result<Vec<_>, _>>()?,
+                primary_ssrcs: media_line
+                    .ssrc_info()
+                    .into_iter()
+                    .filter(|info| info.repairs.is_none())
+                    .map(|info| *info.ssrc)
+                    .collect(),
+            })
         })
         .collect()
 }
@@ -310,11 +312,14 @@ fn rtcp_feedback(payload_params: &PayloadParams) -> Vec<RtcpFeedback> {
     feedback
 }
 
-fn project_header_extension((id, extension): (u8, &Extension)) -> RouterHeaderExtension {
-    RouterHeaderExtension::new(
+fn project_header_extension(
+    (id, extension): (u8, &Extension),
+) -> Result<RouterHeaderExtension, TransportAdapterError> {
+    let id = HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
+    Ok(RouterHeaderExtension::new(
         rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
         id,
-    )
+    ))
 }
 
 fn project_bindings(

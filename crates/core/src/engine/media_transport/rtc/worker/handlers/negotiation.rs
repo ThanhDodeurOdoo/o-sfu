@@ -17,7 +17,7 @@ use std::{
 use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
 use str0m::{
     change::{SdpAnswer, SdpApi},
-    media::{Direction, MediaKind, Mid},
+    media::{Direction, Media, MediaKind, Mid},
 };
 use tracing::debug;
 
@@ -160,12 +160,17 @@ pub(super) fn worker_apply_session_answer(
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
     let client_capabilities =
         negotiated_capabilities::client_rtp_capabilities_from_sdp_answer(&answer)?;
-    let producer_answer_projection = answer_producer_projection(&answer, &producer_mids);
+    let producer_answer_projection = answer_producer_projection(&answer, &producer_mids)?;
+    let offer_encodings = offer_encodings_by_mid(state, session_key, &producer_mids)?;
     let rids_by_mid = producer_mids
         .iter()
-        .map(|producer_mid| {
-            simulcast::send_rids_for_mid(answer_sdp, *producer_mid)
-                .map(|rids| (*producer_mid, rids))
+        .map(|mid| {
+            let encodings = offer_encodings
+                .get(mid)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            simulcast::send_rids_for_mid(answer_sdp, *mid, encodings)
+                .map(|rids| (*mid, rids))
                 .map_err(|_error| TransportAdapterError::InvalidInput)
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -222,6 +227,49 @@ pub(super) fn worker_apply_session_answer(
             }),
     )
     .with_client_capabilities(client_capabilities))
+}
+
+fn offer_encodings_by_mid(
+    state: &PacketLoopState,
+    session_key: &TransportSessionKey,
+    producer_mids: &[Mid],
+) -> Result<BTreeMap<Mid, Vec<SessionUploadEncoding>>, TransportAdapterError> {
+    let session_state = state
+        .users
+        .get(session_key)
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    let mut encodings = session_state
+        .sdp_negotiation
+        .staged_offer_upload_slots
+        .iter()
+        .map(|slot| {
+            (
+                Mid::from(slot.mid.as_str()),
+                slot.simulcast_encodings.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for mid in producer_mids {
+        if encodings.contains_key(mid) {
+            continue;
+        }
+        let Some(rtp_parameters) = session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .get(mid)
+        else {
+            continue;
+        };
+        let Some(media_kind) = session_state.rtc.media(*mid).map(Media::kind) else {
+            continue;
+        };
+        let simulcast_encodings = simulcast::publish_upload_encodings(media_kind, rtp_parameters);
+        if simulcast_encodings.is_empty() {
+            continue;
+        }
+        encodings.insert(*mid, simulcast_encodings);
+    }
+    Ok(encodings)
 }
 
 fn upload_encodings_for_mid(

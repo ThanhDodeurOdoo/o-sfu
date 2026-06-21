@@ -1,7 +1,8 @@
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
-    HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodecCapability,
-    MediaKind as RouterMediaKind, PayloadType, RtcpFeedback, RtcpFeedbackKind,
+    HeaderExtension as RouterHeaderExtension, HeaderExtensionId, MediaCapabilities,
+    MediaCodecCapability, MediaKind as RouterMediaKind, PayloadType, RtcpFeedback,
+    RtcpFeedbackKind,
 };
 use str0m::{
     change::SdpAnswer,
@@ -43,6 +44,7 @@ pub(super) fn client_rtp_capabilities_from_sdp_answer(
             }
         }
         for (id, extension) in media_line.extmaps() {
+            let id = HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
             let header_extension = RouterHeaderExtension::new(
                 rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
                 id,
