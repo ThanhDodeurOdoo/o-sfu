@@ -5,7 +5,7 @@ import { applyUploadPublicationPolicy, type SimulcastEncodingOffer } from "./pub
 type UploadTransition = {
     hadTrack: boolean;
     hasTrack: boolean;
-    knownMid?: string;
+    boundMid?: string;
 };
 
 export type UploadSlot = {
@@ -28,7 +28,7 @@ export class LocalUploads {
         return {
             hadTrack: previousTrack !== null,
             hasTrack: track !== null,
-            knownMid: this._senderMidByType.get(type)
+            boundMid: this._senderMidByType.get(type)
         };
     }
 
@@ -84,11 +84,13 @@ export class LocalUploads {
         if (!peerConnection) {
             return;
         }
-        const knownMid = this._senderMidByType.get(streamType);
-        const transceivers = peerConnection.getTransceivers();
-        const transceiver = knownMid
-            ? transceivers.find((candidate) => candidate.mid === knownMid)
-            : uniqueSenderKindTransceiver(transceivers, STREAM_KIND[streamType]);
+        const boundMid = this._senderMidByType.get(streamType);
+        if (!boundMid) {
+            return;
+        }
+        const transceiver = peerConnection
+            .getTransceivers()
+            .find((candidate) => candidate.mid === boundMid);
         if (transceiver) {
             await transceiver.sender.replaceTrack(null);
             updateTransceiverDirection(transceiver, null);
@@ -112,7 +114,7 @@ export class LocalUploads {
         if (pendingStreamTypes.length === 0) {
             return;
         }
-        const knownMids = new Set(this._senderMidByType.values());
+        const boundMids = new Set(this._senderMidByType.values());
         const candidateTransceivers = peerConnection.getTransceivers().filter((transceiver) => {
             const mid = transceiver.mid;
             return (
@@ -121,7 +123,7 @@ export class LocalUploads {
                 // transceiver must be one of the slots offered by the sfu
                 uploadSlots.some((slot) => slot.mid === mid) &&
                 // and it must not be already assigned to another local stream
-                !knownMids.has(mid) &&
+                !boundMids.has(mid) &&
                 // when the sfu offers an upload slot (a=recvonly), the browser
                 // sets the local transceiver to recvonly until we flip it to sendonly.
                 // we also check that it's unnegotiated (currentDirection === null)
@@ -147,16 +149,6 @@ export class LocalUploads {
             this._uploadIntentByType.delete(streamType);
         }
     }
-}
-
-function uniqueSenderKindTransceiver(
-    transceivers: ReturnType<ClientPeerConnection["getTransceivers"]>,
-    kind: "audio" | "video"
-): (typeof transceivers)[number] | undefined {
-    const matchingTransceivers = transceivers.filter(
-        (candidate) => candidate.sender.track?.kind === kind
-    );
-    return matchingTransceivers.length === 1 ? matchingTransceivers[0] : undefined;
 }
 
 function updateTransceiverDirection(

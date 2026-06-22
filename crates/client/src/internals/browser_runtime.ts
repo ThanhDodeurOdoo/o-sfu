@@ -3,39 +3,52 @@ import {
     type ClientLogDetail,
     type ClientUpdateDetail,
     type ConnectionState,
+    type DownloadStates,
+    type RecordingOptions,
+    type SessionId,
+    type SessionInfo,
     type SfuStats,
     type StreamType
 } from "../public_api.js";
-import { COMMAND_KIND, type HostCommand, type ProtocolCoreBindings } from "../runtime_contract.js";
+import {
+    COMMAND_KIND,
+    createProtocolCore,
+    wrapProtocolCoreBindings,
+    type HostCommand,
+    type ProtocolCoreBindings
+} from "../runtime_contract.js";
 import type {
     ClientPeerConnection,
     ClientWebSocket,
+    ConsumersCompat,
     SfuClientDependencies,
     TimerHandle
 } from "./browser_types.js";
-import type { LocalUploads } from "./local_uploads.js";
-import type { PendingRequests } from "./pending_requests.js";
+import { LocalUploads } from "./local_uploads.js";
+import { PendingRequests } from "./pending_requests.js";
 import { PeerSession } from "./peer_session.js";
-import type { RemoteTracks } from "./remote_tracks.js";
+import { RemoteTracks } from "./remote_tracks.js";
 import { SocketSession } from "./socket_session.js";
 
 type BrowserRuntimeContext = {
-    localUploads: LocalUploads;
     onLog: (detail: ClientLogDetail) => void;
-    onRuntimeError: (error: unknown) => void;
+    onPublicState: (state: PublicState) => void;
+    onRuntimeError: (error: Error) => void;
     onStateChange: (state: ConnectionState, cause?: string) => void;
     onUpdate: (update: ClientUpdateDetail) => void;
-    pendingRequests: PendingRequests;
-    protocolCore: ProtocolCoreBindings;
-    remoteTracks: RemoteTracks;
-    syncPublicState: () => void;
 };
+
+type PublicState = Pick<ProtocolCoreBindings, "state" | "features" | "recordingState">;
 
 const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
 const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
 
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
+    private readonly _core: ProtocolCoreBindings;
+    private readonly _pendingRequests = new PendingRequests();
+    private readonly _remoteTracks = new RemoteTracks();
+    private readonly _uploads = new LocalUploads();
     private readonly _peerSession: PeerSession;
     private readonly _setTimer: (callback: () => void, ms: number) => TimerHandle;
     private readonly _socketSession: SocketSession;
@@ -47,27 +60,26 @@ export class BrowserRuntime {
 
     constructor(context: BrowserRuntimeContext, dependencies: SfuClientDependencies = {}) {
         this._context = context;
+        this._core = dependencies.createProtocolCore
+            ? wrapProtocolCoreBindings(dependencies.createProtocolCore())
+            : createProtocolCore();
         this._setTimer = dependencies.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
         this._clearTimer = dependencies.clearTimer ?? ((handle) => clearTimeout(handle));
-        const log = (level: ClientLogDetail["level"], message: string) => {
-            emitRuntimeLog(this._context, level, message);
-        };
+        const log = (level: ClientLogDetail["level"], message: string) => this.log(level, message);
         this._socketSession = new SocketSession(
             dependencies.createWebSocket ?? ((url) => new WebSocket(url) as ClientWebSocket),
             log,
-            () => this.enqueueProtocolCommands(() => this._context.protocolCore.onWsOpen()),
-            (frame) =>
-                this.enqueueProtocolCommands(() => this._context.protocolCore.onWsMessage(frame)),
-            (code) => this.enqueueProtocolCommands(() => this._context.protocolCore.onWsClose(code))
+            () => this.enqueueProtocolCommands(() => this._core.onWsOpen()),
+            (frame) => this.enqueueProtocolCommands(() => this._core.onWsMessage(frame)),
+            (code) => this.enqueueProtocolCommands(() => this._core.onWsClose(code))
         );
         this._peerSession = new PeerSession(
             dependencies.createPeerConnection ??
                 ((config) => new RTCPeerConnection(config) as ClientPeerConnection),
-            this._context.protocolCore,
-            this._context.localUploads,
-            this._context.remoteTracks,
+            this._uploads,
+            this._remoteTracks,
             this._context.onUpdate,
-            () => this.enqueueProtocolCommands(() => this._context.protocolCore.onTransportReady()),
+            () => this.enqueueProtocolCommands(() => this._core.onTransportReady()),
             () => {
                 log(
                     CLIENT_LOG_LEVEL.WARN,
@@ -77,68 +89,124 @@ export class BrowserRuntime {
             },
             log
         );
+        this.syncPublicState();
     }
 
-    setIceServers(iceServers?: RTCIceServer[]): void {
-        this._peerSession.setIceServers(iceServers);
+    get consumers(): ReadonlyMap<SessionId, ConsumersCompat> {
+        return this._remoteTracks.consumers;
     }
 
-    enqueueProtocolCommands(getCommands: () => HostCommand[]): void {
-        try {
-            this.enqueue(getCommands());
-        } catch (error) {
-            this._context.onRuntimeError(error);
-        }
+    connect(url: string, jwt: string, room: string | null, iceServers?: RTCIceServer[]): void {
+        this.enqueueProtocolCommands(() => {
+            const commands = this._core.connect(url, jwt, room);
+            if (commands.some((command) => command.kind === COMMAND_KIND.CONNECT)) {
+                this._peerSession.setIceServers(iceServers);
+            }
+            return commands;
+        });
     }
 
-    enqueue(commands: HostCommand[]): void {
-        const epoch = this._epoch;
-        this._commandQueue = this._commandQueue
-            .then(() => (this.isCurrent(epoch) ? this.processCommands(commands, epoch) : undefined))
-            .catch((error: unknown) => {
-                if (this.isCurrent(epoch)) {
-                    this._context.onRuntimeError(error);
-                }
-            });
+    disconnect(): void {
+        this.enqueueProtocolCommands(() => this._core.disconnect());
     }
 
-    enqueueLocalOperation(operation: () => void | Promise<void>): void {
-        const epoch = this._epoch;
-        this._commandQueue = this._commandQueue
-            .then(() => (this.isCurrent(epoch) ? operation() : undefined))
-            .catch((error: unknown) => {
-                if (this.isCurrent(epoch)) {
-                    this._context.onRuntimeError(error);
-                }
-            });
+    subscribe(sessionId: SessionId, states: DownloadStates): void {
+        this.enqueueTask(() => {
+            this._remoteTracks.updateSubscriptionStates(sessionId, states, this._context.onUpdate);
+        });
+        this.enqueueProtocolCommands(() => this._core.subscribe(sessionId, states));
+    }
+
+    updateInfo(info: SessionInfo): void {
+        this.enqueueProtocolCommands(() => this._core.updateInfo(info));
+    }
+
+    broadcast(message: unknown): void {
+        this.enqueueProtocolCommands(() => this._core.broadcast(message));
+    }
+
+    startRecording(options: RecordingOptions = {}): Promise<boolean> {
+        return this.beginPendingRequest(() => this._core.startRecording(options));
+    }
+
+    stopRecording(): Promise<boolean> {
+        return this.beginPendingRequest(() => this._core.stopRecording());
     }
 
     async getStats(): Promise<SfuStats> {
         return this._peerSession.getStats();
     }
 
-    abort(): void {
+    publish(type: StreamType, track: MediaStreamTrack | null): void {
+        const transition = this._uploads.setTrack(type, track);
+        if (!transition.hadTrack && !transition.hasTrack) {
+            return;
+        }
+        const replacing = transition.hadTrack && transition.hasTrack;
+        const action = replacing ? "replacing" : transition.hadTrack ? "removing" : "publishing";
+        this.log(
+            replacing ? CLIENT_LOG_LEVEL.DEBUG : CLIENT_LOG_LEVEL.INFO,
+            `${action} ${type} track${transition.boundMid ? ` on mid ${transition.boundMid}` : ""}`
+        );
+        if (replacing) {
+            if (transition.boundMid) {
+                this.enqueue([
+                    { kind: COMMAND_KIND.ATTACH_TRACK, mid: transition.boundMid, streamType: type }
+                ]);
+            }
+            return;
+        }
+        if (transition.hadTrack) {
+            this.enqueue([{ kind: COMMAND_KIND.DETACH_TRACK, streamType: type }]);
+        }
+        this.enqueueProtocolCommands(() => this._core.publish(type, transition.hasTrack));
+    }
+
+    private abort(): void {
         this._epoch += 1;
         this._commandQueue = Promise.resolve();
         this._timerHandles.forEach((handle) => this._clearTimer(handle));
         this._timerHandles.clear();
         this._peerSession.close();
-        this._context.remoteTracks.resetAll();
+        this._remoteTracks.resetAll();
         this._socketSession.abort(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
-    replaceLocalTrack(mid: string, streamType: StreamType): void {
-        this.enqueue([{ kind: COMMAND_KIND.ATTACH_TRACK, mid, streamType }]);
+    private beginPendingRequest(getCommands: () => HostCommand[]): Promise<boolean> {
+        return this._pendingRequests.begin(
+            getCommands,
+            (commands) => this.enqueue(commands),
+            (error) => this.handleRuntimeError(error)
+        );
     }
 
-    detachLocalTrack(streamType: StreamType): void {
-        this.enqueue([{ kind: COMMAND_KIND.DETACH_TRACK, streamType }]);
+    private enqueueProtocolCommands(getCommands: () => HostCommand[]): void {
+        try {
+            this.enqueue(getCommands());
+        } catch (error) {
+            this.handleRuntimeError(error);
+        }
+    }
+
+    private enqueue(commands: HostCommand[]): void {
+        this.enqueueTask((epoch) => this.processCommands(commands, epoch));
+    }
+
+    private enqueueTask(operation: (epoch: number) => void | Promise<void>): void {
+        const epoch = this._epoch;
+        this._commandQueue = this._commandQueue
+            .then(() => (this.isCurrent(epoch) ? operation(epoch) : undefined))
+            .catch((error: unknown) => {
+                if (this.isCurrent(epoch)) {
+                    this.handleRuntimeError(error);
+                }
+            });
     }
 
     private async processCommands(commands: HostCommand[], epoch: number): Promise<void> {
         const pending = [...commands];
         if (pending.length === 0) {
-            this._context.syncPublicState();
+            this.syncPublicState();
             return;
         }
         for (let index = 0; index < pending.length; index += 1) {
@@ -150,7 +218,7 @@ export class BrowserRuntime {
             if (!this.isCurrent(epoch)) {
                 return;
             }
-            this._context.syncPublicState();
+            this.syncPublicState();
             pending.push(...followUp);
         }
     }
@@ -161,26 +229,37 @@ export class BrowserRuntime {
                 this._socketSession.send(command.frame);
                 return [];
             case COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT:
-                this._context.localUploads.setUploadIntent(command.streamType, command.active);
+                this._uploads.setUploadIntent(command.streamType, command.active);
                 return [];
-            case COMMAND_KIND.APPLY_NEGOTIATION:
-                return this._peerSession.negotiate(
+            case COMMAND_KIND.APPLY_NEGOTIATION: {
+                const result = await this._peerSession.negotiate(
                     command.requestId,
                     command.negotiationKind,
                     command.sdp,
                     command.uploadSlots
                 );
+                if (!result) {
+                    return [];
+                }
+                const commands = this._core.submitNegotiationAnswer(
+                    command.requestId,
+                    command.negotiationKind,
+                    result.answerSdp
+                );
+                if (result.shouldSignalTransportReady) {
+                    commands.push(...this._core.onTransportReady());
+                }
+                return commands;
+            }
             case COMMAND_KIND.ATTACH_TRACK:
-                emitRuntimeLog(
-                    this._context,
+                this.log(
                     CLIENT_LOG_LEVEL.INFO,
                     `attaching ${command.streamType} track to mid ${command.mid}`
                 );
                 await this._peerSession.attachTrack(command.mid, command.streamType);
                 return [];
             case COMMAND_KIND.DETACH_TRACK:
-                emitRuntimeLog(
-                    this._context,
+                this.log(
                     CLIENT_LOG_LEVEL.INFO,
                     `detaching ${command.streamType} track from the peer connection`
                 );
@@ -199,34 +278,29 @@ export class BrowserRuntime {
                 this._context.onStateChange(command.state, command.cause);
                 return [];
             case COMMAND_KIND.REPLACE_TRACK_BINDINGS:
-                emitRuntimeLog(
-                    this._context,
+                this.log(
                     CLIENT_LOG_LEVEL.DEBUG,
                     `received ${command.bindings.length} remote track bindings`
                 );
-                this._context.remoteTracks.replaceTrackBindings(
-                    command.bindings,
-                    this._context.onUpdate
-                );
+                this._remoteTracks.replaceTrackBindings(command.bindings, this._context.onUpdate);
                 return [];
             case COMMAND_KIND.REMOVE_SESSION_TRACKS:
-                emitRuntimeLog(
-                    this._context,
+                this.log(
                     CLIENT_LOG_LEVEL.INFO,
                     `removing remote tracks for session ${command.sessionId}`
                 );
-                this._context.remoteTracks.removeSessionTracks(command.sessionId);
+                this._remoteTracks.removeSessionTracks(command.sessionId);
                 return [];
             case COMMAND_KIND.EMIT_UPDATE:
                 this._context.onUpdate(command.update);
                 return [];
             case COMMAND_KIND.BEGIN_PENDING_REQUEST:
-                if (this._context.pendingRequests.has(command.requestId)) {
+                if (this._pendingRequests.has(command.requestId)) {
                     this.scheduleTimer(command.timeoutTimerId, command.timeoutMs);
                 }
                 return [];
             case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
-                this._context.pendingRequests.resolve(command.requestId, command.ok);
+                this._pendingRequests.resolve(command.requestId, command.ok);
                 return [];
             case COMMAND_KIND.SCHEDULE_TIMER:
                 this.scheduleTimer(command.id, command.ms);
@@ -254,24 +328,47 @@ export class BrowserRuntime {
         this._timerHandles.set(
             id,
             this._setTimer(() => {
-                this.enqueueProtocolCommands(() => this._context.protocolCore.onTimer(id));
+                this.enqueueProtocolCommands(() => this._core.onTimer(id));
             }, ms)
         );
+    }
+
+    private handleRuntimeError(error: unknown): void {
+        const resolvedError = error instanceof Error ? error : new Error(String(error));
+        this._pendingRequests.rejectAll(resolvedError);
+        let disconnectCommands: HostCommand[] | undefined;
+        try {
+            disconnectCommands = this._core.disconnect();
+        } catch (disconnectError) {
+            this.log(
+                CLIENT_LOG_LEVEL.ERROR,
+                `protocol disconnect failed: ${String(disconnectError)}`
+            );
+        }
+        this.abort();
+        if (disconnectCommands) {
+            this.enqueue(disconnectCommands);
+        }
+        this._context.onRuntimeError(resolvedError);
+    }
+
+    private syncPublicState(): void {
+        this._context.onPublicState({
+            features: this._core.features,
+            recordingState: this._core.recordingState,
+            state: this._core.state
+        });
+    }
+
+    private log(level: ClientLogDetail["level"], message: string): void {
+        this._context.onLog({
+            id: BROWSER_RUNTIME_LOG_SOURCE,
+            level,
+            message
+        });
     }
 
     private isCurrent(epoch: number): boolean {
         return epoch === this._epoch;
     }
-}
-
-function emitRuntimeLog(
-    context: Pick<BrowserRuntimeContext, "onLog">,
-    level: ClientLogDetail["level"],
-    message: string
-): void {
-    context.onLog({
-        id: BROWSER_RUNTIME_LOG_SOURCE,
-        level,
-        message
-    });
 }

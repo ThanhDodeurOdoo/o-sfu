@@ -81,5 +81,28 @@ export default defineConfig([
                 ...globals.node
             }
         }
+    },
+    {
+        files: ["src/sfu_client.ts", "src/internals/peer_session.ts"],
+        rules: {
+            "no-restricted-imports": [
+                "error",
+                {
+                    paths: [
+                        {
+                            name: "./runtime_contract.js",
+                            message:
+                                "SfuClient must use BrowserRuntime intents instead of protocol bindings"
+                        },
+                        {
+                            allowImportNames: ["NegotiationKind"],
+                            name: "../runtime_contract.js",
+                            message:
+                                "PeerSession must return browser negotiation results instead of calling protocol bindings"
+                        }
+                    ]
+                }
+            ]
+        }
     }
 ]);

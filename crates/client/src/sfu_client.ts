@@ -18,22 +18,12 @@ import {
     type StreamType,
     type UpdateInfoOptions
 } from "./public_api.js";
-import {
-    COMMAND_KIND,
-    createProtocolCore,
-    wrapProtocolCoreBindings,
-    type HostCommand,
-    type ProtocolCoreBindings
-} from "./runtime_contract.js";
 import { BrowserRuntime } from "./internals/browser_runtime.js";
 import {
     EMPTY_FEATURES,
     type ConsumersCompat,
     type SfuClientDependencies
 } from "./internals/browser_types.js";
-import { LocalUploads } from "./internals/local_uploads.js";
-import { PendingRequests } from "./internals/pending_requests.js";
-import { RemoteTracks } from "./internals/remote_tracks.js";
 import {
     cloneIceServers,
     normalizeWebSocketUrl,
@@ -49,42 +39,29 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     public errors: Error[] = [];
     public recordingState: RecordingState = {};
     public sourceDescriptors: readonly SourceDescriptor[] = [];
-    /**
-     * Compatibility/debug view of the remote consumer map kept for Discuss
-     * diagnostics and the bundle contract (exposed to odoo).
-     */
     public readonly _consumers: ReadonlyMap<SessionId, ConsumersCompat>;
 
-    private readonly _localUploads = new LocalUploads();
-    private readonly _pendingRequests = new PendingRequests();
-    private readonly _protocolCore: ProtocolCoreBindings;
-    private readonly _remoteTracks = new RemoteTracks();
     private readonly _runtime: BrowserRuntime;
 
     private _state: ConnectionState = SFU_CLIENT_STATE.DISCONNECTED;
 
-    constructor();
     constructor(dependencies: SfuClientDependencies = {}) {
         super();
-        this._protocolCore = dependencies.createProtocolCore
-            ? wrapProtocolCoreBindings(dependencies.createProtocolCore())
-            : createProtocolCore();
         this._runtime = new BrowserRuntime(
             {
-                localUploads: this._localUploads,
                 onLog: (detail) => this._emitRuntimeLog(detail),
                 onRuntimeError: (error) => this._handleRuntimeError(error),
+                onPublicState: ({ state, features, recordingState }) => {
+                    this._state = state;
+                    this.availableFeatures = features;
+                    this.recordingState = recordingState;
+                },
                 onStateChange: (state, cause) => this._emitStateChange(state, cause),
-                onUpdate: (update) => this._emitUpdate(update),
-                pendingRequests: this._pendingRequests,
-                protocolCore: this._protocolCore,
-                remoteTracks: this._remoteTracks,
-                syncPublicState: () => this._syncPublicState()
+                onUpdate: (update) => this._emitUpdate(update)
             },
             dependencies
         );
-        this._consumers = this._remoteTracks.consumers;
-        this._syncPublicState();
+        this._consumers = this._runtime.consumers;
     }
 
     get state(): ConnectionState {
@@ -99,61 +76,23 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             CLIENT_LOG_LEVEL.INFO,
             `connect requested for ${options.channelUUID ? `room ${options.channelUUID}` : "implicit room"}`
         );
-        this._runtime.enqueueProtocolCommands(() => {
-            const commands = this._protocolCore.connect(
-                normalizeWebSocketUrl(url),
-                jwt,
-                options.channelUUID ?? null
-            );
-            if (commands.some((command) => command.kind === COMMAND_KIND.CONNECT)) {
-                this._runtime.setIceServers(iceServers);
-            }
-            return commands;
-        });
+        this._runtime.connect(
+            normalizeWebSocketUrl(url),
+            jwt,
+            options.channelUUID ?? null,
+            iceServers
+        );
     }
 
     disconnect(): void {
         this.errors = [];
         this._emitLog(CLIENT_LOG_LEVEL.INFO, "disconnect requested");
-        this._runtime.enqueueProtocolCommands(() => this._protocolCore.disconnect());
+        this._runtime.disconnect();
     }
 
     publish(type: StreamType, track: MediaStreamTrack | null | undefined): void {
         validateTrackForStreamType(type, track);
-        const transition = this._localUploads.setTrack(type, track ?? null);
-        const action =
-            transition.hadTrack && transition.hasTrack
-                ? "replacing"
-                : transition.hadTrack
-                  ? "removing"
-                  : transition.hasTrack
-                    ? "publishing"
-                    : "keeping";
-        this._emitLog(
-            transition.hadTrack && transition.hasTrack
-                ? CLIENT_LOG_LEVEL.DEBUG
-                : CLIENT_LOG_LEVEL.INFO,
-            `${action} ${type} track${transition.knownMid ? ` on mid ${transition.knownMid}` : ""}`
-        );
-
-        if (transition.hadTrack && transition.hasTrack) {
-            if (transition.knownMid) {
-                this._runtime.replaceLocalTrack(transition.knownMid, type);
-            }
-            return;
-        }
-
-        if (transition.hadTrack && !transition.hasTrack) {
-            this._runtime.detachLocalTrack(type);
-        }
-
-        if (transition.hadTrack === transition.hasTrack) {
-            return;
-        }
-
-        this._runtime.enqueueProtocolCommands(() =>
-            this._protocolCore.publish(type, transition.hasTrack)
-        );
+        this._runtime.publish(type, track ?? null);
     }
 
     subscribe(sessionId: SessionId, states: DownloadStates): void {
@@ -162,14 +101,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             CLIENT_LOG_LEVEL.INFO,
             `updating download states for user ${sessionId}: ${JSON.stringify(states)}`
         );
-        this._runtime.enqueueLocalOperation(() => {
-            this._remoteTracks.updateSubscriptionStates(sessionId, states, (update) => {
-                this._emitUpdate(update);
-            });
-        });
-        this._runtime.enqueueProtocolCommands(() =>
-            this._protocolCore.subscribe(sessionId, states)
-        );
+        this._runtime.subscribe(sessionId, states);
     }
 
     updateUpload(type: StreamType, track: MediaStreamTrack | null | undefined): void {
@@ -182,7 +114,7 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
         this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `updating user info: ${JSON.stringify(info)}`);
-        this._runtime.enqueueProtocolCommands(() => this._protocolCore.updateInfo(info));
+        this._runtime.updateInfo(info);
     }
 
     async getStats(): Promise<SfuStats> {
@@ -191,29 +123,15 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
 
     broadcast(message: unknown): void {
         this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `broadcast requested: ${JSON.stringify(message)}`);
-        this._runtime.enqueueProtocolCommands(() => this._protocolCore.broadcast(message));
+        this._runtime.broadcast(message);
     }
 
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
-        return this._beginPendingRequest(() => this._protocolCore.startRecording(options));
+        return this._runtime.startRecording(options);
     }
 
     stopRecording(): Promise<boolean> {
-        return this._beginPendingRequest(() => this._protocolCore.stopRecording());
-    }
-
-    private _beginPendingRequest(getCommands: () => HostCommand[]): Promise<boolean> {
-        return this._pendingRequests.begin(
-            getCommands,
-            (commands) => this._runtime.enqueue(commands),
-            (error) => this._handleRuntimeError(error)
-        );
-    }
-
-    private _syncPublicState(): void {
-        this._state = this._protocolCore.state;
-        this.availableFeatures = this._protocolCore.features;
-        this.recordingState = this._protocolCore.recordingState;
+        return this._runtime.stopRecording();
     }
 
     private _emitStateChange(state: ConnectionState, cause?: string): void {
@@ -252,28 +170,13 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         }
     }
 
-    private _handleRuntimeError(error: unknown): void {
-        const resolvedError = error instanceof Error ? error : new Error(String(error));
-        this.errors.push(resolvedError);
-        this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${resolvedError.message}`);
-        this._pendingRequests.rejectAll(resolvedError);
-        let disconnectCommands: HostCommand[] | undefined;
-        try {
-            disconnectCommands = this._protocolCore.disconnect();
-        } catch (disconnectError) {
-            this._emitLog(
-                CLIENT_LOG_LEVEL.ERROR,
-                `protocol disconnect failed: ${String(disconnectError)}`
-            );
-        }
-        this._runtime.abort();
-        if (disconnectCommands) {
-            this._runtime.enqueue(disconnectCommands);
-        }
+    private _handleRuntimeError(error: Error): void {
+        this.errors.push(error);
+        this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${error.message}`);
         this.dispatchEvent(
             new CustomEvent("handledError", {
                 detail: {
-                    error: resolvedError
+                    error
                 }
             })
         );

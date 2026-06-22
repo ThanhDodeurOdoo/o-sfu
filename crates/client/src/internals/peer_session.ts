@@ -7,7 +7,7 @@ import {
     type StreamType
 } from "../public_api.js";
 import type { NegotiationUploadSlot } from "../protocol.js";
-import type { HostCommand, NegotiationKind, ProtocolCoreBindings } from "../runtime_contract.js";
+import type { NegotiationKind } from "../runtime_contract.js";
 import type { ClientPeerConnection } from "./browser_types.js";
 import type { LocalUploads } from "./local_uploads.js";
 import type { RemoteTracks } from "./remote_tracks.js";
@@ -15,13 +15,17 @@ import { localDescriptionHasOnlyInactiveMedia } from "./sdp_media_direction.js";
 
 type RuntimeLog = (level: ClientLogDetail["level"], message: string) => void;
 
+type NegotiationAnswer = {
+    answerSdp: string;
+    shouldSignalTransportReady: boolean;
+};
+
 export class PeerSession {
     private _iceServers?: RTCIceServer[];
     private _activePeer: ClientPeerConnection | null = null;
 
     constructor(
         private readonly _create: (config: RTCConfiguration) => ClientPeerConnection,
-        private readonly _core: ProtocolCoreBindings,
         private readonly _uploads: LocalUploads,
         private readonly _tracks: RemoteTracks,
         private readonly _onUpdate: (update: ClientUpdateDetail) => void,
@@ -102,7 +106,7 @@ export class PeerSession {
         negotiationKind: NegotiationKind,
         offerSdp: string,
         uploadSlots: NegotiationUploadSlot[]
-    ): Promise<HostCommand[]> {
+    ): Promise<NegotiationAnswer | null> {
         const peer = this._activePeer;
         if (!peer) {
             throw new Error("received negotiation command without an active peer connection");
@@ -116,31 +120,33 @@ export class PeerSession {
             type: "offer"
         });
         if (!this.isActive(peer)) {
-            return [];
+            return null;
         }
         await this._uploads.attachPendingTracks(peer, uploadSlots);
         if (!this.isActive(peer)) {
-            return [];
+            return null;
         }
         const answer = await peer.createAnswer();
         if (!this.isActive(peer)) {
-            return [];
+            return null;
         }
         await peer.setLocalDescription(answer);
         if (!this.isActive(peer)) {
-            return [];
+            return null;
         }
         const answerSdp = await this.awaitStableLocalDescription(peer);
         if (!this.isActive(peer)) {
-            return [];
+            return null;
         }
-        const commands = this._core.submitNegotiationAnswer(requestId, negotiationKind, answerSdp);
         this._log(
             CLIENT_LOG_LEVEL.DEBUG,
             `answered ${negotiationKind} negotiation request ${requestId}`
         );
         if (negotiationKind !== "offer") {
-            return commands;
+            return {
+                answerSdp,
+                shouldSignalTransportReady: false
+            };
         }
         const connected = peer.connectionState === "connected";
         const needsTransportReadyFallback =
@@ -153,10 +159,10 @@ export class PeerSession {
                 "falling back to immediate transport-ready because the initial answer stayed inactive"
             );
         }
-        if (connected || needsTransportReadyFallback) {
-            commands.push(...this._core.onTransportReady());
-        }
-        return commands;
+        return {
+            answerSdp,
+            shouldSignalTransportReady: connected || needsTransportReadyFallback
+        };
     }
 
     private handleConnectionState(peer: ClientPeerConnection): void {
