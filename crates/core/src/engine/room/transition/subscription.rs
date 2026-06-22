@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use o_sfu_router::MediaCapabilities;
+use o_sfu_router::rtp::MediaCapabilities;
 
 use super::super::{
     RoomUserOperation,

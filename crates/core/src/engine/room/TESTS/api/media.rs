@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use o_sfu_router::{
-    MediaKind, MediaStream as RouterRtpParameters, derive_consumable_rtp_parameters,
+    MediaKind, negotiation::derive_consumable_rtp_parameters,
+    rtp::MediaStream as RouterRtpParameters,
 };
 use tracing::warn;
 
@@ -24,7 +25,7 @@ pub struct NegotiatedPublish {
     pub stream_type: TestSourceKind,
     pub media_kind: MediaKind,
     pub transport_media_id: TransportMediaId,
-    pub consumable_rtp_parameters: o_sfu_router::MediaStream,
+    pub consumable_rtp_parameters: RouterRtpParameters,
 }
 
 #[derive(Clone, Copy)]

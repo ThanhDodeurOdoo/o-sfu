@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities};
+use o_sfu_router::rtp::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities};
 
 use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,

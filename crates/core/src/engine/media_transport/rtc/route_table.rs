@@ -18,6 +18,7 @@ use std::{
 };
 
 use active_rank::ActiveSpeakerRank;
+use o_sfu_router::rtp::MediaStream;
 use rid_refresh::RidRefreshQueue;
 use source::{RemovedConsumerRoute, RouteSource};
 pub(super) use source::{RidReadinessRouteUpdate, RidReadinessSelectedGateUpdate};
@@ -403,7 +404,7 @@ impl RouteTable {
     pub(super) fn refresh_decoder_codec(
         &mut self,
         source_id: TransportMediaId,
-        parameters: &o_sfu_router::MediaStream,
+        parameters: &MediaStream,
     ) -> Option<DecoderRefreshCodec> {
         let previous = self.decoder_refresh_codec(source_id);
         self.set_decoder_refresh_codec(source_id, DecoderRefreshCodec::from_parameters(parameters));

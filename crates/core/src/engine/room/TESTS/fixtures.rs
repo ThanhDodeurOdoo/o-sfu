@@ -8,7 +8,10 @@ use o_sfu_router::test_support::rtp_samples::{
     sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
     sample_video_rtp_parameters,
 };
-pub(super) use o_sfu_router::{MediaCapabilities, MediaKind, MediaStream};
+pub(super) use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaCapabilities, MediaStream},
+};
 pub(super) use tokio::time::timeout;
 
 pub(super) use super::super::{

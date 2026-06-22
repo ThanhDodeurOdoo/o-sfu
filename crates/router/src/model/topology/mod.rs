@@ -17,10 +17,10 @@ use crate::model::proof_storage::{BTreeMap, BTreeSet};
 use crate::model::{
     ConnectionId, ConsumerCapability, ConsumerId as RouterConsumerId, ConsumerRouteState,
     MediaCapabilities, MediaKind as RouterMediaKind, MediaWorkerId, ProducerId as RouterProducerId,
-    ProducerRouteState, RouterId,
+    ProducerRouteState, RouterError, RouterId,
 };
 
-pub mod router_state;
+pub(super) mod router_state;
 mod shadow;
 #[cfg(any(test, feature = "test-support"))]
 #[path = "../TESTS/topology_support.rs"]
@@ -40,8 +40,10 @@ pub enum RoutingError {
     },
     /// The user has no committed home router in this routing state.
     MissingSessionPlacement { user_id: UserId },
+    /// The topology adapter has lost the pure-router session mapping for a user.
+    MissingSessionMapping { user_id: UserId },
     /// The pure router rejected a topology operation.
-    RouterState(RouterAdapterError),
+    Router(RouterError),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -67,7 +69,12 @@ impl RoutingRepairReport {
 
 impl From<RouterAdapterError> for RoutingError {
     fn from(error: RouterAdapterError) -> Self {
-        Self::RouterState(error)
+        match error {
+            RouterAdapterError::MissingSessionMapping { user_id } => {
+                Self::MissingSessionMapping { user_id }
+            }
+            RouterAdapterError::Router(error) => Self::Router(error),
+        }
     }
 }
 
@@ -337,7 +344,7 @@ impl RoutingTopology {
     /// # Errors
     ///
     /// returns [`RoutingError::MissingRouterForSession`] if the selected router
-    /// is absent or [`RoutingError::RouterState`] if the pure router rejects the
+    /// is absent or [`RoutingError::Router`] if the pure router rejects the
     /// session or transport mutation
     pub fn commit_session_placement(
         &mut self,
@@ -453,7 +460,7 @@ impl RoutingTopology {
     /// # Errors
     ///
     /// returns [`RoutingError::MissingSessionPlacement`] when the user has no
-    /// committed home placement or [`RoutingError::RouterState`] when the pure
+    /// committed home placement or [`RoutingError::Router`] when the pure
     /// router rejects producer insertion
     pub fn add_producer(
         &mut self,
@@ -493,7 +500,7 @@ impl RoutingTopology {
     ///
     /// returns [`RoutingError::MissingSessionPlacement`] when the receiver has
     /// no committed home placement, [`RoutingError::MissingRouter`] when the
-    /// producer router is absent or [`RoutingError::RouterState`] when the pure
+    /// producer router is absent or [`RoutingError::Router`] when the pure
     /// router rejects shadow setup or consumer insertion
     pub fn add_consumer_with_route_state(
         &mut self,
@@ -533,7 +540,7 @@ impl RoutingTopology {
     /// # Errors
     ///
     /// returns [`RoutingError::MissingRouter`] when the producer router is absent
-    /// or [`RoutingError::RouterState`] when the pure router rejects the update
+    /// or [`RoutingError::Router`] when the pure router rejects the update
     pub fn set_producer_route_state(
         &mut self,
         producer_id: RoutedProducerId,
@@ -549,7 +556,7 @@ impl RoutingTopology {
     /// # Errors
     ///
     /// returns [`RoutingError::MissingRouter`] when the consumer router is absent
-    /// or [`RoutingError::RouterState`] when the pure router rejects the update
+    /// or [`RoutingError::Router`] when the pure router rejects the update
     pub fn set_consumer_route_state(
         &mut self,
         consumer_id: RoutedConsumerId,
@@ -565,7 +572,7 @@ impl RoutingTopology {
     /// # Errors
     ///
     /// returns [`RoutingError::MissingRouter`] when the consumer router is absent
-    /// or [`RoutingError::RouterState`] when the pure router rejects teardown
+    /// or [`RoutingError::Router`] when the pure router rejects teardown
     pub fn remove_consumer(&mut self, consumer_id: RoutedConsumerId) -> Result<(), RoutingError> {
         self.router_mut(consumer_id.router_id())?
             .remove_consumer(consumer_id.consumer_id())?;
@@ -579,7 +586,7 @@ impl RoutingTopology {
     /// # Errors
     ///
     /// returns [`RoutingError::MissingRouter`] when the producer router is absent
-    /// or [`RoutingError::RouterState`] when the pure router rejects teardown
+    /// or [`RoutingError::Router`] when the pure router rejects teardown
     pub fn remove_producer(
         &mut self,
         producer_id: RoutedProducerId,
@@ -600,7 +607,7 @@ impl RoutingTopology {
     ///
     /// returns [`RoutingError::MissingSessionPlacement`] when the user has no
     /// home placement, [`RoutingError::MissingRouterForSession`] when the home
-    /// router was detached or [`RoutingError::RouterState`] when a pure router
+    /// router was detached or [`RoutingError::Router`] when a pure router
     /// rejects teardown
     pub fn remove_session(
         &mut self,

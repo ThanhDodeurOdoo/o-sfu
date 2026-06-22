@@ -16,7 +16,7 @@ use fixtures::{
     LocalVideoRoute, RemoteVideoRoute, prepare_pending_selected_rid_route,
     set_consumer_packet_gate_at,
 };
-use o_sfu_router::{MediaStream as RouterRtpParameters, PayloadType, StreamBinding};
+use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, PayloadType, StreamBinding};
 use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid};
 use tokio::sync::{mpsc, oneshot};
 

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use o_sfu_rfc::rtp as rfc_rtp;
+use o_sfu_router::rtp::{CodecSetting, MediaCodecCapability};
 
 use super::client_rtp_capabilities_from_answer;
 
@@ -25,16 +26,14 @@ fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
             let packetization_mode = codec
                 .settings()
                 .find_map(|setting| match setting {
-                    o_sfu_router::CodecSetting::H264PacketizationMode(mode) => {
-                        Some(mode.fmtp_value())
-                    }
+                    CodecSetting::H264PacketizationMode(mode) => Some(mode.fmtp_value()),
                     _ => None,
                 })
                 .unwrap_or(u8::MAX);
             let profile_level_id = codec
                 .settings()
                 .find_map(|setting| match setting {
-                    o_sfu_router::CodecSetting::H264ProfileLevelId(profile_level_id) => {
+                    CodecSetting::H264ProfileLevelId(profile_level_id) => {
                         Some(profile_level_id.clone())
                     }
                     _ => None,
@@ -72,7 +71,7 @@ fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
     let optional_payload_types = projected
         .codecs()
         .filter(|codec| matches!(codec.codec_name(), "H264" | "VP9"))
-        .filter_map(o_sfu_router::MediaCodecCapability::payload_type)
+        .filter_map(MediaCodecCapability::payload_type)
         .collect::<BTreeSet<_>>();
     let rtx_associations = projected
         .codecs()

@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding};
+use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding};
 use str0m::media::MediaKind;
 use tokio::runtime::{Builder, Runtime};
 

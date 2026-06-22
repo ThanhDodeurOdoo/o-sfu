@@ -14,13 +14,13 @@
 
 use o_sfu_rfc::rtp as rfc_rtp;
 
+#[cfg(any(test, feature = "test-support"))]
+use super::diagnostic::{ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference};
 use super::{
     CodecSetting, HeaderExtension, HeaderExtensionUri, MediaCapabilities, MediaCodec,
     MediaCodecCapability, MediaFormat, MediaKind, MediaStream, PayloadType, RtcpFeedback,
     RtcpFeedbackKind,
 };
-#[cfg(any(test, feature = "test-support"))]
-use super::{ParseDiagnostic, ParseDiagnosticKind, ParseDiagnosticSpec, RfcReference};
 
 /// Failure raised while deriving or negotiating RTP parameters.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

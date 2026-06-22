@@ -5,7 +5,7 @@ use std::{
     sync::Mutex,
 };
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use tracing::warn;
 
 #[cfg(test)]

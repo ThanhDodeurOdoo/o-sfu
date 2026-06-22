@@ -1,5 +1,7 @@
 use o_sfu_protocol::wire::{ServerMessage, ServerRequest, SourceDescriptor, TrackBinding};
-use o_sfu_router::{MediaKind, test_support::rtp_samples::sample_simulcast_video_rtp_parameters};
+use o_sfu_router::{
+    MediaKind, rtp::MediaStream, test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
+};
 
 use super::fixtures::*;
 
@@ -209,6 +211,6 @@ fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {
     }
 }
 
-fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::MediaStream {
+fn sample_video_rtp_parameters(mid: &str) -> MediaStream {
     sample_simulcast_video_rtp_parameters(Some(mid))
 }

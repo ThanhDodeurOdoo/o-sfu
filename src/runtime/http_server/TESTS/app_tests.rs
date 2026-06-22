@@ -1,6 +1,7 @@
 use o_sfu_protocol::wire::StreamType;
 use o_sfu_router::{
-    MediaKind, MediaStream,
+    MediaKind,
+    rtp::MediaStream,
     test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
 };
 

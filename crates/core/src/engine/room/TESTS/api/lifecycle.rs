@@ -1,5 +1,5 @@
 use o_sfu_router::{
-    MediaCapabilities, RouterId, test_support::rtp_samples::sample_client_rtp_capabilities,
+    RouterId, rtp::MediaCapabilities, test_support::rtp_samples::sample_client_rtp_capabilities,
 };
 
 use super::super::super::{

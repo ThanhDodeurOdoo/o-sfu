@@ -5,12 +5,15 @@
 
 use o_sfu_model::UserId;
 
-use super::super::{
-    ConnectionId, ConsumerCapability, MediaKind as RouterMediaKind, MediaWorkerId,
-    ProducerId as RouterProducerId, RoutedProducerId, RouterError, RouterId, RouterPlacement,
-    RouterPlacements, RouterPlacementsError, RoutingError, RoutingTopology, SessionId,
+use crate::{
+    ids::{ConnectionId, MediaWorkerId, ProducerId as RouterProducerId, RouterId, SessionId},
+    rtp::MediaKind as RouterMediaKind,
+    state::{ConsumerCapability, RouterError},
+    topology::{
+        RoutedProducerId, RouterPlacement, RouterPlacements, RouterPlacementsError, RoutingError,
+        RoutingTopology,
+    },
 };
-use crate::model::topology::router_state::RouterAdapterError;
 
 fn placement(router: u64, media_worker: usize) -> RouterPlacement {
     RouterPlacement {
@@ -141,8 +144,8 @@ fn topology_rolls_back_replacement_after_duplicate_session_failure() {
             placement(9, 0),
             [],
         ),
-        Err(RoutingError::RouterState(RouterAdapterError::Router(
-            RouterError::DuplicateSession(SessionId(colliding_connection)),
+        Err(RoutingError::Router(RouterError::DuplicateSession(
+            SessionId(colliding_connection),
         )))
     );
     assert_eq!(
@@ -413,9 +416,7 @@ fn topology_reports_missing_user_mapping_from_router_state() {
 
     assert_eq!(
         topology.add_producer(&user_id, RouterMediaKind::Audio),
-        Err(RoutingError::RouterState(
-            RouterAdapterError::MissingSessionMapping { user_id }
-        ))
+        Err(RoutingError::MissingSessionMapping { user_id })
     );
 }
 
@@ -428,8 +429,8 @@ fn topology_preserves_pure_router_errors_without_synthetic_user_ids() {
             RoutedProducerId::new(RouterId(9), RouterProducerId(99),),
             []
         ),
-        Err(RoutingError::RouterState(RouterAdapterError::Router(
-            RouterError::MissingProducer(RouterProducerId(99))
+        Err(RoutingError::Router(RouterError::MissingProducer(
+            RouterProducerId(99)
         )))
     );
 }

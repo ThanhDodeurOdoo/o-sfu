@@ -9,12 +9,16 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use o_sfu_router::{
-    ConsumerCapability, ConsumerId, MediaKind as RouterMediaKind, ProducerId, RoutedConsumerId,
-    RoutedProducerId, RouterId, derive_consumable_rtp_parameters,
+    MediaKind as RouterMediaKind, RouterId,
+    ids::{ConsumerId, ProducerId},
+    negotiation::derive_consumable_rtp_parameters,
+    rtp::{MediaStream, Mid, Rid, Ssrc},
+    state::ConsumerCapability,
     test_support::rtp_samples::{
         sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
         sample_video_rtp_parameters,
     },
+    topology::{RoutedConsumerId, RoutedProducerId},
 };
 
 use super::{
@@ -264,7 +268,7 @@ fn install_test_published_producer_with_route(
     connection_id: ConnectionId,
     stream_type: TestSourceKind,
     routed_producer_id: RoutedProducerId,
-    consumable_rtp_parameters: o_sfu_router::MediaStream,
+    consumable_rtp_parameters: MediaStream,
     transport_media_id: TransportMediaId,
 ) -> (ProducerRuntimeId, PublishedSourceId) {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
@@ -365,7 +369,7 @@ fn install_test_consumer_state(
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(
                 RouterId(1),
-                o_sfu_router::ConsumerId(consumer_media.as_u64()),
+                ConsumerId(consumer_media.as_u64()),
             ),
             consumer_connection_id,
             source_connection_id,
@@ -969,28 +973,13 @@ fn commit_publish_reservation_registers_all_source_encodings() {
         source_kind_for_stream_id(source.stream_id()),
         Some(TestSourceKind::ScalableVideo)
     );
-    assert_eq!(
-        source.mid().map(o_sfu_router::Mid::as_str),
-        Some("camera-0")
-    );
+    assert_eq!(source.mid().map(Mid::as_str), Some("camera-0"));
     let encodings = source.encodings().collect::<Vec<_>>();
     assert_eq!(encodings.len(), 2);
-    assert_eq!(
-        encodings[0].rid().map(o_sfu_router::Rid::as_str),
-        Some("lo")
-    );
-    assert_eq!(
-        encodings[1].rid().map(o_sfu_router::Rid::as_str),
-        Some("hi")
-    );
-    assert_eq!(
-        encodings[0].primary_ssrc(),
-        Some(o_sfu_router::Ssrc::new(31_001))
-    );
-    assert_eq!(
-        encodings[1].primary_ssrc(),
-        Some(o_sfu_router::Ssrc::new(31_002))
-    );
+    assert_eq!(encodings[0].rid().map(Rid::as_str), Some("lo"));
+    assert_eq!(encodings[1].rid().map(Rid::as_str), Some("hi"));
+    assert_eq!(encodings[0].primary_ssrc(), Some(Ssrc::new(31_001)));
+    assert_eq!(encodings[1].primary_ssrc(), Some(Ssrc::new(31_002)));
     assert_eq!(encodings[0].max_bitrate(), Some(Bitrate::from_kbps(150)));
     assert_eq!(encodings[1].max_bitrate(), Some(Bitrate::from_kbps(900)));
     assert_upload_profile_metadata(&encodings);

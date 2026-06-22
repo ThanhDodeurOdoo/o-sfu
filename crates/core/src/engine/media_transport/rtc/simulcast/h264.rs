@@ -6,7 +6,7 @@
 //! RTC edge exposes RID simulcast metadata for it.
 
 use o_sfu_rfc::rtp::{self as rfc_rtp, h264::PacketizationMode};
-use o_sfu_router::{CodecSetting, MediaFormat, MediaStream as RouterRtpParameters};
+use o_sfu_router::rtp::{CodecSetting, MediaFormat, MediaStream as RouterRtpParameters};
 
 use super::common::{self, SimulcastLayerSpec};
 use crate::{VideoBitrateLimits, engine::media_transport::SessionUploadEncoding};

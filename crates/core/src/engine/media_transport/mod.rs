@@ -32,7 +32,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 pub use builder::{MediaTransportBuildError, MediaTransportBuilder};
 pub use config::{MediaTransportConfig, MediaTransportDeps};
-use o_sfu_router::{MediaKind, MediaStream as RouterRtpParameters};
+use o_sfu_router::{MediaKind, rtp::MediaStream as RouterRtpParameters};
 pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };

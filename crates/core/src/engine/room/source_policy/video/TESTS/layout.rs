@@ -3,6 +3,8 @@
     reason = "test source fixtures should fail loudly when descriptor construction regresses"
 )]
 
+use o_sfu_router::{MediaKind, rtp::Rid};
+
 use super::*;
 use crate::engine::source_model::{
     PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
@@ -15,14 +17,14 @@ fn source_with_layout(policy: SourceLayoutPolicy) -> PublishedSourceDescriptor {
         source_id: PublishedSourceId::from_raw(1),
         owner: PublishedSourceOwner::new(UserId::Integer(1)),
         stream_id: UserStreamId::new("video"),
-        media_kind: o_sfu_router::MediaKind::Video,
+        media_kind: MediaKind::Video,
         policy: SourcePolicy::new(Some(policy), SourceAdaptationPolicy::None, None),
         mid: None,
         encodings: vec![SourceEncodingDescriptor::new(
             SourceEncodingDescriptorParts {
                 encoding_id: SourceEncodingId::from_raw(1),
                 source_id: PublishedSourceId::from_raw(1),
-                rid: Some(o_sfu_router::Rid::new("hi")),
+                rid: Some(Rid::new("hi")),
                 primary_ssrc: None,
                 repair_ssrc: None,
                 max_bitrate: None,

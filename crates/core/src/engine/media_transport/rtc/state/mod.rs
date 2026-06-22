@@ -31,7 +31,7 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::{
     Rtc,
     change::SdpPendingOffer,

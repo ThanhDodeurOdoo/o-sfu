@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
-use o_sfu_router::{MediaKind, MediaStream, StreamBinding};
+use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaStream, StreamBinding},
+};
 use str0m::media::Mid;
 
 use super::{MediaTransport, MediaTransportBuildError};

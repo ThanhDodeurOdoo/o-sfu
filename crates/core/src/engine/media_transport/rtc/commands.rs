@@ -9,7 +9,7 @@
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 

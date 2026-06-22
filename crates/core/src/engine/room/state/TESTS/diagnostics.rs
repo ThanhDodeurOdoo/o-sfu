@@ -3,7 +3,7 @@
     reason = "diagnostics fixtures should fail loudly when they build invalid source graphs"
 )]
 
-use o_sfu_router::{MediaKind, Rid};
+use o_sfu_router::{MediaKind, rtp::Rid};
 
 use super::*;
 use crate::engine::source_model::{

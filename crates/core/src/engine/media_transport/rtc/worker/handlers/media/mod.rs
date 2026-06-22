@@ -7,7 +7,7 @@ mod control;
 mod keyframe;
 mod lifecycle;
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::MediaKind;
 
 use super::super::super::commands::RemoteSourceControl;

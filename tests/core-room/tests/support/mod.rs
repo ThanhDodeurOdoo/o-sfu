@@ -35,7 +35,7 @@ use o_sfu_core::{
     },
 };
 use o_sfu_router::{
-    MediaStream,
+    rtp::MediaStream,
     test_support::rtp_samples::{
         sample_audio_rtp_parameters, sample_simulcast_video_rtp_parameters,
         sample_video_rtp_parameters,

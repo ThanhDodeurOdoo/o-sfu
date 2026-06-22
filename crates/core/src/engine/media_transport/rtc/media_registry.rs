@@ -10,6 +10,7 @@ use std::{
     time::Instant,
 };
 
+use o_sfu_router::rtp::MediaStream;
 use str0m::{
     media::{Mid, Rid},
     rtp::Ssrc,
@@ -602,7 +603,7 @@ impl PacketLoopState {
         &mut self,
         session_key: &TransportSessionKey,
         mid: Mid,
-        parameters: &o_sfu_router::MediaStream,
+        parameters: &MediaStream,
     ) {
         let Some(transport_media_id) = self
             .session_media

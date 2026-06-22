@@ -13,9 +13,14 @@ use o_sfu_rfc::{
     webrtc,
 };
 use o_sfu_router::{
-    HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaKind, MediaStream,
-    PayloadType, RtcpFeedback, RtcpFeedbackKind, RtpNegotiationError, StreamBinding,
-    derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
+    MediaKind,
+    negotiation::{
+        RtpNegotiationError, derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
+    },
+    rtp::{
+        HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaFormat, MediaStream,
+        PayloadType, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
+    },
 };
 
 fn pt(value: u8) -> PayloadType {

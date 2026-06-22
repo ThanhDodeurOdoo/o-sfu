@@ -1,7 +1,7 @@
 //! Shared RID simulcast helpers for RTC-edge codec profiles.
 
 use o_sfu_rfc::webrtc;
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::{
     Mid, Rid as Str0mRid, Simulcast as Str0mSimulcast, SimulcastLayer as Str0mSimulcastLayer,
 };

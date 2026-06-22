@@ -2,8 +2,10 @@ use std::net::SocketAddr;
 
 use o_sfu_rfc::rtp::{CodecName, h264::PacketizationMode};
 use o_sfu_router::{
-    CodecSetting, MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters,
-    PayloadType, StreamBinding,
+    MediaKind as RouterMediaKind,
+    rtp::{
+        CodecSetting, MediaFormat, MediaStream as RouterRtpParameters, PayloadType, StreamBinding,
+    },
 };
 use str0m::media::{Mid, Rid};
 

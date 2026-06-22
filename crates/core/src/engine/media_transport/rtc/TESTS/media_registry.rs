@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use o_sfu_router::{MediaStream as RouterRtpParameters, StreamBinding};
+use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, StreamBinding};
 
 use super::*;
 use crate::engine::{UserId, media_transport::rtc::test_support::test_transport_session_key};

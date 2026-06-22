@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use o_sfu_router::CodecSetting;
+use o_sfu_router::rtp::CodecSetting;
 
 use super::{router_rtp_capabilities, router_rtp_capabilities_with_preferences};
 use crate::{CodecPreferences, MediaCodecFlags, VideoCodecPreference};

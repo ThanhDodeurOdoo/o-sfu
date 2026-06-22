@@ -7,9 +7,13 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
-    ConsumerCapability, ConsumerId, ConsumerRouteState, ConsumerSpec, MediaKind, ProducerId,
-    ProducerRouteState, ProducerSpec, Router, RouterError, RouterEvent, RouterId, RouterObserver,
-    Session, SessionId, SessionState, TransportId, model::test_support::router_state_snapshot,
+    MediaKind, Router, RouterError, RouterId,
+    ids::{ConsumerId, ProducerId, SessionId, TransportId},
+    model::test_support::router_state_snapshot,
+    state::{
+        ConsumerCapability, ConsumerRouteState, ConsumerSpec, ProducerRouteState, ProducerSpec,
+        RouterEvent, RouterObserver, Session, SessionState,
+    },
 };
 
 const ROUTER: RouterId = RouterId(1);

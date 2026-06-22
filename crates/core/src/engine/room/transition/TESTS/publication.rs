@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use o_sfu_router::test_support::rtp_samples::sample_simulcast_video_rtp_parameters;
+use o_sfu_router::{
+    rtp::MediaCapabilities, test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
+};
 
 use super::PublishStageOutcome;
 use crate::{
@@ -63,7 +65,7 @@ async fn prepare_publish_session(
         room.apply_session_negotiated(
             user_id,
             connection_id,
-            o_sfu_router::MediaCapabilities::default(),
+            MediaCapabilities::default(),
             media_transport,
         )
         .await,

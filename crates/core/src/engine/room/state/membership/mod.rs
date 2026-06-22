@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, mem};
 
+use o_sfu_router::rtp::MediaCapabilities;
 use tracing::{debug, error, warn};
 
 use super::{
@@ -343,7 +344,7 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        capabilities: o_sfu_router::MediaCapabilities,
+        capabilities: MediaCapabilities,
     ) -> Option<UserNegotiationUpdate> {
         let user = self.user_mut_for_connection(user_id, connection_id)?;
         user.parsed_client_rtp_capabilities = Some(capabilities);

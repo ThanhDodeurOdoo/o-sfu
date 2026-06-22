@@ -1,9 +1,4 @@
 //! pure router state machine plus local dependency indexes
-//!
-//! this file owns legal topology transitions for one router instance
-//! callers supply already-normalized ids and capability results from outer layers
-//! the router records pure session, transport, producer and consumer state
-//! then uses reverse indexes to keep teardown proportional to the affected topology
 
 use super::{
     Consumer, ConsumerId, ConsumerRouteState, ConsumerSpec, NoopRouterObserver, Producer,
@@ -26,29 +21,17 @@ use super::{
 /// relation in the same transition
 #[derive(Debug, Clone)]
 pub struct Router<O: RouterObserver = NoopRouterObserver> {
-    /// stable identity for this pure router instance
     pub(super) id: RouterId,
-    /// live sessions admitted through [`Router::join`]
     pub(super) sessions: BTreeMap<SessionId, Session>,
-    /// live transports grouped by id in the primary topology map
     pub(super) transports: BTreeMap<TransportId, Transport>,
-    /// live source-side producers keyed by router-native producer id
     pub(super) producers: BTreeMap<ProducerId, Producer>,
-    /// live receiver-side consumers keyed by router-native consumer id
     pub(super) consumers: BTreeMap<ConsumerId, Consumer>,
-    /// reverse ownership indexes used for local teardown plus invariant checks
     pub(super) indexes: RouterIndexes,
-    /// synchronous lifecycle sink for outer runtime state
     observer: O,
 }
 
 impl Router<NoopRouterObserver> {
     /// create a router without lifecycle observation
-    ///
-    /// this constructor is the normal choice for tests or callers that only need
-    /// pure topology state
-    /// use [`Router::new_with_observer`] when session or producer lifecycle
-    /// events must be mirrored outside the router
     #[must_use]
     pub fn new(id: RouterId) -> Self {
         Self::new_with_observer(id, NoopRouterObserver)
@@ -58,8 +41,7 @@ impl Router<NoopRouterObserver> {
 impl<O: RouterObserver> Router<O> {
     /// create a router with a synchronous observer
     ///
-    /// the observer is called while the router mutation is still executing
-    /// it must stay cheap and must not call back into the same router
+    /// observer callbacks run inside router mutations and must not re-enter the router
     #[must_use]
     pub fn new_with_observer(id: RouterId, observer: O) -> Self {
         Self {
@@ -73,16 +55,11 @@ impl<O: RouterObserver> Router<O> {
         }
     }
 
-    /// return the stable router identity
     #[must_use]
     pub fn id(&self) -> RouterId {
         self.id
     }
 
-    /// return the number of live sessions
-    ///
-    /// this is a primary-map count
-    /// it does not include transports or media entities
     #[must_use]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
@@ -131,8 +108,6 @@ impl<O: RouterObserver> Router<O> {
 
     /// start a scoped mutation flow for an existing receive transport
     ///
-    /// receive handles can publish producers but cannot consume sources
-    ///
     /// # Errors
     ///
     /// returns [`RouterError::MissingTransport`] when the transport does not exist
@@ -151,8 +126,6 @@ impl<O: RouterObserver> Router<O> {
     }
 
     /// start a scoped mutation flow for an existing send transport
-    ///
-    /// send handles can consume producers but cannot publish sources
     ///
     /// # Errors
     ///
@@ -406,11 +379,6 @@ impl<O: RouterObserver> Router<O> {
     }
 
     /// remove a producer after the caller has resolved its owning session
-    ///
-    /// this helper is used by both explicit producer removal and wider transport
-    /// or session teardown
-    /// it assumes the caller already knows the session id
-    /// needed for observer emission
     fn detach_producer(&mut self, producer_id: ProducerId, session_id: SessionId) {
         let Some(producer) = self.producers.remove(&producer_id) else {
             return;
@@ -432,10 +400,6 @@ impl<O: RouterObserver> Router<O> {
         });
     }
 
-    /// remove a consumer primary record plus both reverse relations
-    ///
-    /// the helper tolerates missing consumers because multiple
-    /// teardown paths can converge here after a relation has already been drained
     fn detach_consumer(&mut self, consumer_id: ConsumerId) {
         let Some(consumer) = self.consumers.remove(&consumer_id) else {
             return;
