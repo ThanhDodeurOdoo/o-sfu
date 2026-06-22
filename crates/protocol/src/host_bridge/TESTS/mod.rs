@@ -12,9 +12,7 @@ use crate::{
         Command, CommandBatch, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
     shared::{StreamType, UserId},
-    signaling::{
-        RequestId, SourceDescriptor, SourceEncodingDescriptor, TrackBinding, UploadLayerPolicyRole,
-    },
+    signaling::{RequestId, SourceDescriptor, TrackBinding},
 };
 
 #[test]
@@ -131,7 +129,7 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
 }
 
 #[test]
-fn host_command_bridge_projects_source_snapshots() {
+fn host_command_bridge_emits_source_update_for_source_snapshot() {
     let commands = project_commands(
         CommandBatch::try_from_vec(vec![Command::EmitEvent {
             event: ProtocolEvent::SourceSnapshot {
@@ -140,16 +138,8 @@ fn host_command_bridge_projects_source_snapshots() {
                     user_id: UserId::Integer(7),
                     stream_type: StreamType::Camera,
                     active: true,
-                    mid: Some(String::from("0")),
-                    encodings: vec![SourceEncodingDescriptor {
-                        encoding_id: String::from("encoding-1"),
-                        rid: Some(String::from("lo")),
-                        max_bitrate: Some(150_000),
-                        resolution_scale: Some(4),
-                        max_framerate: None,
-                        policy_role: Some(UploadLayerPolicyRole::Thumbnail),
-                        max_temporal_layer_id: Some(1),
-                    }],
+                    mid: None,
+                    encodings: Vec::new(),
                 }],
             },
         }])
@@ -159,22 +149,19 @@ fn host_command_bridge_projects_source_snapshots() {
     assert_eq!(
         serde_json::to_value(commands).unwrap_or_default(),
         json!([{
-            "kind": "replaceSourceDescriptors",
-            "sources": [{
-                "sourceId": "source-7",
-                "sessionId": 7,
-                "type": "camera",
-                "active": true,
-                "mid": "0",
-                "encodings": [{
-                    "encodingId": "encoding-1",
-                    "rid": "lo",
-                    "maxBitrate": 150_000,
-                    "resolutionScale": 4,
-                    "policyRole": "thumbnail",
-                    "maxTemporalLayerId": 1
-                }]
-            }]
+            "kind": "emitUpdate",
+            "update": {
+                "name": "source",
+                "payload": {
+                    "sources": [{
+                        "sourceId": "source-7",
+                        "sessionId": 7,
+                        "type": "camera",
+                        "active": true,
+                        "encodings": []
+                    }]
+                }
+            }
         }])
     );
 }

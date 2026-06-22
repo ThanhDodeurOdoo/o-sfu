@@ -20,6 +20,20 @@ const WELCOME_FRAME = JSON.stringify([
         }
     }
 ]);
+const SOURCE = {
+    active: true,
+    encodings: [{ encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" }],
+    mid: "0",
+    sessionId: 42,
+    sourceId: "source-1",
+    type: "camera"
+};
+const SOURCE_FRAME = JSON.stringify([
+    {
+        t: "sources",
+        p: [SOURCE]
+    }
+]);
 
 test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
@@ -329,6 +343,9 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
             if (CLIENT_UPDATE.TRACK !== "track") {
                 throw new Error("unexpected client update export");
             }
+            if (CLIENT_UPDATE.SOURCE !== "source") {
+                throw new Error("unexpected source update export");
+            }
             if (SFU_CLIENT_STATE.CONNECTED !== "connected") {
                 throw new Error("unexpected state export");
             }
@@ -336,6 +353,9 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
             harness.client = client;
             client.addEventListener("stateChange", (event) => {
                 harness.stateChanges.push(structuredClone(event.detail));
+            });
+            client.addEventListener("update", (event) => {
+                harness.events.push(structuredClone(event.detail));
             });
             client.connect("https://example.test/ws", "jwt-token", {
                 channelUUID: "channel-a"
@@ -351,19 +371,32 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
             socket.emitMessage(frame);
             socket.emitMessage(JSON.stringify([{ t: "offer", q: "7", p: { sdp: "offer-sdp" } }]));
         }, WELCOME_FRAME);
+        await page.evaluate((frame) => {
+            globalThis.__browserHarness.state.sockets[0].emitMessage(frame);
+        }, SOURCE_FRAME);
 
         await expect
             .poll(async () =>
                 page.evaluate(() => ({
+                    events: globalThis.__browserHarness.events,
                     fetchCalls: globalThis.__browserHarness.fetchCalls,
                     peerConnections: globalThis.__browserHarness.state.peerConnections.length,
                     sent: globalThis.__browserHarness.state.sockets[0].sent.map((payload) =>
                         JSON.parse(payload)
                     ),
+                    sourceDescriptors: globalThis.__browserHarness.client.sourceDescriptors,
                     states: globalThis.__browserHarness.stateChanges
                 }))
             )
             .toEqual({
+                events: [
+                    {
+                        name: "source",
+                        payload: {
+                            sources: [SOURCE]
+                        }
+                    }
+                ],
                 fetchCalls: [],
                 peerConnections: 1,
                 sent: [
@@ -382,7 +415,8 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
                     { cause: undefined, state: "connecting" },
                     { cause: undefined, state: "authenticated" },
                     { cause: undefined, state: "connected" }
-                ]
+                ],
+                sourceDescriptors: [SOURCE]
             });
     } finally {
         await page.evaluate(() => {
