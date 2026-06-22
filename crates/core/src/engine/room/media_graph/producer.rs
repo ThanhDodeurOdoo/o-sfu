@@ -1,5 +1,6 @@
 use o_sfu_router::{
-    MediaFormat, MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc,
+    MediaKind as RouterMediaKind,
+    rtp::{MediaFormat, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc},
 };
 use tracing::{error, warn};
 

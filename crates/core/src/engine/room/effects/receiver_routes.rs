@@ -1,6 +1,6 @@
 use std::slice;
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 

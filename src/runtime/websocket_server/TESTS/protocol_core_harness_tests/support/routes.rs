@@ -1,4 +1,7 @@
-use o_sfu_router::test_support::rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters;
+use o_sfu_router::{
+    rtp::MediaStream,
+    test_support::rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
+};
 use str0m::media::Mid;
 
 use super::*;
@@ -83,6 +86,6 @@ pub(crate) async fn assert_real_rtc_subscribe_activity(
     Some(())
 }
 
-pub(crate) fn sample_video_rtp_parameters(mid: &str) -> o_sfu_router::MediaStream {
+pub(crate) fn sample_video_rtp_parameters(mid: &str) -> MediaStream {
     router_sample_video_rtp_parameters(Some(mid), 22_222)
 }

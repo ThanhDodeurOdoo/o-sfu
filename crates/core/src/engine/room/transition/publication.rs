@@ -20,7 +20,7 @@
 //! cleanup, worker route updates and fanout run after state mutation releases
 //! the room lock
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use tracing::warn;
 
 use super::super::{

@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
 use o_sfu_router::{
-    ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, MediaCapabilities,
-    MediaStream as RouterRtpParameters, ProducerRouteState, RoutedConsumerId, RoutingError,
-    RoutingPlacementCommit, RoutingTopology,
+    rtp::{MediaCapabilities, MediaStream as RouterRtpParameters},
+    state::{
+        ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, ProducerRouteState,
+    },
+    topology::{RoutedConsumerId, RoutingError, RoutingPlacementCommit, RoutingTopology},
 };
 use tracing::{error, warn};
 

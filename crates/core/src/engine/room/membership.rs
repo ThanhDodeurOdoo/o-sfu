@@ -1,8 +1,8 @@
 use std::future::Future;
 
-#[cfg(any(test, feature = "testing-transport"))]
-use o_sfu_router::MediaCapabilities;
 use o_sfu_router::RouterId;
+#[cfg(any(test, feature = "testing-transport"))]
+use o_sfu_router::rtp::MediaCapabilities;
 use tracing::warn;
 
 use super::{

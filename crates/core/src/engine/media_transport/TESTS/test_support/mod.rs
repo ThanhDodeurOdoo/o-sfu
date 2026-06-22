@@ -16,7 +16,7 @@ use {
 #[cfg(test)]
 use {
     super::{MediaTransportBuilder, TransportAdapterError},
-    o_sfu_router::MediaStream as RouterRtpParameters,
+    o_sfu_router::rtp::MediaStream as RouterRtpParameters,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use {

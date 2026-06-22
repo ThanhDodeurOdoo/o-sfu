@@ -9,8 +9,11 @@
 use std::{slice::from_ref, sync::Arc};
 
 use o_sfu_router::{
-    ConsumerId, MediaKind, MediaStream, ProducerId, RoutedConsumerId, RoutedProducerId, RouterId,
+    MediaKind, RouterId,
+    ids::{ConsumerId, ProducerId},
+    rtp::MediaStream,
     test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
+    topology::{RoutedConsumerId, RoutedProducerId},
 };
 
 use super::*;

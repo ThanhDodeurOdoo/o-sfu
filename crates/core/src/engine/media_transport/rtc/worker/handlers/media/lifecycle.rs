@@ -16,7 +16,7 @@ use std::{
     time::Instant,
 };
 
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::{
     bwe::Bitrate as Str0mBitrate,
     media::{Direction, MediaKind, Mid, Rid},

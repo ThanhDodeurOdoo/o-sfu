@@ -1,4 +1,7 @@
-use o_sfu_router::{MediaFormat, MediaKind, Mid, Rid, Ssrc};
+use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaFormat, Mid, Rid, Ssrc},
+};
 use thiserror::Error;
 
 use super::{

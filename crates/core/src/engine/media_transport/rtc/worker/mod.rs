@@ -56,7 +56,7 @@ pub(super) use handlers::{
 };
 use lifecycle::WorkerHandleSlot;
 #[cfg(any(test, feature = "internal-benchmarks"))]
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use str0m::media::MediaKind;
 use tokio::sync::mpsc;

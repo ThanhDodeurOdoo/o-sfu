@@ -4,6 +4,7 @@
 //! plus the remote-source and decoder-refresh facts attached to that source
 
 use o_sfu_rfc::rtp;
+use o_sfu_router::rtp::{CodecSetting, MediaFormat, MediaStream};
 use str0m::media::{Mid, Pt, Rid};
 
 use super::{
@@ -179,7 +180,7 @@ pub(super) enum DecoderRefreshCodec {
 }
 
 impl DecoderRefreshCodec {
-    pub(super) fn from_parameters(parameters: &o_sfu_router::MediaStream) -> Option<Self> {
+    pub(super) fn from_parameters(parameters: &MediaStream) -> Option<Self> {
         let mut has_vp8 = false;
         let mut has_unsupported_primary = false;
         for format in parameters.formats() {
@@ -197,11 +198,11 @@ impl DecoderRefreshCodec {
         }
     }
 
-    fn from_h264_format(format: &o_sfu_router::MediaFormat) -> Self {
+    fn from_h264_format(format: &MediaFormat) -> Self {
         let mode = format
             .settings()
             .find_map(|setting| match setting {
-                o_sfu_router::CodecSetting::H264PacketizationMode(mode) => Some(*mode),
+                CodecSetting::H264PacketizationMode(mode) => Some(*mode),
                 _ => None,
             })
             .unwrap_or(rtp::h264::PacketizationMode::SingleNalUnit);

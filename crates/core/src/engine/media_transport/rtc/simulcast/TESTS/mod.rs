@@ -1,6 +1,7 @@
 use o_sfu_rfc::{rtp as rfc_rtp, rtp::h264::PacketizationMode, webrtc};
 use o_sfu_router::{
-    CodecSetting, MediaFormat, MediaKind as RouterMediaKind, PayloadType, StreamBinding,
+    MediaKind as RouterMediaKind,
+    rtp::{CodecSetting, MediaFormat, PayloadType, StreamBinding},
 };
 use str0m::media::{MediaKind, Rid as Str0mRid};
 

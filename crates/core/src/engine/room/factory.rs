@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use o_sfu_router::{MediaCapabilities, RouterId};
+use o_sfu_router::{RouterId, rtp::MediaCapabilities};
 
 use super::{Room, RoomRuntimeContext};
 use crate::{

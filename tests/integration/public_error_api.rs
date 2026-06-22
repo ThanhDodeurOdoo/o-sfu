@@ -1,7 +1,7 @@
 use std::{error::Error, fmt::Display};
 
 use o_sfu_core::{prelude::SfuCoreError, server::transport::TransportAdapterError};
-use o_sfu_router::{RouterError, RtpNegotiationError, SessionId};
+use o_sfu_router::{RouterError, ids::SessionId, negotiation::RtpNegotiationError};
 
 fn assert_error<T: Error + Send + Sync + 'static>() {}
 

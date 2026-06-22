@@ -1,6 +1,9 @@
 use std::{error::Error, io, sync::Arc};
 
-use o_sfu_router::{MediaKind, MediaStream, StreamBinding};
+use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaStream, StreamBinding},
+};
 
 use super::*;
 use crate::{

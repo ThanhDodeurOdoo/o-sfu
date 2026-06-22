@@ -7,9 +7,12 @@
 //! changes cannot silently leave stale dependency edges
 
 use o_sfu_router::{
-    ConsumerCapability, ConsumerId, ConsumerRouteState, ConsumerSpec, MediaKind, ProducerId,
-    ProducerRouteState, ProducerSpec, Router, RouterError, RouterId, Session, SessionId,
-    TransportDirection, TransportId,
+    MediaKind, Router, RouterError, RouterId,
+    ids::{ConsumerId, ProducerId, SessionId, TransportId},
+    state::{
+        ConsumerCapability, ConsumerRouteState, ConsumerSpec, ProducerRouteState, ProducerSpec,
+        Session, TransportDirection,
+    },
     test_support::{
         proof::{
             RouterProofView, assert_routing_placement_replacement_retires_stale_connection,

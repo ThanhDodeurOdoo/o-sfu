@@ -9,7 +9,7 @@ use super::{MediaKind, ProducerId, SessionId, TransportId};
 /// Example:
 ///
 /// ```rust
-/// use o_sfu_router::{RouterEvent, RouterObserver};
+/// use o_sfu_router::state::{RouterEvent, RouterObserver};
 ///
 /// struct RecordingObserver;
 ///

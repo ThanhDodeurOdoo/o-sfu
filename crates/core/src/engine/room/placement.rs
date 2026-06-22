@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use o_sfu_router::RouterId;
-pub use o_sfu_router::{
+pub use o_sfu_router::topology::{
     RouterPlacement, RouterPlacements, RouterPlacementsError, RoutingPlacementSnapshot,
 };
 

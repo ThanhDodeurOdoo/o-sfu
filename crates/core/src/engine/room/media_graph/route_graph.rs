@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
-use o_sfu_router::RoutedConsumerId;
+use o_sfu_router::topology::RoutedConsumerId;
 
 use super::{
     ConsumerKey, ConsumerSourceSelection, ConsumerState, TransportMediaRemoval,

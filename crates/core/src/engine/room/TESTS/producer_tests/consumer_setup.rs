@@ -1,3 +1,5 @@
+use o_sfu_router::rtp::MediaStream;
+
 use super::support::*;
 
 #[tokio::test]
@@ -148,7 +150,7 @@ async fn negotiated_publish_commit_sets_up_consumers_on_real_rtc() {
         .publish_media(
             &publisher_session_key,
             MediaKind::Video,
-            &o_sfu_router::MediaStream::new(vec![], vec![], vec![]),
+            &MediaStream::new(vec![], vec![], vec![]),
         )
         .await
         .expect("protocol publish intent should stage a recv-only media line");

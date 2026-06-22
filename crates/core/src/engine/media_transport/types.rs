@@ -7,7 +7,7 @@ use std::{
 };
 
 use o_sfu_rfc::webrtc::MediaKind;
-use o_sfu_router::{MediaCapabilities, MediaStream as RouterRtpParameters};
+use o_sfu_router::rtp::{MediaCapabilities, MediaStream as RouterRtpParameters};
 use thiserror::Error;
 
 use crate::{Bitrate, ConnectionId, MediaWorkerId, RoomInstanceId, engine::UserId};

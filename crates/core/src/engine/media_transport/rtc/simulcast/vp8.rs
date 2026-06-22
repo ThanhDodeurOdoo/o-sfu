@@ -1,7 +1,7 @@
 //! Production VP8 RID simulcast profile.
 
 use o_sfu_rfc::rtp as rfc_rtp;
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 
 use super::common::{self, SimulcastLayerSpec};
 use crate::{VideoBitrateLimits, engine::media_transport::SessionUploadEncoding};

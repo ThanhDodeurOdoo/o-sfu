@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::{MediaKind, RoutedConsumerId, RoutedProducerId};
+use o_sfu_router::{
+    MediaKind, rtp,
+    topology::{RoutedConsumerId, RoutedProducerId},
+};
 
 use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
@@ -80,7 +83,7 @@ pub(super) struct PublishedProducer {
     pub owner_connection_id: ConnectionId,
     pub stream_id: UserStreamId,
     pub media_kind: MediaKind,
-    pub consumable_rtp_parameters: o_sfu_router::MediaStream,
+    pub consumable_rtp_parameters: rtp::MediaStream,
     pub routed_producer_id: RoutedProducerId,
     pub transport_media_id: Option<TransportMediaId>,
     pub active: bool,

@@ -1,7 +1,10 @@
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc};
 use o_sfu_router::{
-    CodecSetting, HeaderExtension, MediaCapabilities, MediaCodecCapability, MediaKind, PayloadType,
-    RtcpFeedback, RtcpFeedbackKind,
+    MediaKind,
+    rtp::{
+        CodecSetting, HeaderExtension, MediaCapabilities, MediaCodecCapability, PayloadType,
+        RtcpFeedback, RtcpFeedbackKind,
+    },
 };
 
 use crate::{

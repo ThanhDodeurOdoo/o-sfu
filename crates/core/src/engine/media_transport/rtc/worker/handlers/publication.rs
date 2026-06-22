@@ -12,9 +12,12 @@ use std::{
 
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
-    HeaderExtension as RouterHeaderExtension, HeaderExtensionId, MediaFormat as RouterMediaFormat,
-    MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, PayloadType, RtcpFeedback,
-    RtcpFeedbackKind, StreamBinding,
+    MediaKind as RouterMediaKind,
+    rtp::{
+        HeaderExtension as RouterHeaderExtension, HeaderExtensionId,
+        MediaFormat as RouterMediaFormat, MediaStream as RouterRtpParameters, PayloadType,
+        RtcpFeedback, RtcpFeedbackKind, StreamBinding,
+    },
 };
 use str0m::{
     change::SdpAnswer,

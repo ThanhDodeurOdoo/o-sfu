@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
+use o_sfu_router::rtp::{MediaFormat, Ssrc};
+
 use super::shared::RoomState;
 use crate::{
     Bitrate,
@@ -289,9 +291,9 @@ fn source_encoding(
             .policy_role()
             .map(|role| role.as_wire_value().to_owned()),
         max_temporal_layer_id,
-        payload_type: negotiated_format.map(o_sfu_router::MediaFormat::payload_type),
-        primary_ssrc: encoding.primary_ssrc().map(o_sfu_router::Ssrc::value),
-        repair_ssrc: encoding.repair_ssrc().map(o_sfu_router::Ssrc::value),
+        payload_type: negotiated_format.map(MediaFormat::payload_type),
+        primary_ssrc: encoding.primary_ssrc().map(Ssrc::value),
+        repair_ssrc: encoding.repair_ssrc().map(Ssrc::value),
         rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
         last_packet_age_ms: rid_activity
             .map(|activity| duration_millis(activity.last_packet_age())),

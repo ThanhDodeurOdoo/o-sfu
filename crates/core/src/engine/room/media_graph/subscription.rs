@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::{MediaKind as RouterMediaKind, negotiate_consumer_rtp_parameters};
+use o_sfu_router::{MediaKind as RouterMediaKind, negotiation::negotiate_consumer_rtp_parameters};
 use tracing::error;
 
 use super::{

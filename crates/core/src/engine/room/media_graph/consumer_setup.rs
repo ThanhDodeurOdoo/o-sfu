@@ -1,6 +1,7 @@
 use o_sfu_router::{
-    MediaKind as RouterMediaKind, MediaStream as RouterRtpParameters, RoutedConsumerId,
-    RoutedProducerId,
+    MediaKind as RouterMediaKind,
+    rtp::MediaStream as RouterRtpParameters,
+    topology::{RoutedConsumerId, RoutedProducerId},
 };
 
 use super::{

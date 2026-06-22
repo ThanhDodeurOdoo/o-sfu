@@ -4,7 +4,10 @@
 )]
 
 use o_sfu_router::{
-    ConsumerId, MediaKind, MediaStream, ProducerId, RoutedConsumerId, RoutedProducerId, RouterId,
+    MediaKind, RouterId,
+    ids::{ConsumerId, ProducerId},
+    rtp::MediaStream,
+    topology::{RoutedConsumerId, RoutedProducerId},
 };
 
 use super::{

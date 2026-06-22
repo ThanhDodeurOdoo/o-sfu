@@ -1,4 +1,4 @@
-use o_sfu_router::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 
 #[cfg(test)]
 use super::Room;

@@ -1,10 +1,15 @@
 use o_sfu_rfc::webrtc;
 
 use crate::{
-    HeaderExtension, HeaderExtensionId, MediaCapabilities, MediaCodecCapability, MediaFormat,
-    MediaKind, MediaStream, ParseDiagnostic, ParseDiagnosticKind, PayloadType, Rid, RtcpFeedback,
-    RtcpFeedbackKind, RtpNegotiationError, StreamBinding, can_consume,
-    derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
+    MediaKind,
+    negotiation::{
+        ParseDiagnostic, ParseDiagnosticKind, RtpNegotiationError, can_consume,
+        derive_consumable_rtp_parameters, negotiate_consumer_rtp_parameters,
+    },
+    rtp::{
+        HeaderExtension, HeaderExtensionId, MediaCapabilities, MediaCodecCapability, MediaFormat,
+        MediaStream, PayloadType, Rid, RtcpFeedback, RtcpFeedbackKind, StreamBinding,
+    },
 };
 
 fn pt(value: u8) -> PayloadType {

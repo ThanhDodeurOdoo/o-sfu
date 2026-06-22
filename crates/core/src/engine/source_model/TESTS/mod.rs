@@ -6,7 +6,10 @@
 )]
 
 use o_sfu_rfc::rtp::frame_marking;
-use o_sfu_router::{MediaCodec, MediaFormat, MediaKind, Mid, PayloadType, Rid, Ssrc};
+use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaCodec, MediaFormat, Mid, PayloadType, Rid, Ssrc},
+};
 
 use super::*;
 use crate::{Bitrate, engine::UserId};

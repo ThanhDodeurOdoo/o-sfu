@@ -17,7 +17,7 @@ use crate::model::{
 mod test_support;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RouterAdapterError {
+pub(super) enum RouterAdapterError {
     MissingSessionMapping { user_id: UserId },
     Router(RouterError),
 }
@@ -106,7 +106,7 @@ impl RouterAdapterState {
     ///
     /// Returns the underlying [`RouterError`] when the pure router cannot open
     /// either directional transport for the user.
-    pub fn ensure_session_transports(
+    pub(super) fn ensure_session_transports(
         &mut self,
         user_id: &UserId,
     ) -> Result<(), RouterAdapterError> {
