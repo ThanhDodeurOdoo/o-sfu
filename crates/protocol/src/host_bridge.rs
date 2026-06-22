@@ -3,14 +3,14 @@ use serde::Serialize;
 use crate::{
     bundle_api::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate,
-        BundleSessionInfoSnapshotById, BundleUpdate, bundle_session_info_key,
+        BundleSessionInfoSnapshotById, BundleSourceUpdate, BundleUpdate, bundle_session_info_key,
     },
     core::{
         Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore,
         ProtocolEvent,
     },
     shared::{AvailableFeatures, RecordingState, StreamType, UserId},
-    signaling::{NegotiationUploadSlot, RequestId, SourceDescriptor, TrackBinding},
+    signaling::{NegotiationUploadSlot, RequestId, TrackBinding},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -72,9 +72,6 @@ pub enum HostCommand {
     ReplaceTrackBindings {
         bindings: Vec<TrackBinding>,
     },
-    ReplaceSourceDescriptors {
-        sources: Vec<SourceDescriptor>,
-    },
     RemoveSessionTracks {
         #[serde(rename = "sessionId")]
         user_id: UserId,
@@ -116,8 +113,7 @@ fn push_commands_for_event(commands: &mut Vec<HostCommand>, event: ProtocolEvent
             return;
         }
         ProtocolEvent::SourceSnapshot { sources } => {
-            commands.push(HostCommand::ReplaceSourceDescriptors { sources });
-            return;
+            BundleUpdate::Source(BundleSourceUpdate { sources })
         }
         ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
             peers

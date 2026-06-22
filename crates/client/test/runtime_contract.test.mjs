@@ -139,6 +139,16 @@ function validSourceDescriptor(encodingOverrides = {}) {
     };
 }
 
+function sourceUpdate(sources) {
+    return {
+        kind: "emitUpdate",
+        update: {
+            name: CLIENT_UPDATE.SOURCE,
+            payload: { sources }
+        }
+    };
+}
+
 test("source tree does not own generated protocol manifest", () => {
     const sourceManifestPath = fileURLToPath(
         new URL("../src/generated/protocol_manifest.json", import.meta.url)
@@ -246,12 +256,7 @@ test("injected protocol core validates replaceTrackBindings host commands", () =
 test("injected protocol core validates source descriptors", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
-            connect: () => [
-                {
-                    kind: "replaceSourceDescriptors",
-                    sources: [validSourceDescriptor({ maxBitrate: -1 })]
-                }
-            ]
+            connect: () => [sourceUpdate([validSourceDescriptor({ maxBitrate: -1 })])]
         })
     );
 
@@ -261,12 +266,7 @@ test("injected protocol core validates source descriptors", () => {
 test("injected protocol core accepts valid temporal layer ids", () => {
     const core = wrapProtocolCoreBindings(
         validCore({
-            connect: () => [
-                {
-                    kind: "replaceSourceDescriptors",
-                    sources: [validSourceDescriptor({ maxTemporalLayerId: 7 })]
-                }
-            ]
+            connect: () => [sourceUpdate([validSourceDescriptor({ maxTemporalLayerId: 7 })])]
         })
     );
 
@@ -277,12 +277,7 @@ for (const maxTemporalLayerId of [-1, 8, 1.5, "2", Number.NaN]) {
     test(`injected protocol core rejects invalid temporal layer id ${String(maxTemporalLayerId)}`, () => {
         const core = wrapProtocolCoreBindings(
             validCore({
-                connect: () => [
-                    {
-                        kind: "replaceSourceDescriptors",
-                        sources: [validSourceDescriptor({ maxTemporalLayerId })]
-                    }
-                ]
+                connect: () => [sourceUpdate([validSourceDescriptor({ maxTemporalLayerId })])]
             })
         );
 

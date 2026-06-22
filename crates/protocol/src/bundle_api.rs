@@ -9,9 +9,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::shared::{
-    AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
-    StreamType, UserId, UserInfo,
+use crate::{
+    shared::{
+        AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
+        StreamType, UserId, UserInfo,
+    },
+    signaling::SourceDescriptor,
 };
 
 pub const FIRST_BUNDLE_PROTOCOL_VERSION: u16 = 1;
@@ -181,6 +184,8 @@ pub struct BundleStateChange {
 pub enum BundleUpdateKind {
     #[serde(rename = "track")]
     Track,
+    #[serde(rename = "source")]
+    Source,
     #[serde(rename = "broadcast")]
     Broadcast,
     #[serde(rename = "disconnect")]
@@ -239,10 +244,17 @@ pub struct BundleTrackUpdate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleSourceUpdate {
+    pub sources: Vec<SourceDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "payload")]
 pub enum BundleUpdate {
     #[serde(rename = "track")]
     Track(BundleTrackUpdate),
+    #[serde(rename = "source")]
+    Source(BundleSourceUpdate),
     #[serde(rename = "broadcast")]
     Broadcast(BundleBroadcastUpdate),
     #[serde(rename = "disconnect")]
@@ -258,6 +270,7 @@ impl BundleUpdate {
     pub const fn kind(&self) -> BundleUpdateKind {
         match self {
             Self::Track(_) => BundleUpdateKind::Track,
+            Self::Source(_) => BundleUpdateKind::Source,
             Self::Broadcast(_) => BundleUpdateKind::Broadcast,
             Self::Disconnect(_) => BundleUpdateKind::Disconnect,
             Self::SessionInfoChange(_) => BundleUpdateKind::SessionInfoChange,

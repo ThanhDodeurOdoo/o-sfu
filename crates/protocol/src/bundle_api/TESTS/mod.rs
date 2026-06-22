@@ -6,12 +6,16 @@ use serde_json::{Value, json};
 use super::{
     BundleBroadcastCall, BundleBroadcastUpdate, BundleConnectCall, BundleConnectOptions,
     BundleConnectionState, BundleMethodCall, BundleProtocolStrategy, BundlePublishCall,
-    BundleRecordingOptions, BundleStartRecordingCall, BundleStateChange, BundleSubscribeCall,
-    BundleTrackUpdate, BundleUpdate, BundleUpdateInfoCall, BundleUpdateKind,
+    BundleRecordingOptions, BundleSourceUpdate, BundleStartRecordingCall, BundleStateChange,
+    BundleSubscribeCall, BundleTrackUpdate, BundleUpdate, BundleUpdateInfoCall, BundleUpdateKind,
     FIRST_BUNDLE_PROTOCOL_STRATEGY, FIRST_BUNDLE_PROTOCOL_VERSION, bundle_session_info_key,
 };
-use crate::shared::{
-    DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId, UserInfo,
+use crate::{
+    shared::{
+        DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId,
+        UserInfo,
+    },
+    signaling::SourceDescriptor,
 };
 
 fn assert_round_trip<T>(value: &T, expected_json: Value) -> serde_json::Result<()>
@@ -55,6 +59,7 @@ fn bundle_connection_states_round_trip() -> serde_json::Result<()> {
 #[test]
 fn bundle_update_kinds_round_trip() -> serde_json::Result<()> {
     assert_round_trip(&BundleUpdateKind::Track, json!("track"))?;
+    assert_round_trip(&BundleUpdateKind::Source, json!("source"))?;
     assert_round_trip(&BundleUpdateKind::Broadcast, json!("broadcast"))?;
     assert_round_trip(&BundleUpdateKind::Disconnect, json!("disconnect"))?;
     assert_round_trip(&BundleUpdateKind::SessionInfoChange, json!("info_change"))?;
@@ -361,6 +366,37 @@ fn bundle_updates_round_trip() -> serde_json::Result<()> {
                     "video": false
                 },
                 "stopCode": "user_request"
+            }
+        }),
+    )
+}
+
+#[test]
+fn bundle_source_update_round_trips() -> serde_json::Result<()> {
+    let source_update = BundleUpdate::Source(BundleSourceUpdate {
+        sources: vec![SourceDescriptor {
+            source_id: String::from("source-7"),
+            user_id: UserId::Integer(7),
+            stream_type: StreamType::Camera,
+            active: true,
+            mid: None,
+            encodings: Vec::new(),
+        }],
+    });
+
+    assert_eq!(source_update.kind(), BundleUpdateKind::Source);
+    assert_round_trip(
+        &source_update,
+        json!({
+            "name": "source",
+            "payload": {
+                "sources": [{
+                    "sourceId": "source-7",
+                    "sessionId": 7,
+                    "type": "camera",
+                    "active": true,
+                    "encodings": []
+                }]
             }
         }),
     )

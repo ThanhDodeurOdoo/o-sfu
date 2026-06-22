@@ -83,7 +83,6 @@ export type HostCommand =
     | { kind: typeof COMMAND_KIND.CLOSE_WEB_SOCKET; code: number }
     | { kind: typeof COMMAND_KIND.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
     | { kind: typeof COMMAND_KIND.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
-    | { kind: typeof COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS; sources: SourceDescriptor[] }
     | { kind: typeof COMMAND_KIND.REMOVE_SESSION_TRACKS; sessionId: SessionId }
     | { kind: typeof COMMAND_KIND.EMIT_UPDATE; update: ClientUpdateDetail }
     | {
@@ -389,9 +388,6 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             return command as HostCommand;
         case COMMAND_KIND.REPLACE_TRACK_BINDINGS:
             validateArray(command.bindings, `${context}.bindings`, validateTrackBinding);
-            return command as HostCommand;
-        case COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS:
-            validateArray(command.sources, `${context}.sources`, validateSourceDescriptor);
             return command as HostCommand;
         case COMMAND_KIND.REMOVE_SESSION_TRACKS:
             validateSessionId(command.sessionId, `${context}.sessionId`);

@@ -24,6 +24,14 @@ const initialOfferCommand = (requestId) => ({
     uploadSlots: [audioUploadSlot("0"), videoUploadSlot("1")]
 });
 
+const sourceUpdate = (sources) => ({
+    kind: "emitUpdate",
+    update: {
+        name: CLIENT_UPDATE.SOURCE,
+        payload: { sources }
+    }
+});
+
 export class FakeProtocolCore {
     constructor() {
         this.features = { ...EMPTY_FEATURES };
@@ -58,10 +66,7 @@ export class FakeProtocolCore {
         this.recordingState = {};
         this.sourceDescriptors.clear();
         this.trackBindings.clear();
-        return [
-            { kind: "replaceSourceDescriptors", sources: [] },
-            { kind: "emitStateChange", state: "disconnected" }
-        ];
+        return [sourceUpdate([]), { kind: "emitStateChange", state: "disconnected" }];
     }
 
     onTimer() {
@@ -146,12 +151,7 @@ export class FakeProtocolCore {
                     sourceId: "source-1",
                     type: "camera"
                 });
-                return [
-                    {
-                        kind: "replaceSourceDescriptors",
-                        sources: [...this.sourceDescriptors.values()]
-                    }
-                ];
+                return [sourceUpdate([...this.sourceDescriptors.values()])];
             case "track-inactive":
                 this.trackBindings.set("0", {
                     active: false,

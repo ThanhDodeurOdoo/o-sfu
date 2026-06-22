@@ -1,5 +1,4 @@
 import {
-    CLIENT_UPDATE,
     CLIENT_LOG_LEVEL,
     type ClientLogDetail,
     type ClientUpdateDetail,
@@ -209,19 +208,6 @@ export class BrowserRuntime {
                     command.bindings,
                     this._context.onUpdate
                 );
-                return [];
-            case COMMAND_KIND.REPLACE_SOURCE_DESCRIPTORS:
-                emitRuntimeLog(
-                    this._context,
-                    CLIENT_LOG_LEVEL.DEBUG,
-                    `received ${command.sources.length} remote source descriptors`
-                );
-                this._context.onUpdate({
-                    name: CLIENT_UPDATE.SOURCE,
-                    payload: {
-                        sources: command.sources
-                    }
-                });
                 return [];
             case COMMAND_KIND.REMOVE_SESSION_TRACKS:
                 emitRuntimeLog(

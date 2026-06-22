@@ -136,7 +136,6 @@ export const COMMAND_KIND = {
     ATTACH_TRACK: "attachTrack",
     DETACH_TRACK: "detachTrack",
     REPLACE_TRACK_BINDINGS: "replaceTrackBindings",
-    REPLACE_SOURCE_DESCRIPTORS: "replaceSourceDescriptors",
     REMOVE_SESSION_TRACKS: "removeSessionTracks",
     EMIT_STATE_CHANGE: "emitStateChange",
     EMIT_UPDATE: "emitUpdate",
