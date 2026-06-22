@@ -87,7 +87,6 @@ impl RoomState {
         stream_type: TestSourceKind,
     ) -> Option<PublishedSourceId> {
         self.topology
-            .media()
             .source_id_for_owner_stream(owner_user_id, &stream_id_for_source(stream_type))
     }
 
@@ -98,7 +97,6 @@ impl RoomState {
         source_id: PublishedSourceId,
     ) -> bool {
         self.topology
-            .media()
             .consumer_source_selection(&ConsumerKey::new(consumer_user_id, source_id))
             .is_some()
     }
@@ -111,7 +109,7 @@ impl RoomState {
         let source_id = self
             .source_transport_media_entry(transport_media_id)?
             .source;
-        self.topology.media().source(source_id).map(|source| {
+        self.topology.source(source_id).map(|source| {
             source
                 .encodings()
                 .map(SourceEncodingDescriptor::encoding_id)
@@ -128,7 +126,6 @@ impl RoomState {
             .source_transport_media_entry(transport_media_id)?
             .source;
         self.topology
-            .media()
             .producer_for_source(source_id)
             .map(|producer| producer.owner_connection_id)
     }

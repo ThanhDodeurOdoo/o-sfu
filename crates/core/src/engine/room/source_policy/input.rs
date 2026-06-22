@@ -13,9 +13,7 @@ use crate::{
             TransportMediaId,
         },
         room::{media_graph::ConsumerRouteTransportRef, state::RoomState},
-        source_model::{
-            ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
-        },
+        source_model::{ConsumerSourceSelection, PublishedSourceDescriptor},
     },
 };
 
@@ -191,16 +189,9 @@ fn featured_source_owner_for_active_speaker_source(
     state: &RoomState,
     transport_media_id: TransportMediaId,
 ) -> Option<UserId> {
-    let entry = state.source_transport_media_entry(transport_media_id)?;
-    let media = state.topology.media();
-    let detector_source = media.source(entry.source)?;
-    let detector_policy = detector_source.policy().active_speaker()?;
-    if detector_policy.role() != ActiveSpeakerSourceRole::Detector {
-        return None;
-    }
-    media
-        .owner_has_promotable_source_in_group(&entry.owner, detector_policy.group())
-        .then(|| entry.owner.clone())
+    state
+        .topology
+        .active_speaker_detector_owner(transport_media_id)
 }
 
 fn featured_user_updates(

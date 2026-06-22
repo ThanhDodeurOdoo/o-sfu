@@ -83,12 +83,12 @@ impl RoomState {
         >,
         source_activity_by_media: &BTreeMap<TransportMediaId, TransportSourceActivity>,
     ) -> Vec<DiagnosticsSource> {
-        let media = self.topology.media();
-        media
-            .sources()
-            .map(|source| {
-                let producer = media.producer_for_source(source.source_id());
-                let transport_media_id = producer.and_then(|producer| producer.transport_media_id);
+        self.topology
+            .source_views()
+            .map(|view| {
+                let source = view.source;
+                let producer = view.producer;
+                let transport_media_id = producer.transport_media_id;
                 let source_activity =
                     transport_media_id.and_then(|media_id| source_activity_by_media.get(&media_id));
                 let encodings = source
@@ -96,7 +96,7 @@ impl RoomState {
                     .map(|encoding| source_encoding(encoding, source_activity))
                     .collect();
                 DiagnosticsSource {
-                    active: producer.is_some_and(|producer| producer.active),
+                    active: producer.active,
                     active_speaker: active_speaker(
                         source,
                         transport_media_id,
@@ -126,16 +126,14 @@ impl RoomState {
 
     pub fn diagnostics_source_media(&self) -> Vec<DiagnosticsSourceMedia> {
         self.topology
-            .media()
-            .producers()
-            .filter_map(|(_producer_id, producer)| {
-                producer
-                    .transport_media_id
-                    .map(|media| DiagnosticsSourceMedia {
-                        owner: producer.owner_user_id.clone(),
-                        connection: producer.owner_connection_id,
-                        media,
-                    })
+            .source_views()
+            .filter_map(|view| {
+                let media = view.producer.transport_media_id?;
+                Some(DiagnosticsSourceMedia {
+                    owner: view.producer.owner_user_id.clone(),
+                    connection: view.producer.owner_connection_id,
+                    media,
+                })
             })
             .collect()
     }
@@ -184,18 +182,26 @@ impl RoomState {
         connection_id: ConnectionId,
     ) -> Vec<DiagnosticsPublication> {
         self.topology
-            .media()
-            .publications_for_user_connection(user_id, connection_id)
-            .map(|(source, producer)| DiagnosticsPublication {
-                active: producer.active,
-                encoding_ids: source
-                    .encodings()
-                    .map(|encoding| encoding.encoding_id().as_u64())
-                    .collect(),
-                media_kind: media_kind(producer.media_kind),
-                source_id: producer.source_id.as_u64(),
-                stream_id: producer.stream_id.to_string(),
-                transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
+            .source_views()
+            .filter_map(|view| {
+                let source = view.source;
+                let producer = view.producer;
+                if producer.owner_user_id != *user_id
+                    || producer.owner_connection_id != connection_id
+                {
+                    return None;
+                }
+                Some(DiagnosticsPublication {
+                    active: producer.active,
+                    encoding_ids: source
+                        .encodings()
+                        .map(|encoding| encoding.encoding_id().as_u64())
+                        .collect(),
+                    media_kind: media_kind(producer.media_kind),
+                    source_id: producer.source_id.as_u64(),
+                    stream_id: producer.stream_id.to_string(),
+                    transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
+                })
             })
             .collect()
     }
@@ -207,7 +213,6 @@ impl RoomState {
     ) -> Vec<DiagnosticsSubscription> {
         let mut subscriptions = self
             .topology
-            .media()
             .live_consumer_routes()
             .filter_map(|route| {
                 if route.consumer_user_id != *user_id
@@ -240,32 +245,29 @@ impl RoomState {
             })
             .collect::<Vec<_>>();
 
-        subscriptions.extend(
-            self.topology
-                .media()
-                .pending_consumer_routes_for_user(user_id)
-                .map(|route| {
-                    let source = route.source;
-                    let route_selection = route
-                        .selection
-                        .unwrap_or_else(|| ConsumerSourceSelection::open(true));
-                    let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
-                    DiagnosticsSubscription {
-                        consumer_transport_media_id: None,
-                        layout_priority: layout_intent.map(|intent| intent.priority().into()),
-                        layout_role: layout_intent.map(|intent| intent.role().into()),
-                        producer_user_id: source.owner().user_id().clone(),
-                        selection: selection(source, route_selection),
-                        source_id: source.source_id().as_u64(),
-                        source_transport_media_id: route
-                            .producer
-                            .and_then(|producer| producer.transport_media_id)
-                            .map(TransportMediaId::as_u64),
-                        state: DiagnosticsRouteState::Pending,
-                        stream_id: source.stream_id().to_string(),
-                    }
-                }),
-        );
+        subscriptions.extend(self.topology.pending_consumer_routes_for_user(user_id).map(
+            |route| {
+                let source = route.source;
+                let route_selection = route
+                    .selection
+                    .unwrap_or_else(|| ConsumerSourceSelection::open(true));
+                let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
+                DiagnosticsSubscription {
+                    consumer_transport_media_id: None,
+                    layout_priority: layout_intent.map(|intent| intent.priority().into()),
+                    layout_role: layout_intent.map(|intent| intent.role().into()),
+                    producer_user_id: source.owner().user_id().clone(),
+                    selection: selection(source, route_selection),
+                    source_id: source.source_id().as_u64(),
+                    source_transport_media_id: route
+                        .producer
+                        .transport_media_id
+                        .map(TransportMediaId::as_u64),
+                    state: DiagnosticsRouteState::Pending,
+                    stream_id: source.stream_id().to_string(),
+                }
+            },
+        ));
         subscriptions
     }
 }

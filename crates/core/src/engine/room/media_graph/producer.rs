@@ -6,9 +6,8 @@ use tracing::{error, warn};
 
 use super::{
     super::{RoomMediaCounts, TrackBindingUpdate, outbound::OutboundSender, state::RoomState},
-    ConsumerKey, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer,
-    SourceTransportMediaIndexEntry,
-    consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
+    ProducerRouteTarget, ProducerRuntimeId, SourceTransportMediaIndexEntry,
+    consumer_setup::PendingConsumerSetup,
     topology::MediaTopologyEffects,
 };
 use crate::{
@@ -202,27 +201,35 @@ impl RoomState {
             .ok()?;
         let publish_before = self.media_counts();
         let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
-        let producer = match self.topology.publish_source(
+        if let Err(error) = self.topology.publish_source(
             publish,
             producer_id,
             source_descriptor,
             consumable_rtp_parameters,
             transport_media_id,
         ) {
-            Ok(producer) => producer,
-            Err(error) => {
-                error!(
-                    user_id = ?owner_user_id,
-                    ?owner_connection_id,
-                    stream_id = %stream_id,
-                    ?transport_media_id,
-                    ?error,
-                    "failed to mirror publish request into room router producer state"
-                );
-                return None;
-            }
-        };
-        let consumers = self.publish_consumer_targets(producer_id, &producer, transport_media_id);
+            error!(
+                user_id = ?owner_user_id,
+                ?owner_connection_id,
+                stream_id = %stream_id,
+                ?transport_media_id,
+                ?error,
+                "failed to mirror publish request into room router producer state"
+            );
+            return None;
+        }
+        let consume_ready_users = self
+            .users
+            .iter()
+            .filter_map(|(remote_user_id, remote_user)| {
+                remote_user
+                    .negotiation
+                    .can_consume()
+                    .then_some((remote_user_id, remote_user.connection_id))
+            });
+        let consumers = self
+            .topology
+            .consumer_targets_for_producer(producer_id, consume_ready_users);
         let publish_after = self.media_counts();
         let setup_before = self.media_counts();
         let setups = self.plan_consumers(consumers);
@@ -269,7 +276,6 @@ impl RoomState {
         }
         if self
             .topology
-            .media()
             .source_id_for_owner_stream(&publish.owner_user_id, &publish.stream_id)
             .is_some()
         {
@@ -332,58 +338,13 @@ impl RoomState {
         })
     }
 
-    pub fn publish_consumer_targets(
-        &self,
-        producer_id: ProducerRuntimeId,
-        producer: &PublishedProducer,
-        transport_media_id: TransportMediaId,
-    ) -> Vec<ConsumerSetupTarget> {
-        let Some(producer_session) = self
-            .committed_transport_user_key(&producer.owner_user_id, producer.owner_connection_id)
-        else {
-            return Vec::new();
-        };
-        self.users
-            .iter()
-            .filter_map(|(remote_user_id, remote_user)| {
-                if *remote_user_id == producer.owner_user_id
-                    || !remote_user.negotiation.can_consume()
-                {
-                    return None;
-                }
-                if self
-                    .topology
-                    .media()
-                    .has_consumer_setup_or_route(&ConsumerKey::new(
-                        remote_user_id,
-                        producer.source_id,
-                    ))
-                {
-                    return None;
-                }
-                let consumer_session =
-                    self.committed_transport_user_key(remote_user_id, remote_user.connection_id)?;
-                Some(ConsumerSetupTarget::new(
-                    remote_user_id.clone(),
-                    remote_user.connection_id,
-                    consumer_session,
-                    producer_session.clone(),
-                    producer_id,
-                    producer,
-                    transport_media_id,
-                ))
-            })
-            .collect()
-    }
-
     #[must_use]
     pub fn producer_stream_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<UserStreamId> {
-        self.topology
-            .media()
-            .producer_stream_id_for_transport_media_id(transport_media_id)
+        self.source_transport_media_entry(transport_media_id)
+            .map(|entry| entry.stream.clone())
     }
 
     #[must_use]
@@ -392,7 +353,6 @@ impl RoomState {
         transport_media_id: TransportMediaId,
     ) -> Option<&SourceTransportMediaIndexEntry> {
         self.topology
-            .media()
             .source_transport_media_entry(transport_media_id)
     }
 
@@ -404,7 +364,6 @@ impl RoomState {
         stream_id: &UserStreamId,
     ) -> Option<ProducerRouteTarget> {
         self.topology
-            .media()
             .producer_route_target(owner_user_id, owner_connection_id, stream_id)
     }
 

@@ -176,11 +176,11 @@ impl RouteGraph {
         self.entries.get(key)?.consumer()
     }
 
-    pub(super) fn committed_consumer_transport_entries(
+    pub(super) fn committed_consumer_connection_ids(
         &self,
-    ) -> impl Iterator<Item = (UserId, ConnectionId)> + '_ {
+    ) -> impl Iterator<Item = ConnectionId> + '_ {
         self.committed_entries()
-            .map(|(key, state)| (key.consumer_user_id.clone(), state.consumer_connection_id))
+            .map(|(_, state)| state.consumer_connection_id)
     }
 
     pub(super) fn pending_consumer_user_ids(&self) -> impl Iterator<Item = &UserId> {

@@ -3,9 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::{MediaKind as RouterMediaKind, negotiation::negotiate_consumer_rtp_parameters};
 use tracing::error;
 
+#[cfg(any(test, feature = "testing-transport"))]
+use super::ConsumerKey;
 use super::{
     super::{RoomMediaCounts, state::RoomState},
-    ConsumerKey, ConsumerRouteTarget, ConsumerRuntimeId, ProducerRuntimeId, PublishedProducer,
+    ConsumerRouteTarget, ConsumerRuntimeId,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup, RemoteTrackSetup},
     route_graph::ResolvedRelayRouteEffect,
 };
@@ -242,7 +244,7 @@ impl RoomState {
                 target.source_id,
             );
         }
-        let Some(source) = self.topology.media().source(target.source_id) else {
+        let Some(source) = self.topology.source(target.source_id) else {
             return VideoAdmissionRank::new(
                 SourceRoutePriority::HiddenOrOverflow,
                 None,
@@ -302,7 +304,8 @@ impl RoomState {
         user_id: &UserId,
         consumer_connection_id: ConnectionId,
     ) -> Vec<ConsumerSetupTarget> {
-        self.missing_targets_where(user_id, consumer_connection_id, |_| true)
+        self.topology
+            .missing_consumer_targets(user_id, consumer_connection_id, |_| true)
     }
 
     fn missing_targets_for_peer(
@@ -311,57 +314,10 @@ impl RoomState {
         consumer_connection_id: ConnectionId,
         target_user_id: &UserId,
     ) -> Vec<ConsumerSetupTarget> {
-        self.missing_targets_where(user_id, consumer_connection_id, |producer| {
-            producer.owner_user_id == *target_user_id
-        })
-    }
-
-    fn missing_targets_where(
-        &self,
-        user_id: &UserId,
-        consumer_connection_id: ConnectionId,
-        should_include: impl Fn(&PublishedProducer) -> bool,
-    ) -> Vec<ConsumerSetupTarget> {
         self.topology
-            .media()
-            .producers()
-            .filter_map(|(producer_id, producer)| {
-                if !should_include(producer) {
-                    return None;
-                }
-                self.consumer_setup_target(user_id, consumer_connection_id, producer_id, producer)
+            .missing_consumer_targets(user_id, consumer_connection_id, |producer| {
+                producer.owner_user_id == *target_user_id
             })
-            .collect()
-    }
-
-    fn consumer_setup_target(
-        &self,
-        user_id: &UserId,
-        consumer_connection_id: ConnectionId,
-        producer_id: ProducerRuntimeId,
-        producer: &PublishedProducer,
-    ) -> Option<ConsumerSetupTarget> {
-        let transport_media_id = producer.transport_media_id?;
-        if producer.owner_user_id == *user_id {
-            return None;
-        }
-        let key = ConsumerKey::new(user_id, producer.source_id);
-        if self.topology.media().has_consumer_setup_or_route(&key) {
-            return None;
-        }
-        let consumer_session =
-            self.committed_transport_user_key(user_id, consumer_connection_id)?;
-        let producer_session = self
-            .committed_transport_user_key(&producer.owner_user_id, producer.owner_connection_id)?;
-        Some(ConsumerSetupTarget::new(
-            user_id.clone(),
-            consumer_connection_id,
-            consumer_session,
-            producer_session,
-            producer_id,
-            producer,
-            transport_media_id,
-        ))
     }
 
     fn plan_consumer(&mut self, target: ConsumerSetupTarget) -> Option<PendingConsumerSetup> {
@@ -376,14 +332,14 @@ impl RoomState {
             )
         };
         let (producer_rtp, producer_active, descriptor) = {
-            let producer = self.topology.media().producer(target.producer_id)?;
+            let producer = self.topology.producer(target.producer_id)?;
             if !target.matches_identity(producer) {
                 return None;
             }
             (
                 &producer.consumable_rtp_parameters,
                 producer.active,
-                self.topology.media().source(target.source_id)?.clone(),
+                self.topology.source(target.source_id)?.clone(),
             )
         };
         let selection = self.setup_selection(&target, producer_active);
@@ -414,7 +370,6 @@ impl RoomState {
         let key = target.consumer_key();
         let selection = self
             .topology
-            .media()
             .consumer_source_selection(&key)
             .unwrap_or_else(|| {
                 ConsumerSourceSelection::open(self.desired_source_active(
@@ -461,10 +416,9 @@ impl RoomState {
             .count();
         let pending = self
             .topology
-            .media()
             .pending_consumer_routes_for_user(consumer_user_id)
             .filter(|route| route.source.media_kind() == RouterMediaKind::Video)
-            .filter(|route| route.producer.is_some_and(|producer| producer.active))
+            .filter(|route| route.producer.active)
             .filter(|route| {
                 let desired_active = self.desired_source_active(
                     consumer_user_id,
@@ -504,13 +458,12 @@ impl RoomState {
         self.users.get(consumer_user_id)?;
         let Some(source) = self
             .topology
-            .media()
             .source_id_for_owner_stream(producer_user_id, stream_id)
         else {
             return Some(ConsumerRouteState::Absent);
         };
         let key = ConsumerKey::new(consumer_user_id, source);
-        let Some(route) = self.topology.media().committed_consumer_route_for_key(&key) else {
+        let Some(route) = self.topology.committed_consumer_route_for_key(&key) else {
             return Some(ConsumerRouteState::Absent);
         };
         let desired_active =

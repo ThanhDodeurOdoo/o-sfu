@@ -189,20 +189,12 @@ impl Room {
 
 impl RoomState {
     fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
-        let media = self.topology.media();
         let routing = self.topology.routing();
         for user in self.users.values() {
             loads.record_session(routing.media_worker_id_for_connection(user.connection_id));
         }
-        for (_, connection_id) in media.committed_consumer_transport_entries() {
-            loads.record_consumer(routing.media_worker_id_for_connection(connection_id));
-        }
-        for user_id in media.pending_consumer_user_ids() {
-            let Some(user) = self.users.get(user_id) else {
-                continue;
-            };
-            loads.record_consumer(routing.media_worker_id_for_connection(user.connection_id));
-        }
+        self.topology
+            .record_consumer_loads(loads, |user_id| self.user_connection_id(user_id));
     }
 }
 
