@@ -1144,6 +1144,60 @@ test("publish detaches the local sender before signaling unpublish", async () =>
     ]);
 });
 
+test("duplicate unpublish keeps later re-publish eligible for a new upload mid", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections } = harness;
+    const firstTrack = createCameraTrack("camera-track-first");
+    const secondTrack = createCameraTrack("camera-track-second");
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    client.publish("camera", firstTrack);
+    await tick();
+    await emitMessage(buildVideoRenegotiationFrame("9", { mid: "2", simulcastEncodings: [] }));
+
+    client.publish("camera", null);
+    client.publish("camera", null);
+    await tick();
+
+    client.publish("camera", secondTrack);
+    await tick();
+    await emitMessage(buildVideoRenegotiationFrame("10", { mid: "3", simulcastEncodings: [] }));
+
+    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "3");
+    assert.ok(transceiver);
+    assert.equal(transceiver.sender.track, secondTrack);
+    assert.equal(
+        peerConnections[0].answerSnapshots
+            .at(-1)
+            .find((snapshot) => snapshot.mid === transceiver.mid)?.senderTrack,
+        secondTrack
+    );
+});
+
+test("canceling pending camera publish does not detach an attached screen sender", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections } = harness;
+    const screenTrack = createScreenTrack("screen-track");
+    const cameraTrack = createCameraTrack("camera-track");
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    client.publish("screen", screenTrack);
+    await tick();
+    await emitMessage(buildVideoRenegotiationFrame("9", { mid: "2", simulcastEncodings: [] }));
+
+    client.publish("camera", cameraTrack);
+    client.publish("camera", null);
+    await tick();
+
+    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "2");
+    assert.ok(transceiver);
+    assert.equal(transceiver.sender.track, screenTrack);
+});
+
 test("renegotiation binds a newly published local track before answering", async () => {
     const { peerConnections, track } = await renegotiateCamera(
         buildVideoRenegotiationFrame("9", { simulcastEncodings: [] }),
