@@ -255,12 +255,21 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     private _handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
         this.errors.push(resolvedError);
-        this.sourceDescriptors = [];
         this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${resolvedError.message}`);
-        this._protocolCore.disconnect();
         this._pendingRequests.rejectAll(resolvedError);
+        let disconnectCommands: HostCommand[] | undefined;
+        try {
+            disconnectCommands = this._protocolCore.disconnect();
+        } catch (disconnectError) {
+            this._emitLog(
+                CLIENT_LOG_LEVEL.ERROR,
+                `protocol disconnect failed: ${String(disconnectError)}`
+            );
+        }
         this._runtime.abort();
-        this._syncPublicState();
+        if (disconnectCommands) {
+            this._runtime.enqueue(disconnectCommands);
+        }
         this.dispatchEvent(
             new CustomEvent("handledError", {
                 detail: {
