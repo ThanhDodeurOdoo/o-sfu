@@ -86,6 +86,10 @@ fn test_sender() -> UserOutboundSender {
     UserOutboundSender::channel(128, Arc::new(RuntimeMetrics::default())).0
 }
 
+fn has_committed_consumer(topology: &super::RoomTopology, key: &ConsumerKey) -> bool {
+    topology.committed_consumer_route_for_key(key).is_some()
+}
+
 fn join_test_user(state: &mut RoomState, user_id: &UserId) {
     let sender = test_sender();
     assert!(
@@ -276,8 +280,7 @@ fn install_test_published_producer_with_route(
     let source_id = source_descriptor.source_id();
     state
         .topology
-        .media_mut_for_test()
-        .install_source(PublishedSourceInstall {
+        .install_source_for_test(PublishedSourceInstall {
             source_descriptor,
             producer_id,
             producer: PublishedProducer {
@@ -384,18 +387,16 @@ fn install_test_consumer_state(
 fn set_test_consumer_policy_pause(state: &mut RoomState, key: &ConsumerKey) {
     let route_ref = state
         .topology
-        .media()
         .committed_consumer_route_for_key(key)
         .expect("consumer route should exist")
         .transport_ref();
-    assert!(
-        state
-            .topology
-            .media_mut_for_test()
-            .update_consumer_source_selection(&route_ref, key.source_id, |selection| {
-                selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
-            })
-    );
+    assert!(state.topology.update_consumer_source_selection(
+        &route_ref,
+        key.source_id,
+        |selection| {
+            selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
+        }
+    ));
 }
 
 fn two_user_consumer_route() -> (RoomState, UserId, UserId, ConsumerKey, ConnectionId) {
@@ -544,7 +545,6 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     assert!(
         state
             .topology
-            .media()
             .producer(producer_id)
             .is_some_and(|producer| producer.active),
         "room state must keep the previous activity flag when router pause propagation fails"
@@ -633,7 +633,6 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
     assert_eq!(setups.len(), 1);
     let selection = state
         .topology
-        .media()
         .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, source_id))
         .expect("compat subscription should create a source-level selection");
     assert!(!selection.active());
@@ -735,7 +734,6 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
 
     let source_id = state
         .topology
-        .media()
         .source_id_for_owner_stream(&publisher_user_id, &stream_id)
         .expect("publisher source should exist");
     state
@@ -765,11 +763,10 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
 
     let source_id = state
         .topology
-        .media()
         .source_id_for_owner_stream(&publisher_user_id, &stream_id)
         .expect("publisher source should exist");
     let key = ConsumerKey::new(&subscriber_user_id, source_id);
-    assert!(state.topology.media().has_consumer_setup_or_route(&key));
+    assert!(state.topology.has_consumer_setup_or_route(&key));
     assert!(
         state
             .topology
@@ -777,7 +774,7 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
             .remove_consumer_key_state(&key)
             .is_empty()
     );
-    assert!(!state.topology.media().has_consumer_setup_or_route(&key));
+    assert!(!state.topology.has_consumer_setup_or_route(&key));
 
     let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
         panic!("setup with rejected graph commit should be released");
@@ -837,37 +834,21 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
     assert_eq!(planned_setups.len(), 2);
     let scalable_selection = state
         .topology
-        .media()
         .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, scalable_source_id))
         .expect("scalable source should have a consumer selection");
     let readable_selection = state
         .topology
-        .media()
         .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, readable_source_id))
         .expect("readable source should have a consumer selection");
-    let selections = [scalable_selection, readable_selection];
-    assert!(selections.iter().all(|selection| selection.active()));
+    assert!(scalable_selection.active());
+    assert!(readable_selection.active());
+    assert!(!scalable_selection.delivery_active());
     assert!(readable_selection.delivery_active());
     assert_eq!(
         scalable_selection.policy_pause_reason(),
         Some(PolicyPauseReason::VideoDownloadLimit)
     );
-    assert_eq!(
-        selections
-            .iter()
-            .filter(|selection| selection.delivery_active())
-            .count(),
-        1
-    );
-    assert_eq!(
-        selections
-            .iter()
-            .filter(|selection| {
-                selection.policy_pause_reason() == Some(PolicyPauseReason::VideoDownloadLimit)
-            })
-            .count(),
-        1
-    );
+    assert_eq!(readable_selection.policy_pause_reason(), None);
 }
 
 #[test]
@@ -917,13 +898,6 @@ fn commit_publish_reservation_populates_transport_media_owner_index() {
         Some(connection_id)
     );
     assert_eq!(state.media_counts().publications, 1);
-    assert_eq!(
-        state
-            .inspect_source_encoding_ids_for_transport_media_id(transport_media_id)
-            .expect("transport media should resolve to source encodings")
-            .len(),
-        1
-    );
 }
 
 #[test]
@@ -965,7 +939,6 @@ fn commit_publish_reservation_registers_all_source_encodings() {
         .expect("transport media should resolve to the committed source");
     let source = state
         .topology
-        .media()
         .source(source_id)
         .expect("source registry should own the committed source");
     assert_eq!(source.owner().user_id(), &user_id);
@@ -1151,24 +1124,25 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
         media.remove_user_media(&publisher_id);
     }
 
-    let media = state.topology.media();
-    assert!(media.source(publisher_source_id).is_none());
-    assert!(media.source(other_source_id).is_some());
-    assert!(!media.contains_consumer(&removed_consumer_key));
-    assert!(!media.has_consumer_setup_or_route(&pending_removed_key));
+    let topology = &state.topology;
+    assert!(topology.source(publisher_source_id).is_none());
+    assert!(topology.source(other_source_id).is_some());
+    assert!(!has_committed_consumer(topology, &removed_consumer_key));
+    assert!(!topology.has_consumer_setup_or_route(&pending_removed_key));
     assert!(
-        media
+        topology
             .consumer_source_selection(&removed_consumer_key)
             .is_none()
     );
-    assert!(media.contains_consumer(&surviving_consumer_key));
+    assert!(has_committed_consumer(topology, &surviving_consumer_key));
     assert!(
-        media
+        topology
             .consumer_source_selection(&surviving_consumer_key)
             .is_some()
     );
     assert_eq!(
-        media
+        topology
+            .media()
             .consumer_keys_for_source(other_source_id)
             .cloned()
             .collect::<Vec<_>>(),
@@ -1178,9 +1152,9 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
         .topology
         .media_mut_for_test()
         .remove_user_media(&other_publisher_id);
-    let media = state.topology.media();
-    assert!(media.source(other_source_id).is_none());
-    assert!(!media.contains_consumer(&surviving_consumer_key));
+    let topology = &state.topology;
+    assert!(topology.source(other_source_id).is_none());
+    assert!(!has_committed_consumer(topology, &surviving_consumer_key));
 }
 
 #[test]

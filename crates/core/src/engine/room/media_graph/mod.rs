@@ -8,10 +8,9 @@ use o_sfu_router::{
 use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
     ConnectionId, UserId,
-    media_transport::{RelayRouteActivity, TransportConsumerRoute, TransportMediaId},
+    media_transport::{TransportConsumerRoute, TransportMediaId},
     source_model::{
-        ActiveSpeakerGroup, ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
-        UserStreamId,
+        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, UserStreamId,
     },
 };
 
@@ -142,6 +141,12 @@ pub(super) struct ConsumerRouteView<'a> {
     pub selection: Option<ConsumerSourceSelection>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SourceView<'a> {
+    pub source: &'a PublishedSourceDescriptor,
+    pub producer: &'a PublishedProducer,
+}
+
 impl ConsumerRouteView<'_> {
     pub fn selection_or_open(&self, active: bool) -> ConsumerSourceSelection {
         self.selection
@@ -172,7 +177,7 @@ impl ConsumerRouteView<'_> {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingConsumerRouteView<'a> {
     pub source: &'a PublishedSourceDescriptor,
-    pub producer: Option<&'a PublishedProducer>,
+    pub producer: &'a PublishedProducer,
     pub selection: Option<ConsumerSourceSelection>,
 }
 
@@ -274,14 +279,6 @@ impl SourceKey {
 }
 
 impl RoomMediaGraph {
-    pub fn publication_count(&self) -> usize {
-        self.sources.publication_count()
-    }
-
-    pub fn subscription_count(&self) -> usize {
-        self.routes.subscription_count()
-    }
-
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn producer_count(&self) -> usize {
         self.sources.producer_count()
@@ -290,37 +287,6 @@ impl RoomMediaGraph {
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn consumer_count(&self) -> usize {
         self.routes.count()
-    }
-
-    pub fn sources(&self) -> impl Iterator<Item = &PublishedSourceDescriptor> {
-        self.sources.sources()
-    }
-
-    pub fn producers(&self) -> impl Iterator<Item = (ProducerRuntimeId, &PublishedProducer)> {
-        self.sources.producers()
-    }
-
-    pub fn active_producer_stream_owners(&self) -> impl Iterator<Item = (&UserStreamId, &UserId)> {
-        self.sources.active_producer_stream_owners()
-    }
-
-    pub fn source(&self, source_id: PublishedSourceId) -> Option<&PublishedSourceDescriptor> {
-        self.sources.source(source_id)
-    }
-
-    pub fn source_transport_media_entry(
-        &self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<&SourceTransportMediaIndexEntry> {
-        self.sources.transport_media_entry(transport_media_id)
-    }
-
-    pub fn producer_stream_id_for_transport_media_id(
-        &self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<UserStreamId> {
-        self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.stream.clone())
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -339,67 +305,6 @@ impl RoomMediaGraph {
             .producer_transport_media_id(user_id, connection_id, stream_id)
     }
 
-    pub fn source_id_for_owner_stream(
-        &self,
-        owner_user_id: &UserId,
-        stream_id: &UserStreamId,
-    ) -> Option<PublishedSourceId> {
-        self.sources.id_for_owner_stream(owner_user_id, stream_id)
-    }
-
-    pub fn producer_route_target(
-        &self,
-        owner_user_id: &UserId,
-        owner_connection_id: ConnectionId,
-        stream_id: &UserStreamId,
-    ) -> Option<ProducerRouteTarget> {
-        self.sources
-            .producer_route_target(owner_user_id, owner_connection_id, stream_id)
-    }
-
-    pub fn producer_for_route_target(
-        &self,
-        target: &ProducerRouteTarget,
-        current_connection_id: Option<ConnectionId>,
-    ) -> Option<&PublishedProducer> {
-        self.sources
-            .producer_for_route_target(target, current_connection_id)
-    }
-
-    pub fn set_producer_active(&mut self, target: &ProducerRouteTarget, active: bool) -> bool {
-        self.sources.set_producer_active(target, active)
-    }
-
-    pub fn publications_for_user_connection(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> impl Iterator<Item = (&PublishedSourceDescriptor, &PublishedProducer)> {
-        self.sources
-            .publications_for_user_connection(user_id, connection_id)
-    }
-
-    pub fn owner_has_promotable_source_in_group(
-        &self,
-        owner_user_id: &UserId,
-        group: ActiveSpeakerGroup,
-    ) -> bool {
-        self.sources
-            .owner_has_promotable_source_in_group(owner_user_id, group)
-    }
-
-    pub fn install_source(&mut self, install: PublishedSourceInstall) {
-        self.sources.install_source(install);
-    }
-
-    pub fn set_consumer_source_selection(&mut self, key: &ConsumerKey, active: bool) {
-        self.routes.set_selection(key, active);
-    }
-
-    pub fn consumer_source_selection(&self, key: &ConsumerKey) -> Option<ConsumerSourceSelection> {
-        self.routes.selection(key)
-    }
-
     #[cfg(test)]
     pub fn ensure_consumer_source_selection(
         &mut self,
@@ -407,23 +312,6 @@ impl RoomMediaGraph {
         selection: ConsumerSourceSelection,
     ) {
         self.routes.ensure_selection(key, selection);
-    }
-
-    pub fn update_consumer_source_selection(
-        &mut self,
-        route: &ConsumerRouteTransportRef,
-        source_id: PublishedSourceId,
-        update: impl FnOnce(&mut ConsumerSourceSelection),
-    ) -> bool {
-        let key = ConsumerKey::new(&route.consumer_user_id, source_id);
-        let Some(current_route) = self.committed_consumer_route_for_key(&key) else {
-            return false;
-        };
-        if !current_route.matches_transport_ref(route) {
-            return false;
-        }
-        update(self.routes.selection_mut_or_open(key));
-        true
     }
 
     #[cfg(test)]
@@ -442,70 +330,6 @@ impl RoomMediaGraph {
     #[cfg(test)]
     pub fn consumer_state(&self, key: &ConsumerKey) -> Option<ConsumerState> {
         self.routes.consumer_state(key)
-    }
-
-    pub fn committed_consumer_transport_entries(
-        &self,
-    ) -> impl Iterator<Item = (UserId, ConnectionId)> + '_ {
-        self.routes.committed_consumer_transport_entries()
-    }
-
-    pub fn pending_consumer_user_ids(&self) -> impl Iterator<Item = &UserId> {
-        self.routes.pending_consumer_user_ids()
-    }
-
-    pub fn live_consumer_routes(&self) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.routes
-            .committed_entries()
-            .filter_map(|(key, state)| self.consumer_route_for_key(key, state))
-    }
-
-    pub fn consumer_route_for_key(
-        &self,
-        key: &ConsumerKey,
-        state: ConsumerState,
-    ) -> Option<ConsumerRouteView<'_>> {
-        let source = self.sources.source(key.source_id)?;
-        let producer = self.producer_for_source(key.source_id)?;
-        Some(ConsumerRouteView {
-            consumer_user_id: key.consumer_user_id.clone(),
-            state,
-            source,
-            producer,
-            selection: self.routes.selection(key),
-        })
-    }
-
-    pub fn committed_consumer_route_for_key(
-        &self,
-        key: &ConsumerKey,
-    ) -> Option<ConsumerRouteView<'_>> {
-        let state = self.routes.consumer_state(key)?;
-        self.consumer_route_for_key(key, state)
-    }
-
-    pub fn pending_consumer_routes_for_user(
-        &self,
-        user_id: &UserId,
-    ) -> impl Iterator<Item = PendingConsumerRouteView<'_>> {
-        self.routes
-            .pending_keys_for_user(user_id)
-            .filter_map(|key| {
-                let source = self.sources.source(key.source_id)?;
-                Some(PendingConsumerRouteView {
-                    source,
-                    producer: self.producer_for_source(key.source_id),
-                    selection: self.routes.selection(key),
-                })
-            })
-    }
-
-    pub fn producer_for_source(&self, source_id: PublishedSourceId) -> Option<&PublishedProducer> {
-        self.sources.producer_for_source(source_id)
-    }
-
-    pub fn producer(&self, producer_id: ProducerRuntimeId) -> Option<&PublishedProducer> {
-        self.sources.producer(producer_id)
     }
 
     pub fn remove_consumer_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
@@ -613,29 +437,6 @@ impl RoomMediaGraph {
             .collect::<BTreeSet<_>>();
 
         self.routes.transport_removals_for_keys(keys)
-    }
-
-    pub fn set_relay_consumer_active(
-        &mut self,
-        consumer_user_id: &UserId,
-        consumer_connection_id: ConnectionId,
-        source_id: PublishedSourceId,
-        activity: RelayRouteActivity,
-    ) -> Vec<RelayRouteEffect> {
-        self.routes.set_relay_active(
-            consumer_user_id,
-            consumer_connection_id,
-            source_id,
-            activity,
-        )
-    }
-
-    pub fn has_consumer_setup_or_route(&self, consumer_key: &ConsumerKey) -> bool {
-        self.routes.has_consumer_setup_or_route(consumer_key)
-    }
-
-    pub fn contains_consumer(&self, key: &ConsumerKey) -> bool {
-        self.routes.contains(key)
     }
 }
 

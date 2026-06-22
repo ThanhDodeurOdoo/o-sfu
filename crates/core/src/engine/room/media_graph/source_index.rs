@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall, SourceKey,
-    SourceTransportMediaIndexEntry, TransportMediaRemoval, remove_from_index_set,
+    SourceTransportMediaIndexEntry, SourceView, TransportMediaRemoval, remove_from_index_set,
 };
 use crate::engine::{
     ConnectionId, UserId,
@@ -39,8 +39,18 @@ impl SourceIndex {
         self.records.len()
     }
 
-    pub(super) fn sources(&self) -> impl Iterator<Item = &PublishedSourceDescriptor> {
-        self.records.values().map(|record| &record.descriptor)
+    pub(super) fn source_views(&self) -> impl Iterator<Item = SourceView<'_>> {
+        self.records.values().map(|record| SourceView {
+            source: &record.descriptor,
+            producer: &record.producer,
+        })
+    }
+
+    pub(super) fn source_view(&self, source_id: PublishedSourceId) -> Option<SourceView<'_>> {
+        self.records.get(&source_id).map(|record| SourceView {
+            source: &record.descriptor,
+            producer: &record.producer,
+        })
     }
 
     pub(super) fn producers(
@@ -49,15 +59,6 @@ impl SourceIndex {
         self.records
             .values()
             .map(|record| (record.producer_id, &record.producer))
-    }
-
-    pub(super) fn active_producer_stream_owners(
-        &self,
-    ) -> impl Iterator<Item = (&UserStreamId, &UserId)> {
-        self.records
-            .values()
-            .filter(|record| record.producer.active)
-            .map(|record| (&record.producer.stream_id, &record.producer.owner_user_id))
     }
 
     pub(super) fn source(
@@ -159,22 +160,6 @@ impl SourceIndex {
         true
     }
 
-    pub(super) fn publications_for_user_connection(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> impl Iterator<Item = (&PublishedSourceDescriptor, &PublishedProducer)> {
-        self.ids_by_owner
-            .get(user_id)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .filter_map(move |source_id| {
-                let record = self.records.get(source_id)?;
-                (record.producer.owner_connection_id == connection_id)
-                    .then_some((&record.descriptor, &record.producer))
-            })
-    }
-
     pub(super) fn owner_has_promotable_source_in_group(
         &self,
         owner_user_id: &UserId,
@@ -273,6 +258,7 @@ impl SourceIndex {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn producer_for_source(
         &self,
         source_id: PublishedSourceId,

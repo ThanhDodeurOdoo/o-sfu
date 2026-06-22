@@ -101,8 +101,7 @@ fn install_test_published_producer(
     .expect("test source graph should be valid");
     state
         .topology
-        .media_mut_for_test()
-        .install_source(PublishedSourceInstall {
+        .install_source_for_test(PublishedSourceInstall {
             source_descriptor: source,
             producer_id,
             producer: PublishedProducer {
@@ -186,7 +185,6 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let target = {
         let producer = state
             .topology
-            .media()
             .producer_for_source(source_id)
             .expect("relayed source producer should exist");
         ConsumerSetupTarget::new(
@@ -377,9 +375,9 @@ fn leave_removes_consumer_routes_for_departed_session() {
     let outcome = state.apply_leave(&UserId::Integer(2), consumer_connection_id);
 
     assert!(outcome.is_some());
-    assert_eq!(state.topology.media().consumer_count(), 0);
-    assert_eq!(state.topology.media().producer_count(), 1);
-    assert!(state.topology.media().source(source_id).is_some());
+    assert_eq!(state.consumer_count(), 0);
+    assert_eq!(state.producer_count(), 1);
+    assert!(state.topology.source(source_id).is_some());
 }
 
 #[test]

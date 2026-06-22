@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use o_sfu_router::rtp::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities};
 
@@ -166,57 +166,17 @@ impl RoomState {
     pub(in crate::engine::room) fn live_consumer_routes(
         &self,
     ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.topology
-            .media()
-            .live_consumer_routes()
-            .filter(|route| {
-                self.user_connection_id(&route.consumer_user_id)
-                    == Some(route.state.consumer_connection_id)
-            })
+        self.topology.live_consumer_routes().filter(|route| {
+            self.user_connection_id(&route.consumer_user_id)
+                == Some(route.state.consumer_connection_id)
+        })
     }
 
     pub fn source_fanout_pressure(&self, max_fanout_per_source: usize) -> bool {
-        if max_fanout_per_source == 0 {
-            return false;
-        }
-        let media = self.topology.media();
-        media.sources().any(|source| {
-            if !media
-                .producer_for_source(source.source_id())
-                .is_some_and(|producer| producer.active)
-            {
-                return false;
-            }
-            let mut deliveries_by_worker = BTreeMap::new();
-            for key in media.consumer_keys_for_source(source.source_id()) {
-                if !media.has_consumer_setup_or_route(key) {
-                    continue;
-                }
-                if media
-                    .consumer_source_selection(key)
-                    .is_some_and(|selection| !selection.delivery_active())
-                {
-                    continue;
-                }
-                let Some(user) = self.users.get(&key.consumer_user_id) else {
-                    continue;
-                };
-                let Some(media_worker) = self
-                    .topology
-                    .committed_media_worker_id(&key.consumer_user_id, user.connection_id)
-                else {
-                    continue;
-                };
-                deliveries_by_worker
-                    .entry(media_worker)
-                    .and_modify(|count: &mut usize| *count = count.saturating_add(1))
-                    .or_insert(1);
-            }
-            !deliveries_by_worker.is_empty()
-                && deliveries_by_worker
-                    .values()
-                    .all(|count| *count >= max_fanout_per_source)
-        })
+        self.topology
+            .source_fanout_pressure(max_fanout_per_source, |user_id| {
+                self.user_connection_id(user_id)
+            })
     }
 
     pub fn reconcile_spillover_routers(
@@ -260,20 +220,9 @@ impl RoomState {
     }
 
     pub fn user_stats_counts(&self) -> (u64, BTreeMap<UserStreamId, u64>) {
-        let mut active_users_by_stream: BTreeMap<UserStreamId, BTreeSet<UserId>> = BTreeMap::new();
-        for (stream_id, owner_user_id) in self.topology.media().active_producer_stream_owners() {
-            active_users_by_stream
-                .entry(stream_id.clone())
-                .or_default()
-                .insert(owner_user_id.clone());
-        }
-        let active_stream_counts = active_users_by_stream
-            .into_iter()
-            .map(|(stream_id, users)| (stream_id, u64::try_from(users.len()).unwrap_or(u64::MAX)))
-            .collect();
         (
             u64::try_from(self.users.len()).unwrap_or(u64::MAX),
-            active_stream_counts,
+            self.topology.active_stream_user_counts(),
         )
     }
 

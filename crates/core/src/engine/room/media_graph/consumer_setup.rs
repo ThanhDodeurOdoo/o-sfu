@@ -113,20 +113,13 @@ impl RoomState {
         if user.connection_id != target.connection || !user.negotiation.can_consume() {
             return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
         }
-        let Some(producer) = self.topology.media().producer(target.producer_id) else {
+        let Some(producer) = self.topology.producer(target.producer_id) else {
             return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
         };
         if !target.matches_identity(producer) {
             return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
         }
         let active = producer.active;
-        if self
-            .topology
-            .media()
-            .contains_consumer(setup.reservation.key())
-        {
-            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
-        }
         let selection = self.setup_selection(target, active);
         self.topology
             .commit_consumer_setup(setup, selection, media, mid, active)
