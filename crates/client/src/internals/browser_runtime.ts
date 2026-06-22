@@ -96,7 +96,9 @@ export class BrowserRuntime {
         this._commandQueue = this._commandQueue
             .then(() => (this.isCurrent(epoch) ? this.processCommands(commands, epoch) : undefined))
             .catch((error: unknown) => {
-                this._context.onRuntimeError(error);
+                if (this.isCurrent(epoch)) {
+                    this._context.onRuntimeError(error);
+                }
             });
     }
 
@@ -105,7 +107,9 @@ export class BrowserRuntime {
         this._commandQueue = this._commandQueue
             .then(() => (this.isCurrent(epoch) ? operation() : undefined))
             .catch((error: unknown) => {
-                this._context.onRuntimeError(error);
+                if (this.isCurrent(epoch)) {
+                    this._context.onRuntimeError(error);
+                }
             });
     }
 
@@ -115,6 +119,7 @@ export class BrowserRuntime {
 
     abort(): void {
         this._epoch += 1;
+        this._commandQueue = Promise.resolve();
         this._timerHandles.forEach((handle) => this._clearTimer(handle));
         this._timerHandles.clear();
         this._peerSession.close();
@@ -188,11 +193,6 @@ export class BrowserRuntime {
                 this._peerSession.close();
                 return [];
             case COMMAND_KIND.CLOSE_WEB_SOCKET:
-                emitRuntimeLog(
-                    this._context,
-                    CLIENT_LOG_LEVEL.INFO,
-                    `closing websocket with code ${command.code}`
-                );
                 this._socketSession.close(command.code);
                 return [];
             case COMMAND_KIND.EMIT_STATE_CHANGE:

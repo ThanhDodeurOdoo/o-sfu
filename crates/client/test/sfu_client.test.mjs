@@ -176,7 +176,7 @@ test("runtime errors reject registered recording requests", async () => {
 
     const registeredPromise = client.startRecording({ audio: true });
     await tick();
-    const recordingRejection = assert.rejects(registeredPromise, Error);
+    const recordingRejection = assert.rejects(registeredPromise, /recording runtime failure/);
 
     await emitMessage("recording-runtime-failure");
     await recordingRejection;
@@ -1391,8 +1391,21 @@ test("updateInfo keeps the legacy needRefresh option as a compatibility no-op", 
 });
 
 test("fatal runtime errors reset the public client surface", async () => {
-    const { client, core, emitMessage, handledErrors, open, peerConnections, sockets, connect } =
-        createSfuClientHarness();
+    const {
+        client,
+        core,
+        emitMessage,
+        handledErrors,
+        open,
+        peerConnections,
+        sockets,
+        updates,
+        connect
+    } = createSfuClientHarness();
+    const stateChanges = [];
+    client.addEventListener("stateChange", (event) => {
+        stateChanges.push(event.detail);
+    });
 
     await connect();
     await open();
@@ -1410,12 +1423,76 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.deepEqual(client.recordingState, {});
     assert.deepEqual(client.sourceDescriptors, []);
     assert.equal(client._consumers.size, 0);
+    const sourceUpdates = updates.filter((update) => update.name === CLIENT_UPDATE.SOURCE);
+    assert.deepEqual(sourceUpdates.at(-1), {
+        name: CLIENT_UPDATE.SOURCE,
+        payload: {
+            sources: []
+        }
+    });
+    assert.equal(stateChanges.at(-1).state, "disconnected");
     assert.equal(client.errors.length, 1);
     assert.equal(client.errors[0] instanceof Error, true);
     assert.equal(handledErrors[0], client.errors[0]);
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
     assert.deepEqual(core.wsCloseCodes, []);
+});
+
+test("fatal runtime errors ignore stale remote-description failures after abort", async () => {
+    let rejectRemoteDescription;
+    const { client, core, connect, emitMessage, handledErrors, open } = createSfuClientHarness({
+        createPeerConnection(config) {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnection.setRemoteDescription = () =>
+                new Promise((_, reject) => {
+                    rejectRemoteDescription = reject;
+                });
+            return peerConnection;
+        }
+    });
+
+    await connect();
+    await open();
+    await emitMessage("welcome");
+    await emitMessage("source-descriptors");
+    await emitMessage("offer");
+
+    await emitMessage("explode");
+
+    assert.equal(client.state, "disconnected");
+    assert.deepEqual(client.sourceDescriptors, []);
+    assert.equal(handledErrors.length, 1);
+
+    rejectRemoteDescription(new Error("late negotiation failure"));
+    await tick();
+
+    assert.equal(core.disconnectCalls, 1);
+    assert.equal(handledErrors.length, 1);
+});
+
+test("fatal runtime errors keep the original error when protocol disconnect fails", async () => {
+    const core = new FakeProtocolCore();
+    let disconnectCalls = 0;
+    core.disconnect = () => {
+        disconnectCalls += 1;
+        throw new Error("disconnect failure");
+    };
+    const { client, connect, emitMessage, handledErrors, open, sockets } = createSfuClientHarness({
+        protocolCore: core
+    });
+
+    await connect();
+    await open();
+
+    await emitMessage("explode");
+
+    assert.equal(client.errors.length, 1);
+    assert.equal(client.errors[0].message, "boom");
+    assert.equal(handledErrors[0], client.errors[0]);
+    assert.equal(disconnectCalls, 1);
+    assert.equal(sockets[0].closeCode, 4000);
+    assert.equal(sockets[0].readyState, 3);
 });
 
 test("fatal runtime errors drop already queued browser commands", async () => {
