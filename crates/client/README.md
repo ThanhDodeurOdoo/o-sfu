@@ -28,18 +28,18 @@ still heavily logging the sfu_client.ts, maybe need to cleanup at some point
 
 ### public parts:
 
-- `src/public_api.ts`: Odoo-facing client API, events, states, and compatibility types
+- `src/public_api.ts`: Odoo-facing client API, events, states and compatibility types
 - `src/protocol.ts`: stable public facade for curated signaling envelope and payload types
-- `src/protocol_contract.ts`: handwritten browser signaling contract with envelope aliases and client-visible literals
-- `src/runtime_contract.ts`: protocol-core provider boundary, host-command types, and runtime validation.
+- `src/protocol_contract.ts`: handwritten browser signaling contract with host-command literals plus envelope and payload aliases
+- `src/runtime_contract.ts`: protocol-core provider boundary, host-command types and runtime validation
 - `src/sfu_client.ts`: public `SfuClient` facade exposed to Odoo and tests.
 - `src/wasm_runtime.ts`: default async `wasm-pack` bootstrap for the normal browser bundle.
 
 ### internals:
 
-- `src/internals/browser_runtime.ts`: executes host commands against `WebSocket`, `RTCPeerConnection`, and timers.
+- `src/internals/browser_runtime.ts`: executes host commands against `WebSocket`, `RTCPeerConnection` and timers.
 - `src/internals/browser_types.ts`: browser/test types used by the runtime helpers.
-- `src/internals/local_uploads.ts`: local track bookeping and sender-to-mid attachment logic
+- `src/internals/local_uploads.ts`: local track bookkeeping and sender-to-mid attachment logic
 - `src/internals/remote_tracks.ts`: remote track binding state and the compatibility `_consumers` map.
 - `src/internals/pending_requests.ts`: request/response bookkeeping for recording-style async operations.
 - `src/internals/validation.ts`: input validation and cloning helpers.

@@ -11,12 +11,12 @@ import {
     type StreamType
 } from "../public_api.js";
 import {
-    COMMAND_KIND,
     createProtocolCore,
     wrapProtocolCoreBindings,
     type HostCommand,
     type ProtocolCoreBindings
 } from "../runtime_contract.js";
+import { COMMAND_KIND } from "../protocol_contract.js";
 import type {
     ClientPeerConnection,
     ClientWebSocket,

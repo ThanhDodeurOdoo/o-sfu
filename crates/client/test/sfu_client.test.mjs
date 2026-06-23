@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { CLIENT_UPDATE } from "../dist/index.js";
-import { WS_CLOSE_CODE } from "../dist/protocol_contract.js";
-import { PENDING_REQUEST_KIND, createProtocolCore } from "../dist/runtime_contract.js";
+import { PENDING_REQUEST_KIND, WS_CLOSE_CODE } from "../dist/protocol_contract.js";
+import { createProtocolCore } from "../dist/runtime_contract.js";
 import { PendingRequests } from "../dist/internals/pending_requests.js";
 import { FakeMediaTrack, FakePeerConnection, FakeSender } from "./support/browser_fakes.mjs";
 import {
@@ -938,13 +938,7 @@ test("stale peer connection callbacks cannot affect the active session", async (
     const stalePeerConnection = peerConnections[0];
     assert.equal(client.state, "connected");
 
-    core.trackBindings.set("0", {
-        active: true,
-        mid: "0",
-        sessionId: 84,
-        type: "screen"
-    });
-    await emitMessage("offer");
+    await emitOfferWithBinding({ core, emitMessage }, { sessionId: 84, type: "screen" });
 
     assert.equal(peerConnections.length, 2);
     assert.equal(stalePeerConnection.closed, true);

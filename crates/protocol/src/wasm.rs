@@ -3,7 +3,7 @@ use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 use crate::{
     core::{NegotiationKind, ProtocolCore},
-    host_bridge::{CoreSnapshot, connection_state_tag, project_commands, track_binding},
+    host_bridge::{CoreSnapshot, connection_state_tag, project_commands},
     shared::StreamType,
 };
 
@@ -39,11 +39,6 @@ impl WasmProtocolCore {
     #[wasm_bindgen(js_name = snapshot)]
     pub fn snapshot_js(&self) -> Result<JsValue, JsValue> {
         to_js(&CoreSnapshot::from(&self.inner))
-    }
-
-    #[wasm_bindgen(js_name = trackBinding)]
-    pub fn track_binding_js(&self, mid: String) -> Result<JsValue, JsValue> {
-        to_js(&track_binding(&self.inner, &mid))
     }
 
     pub fn connect(

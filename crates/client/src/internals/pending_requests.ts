@@ -1,4 +1,5 @@
-import { COMMAND_KIND, type HostCommand } from "../runtime_contract.js";
+import { COMMAND_KIND } from "../protocol_contract.js";
+import type { HostCommand } from "../runtime_contract.js";
 import type { PendingRequestCallbacks } from "./browser_types.js";
 
 type BeginPendingRequestCommand = Extract<

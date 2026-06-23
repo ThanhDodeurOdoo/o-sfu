@@ -21,7 +21,9 @@ import {
     SOURCE_ENCODING_POLICY_ROLES,
     STREAM_TYPES,
     UPLOAD_KINDS,
+    type NegotiationKind,
     type NegotiationUploadSlot,
+    type PendingRequestKind,
     type TrackBinding
 } from "./protocol_contract.js";
 
@@ -49,18 +51,11 @@ const SESSION_INFO_BOOLEAN_FIELDS = [
     "isDeaf",
     "isRaisingHand"
 ] as const satisfies readonly (keyof SessionInfo)[];
-export { COMMAND_KIND, NEGOTIATION_KIND, PENDING_REQUEST_KIND };
 
 const CONNECTION_STATES = Object.values(SFU_CLIENT_STATE);
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
 
-export type NegotiationKind = (typeof NEGOTIATION_KIND)[keyof typeof NEGOTIATION_KIND];
-
 const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
-
-export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
-
-export type HostCommandKind = (typeof COMMAND_KIND)[keyof typeof COMMAND_KIND];
 
 export type HostCommand =
     | { kind: typeof COMMAND_KIND.SEND_WEB_SOCKET; frame: string }
@@ -120,7 +115,6 @@ export interface ProtocolCoreBindings {
         sdp: string
     ): HostCommand[];
     disconnect(): HostCommand[];
-    trackBinding(mid: string): TrackBinding | null | undefined;
 }
 
 export type ProtocolCoreProvider = () => ProtocolCoreBindings;
@@ -211,12 +205,6 @@ function wrapProtocolCoreBindingsWith(
         },
         disconnect(): HostCommand[] {
             return validateCommands(bindings.disconnect(), "protocol core disconnect()");
-        },
-        trackBinding(mid: string): TrackBinding | null | undefined {
-            return validateOptionalTrackBinding(
-                bindings.trackBinding(mid),
-                "protocol core trackBinding()"
-            );
         }
     };
 }
@@ -489,16 +477,6 @@ function validateClientUpdate(value: unknown, context: string): ClientUpdateDeta
         default:
             throw new Error(`${context}.name is invalid: ${String(name)}`);
     }
-}
-
-function validateOptionalTrackBinding(
-    value: unknown,
-    context: string
-): TrackBinding | null | undefined {
-    if (value === null || value === undefined) {
-        return value;
-    }
-    return validateTrackBinding(value, context);
 }
 
 function validateTrackBinding(value: unknown, context: string): TrackBinding {

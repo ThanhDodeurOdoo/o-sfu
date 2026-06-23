@@ -7,7 +7,7 @@ import {
     type StreamType
 } from "../public_api.js";
 import type { NegotiationUploadSlot } from "../protocol.js";
-import type { NegotiationKind } from "../runtime_contract.js";
+import type { NegotiationKind } from "../protocol_contract.js";
 import type { ClientPeerConnection } from "./browser_types.js";
 import type { LocalUploads } from "./local_uploads.js";
 import type { RemoteTracks } from "./remote_tracks.js";

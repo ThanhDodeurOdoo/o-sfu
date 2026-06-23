@@ -4,9 +4,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { CLIENT_UPDATE } from "../dist/index.js";
+import { NEGOTIATION_KIND, PENDING_REQUEST_KIND } from "../dist/protocol_contract.js";
 import {
-    NEGOTIATION_KIND,
-    PENDING_REQUEST_KIND,
     configureDefaultWasmProtocolCoreProvider,
     createProtocolCore,
     wrapProtocolCoreBindings
@@ -72,32 +71,16 @@ function validCore(overrides = {}) {
             return [];
         },
         startRecording() {
-            return [beginPendingRequest()];
+            return [];
         },
         stopRecording() {
             return [];
         },
         submitNegotiationAnswer() {
-            return [
-                {
-                    kind: "applyNegotiation",
-                    requestId: "request-2",
-                    negotiationKind: NEGOTIATION_KIND.OFFER,
-                    sdp: "v=0\r\n",
-                    uploadSlots: []
-                }
-            ];
+            return [];
         },
         disconnect() {
             return [];
-        },
-        trackBinding() {
-            return {
-                active: true,
-                mid: "0",
-                sessionId: 7,
-                type: "camera"
-            };
         },
         ...overrides
     };
@@ -223,44 +206,27 @@ test("injected protocol core validates pending request lifecycle commands", () =
     }
 });
 
-test("injected protocol core rejects malformed track bindings", () => {
-    const core = wrapProtocolCoreBindings(
-        validCore({
-            trackBinding: () => ({
-                active: "yes",
-                mid: "0",
-                sessionId: 7,
-                type: "camera"
-            })
-        })
-    );
-
-    assertThrowsError(() => core.trackBinding("0"));
-});
-
 test("injected protocol core validates replaceTrackBindings host commands", () => {
-    const core = wrapProtocolCoreBindings(
-        validCore({
+    assertInjectedCoreThrows(
+        {
             connect: () => [
                 {
                     bindings: [{ active: "yes", mid: "0", sessionId: 7, type: "camera" }],
                     kind: "replaceTrackBindings"
                 }
             ]
-        })
+        },
+        (core) => core.connect("ws://example.test", "jwt", null)
     );
-
-    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
 test("injected protocol core validates source descriptors", () => {
-    const core = wrapProtocolCoreBindings(
-        validCore({
+    assertInjectedCoreThrows(
+        {
             connect: () => [sourceUpdate([validSourceDescriptor({ maxBitrate: -1 })])]
-        })
+        },
+        (core) => core.connect("ws://example.test", "jwt", null)
     );
-
-    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
 });
 
 test("injected protocol core accepts valid temporal layer ids", () => {
