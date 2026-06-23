@@ -2,6 +2,14 @@
   <img src="assets/o-sfu.svg" alt="o-sfu logo" width="400">
 </p>
 
+<div align="center">
+
+  <a href="">[![Rustdoc](https://img.shields.io/badge/rustdoc-deployed-0CB9FF)](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/)</a>
+
+</div>
+
+<div align="center">
+  
 [![Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/tests.yml)
 [![Client](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client.yml)
 [![Client Browser](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/client-browser.yml)
@@ -13,6 +21,8 @@
 [![Cargo Deny](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml)
 [![Dependency Review](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/dependency-review.yml)
 [![CodeQL](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql)
+
+</div>
 
 # o-sfu
 
