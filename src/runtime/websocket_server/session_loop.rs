@@ -92,6 +92,10 @@ impl ActiveWebSocketSession {
         self.accepted.finish(&self.services, reason).await;
     }
 
+    /// drives websocket liveness and transport health from one owner loop
+    ///
+    /// transport health is checked before each ping so RTC teardown can close idle
+    /// or negotiating sockets
     async fn run_until_exit(&mut self) -> WsSessionLoopExitReason {
         let ping_interval = Duration::from_millis(self.services.user.ping_interval_ms);
         let ping_timeout = Duration::from_millis(self.services.user.timeout_ms);

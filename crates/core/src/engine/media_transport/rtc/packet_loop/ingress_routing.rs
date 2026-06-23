@@ -155,6 +155,10 @@ pub(super) fn route_pkt_to_session(
     );
 }
 
+/// routes one UDP datagram without making routing misses caller-visible errors
+///
+/// `Rtc::accepts()` is the authority
+/// demux indexes, recent misses and rate limits are bounded recovery hints
 pub fn route_pkt_to_session_at(
     state: &mut PacketLoopState,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,

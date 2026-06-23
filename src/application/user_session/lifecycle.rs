@@ -76,6 +76,10 @@ impl User {
         Ok(output)
     }
 
+    /// must run before [`User`] is dropped
+    ///
+    /// clears pending negotiation state and closes the room session so staged media
+    /// plus transport user state are rolled back
     pub async fn close(&mut self, rooms: &room::RoomManager) {
         if !self.cleanup_finished {
             self.requests.clear();

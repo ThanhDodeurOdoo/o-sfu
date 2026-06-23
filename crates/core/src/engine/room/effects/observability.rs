@@ -59,7 +59,7 @@ impl RoomObservabilityPlan {
     }
 }
 
-/// counter delta captured under the same [`RoomState`] lock as the transition
+/// counter delta captured under the same `RoomState` lock as the transition
 #[derive(Debug, Clone, Copy)]
 pub struct RoomGaugeDelta {
     users: i64,

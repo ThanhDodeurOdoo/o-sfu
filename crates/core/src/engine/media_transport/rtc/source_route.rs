@@ -165,6 +165,11 @@ impl MediaRouteDestination {
     }
 }
 
+/// remote source control path with latest-gate retry state
+///
+/// failed sends keep only the newest packet gate
+/// `RouteTable::flush_remote_pkt_gates` retries it until the source worker
+/// accepts it
 #[derive(Debug, Clone)]
 pub(super) struct RemoteSourceRegistration {
     source: TransportSourceKey,

@@ -54,6 +54,9 @@ impl StagedPublishes {
         ))
     }
 
+    /// publishes the staged slot only if no stream reservation already exists
+    ///
+    /// duplicate reservations are released before returning `false`
     pub async fn stage(
         &self,
         publish: StagedPublish,

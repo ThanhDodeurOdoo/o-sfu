@@ -26,6 +26,10 @@ type RelayOwners = BTreeMap<ConsumerKey, RelayRouteActivity>;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct RouteReservationId(u64);
 
+/// reservation token for one pending consumer setup slot
+///
+/// stale reservations must not commit or release a newer pending route for the
+/// same [`ConsumerKey`]
 #[derive(Debug)]
 pub struct ConsumerRouteReservation {
     key: ConsumerKey,

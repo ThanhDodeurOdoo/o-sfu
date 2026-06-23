@@ -39,6 +39,11 @@ impl SourcePolicyTrigger {
     }
 }
 
+/// deferred source-policy trigger emitted by room state transitions
+///
+/// multiple wakeups collapse to one strongest trigger
+/// [`Self::execute`] runs policy work after route effects and pre-policy output
+/// drain
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SourcePolicyWakeups {
     trigger: Option<SourcePolicyTrigger>,

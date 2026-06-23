@@ -167,6 +167,10 @@ impl UdpIngressBenchHarness {
     }
 }
 
+/// drop cancels the ingress pump and wakes the blocking socket receive
+///
+/// the wake datagram is only a shutdown nudge
+/// the receive task checks the token again before enqueueing a packet
 impl Drop for UdpIngress {
     fn drop(&mut self) {
         self.shutdown.cancel();

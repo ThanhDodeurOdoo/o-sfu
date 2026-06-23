@@ -775,6 +775,12 @@ fn local_src_pkt_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> 
     )
 }
 
+/// computes the packet gate sent back to a remote source worker
+///
+/// selected-rid bootstrap keeps the remote relay open while local destinations
+/// remain blocked
+/// explicit `Block` crosses workers only when no pending selected rid still
+/// needs relay traffic
 fn remote_pkt_gate_for_route(
     route_entry: Option<&MediaRouteEntry>,
     local_packet_gate: Option<PacketLayerGate>,

@@ -9,6 +9,11 @@ use str0m::media::Rid;
 use super::source::RouteSource;
 use crate::engine::media_transport::TransportMediaId;
 
+/// selected-rid refresh queue with source-local cancellation
+///
+/// the heap is only the wake index
+/// `RouteSource::producer.pending_rid_refreshes` is the authority
+/// stale heap entries are skipped after teardown or direct draining
 #[derive(Debug, Default)]
 pub(super) struct RidRefreshQueue {
     heap: BinaryHeap<Reverse<RidKeyframeRefresh>>,

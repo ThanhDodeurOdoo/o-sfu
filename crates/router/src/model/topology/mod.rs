@@ -46,6 +46,11 @@ pub enum RoutingError {
     Router(RouterError),
 }
 
+/// teardown repair sentinel returned after best-effort router cleanup
+///
+/// errors are preserved for diagnostics
+/// callers may still finish room-state cleanup that no longer depends on router
+/// consistency
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoutingRepairReport {
     errors: Vec<RoutingError>,
@@ -495,6 +500,10 @@ impl RoutingTopology {
     }
 
     /// create a routed consumer on the producer's source router
+    ///
+    /// cross-router receivers get a temporary shadow session before consumer insertion
+    /// if insertion fails, only a newly created untracked shadow is removed
+    /// existing shadows stay live because another routed consumer may still need them
     ///
     /// # Errors
     ///

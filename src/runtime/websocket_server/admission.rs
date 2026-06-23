@@ -17,6 +17,11 @@ struct OriginAdmission {
     semaphore: Arc<Semaphore>,
 }
 
+/// holds global and origin pre-auth capacity until authentication releases it
+/// or the upgraded socket is dropped
+///
+/// dropping the permit removes idle origin buckets after the last origin permit
+/// returns
 #[derive(Debug)]
 pub(super) struct PreAuthWebSocketPermit {
     _global_permit: OwnedSemaphorePermit,

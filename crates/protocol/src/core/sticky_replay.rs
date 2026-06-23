@@ -5,6 +5,10 @@ use crate::{
     signaling::{ClientEnvelope, ClientMessage, EnvelopeBatch, SubscribePayload},
 };
 
+/// remembers reconnect-safe client intent outside the live socket
+///
+/// welcome replay sends subscriptions and user info
+/// transport-ready replay sends active publications
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct StickyReplayState {
     active_publications: BTreeSet<StreamType>,

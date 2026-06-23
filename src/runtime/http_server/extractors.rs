@@ -40,6 +40,10 @@ pub(super) struct VerifiedRoomRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct VerifiedDisconnectClaims(pub(super) HttpDisconnectClaims);
 
+/// authorizes diagnostics routes with a configured bearer token or loopback-only fallback
+///
+/// configured tokens take precedence over loopback access so public listeners
+/// cannot bypass operator auth
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DiagnosticsAccess;
 

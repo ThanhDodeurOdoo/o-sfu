@@ -30,6 +30,10 @@ pub(super) struct AcceptedUser {
 }
 
 impl AcceptedUser {
+    /// joins the room only after authentication and before the session loop starts
+    ///
+    /// join -> send startup payload -> enter loop
+    /// failures after join close [`User`] before returning `None`
     pub(super) async fn establish(
         state: &WebSocketServices,
         auth: AuthenticatedJoin,
