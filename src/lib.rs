@@ -1,15 +1,14 @@
-//! o-sfu is a Selective Forwading Unit for WebRTC rooms
+//! o-sfu is a Selective Forwading Unit for audio/video calls
 //!
-//! `o-sfu` is the orchestration layer, it handles room admission, routing topology, media policy, packet
-//! forwarding, diagnostics and verification for applications that need an
-//! embeddable SFU process
+//! `o-sfu/src` is the orchestration layer, it handles room admission, routing topology, media policy, packet
+//! forwarding, diagnostics and verification for applications that need a dedicated SFU server.
 //!
 //! - configuration loading through [`config::Config`] and [`Runtime`]
 //!   construction through [`Runtime::new`]
-//! - application-facing HTTP routes such like [`http::CHANNEL_PATH`],
-//!   [`http::STATS_PATH`] and [`http::METRICS_PATH`]
-//! - WebSocket admission through [`websocket::decode_auth_payload_text`] and
-//!   authenticated signaling batches through [`websocket::decode_client_batch`]
+//! - room provisioning, bulk disconnect, statistics, metrics and diagnostics
+//!   through [`http`]
+//! - browser bundle orchestration for Odoo through `SfuClient`,
+//!   `BrowserRuntime` and [`o_sfu_protocol::host::ProtocolCore`]
 //! - room membership through [`core::server::room::RoomManager`] and
 //!   user-session orchestration through [`core::prelude::MediaSession`]
 //! - process lifecycle through [`run`], [`Runtime::serve_listener`],
@@ -36,24 +35,34 @@
 //!     -> UDP, RTP fanout, relays and packet sinks
 //! ```
 //!
-//! follow the named steps through [`Runtime`],
+//! follow the steps through [`Runtime`],
 //! [`core::server::room::RoomManager`], [`core::prelude::MediaSession`],
 //! [`core::server::room::Room`], [`o_sfu_router::topology::RoutingTopology`]
 //! and [`core::server::transport::MediaTransport`]
 //!
-//! browser signaling follows a separate sans-I/O path
+//! # client bundle
+//!
+//! The server that implements the call (like odoo) imports the generated browser bundle from `crates/client`
+//! and implements the calls features with `SfuClient`
 //!
 //! ```text
-//! browser client
-//!     -> browser runtime
+//! SfuClient
+//!     -> BrowserRuntime
 //!     -> ProtocolCore
-//!     -> ordered host commands
-//!     -> WebSocket frames, SDP negotiation, track attachment and timers
+//!     -> HostCommand
+//!     -> WebSocket, RTCPeerConnection and timers
 //! ```
 //!
-//! the protocol path is rooted at [`o_sfu_protocol::host::ProtocolCore`],
-//! [`o_sfu_protocol::host::CommandBatch`] and
-//! [`o_sfu_protocol::host::HostCommand`]
+//! `SfuClient` keeps compatibility for `connect`, `publish`, `subscribe`,
+//! recording, stats and update events
+//! signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and returns
+//! ordered [`o_sfu_protocol::host::CommandBatch`] values
+//! `BrowserRuntime` executes the projected
+//! [`o_sfu_protocol::host::HostCommand`] values against browser `WebSocket`,
+//! `RTCPeerConnection` and timer APIs
+//!
+//! read `crates/client/API.md` for the public TypeScript surface and
+//! `crates/client/README.md` for the client file map
 //!
 //! the idea is that room and router state approve topology
 //! before packet-loop workers forward media
