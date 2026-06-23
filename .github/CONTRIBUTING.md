@@ -11,7 +11,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 >
 > Trivial changes are allowed (rewording docstring, basic autocompletion,...)
 >
-> Non-Trivial changes written by AI must have the `AI` tag on the PR.
+> Non-Trivial changes written by AI must have the `AI` tag on the PR, and the complete extent of AI usage must be dislosed in the commit message.
 >
 > The author must always understand all the added code and can justify the changes (replying with copy-pasted AI responses does not count).
 
