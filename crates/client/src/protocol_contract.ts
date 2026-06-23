@@ -120,10 +120,14 @@ export const NEGOTIATION_KIND = {
     RENEGOTIATE: "renegotiate"
 } as const;
 
+export type NegotiationKind = (typeof NEGOTIATION_KIND)[keyof typeof NEGOTIATION_KIND];
+
 export const PENDING_REQUEST_KIND = {
     START_RECORDING: "startRecording",
     STOP_RECORDING: "stopRecording"
 } as const;
+
+export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
 
 export const COMMAND_KIND = {
     CONNECT: "connect",

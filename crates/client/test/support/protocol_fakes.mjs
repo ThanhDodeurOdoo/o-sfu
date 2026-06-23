@@ -207,10 +207,6 @@ export class FakeProtocolCore {
         return [];
     }
 
-    trackBinding(mid) {
-        return this.trackBindings.get(mid) ?? null;
-    }
-
     subscribe(sessionId, states) {
         this.subscriptionUpdates.push({ sessionId, states });
         return [];

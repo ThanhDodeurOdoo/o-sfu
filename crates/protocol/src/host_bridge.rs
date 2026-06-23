@@ -226,11 +226,6 @@ pub fn connection_state_tag(state: ConnectionState) -> &'static str {
     }
 }
 
-#[must_use]
-pub fn track_binding(core: &ProtocolCore, mid: &str) -> Option<TrackBinding> {
-    core.track_binding(mid).cloned()
-}
-
 #[cfg(test)]
 #[path = "host_bridge/TESTS/mod.rs"]
 mod tests;
