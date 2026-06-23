@@ -17,37 +17,29 @@
 //!   [`core::server::metrics::RuntimeMetrics`] and
 //!   [`core::server::diagnostics::DiagnosticsStore`]
 //!
-//! media routing and packet forwarding live below this crate in
-//! [`core::server::transport::MediaTransport`] and `o-sfu-router`
-//!
-//! browser signaling state is in [`o_sfu_protocol::host::ProtocolCore`]
-//! and the browser integration (client crate) executes the returned
-//! [`o_sfu_protocol::host::HostCommand`] values with WebSocket and
-//! `RTCPeerConnection` APIs
 //!
 //! # architecture
 //!
 //! ```text
-//! +---------------------+   +---------------------------+
-//! | HTTP control API    |   |  WebSocket user sessions  |
-//! +-----------+---------+   +---------+-----------------+
-//!             |                      |
-//!             v                      v
-//!        RoomManager          application::User
-//!             |                      |
-//!             |                      |
-//!             +----------+-----------+
-//!                        |
-//!                        v
-//!                   core::Room <--------> router::RoutingTopology
-//!                        |
-//!                        v
-//!              core::MediaTransport
-//!                        |
-//!                        v
-//!                   core::Worker
-//!                 UDP, RTP fanout,
-//!                relays and sinks
+//!     +---------------------+   +---------------------------+
+//!     | HTTP control API    |   |  WebSocket user sessions  |
+//!     +-----------+---------+   +---------+-----------------+
+//!                 |                      |
+//!                 v                      v
+//!            RoomManager          application::User
+//!                 |                      |
+//!                 |                      |
+//!                 +----------+-----------+
+//!                            |
+//!                            v
+//!                       core::Room <--------> router::RoutingTopology
+//!                            |
+//!                            v
+//!                  core::MediaTransport
+//!                            |
+//!                            v
+//!                       core::Worker
+//!  UDP Socket IN ----->  RTP fanout ------>  relays / sinks / UDP socket OUT
 //! ```
 //!
 //! follow the steps through [`Runtime`],
@@ -59,7 +51,7 @@
 //!
 //! | crate | role |
 //! | --- | --- |
-//! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC vocabulary |
+//! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC consts/types |
 //! | `o-sfu-model` | shared call data surfaced through [`o_sfu_protocol::wire::UserId`], [`o_sfu_protocol::wire::StreamType`], [`o_sfu_protocol::wire::RecordingState`] and [`o_sfu_protocol::wire::WebSocketCloseCode`] |
 //! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] state for sessions, transports, producers, consumers and [`o_sfu_router::topology::RoutingTopology`] |
 //! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, cleanup effects and [`core::server::transport::MediaTransport`] projection |
