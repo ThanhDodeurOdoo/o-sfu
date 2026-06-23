@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_model::UserId;
 
-use super::RoutedConsumerId;
+use super::{RoutedConsumerId, RoutedProducerId};
 use crate::model::RouterId;
 #[cfg(kani)]
 use crate::model::proof_storage::{BTreeMap, BTreeSet};
@@ -64,58 +64,76 @@ impl ShadowSessionKey {
 ///
 /// Only cross-router consumers are tracked. A same-router consumer has no
 /// shadow session and is ignored here. Each tracked consumer points to exactly
-/// one producer and at most one shadow. Each shadow reference count is the
+/// one producer and one receiver shadow. Each shadow reference count is the
 /// number of live routed consumers that still need that receiver session on the
 /// source router.
 #[derive(Debug, Clone, Default)]
 pub(super) struct ShadowSessionTracker {
-    /// Consumer-to-shadow link for cross-router receiver cleanup.
-    consumer_shadows: BTreeMap<RoutedConsumerId, ShadowSessionKey>,
-    /// Live routed edge count per receiver shadow.
+    consumer_edges: BTreeMap<RoutedConsumerId, ShadowConsumerEdge>,
     shadow_refcounts: BTreeMap<ShadowSessionKey, usize>,
+    producer_owners: BTreeMap<RoutedProducerId, UserId>,
 }
 
 impl ShadowSessionTracker {
-    /// Register a routed consumer after the source router accepted it.
-    ///
-    /// `shadow_key` is `None` for same-router consumers. Those edges are still
-    /// owned by the pure router but they do not require topology-level shadow
-    /// bookkeeping.
+    pub(super) fn register_producer(&mut self, producer_id: RoutedProducerId, owner: UserId) {
+        self.producer_owners.insert(producer_id, owner);
+    }
+
     pub(super) fn register_consumer(
         &mut self,
         consumer_id: RoutedConsumerId,
+        producer_id: RoutedProducerId,
         shadow_key: Option<ShadowSessionKey>,
     ) {
         let Some(shadow_key) = shadow_key else {
             return;
         };
-        self.consumer_shadows
-            .insert(consumer_id, shadow_key.clone());
         if let Some(count) = self.shadow_refcounts.get_mut(&shadow_key) {
             *count = count.saturating_add(1);
-            return;
+        } else {
+            self.shadow_refcounts.insert(shadow_key.clone(), 1);
         }
-        self.shadow_refcounts.insert(shadow_key, 1);
+        self.consumer_edges.insert(
+            consumer_id,
+            ShadowConsumerEdge {
+                producer_id,
+                shadow_key,
+            },
+        );
     }
 
-    /// Return whether a shadow currently has any tracked routed edge.
-    ///
-    /// `RoutingTopology` uses this before finishing consumer creation. If the pure
-    /// router later rejects the consumer, the topology can remove a newly
-    /// materialized shadow without touching an older shadow that still belongs
-    /// to another live consumer.
     #[must_use]
     pub(super) fn contains_shadow_session(&self, shadow_key: &ShadowSessionKey) -> bool {
         self.shadow_refcounts.contains_key(shadow_key)
     }
 
-    /// Release all routed consumer edges supplied by the caller.
-    ///
-    /// The caller owns the producer and consumer graph. The topology tracker
-    /// only keeps the shadow reference counts needed after router teardown
-    /// accepts the mutation.
     #[must_use]
-    pub(super) fn unregister_consumers(
+    pub(super) fn unregister_producer(
+        &mut self,
+        producer_id: RoutedProducerId,
+    ) -> BTreeSet<ShadowSessionKey> {
+        self.producer_owners.remove(&producer_id);
+        self.release_matching(|consumer| consumer.producer_id == producer_id)
+    }
+
+    #[must_use]
+    pub(super) fn unregister_user(&mut self, user_id: &UserId) -> BTreeSet<ShadowSessionKey> {
+        let mut producers = BTreeSet::new();
+        for (producer_id, owner) in &self.producer_owners {
+            if owner == user_id {
+                producers.insert(*producer_id);
+            }
+        }
+        for producer_id in &producers {
+            self.producer_owners.remove(producer_id);
+        }
+        self.release_matching(|consumer| {
+            consumer.shadow_key.user_id() == user_id || producers.contains(&consumer.producer_id)
+        })
+    }
+
+    #[must_use]
+    pub(super) fn release_consumers(
         &mut self,
         consumer_ids: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> BTreeSet<ShadowSessionKey> {
@@ -126,16 +144,29 @@ impl ShadowSessionTracker {
         prune
     }
 
+    fn release_matching(
+        &mut self,
+        mut should_release: impl FnMut(&ShadowConsumerEdge) -> bool,
+    ) -> BTreeSet<ShadowSessionKey> {
+        let mut consumer_ids = BTreeSet::new();
+        for (consumer_id, consumer) in &self.consumer_edges {
+            if should_release(consumer) {
+                consumer_ids.insert(*consumer_id);
+            }
+        }
+        self.release_consumers(consumer_ids)
+    }
+
     fn release_consumer(
         &mut self,
         consumer_id: RoutedConsumerId,
         prune: &mut BTreeSet<ShadowSessionKey>,
     ) {
-        let Some(shadow_key) = self.consumer_shadows.remove(&consumer_id) else {
+        let Some(consumer) = self.consumer_edges.remove(&consumer_id) else {
             return;
         };
-        if self.decrement_shadow_refcount(&shadow_key) {
-            prune.insert(shadow_key);
+        if self.decrement_shadow_refcount(&consumer.shadow_key) {
+            prune.insert(consumer.shadow_key);
         }
     }
 
@@ -150,4 +181,10 @@ impl ShadowSessionTracker {
         self.shadow_refcounts.remove(shadow_key);
         true
     }
+}
+
+#[derive(Debug, Clone)]
+struct ShadowConsumerEdge {
+    producer_id: RoutedProducerId,
+    shadow_key: ShadowSessionKey,
 }
