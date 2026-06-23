@@ -1,166 +1,18 @@
-//! browser bundle compatibility edge for Odoo
+//! rust payloads for odoo browser bundle state and updates
 //!
-//! preserves legacy `SfuClient` methods while native protocol uses typed host
-//! commands and wire envelopes
-//!
-//! import through [`crate::bundle`]
+//! callable compatibility methods stay on `SfuClient`
+//! host projection emits these DTOs through the public [`crate::bundle`] facade
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    shared::{
-        AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
-        StreamType, UserId, UserInfo,
-    },
+    shared::{JsonPayload, RecordingStateUpdate, StreamType, UserId, UserInfo},
     signaling::SourceDescriptor,
 };
 
-pub const FIRST_BUNDLE_PROTOCOL_VERSION: u16 = 1;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BundleProtocolStrategy {
-    ReuseCurrentWireV1,
-}
-
-pub const FIRST_BUNDLE_PROTOCOL_STRATEGY: BundleProtocolStrategy =
-    BundleProtocolStrategy::ReuseCurrentWireV1;
-
-pub type BundleIceServer = JsonPayload;
-
 pub type BundleMediaTrack = JsonPayload;
-
-pub type BundleStatsReport = JsonPayload;
-
-/// method call accepted from the Odoo browser bundle edge with aliases like
-/// `updateUpload` and `updateDownload`
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "method", content = "arguments", rename_all = "camelCase")]
-pub enum BundleMethodCall {
-    Connect(BundleConnectCall),
-    Disconnect,
-    Broadcast(BundleBroadcastCall),
-    UpdateInfo(BundleUpdateInfoCall),
-    #[serde(rename = "subscribe", alias = "updateDownload")]
-    Subscribe(BundleSubscribeCall),
-    #[serde(rename = "publish", alias = "updateUpload")]
-    Publish(BundlePublishCall),
-    GetStats,
-    StartRecording(BundleStartRecordingCall),
-    StopRecording,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundleConnectCall {
-    pub url: String,
-    #[serde(rename = "jsonWebToken")]
-    pub json_web_token: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<BundleConnectOptions>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleConnectOptions {
-    #[serde(rename = "channelUUID", skip_serializing_if = "Option::is_none")]
-    pub room_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ice_servers: Option<Vec<BundleIceServer>>,
-}
-
-impl BundleConnectOptions {
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.room_id.is_none() && self.ice_servers.is_none()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundleBroadcastCall {
-    pub message: JsonPayload,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct BundleUpdateInfoCall {
-    pub info: UserInfo,
-}
-
-impl<'de> Deserialize<'de> for BundleUpdateInfoCall {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct LegacyBundleUpdateInfoCall {
-            pub info: UserInfo,
-            #[serde(default, rename = "options")]
-            pub _options: Option<serde_json::Value>,
-        }
-
-        let legacy = LegacyBundleUpdateInfoCall::deserialize(deserializer)?;
-        Ok(Self { info: legacy.info })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleSubscribeCall {
-    #[serde(rename = "sessionId")]
-    pub user_id: UserId,
-    pub states: DownloadStates,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundlePublishCall {
-    #[serde(rename = "type")]
-    pub stream_type: StreamType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub track: Option<BundleMediaTrack>,
-}
-
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "The public recording surface intentionally mirrors the three independent toggles exposed by the current bundle."
-)]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleRecordingOptions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub video: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transcription: Option<bool>,
-}
-
-impl BundleRecordingOptions {
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.audio.is_none() && self.video.is_none() && self.transcription.is_none()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundleStartRecordingCall {
-    #[serde(default, skip_serializing_if = "BundleRecordingOptions::is_empty")]
-    pub options: BundleRecordingOptions,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleStats {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upload_stats: Option<BundleStatsReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub download_stats: Option<BundleStatsReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio: Option<BundleStatsReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub camera: Option<BundleStatsReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub screen: Option<BundleStatsReport>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,36 +32,9 @@ pub struct BundleStateChange {
     pub cause: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BundleUpdateKind {
-    #[serde(rename = "track")]
-    Track,
-    #[serde(rename = "source")]
-    Source,
-    #[serde(rename = "broadcast")]
-    Broadcast,
-    #[serde(rename = "disconnect")]
-    Disconnect,
-    #[serde(rename = "info_change")]
-    SessionInfoChange,
-    #[serde(rename = "channel_info_change")]
-    ChannelInfoChange,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BundleSessionSnapshot {
-    pub available_features: AvailableFeatures,
-    pub recording_state: RecordingState,
-}
-
-/// odoo/sfu `info_change` bundle payloads are string-keyed objects, so this
-/// snapshot shape cannot distinguish `UserId::Integer(7)` from
-/// `UserId::String("7")`. Mixed ID kinds remain accepted by the public API,
-/// but if two users in the same channel stringify to the same key then the
-/// later entry overwrites the earlier one in this snapshot view.
-/// we just assume that the API user will not mix integer and string user
-/// IDs in the same channel.
+/// `info_change` payloads use string keys from [`bundle_session_info_key`]
+/// integer and string user ids that stringify to the same key collide, so the
+/// later entry wins
 pub type BundleSessionInfoSnapshotById = BTreeMap<String, UserInfo>;
 
 #[must_use]
@@ -263,20 +88,6 @@ pub enum BundleUpdate {
     SessionInfoChange(BundleSessionInfoSnapshotById),
     #[serde(rename = "channel_info_change")]
     ChannelInfoChange(RecordingStateUpdate),
-}
-
-impl BundleUpdate {
-    #[must_use]
-    pub const fn kind(&self) -> BundleUpdateKind {
-        match self {
-            Self::Track(_) => BundleUpdateKind::Track,
-            Self::Source(_) => BundleUpdateKind::Source,
-            Self::Broadcast(_) => BundleUpdateKind::Broadcast,
-            Self::Disconnect(_) => BundleUpdateKind::Disconnect,
-            Self::SessionInfoChange(_) => BundleUpdateKind::SessionInfoChange,
-            Self::ChannelInfoChange(_) => BundleUpdateKind::ChannelInfoChange,
-        }
-    }
 }
 
 #[cfg(test)]
