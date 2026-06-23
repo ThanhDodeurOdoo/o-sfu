@@ -28,14 +28,26 @@
 //! # architecture
 //!
 //! ```text
-//! HTTP control API
-//!     -> Runtime
-//!     -> RoomManager
-//!     -> MediaSession
-//!     -> Room
-//!     -> RoutingTopology
-//!     -> MediaTransport
-//!     -> UDP, RTP fanout, relays and packet sinks
+//! +---------------------+   +---------------------------+
+//! | HTTP control API    |   |  WebSocket user sessions  |
+//! +-----------+---------+   +---------+-----------------+
+//!             |                      |
+//!             v                      v
+//!        RoomManager          application::User
+//!             |                      |
+//!             |                      |
+//!             +----------+-----------+
+//!                        |
+//!                        v
+//!                   core::Room <--------> router::RoutingTopology
+//!                        |
+//!                        v
+//!              core::MediaTransport
+//!                        |
+//!                        v
+//!                   core::Worker
+//!                 UDP, RTP fanout,
+//!                relays and sinks
 //! ```
 //!
 //! follow the steps through [`Runtime`],
@@ -59,14 +71,6 @@
 //! The server that implements the call (like odoo) imports the generated browser bundle from `crates/client` (part of the release artifacts)
 //! and implements the calls features with `SfuClient`.
 //!
-//! ```text
-//! SfuClient
-//!     -> BrowserRuntime
-//!     -> ProtocolCore
-//!     -> HostCommand
-//!     -> WebSocket, RTCPeerConnection and timers
-//! ```
-//!
 //! `SfuClient` exposes a small and simple API with `connect`, `publish`, `subscribe`,
 //! recording, stats and update events.
 //! signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and returns
@@ -74,6 +78,21 @@
 //! `BrowserRuntime` executes the projected
 //! [`o_sfu_protocol::host::HostCommand`] values against browser `WebSocket`,
 //! `RTCPeerConnection` and timer APIs
+//!
+//! ```text
+//! SfuClient public API
+//!   connect, disconnect, updateUpload, updateDownload, updateInfo
+//!        |
+//!        v
+//! BrowserRuntime
+//!        |
+//!        v
+//! ProtocolCore
+//!   input envelope -> CommandBatch -> HostCommand
+//!        |
+//!        v
+//! WebSocket, RTCPeerConnection, timers
+//! ```
 //!
 //! read `crates/client/API.md` for the public TypeScript surface and
 //! `crates/client/README.md` for the client file map
@@ -91,18 +110,25 @@
 //!
 //! # shutdown and cleanup
 //!
-//! serving owns background tasks for the lfietime of the server future
-//! normal shutdown cancels those tasks and waits for completion
-//! cancelling or dropping the server future cancels the same token and aborts
-//! remaining work so embedders cannot detach process workers by accident
+//! [`Runtime::serve_listener`] scopes background tasks to the server future
+//! normal shutdown cancels the shared token and waits for those tasks to finish
+//! if the server future is dropped first, the drop path cancels the same token
+//! and aborts remaining task handles
 //!
 //! ```text
-//! serve HTTP
-//!     -> spawn runtime tasks
-//!     -> wait for server exit
-//!     -> cancel task token
-//!     -> join background tasks
-//!     -> return server result
+//! Runtime::serve_listener
+//!     |
+//!     +-> spawn RuntimeTasks
+//!     |     +-> source-policy sync
+//!     |     +-> cleanup retry drain
+//!     |
+//!     +-> serve HTTP and WebSocket
+//!     |
+//!     +-> cancel task token
+//!     |
+//!     +-> join background tasks
+//!     |
+//!     +-> return server result
 //! ```
 //!
 //! user and media cleanup is explicit async work
@@ -118,20 +144,6 @@
 //! the WebSocket
 //! both paths are authenticated before they reach room state
 //!
-//! ```text
-//! POST /v1/channel
-//!     -> verify HttpRoomClaims with the HTTP key
-//!     -> require issuer and room key claim
-//!     -> create or reuse keyed Room
-//!     -> return RoomResponse
-//!
-//! WebSocket upgrade
-//!     -> reserve pre-auth capacity
-//!     -> read exactly one first-frame auth envelope
-//!     -> select candidate room
-//!     -> verify WebSocketConnectClaims with that room key
-//!     -> admit the user into room state
-//! ```
 //!
 //! the HTTP path is repersented by [`http::CHANNEL_PATH`],
 //! [`http::CreateRoomQuery`], [`auth::HttpRoomClaims`] and
@@ -152,13 +164,13 @@
 //! asyn transport and diagnostics work is executed later through effect plans
 //!
 //! ```text
-//! room mutation
-//!     -> validate user and connection ownership
-//!     -> update room media graph
-//!     -> update `o-sfu-router` topology
-//!     -> return transport and output effects
-//!     -> release room lock
-//!     -> execute effects
+//! room state lock held                  lock released
+//! +--------------------------------+    +------------------------------+
+//! | validate user and connection   |    | MediaTransport commands      |
+//! | commit RoomMediaGraph          |    | diagnostics and metrics      |
+//! | commit RoutingTopology         |--->| websocket output             |
+//! | capture RoomEffects            |    | cleanup retry reconciliation |
+//! +--------------------------------+    +------------------------------+
 //! ```
 //!
 //! [`o_sfu_router::Router`] is pure and synchronous
@@ -184,12 +196,27 @@
 //!
 //! ```text
 //! UDP datagram
-//!     -> worker ingress
-//!     -> session lookup and source pin
-//!     -> str0m input
-//!     -> route lookup
-//!     -> packet gate
-//!     -> local fanout, relay fanout and packet sinks
+//!     |
+//!     v
+//! worker ingress
+//!     |
+//!     +-> remote-address cache
+//!     +-> bounded fallback
+//!     +-> source pin
+//!     |
+//!     v
+//! str0m input and output drain
+//!     |
+//!     v
+//! RouteTable
+//!     |
+//!     +-> packet gate
+//!     |     +-> RID or layer policy
+//!     |     +-> source activity
+//!     |
+//!     +-> local fanout
+//!     +-> relay fanout
+//!     +-> packet sinks
 //! ```
 //!
 //! packet loops do not own room membership
