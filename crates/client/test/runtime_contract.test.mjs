@@ -112,6 +112,12 @@ function negotiationCommand(negotiationKind) {
     };
 }
 
+function sparseHostCommandBatch() {
+    const commands = [];
+    commands.length = 1;
+    return commands;
+}
+
 function validSourceDescriptor(encodingOverrides = {}) {
     return {
         active: true,
@@ -145,6 +151,7 @@ test("default WASM protocol core validates host command shape only", () => {
     configureDefaultWasmProtocolCoreProvider(() =>
         validCore({
             connect: () => [{ kind: "emitStateChange", state: "broken" }],
+            onTimer: () => sparseHostCommandBatch(),
             onWsMessage: () => misorderedHostCommands
         })
     );
@@ -152,16 +159,23 @@ test("default WASM protocol core validates host command shape only", () => {
 
     assert.deepEqual(core.onWsMessage("offer"), misorderedHostCommands);
     assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
+    assertThrowsError(() => core.onTimer(1));
 });
 
 test("injected protocol core rejects malformed host commands", () => {
+    const commandsWithHostileMap = [{ kind: "sendWebSocket", frame: "auth" }];
+    commandsWithHostileMap.map = () => [{ kind: "closeWebSocket", code: "bad" }];
     const core = wrapProtocolCoreBindings(
         validCore({
-            connect: () => [{ kind: "emitStateChange", state: "broken" }]
+            connect: () => [{ kind: "emitStateChange", state: "broken" }],
+            onTimer: () => sparseHostCommandBatch(),
+            onWsOpen: () => commandsWithHostileMap
         })
     );
 
     assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
+    assertThrowsError(() => core.onTimer(1));
+    assert.deepEqual(core.onWsOpen(), [{ kind: "sendWebSocket", frame: "auth" }]);
 });
 
 test("injected protocol core validates host command ordering", () => {
@@ -221,12 +235,16 @@ test("injected protocol core validates replaceTrackBindings host commands", () =
 });
 
 test("injected protocol core validates source descriptors", () => {
-    assertInjectedCoreThrows(
-        {
-            connect: () => [sourceUpdate([validSourceDescriptor({ maxBitrate: -1 })])]
-        },
-        (core) => core.connect("ws://example.test", "jwt", null)
-    );
+    const sparseSources = [];
+    sparseSources.length = 1;
+    for (const sources of [[validSourceDescriptor({ maxBitrate: -1 })], sparseSources]) {
+        assertInjectedCoreThrows(
+            {
+                connect: () => [sourceUpdate(sources)]
+            },
+            (core) => core.connect("ws://example.test", "jwt", null)
+        );
+    }
 });
 
 test("injected protocol core accepts valid temporal layer ids", () => {
@@ -252,21 +270,14 @@ for (const maxTemporalLayerId of [-1, 8, 1.5, "2", Number.NaN]) {
 }
 
 test("injected protocol core rejects NaN and infinite numeric session IDs", () => {
-    const nanSessionIdCore = wrapProtocolCoreBindings(
-        validCore({
-            connect: () => [{ kind: "removeSessionTracks", sessionId: Number.NaN }]
-        })
-    );
-
-    assertThrowsError(() => nanSessionIdCore.connect("ws://example.test", "jwt", null));
-
-    const infiniteSessionIdCore = wrapProtocolCoreBindings(
-        validCore({
-            connect: () => [{ kind: "removeSessionTracks", sessionId: Number.POSITIVE_INFINITY }]
-        })
-    );
-
-    assertThrowsError(() => infiniteSessionIdCore.connect("ws://example.test", "jwt", null));
+    for (const sessionId of [Number.NaN, Number.POSITIVE_INFINITY]) {
+        assertInjectedCoreThrows(
+            {
+                connect: () => [{ kind: "removeSessionTracks", sessionId }]
+            },
+            (core) => core.connect("ws://example.test", "jwt", null)
+        );
+    }
 });
 
 test("injected protocol core validates boolean fields", () => {

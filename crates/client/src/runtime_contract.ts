@@ -1,96 +1,26 @@
 import {
-    CLIENT_UPDATE,
-    SFU_CLIENT_STATE,
     type AvailableFeatures,
-    type ClientUpdateDetail,
     type ConnectionState,
     type DownloadStates,
-    type InfoChangeUpdateDetail,
     type RecordingOptions,
     type RecordingState,
     type SessionId,
     type SessionInfo,
-    type SourceDescriptor,
     type StreamType
 } from "./public_api.js";
 import {
-    COMMAND_KIND,
-    NEGOTIATION_KIND,
-    PENDING_REQUEST_KIND,
-    RECORDING_STOP_CODES,
-    SOURCE_ENCODING_POLICY_ROLES,
-    STREAM_TYPES,
-    UPLOAD_KINDS,
-    type NegotiationKind,
-    type NegotiationUploadSlot,
-    type PendingRequestKind,
-    type TrackBinding
-} from "./protocol_contract.js";
+    validateAvailableFeatures,
+    validateConnectionState,
+    validateRecordingState
+} from "./public_api_validation.js";
+import type { NegotiationKind } from "./protocol_contract.js";
+import {
+    type HostCommand,
+    validateHostCommandBatch,
+    validateHostCommandShapes
+} from "./protocol_host_commands.js";
 
-const MIN_TEMPORAL_LAYER_ID = 0;
-const MAX_TEMPORAL_LAYER_ID = 7;
-const REQUEST_TIMEOUT_TIMER_BASE = 10_000;
-const FEATURE_BOOLEAN_FIELDS = [
-    "rtc",
-    "transcription",
-    "audioRecording",
-    "videoRecording"
-] as const satisfies readonly (keyof AvailableFeatures)[];
-const RECORDING_BOOLEAN_FIELDS = [
-    "recording",
-    "audio",
-    "video",
-    "transcription"
-] as const satisfies readonly (keyof RecordingState)[];
-const SESSION_INFO_BOOLEAN_FIELDS = [
-    "isTalking",
-    "isFeatured",
-    "isCameraOn",
-    "isScreenSharingOn",
-    "isSelfMuted",
-    "isDeaf",
-    "isRaisingHand"
-] as const satisfies readonly (keyof SessionInfo)[];
-
-const CONNECTION_STATES = Object.values(SFU_CLIENT_STATE);
-const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
-
-const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
-
-export type HostCommand =
-    | { kind: typeof COMMAND_KIND.SEND_WEB_SOCKET; frame: string }
-    | {
-          kind: typeof COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT;
-          streamType: StreamType;
-          active: boolean;
-      }
-    | {
-          kind: typeof COMMAND_KIND.APPLY_NEGOTIATION;
-          requestId: string;
-          negotiationKind: NegotiationKind;
-          sdp: string;
-          uploadSlots: NegotiationUploadSlot[];
-      }
-    | { kind: typeof COMMAND_KIND.ATTACH_TRACK; mid: string; streamType: StreamType }
-    | { kind: typeof COMMAND_KIND.DETACH_TRACK; streamType: StreamType }
-    | { kind: typeof COMMAND_KIND.CREATE_PEER_CONNECTION }
-    | { kind: typeof COMMAND_KIND.CLOSE_PEER_CONNECTION }
-    | { kind: typeof COMMAND_KIND.CLOSE_WEB_SOCKET; code: number }
-    | { kind: typeof COMMAND_KIND.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
-    | { kind: typeof COMMAND_KIND.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
-    | { kind: typeof COMMAND_KIND.REMOVE_SESSION_TRACKS; sessionId: SessionId }
-    | { kind: typeof COMMAND_KIND.EMIT_UPDATE; update: ClientUpdateDetail }
-    | {
-          kind: typeof COMMAND_KIND.BEGIN_PENDING_REQUEST;
-          requestId: string;
-          requestKind: PendingRequestKind;
-          timeoutTimerId: number;
-          timeoutMs: number;
-      }
-    | { kind: typeof COMMAND_KIND.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
-    | { kind: typeof COMMAND_KIND.SCHEDULE_TIMER; id: number; ms: number }
-    | { kind: typeof COMMAND_KIND.CANCEL_TIMER; id: number }
-    | { kind: typeof COMMAND_KIND.CONNECT; url: string };
+export type { HostCommand } from "./protocol_host_commands.js";
 
 export interface ProtocolCoreBindings {
     readonly state: ConnectionState;
@@ -120,18 +50,20 @@ export interface ProtocolCoreBindings {
 export type ProtocolCoreProvider = () => ProtocolCoreBindings;
 
 let defaultWasmProtocolCoreProvider: ProtocolCoreProvider | undefined;
-let protocolCoreProvider: ProtocolCoreProvider | undefined;
 
 export function configureDefaultWasmProtocolCoreProvider(provider: ProtocolCoreProvider): void {
     defaultWasmProtocolCoreProvider = provider;
 }
 
-export function configureProtocolCoreProvider(provider: ProtocolCoreProvider): void {
-    protocolCoreProvider = provider;
-}
-
 export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): ProtocolCoreBindings {
     return wrapProtocolCoreBindingsWith(bindings, validateHostCommandBatch);
+}
+
+export function createProtocolCore(): ProtocolCoreBindings {
+    return wrapProtocolCoreBindingsWith(
+        requireDefaultWasmProtocolCoreProvider()(),
+        validateHostCommandShapes
+    );
 }
 
 function wrapProtocolCoreBindingsWith(
@@ -148,73 +80,36 @@ function wrapProtocolCoreBindingsWith(
         get recordingState(): RecordingState {
             return validateRecordingState(bindings.recordingState, "protocol core recordingState");
         },
-        connect(url: string, jwt: string, room?: string | null): HostCommand[] {
-            return validateCommands(bindings.connect(url, jwt, room), "protocol core connect()");
-        },
-        onWsOpen(): HostCommand[] {
-            return validateCommands(bindings.onWsOpen(), "protocol core onWsOpen()");
-        },
-        onWsMessage(frame: string): HostCommand[] {
-            return validateCommands(bindings.onWsMessage(frame), "protocol core onWsMessage()");
-        },
-        onTransportReady(): HostCommand[] {
-            return validateCommands(
-                bindings.onTransportReady(),
-                "protocol core onTransportReady()"
-            );
-        },
-        onWsClose(code: number): HostCommand[] {
-            return validateCommands(bindings.onWsClose(code), "protocol core onWsClose()");
-        },
-        onTimer(timerId: number): HostCommand[] {
-            return validateCommands(bindings.onTimer(timerId), "protocol core onTimer()");
-        },
-        publish(type: StreamType, active: boolean): HostCommand[] {
-            return validateCommands(bindings.publish(type, active), "protocol core publish()");
-        },
-        subscribe(sessionId: SessionId, states: DownloadStates): HostCommand[] {
-            return validateCommands(
-                bindings.subscribe(sessionId, states),
-                "protocol core subscribe()"
-            );
-        },
-        updateInfo(info: SessionInfo): HostCommand[] {
-            return validateCommands(bindings.updateInfo(info), "protocol core updateInfo()");
-        },
-        broadcast(message: unknown): HostCommand[] {
-            return validateCommands(bindings.broadcast(message), "protocol core broadcast()");
-        },
-        startRecording(options?: RecordingOptions): HostCommand[] {
-            return validateCommands(
-                bindings.startRecording(options),
-                "protocol core startRecording()"
-            );
-        },
-        stopRecording(): HostCommand[] {
-            return validateCommands(bindings.stopRecording(), "protocol core stopRecording()");
-        },
-        submitNegotiationAnswer(
-            requestId: string,
-            negotiationKind: NegotiationKind,
-            sdp: string
-        ): HostCommand[] {
-            return validateCommands(
+        connect: (url, jwt, room) =>
+            validateCommands(bindings.connect(url, jwt, room), "protocol core connect()"),
+        onWsOpen: () => validateCommands(bindings.onWsOpen(), "protocol core onWsOpen()"),
+        onWsMessage: (frame) =>
+            validateCommands(bindings.onWsMessage(frame), "protocol core onWsMessage()"),
+        onTransportReady: () =>
+            validateCommands(bindings.onTransportReady(), "protocol core onTransportReady()"),
+        onWsClose: (code) =>
+            validateCommands(bindings.onWsClose(code), "protocol core onWsClose()"),
+        onTimer: (timerId) =>
+            validateCommands(bindings.onTimer(timerId), "protocol core onTimer()"),
+        publish: (type, active) =>
+            validateCommands(bindings.publish(type, active), "protocol core publish()"),
+        subscribe: (sessionId, states) =>
+            validateCommands(bindings.subscribe(sessionId, states), "protocol core subscribe()"),
+        updateInfo: (info) =>
+            validateCommands(bindings.updateInfo(info), "protocol core updateInfo()"),
+        broadcast: (message) =>
+            validateCommands(bindings.broadcast(message), "protocol core broadcast()"),
+        startRecording: (options) =>
+            validateCommands(bindings.startRecording(options), "protocol core startRecording()"),
+        stopRecording: () =>
+            validateCommands(bindings.stopRecording(), "protocol core stopRecording()"),
+        submitNegotiationAnswer: (requestId, negotiationKind, sdp) =>
+            validateCommands(
                 bindings.submitNegotiationAnswer(requestId, negotiationKind, sdp),
                 "protocol core submitNegotiationAnswer()"
-            );
-        },
-        disconnect(): HostCommand[] {
-            return validateCommands(bindings.disconnect(), "protocol core disconnect()");
-        }
+            ),
+        disconnect: () => validateCommands(bindings.disconnect(), "protocol core disconnect()")
     };
-}
-
-export function createProtocolCore(): ProtocolCoreBindings {
-    const provider = protocolCoreProvider;
-    return wrapProtocolCoreBindingsWith(
-        (provider ?? requireDefaultWasmProtocolCoreProvider())(),
-        provider ? validateHostCommandBatch : validateHostCommandShapes
-    );
 }
 
 function requireDefaultWasmProtocolCoreProvider(): ProtocolCoreProvider {
@@ -224,504 +119,4 @@ function requireDefaultWasmProtocolCoreProvider(): ProtocolCoreProvider {
         );
     }
     return defaultWasmProtocolCoreProvider;
-}
-
-function validateHostCommandShapes(value: unknown, context: string): HostCommand[] {
-    if (!Array.isArray(value)) {
-        throw new Error(`${context} must return an array of host commands`);
-    }
-    return value.map((command, index) =>
-        validateHostCommand(command, `${context} command #${index}`)
-    );
-}
-
-function validateHostCommandBatch(value: unknown, context: string): HostCommand[] {
-    const commands = validateHostCommandShapes(value, context);
-    validateHostCommandOrder(commands, context);
-    return commands;
-}
-
-function validateHostCommandOrder(commands: HostCommand[], context: string): void {
-    let closeWebSocketIndex = -1;
-    let closePeerConnectionIndex = -1;
-    let recoveryTimerIndex = -1;
-    let unknownResolvedRequestIndex = -1;
-    let unknownResolvedRequestId = "";
-    for (let index = 0; index < commands.length; index += 1) {
-        const command = commands[index];
-        if (command.kind === COMMAND_KIND.CLOSE_WEB_SOCKET && closeWebSocketIndex < 0) {
-            closeWebSocketIndex = index;
-        }
-        if (command.kind === COMMAND_KIND.CLOSE_PEER_CONNECTION && closePeerConnectionIndex < 0) {
-            closePeerConnectionIndex = index;
-        }
-        if (
-            command.kind === COMMAND_KIND.SCHEDULE_TIMER &&
-            command.id === 1 &&
-            recoveryTimerIndex < 0
-        ) {
-            recoveryTimerIndex = index;
-        }
-        if (
-            command.kind === COMMAND_KIND.RESOLVE_PENDING_REQUEST &&
-            unknownResolvedRequestIndex < 0 &&
-            !hasPendingRequestResolutionEvidence(commands, command.requestId, index)
-        ) {
-            unknownResolvedRequestIndex = index;
-            unknownResolvedRequestId = command.requestId;
-        }
-        if (command.kind !== COMMAND_KIND.APPLY_NEGOTIATION) {
-            continue;
-        }
-        const previous = commands[index - 1];
-        if (command.negotiationKind === NEGOTIATION_KIND.OFFER) {
-            if (!previous || previous.kind !== COMMAND_KIND.CREATE_PEER_CONNECTION) {
-                throw new Error(
-                    `${context} command #${index} initial negotiation must immediately follow createPeerConnection`
-                );
-            }
-        } else if (previous?.kind === COMMAND_KIND.CREATE_PEER_CONNECTION) {
-            throw new Error(
-                `${context} command #${index} renegotiation must not recreate the peer connection`
-            );
-        }
-    }
-
-    if (
-        closeWebSocketIndex >= 0 &&
-        closePeerConnectionIndex >= 0 &&
-        closeWebSocketIndex > closePeerConnectionIndex
-    ) {
-        throw new Error(
-            `${context} must close the websocket before the peer connection when both are in one batch`
-        );
-    }
-
-    if (
-        recoveryTimerIndex >= 0 &&
-        closePeerConnectionIndex >= 0 &&
-        closePeerConnectionIndex > recoveryTimerIndex
-    ) {
-        throw new Error(`${context} must close the peer connection before scheduling recovery`);
-    }
-
-    if (closePeerConnectionIndex < 0 && unknownResolvedRequestIndex >= 0) {
-        throw new Error(
-            `${context} command #${unknownResolvedRequestIndex} resolves unknown pending request ${unknownResolvedRequestId}`
-        );
-    }
-}
-
-function hasPendingRequestResolutionEvidence(
-    commands: HostCommand[],
-    requestId: string,
-    resolveIndex: number
-): boolean {
-    for (let index = 0; index < resolveIndex; index += 1) {
-        const command = commands[index];
-        if (
-            command.kind === COMMAND_KIND.BEGIN_PENDING_REQUEST &&
-            command.requestId === requestId
-        ) {
-            return true;
-        }
-    }
-    const previous = resolveIndex > 0 ? commands[resolveIndex - 1] : undefined;
-    return (
-        previous?.kind === COMMAND_KIND.CANCEL_TIMER && previous.id >= REQUEST_TIMEOUT_TIMER_BASE
-    );
-}
-
-function validateHostCommand(value: unknown, context: string): HostCommand {
-    const command = asRecord(value, context);
-    const kind = requireString(command.kind, `${context}.kind`);
-    switch (kind) {
-        case COMMAND_KIND.SEND_WEB_SOCKET:
-            requireString(command.frame, `${context}.frame`);
-            return command as HostCommand;
-        case COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT:
-            validateStreamType(command.streamType, `${context}.streamType`);
-            requireBoolean(command.active, `${context}.active`);
-            return command as HostCommand;
-        case COMMAND_KIND.APPLY_NEGOTIATION:
-            requireString(command.requestId, `${context}.requestId`);
-            validateStringEnum(
-                command.negotiationKind,
-                NEGOTIATION_KINDS,
-                `${context}.negotiationKind`
-            );
-            requireString(command.sdp, `${context}.sdp`);
-            validateArray(
-                command.uploadSlots,
-                `${context}.uploadSlots`,
-                validateNegotiationUploadSlot
-            );
-            return command as HostCommand;
-        case COMMAND_KIND.ATTACH_TRACK:
-            requireString(command.mid, `${context}.mid`);
-            validateStreamType(command.streamType, `${context}.streamType`);
-            return command as HostCommand;
-        case COMMAND_KIND.DETACH_TRACK:
-            validateStreamType(command.streamType, `${context}.streamType`);
-            return command as HostCommand;
-        case COMMAND_KIND.CREATE_PEER_CONNECTION:
-        case COMMAND_KIND.CLOSE_PEER_CONNECTION:
-            return command as HostCommand;
-        case COMMAND_KIND.CLOSE_WEB_SOCKET:
-            requireNonNegativeInteger(command.code, `${context}.code`);
-            return command as HostCommand;
-        case COMMAND_KIND.EMIT_STATE_CHANGE:
-            validateConnectionState(command.state, `${context}.state`);
-            requireOptionalString(command.cause, `${context}.cause`);
-            return command as HostCommand;
-        case COMMAND_KIND.REPLACE_TRACK_BINDINGS:
-            validateArray(command.bindings, `${context}.bindings`, validateTrackBinding);
-            return command as HostCommand;
-        case COMMAND_KIND.REMOVE_SESSION_TRACKS:
-            validateSessionId(command.sessionId, `${context}.sessionId`);
-            return command as HostCommand;
-        case COMMAND_KIND.EMIT_UPDATE:
-            return {
-                kind,
-                update: validateClientUpdate(command.update, `${context}.update`)
-            };
-        case COMMAND_KIND.BEGIN_PENDING_REQUEST: {
-            requireString(command.requestId, `${context}.requestId`);
-            validateStringEnum(
-                command.requestKind,
-                PENDING_REQUEST_KINDS,
-                `${context}.requestKind`
-            );
-            const timeoutTimerId = requireNonNegativeInteger(
-                command.timeoutTimerId,
-                `${context}.timeoutTimerId`
-            );
-            if (timeoutTimerId < REQUEST_TIMEOUT_TIMER_BASE) {
-                throw new Error(`${context}.timeoutTimerId must be a request timeout timer id`);
-            }
-            if (requireNonNegativeInteger(command.timeoutMs, `${context}.timeoutMs`) === 0) {
-                throw new Error(`${context}.timeoutMs must be a positive browser timer delay`);
-            }
-            return command as HostCommand;
-        }
-        case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
-            requireString(command.requestId, `${context}.requestId`);
-            requireBoolean(command.ok, `${context}.ok`);
-            return command as HostCommand;
-        case COMMAND_KIND.SCHEDULE_TIMER:
-            requireNonNegativeInteger(command.id, `${context}.id`);
-            requireNonNegativeInteger(command.ms, `${context}.ms`);
-            return command as HostCommand;
-        case COMMAND_KIND.CANCEL_TIMER:
-            requireNonNegativeInteger(command.id, `${context}.id`);
-            return command as HostCommand;
-        case COMMAND_KIND.CONNECT:
-            requireString(command.url, `${context}.url`);
-            return command as HostCommand;
-        default:
-            throw new Error(`${context}.kind is invalid: ${String(kind)}`);
-    }
-}
-
-function validateClientUpdate(value: unknown, context: string): ClientUpdateDetail {
-    const update = asRecord(value, context);
-    const name = requireString(update.name, `${context}.name`);
-    switch (name) {
-        case CLIENT_UPDATE.TRACK: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateSessionId(payload.sessionId, `${context}.payload.sessionId`);
-            validateStreamType(payload.type, `${context}.payload.type`);
-            requireBoolean(payload.active, `${context}.payload.active`);
-            if (payload.track === null || typeof payload.track !== "object") {
-                throw new Error(`${context}.payload.track must be an object`);
-            }
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.SOURCE: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateArray(payload.sources, `${context}.payload.sources`, validateSourceDescriptor);
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.DISCONNECT: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateSessionId(payload.sessionId, `${context}.payload.sessionId`);
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.INFO_CHANGE: {
-            const payload = toStringKeyedRecord(update.payload, `${context}.payload`);
-            for (const [sessionId, info] of Object.entries(payload)) {
-                validateSessionInfo(info, `${context}.payload.${sessionId}`);
-            }
-            return {
-                name: CLIENT_UPDATE.INFO_CHANGE,
-                payload: payload as InfoChangeUpdateDetail
-            };
-        }
-        case CLIENT_UPDATE.BROADCAST: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateSessionId(payload.senderId, `${context}.payload.senderId`);
-            return update as ClientUpdateDetail;
-        }
-        case CLIENT_UPDATE.CHANNEL_INFO_CHANGE: {
-            const payload = asRecord(update.payload, `${context}.payload`);
-            validateRecordingState(payload.state, `${context}.payload.state`);
-            if (payload.stopCode !== undefined) {
-                validateStringEnum(
-                    payload.stopCode,
-                    RECORDING_STOP_CODES,
-                    `${context}.payload.stopCode`
-                );
-            }
-            return update as ClientUpdateDetail;
-        }
-        default:
-            throw new Error(`${context}.name is invalid: ${String(name)}`);
-    }
-}
-
-function validateTrackBinding(value: unknown, context: string): TrackBinding {
-    const binding = asRecord(value, context);
-    requireString(binding.mid, `${context}.mid`);
-    validateSessionId(binding.sessionId, `${context}.sessionId`);
-    validateStreamType(binding.type, `${context}.type`);
-    requireBoolean(binding.active, `${context}.active`);
-    if (binding.source !== undefined) {
-        validateSourceDescriptor(binding.source, `${context}.source`);
-    }
-    return value as TrackBinding;
-}
-
-function validateSourceDescriptor(value: unknown, context: string): SourceDescriptor {
-    const source = asRecord(value, context);
-    requireString(source.sourceId, `${context}.sourceId`);
-    validateSessionId(source.sessionId, `${context}.sessionId`);
-    validateStreamType(source.type, `${context}.type`);
-    requireBoolean(source.active, `${context}.active`);
-    requireOptionalString(source.mid, `${context}.mid`);
-    validateArray(source.encodings, `${context}.encodings`, validateSourceEncodingDescriptor);
-    return value as SourceDescriptor;
-}
-
-function validateSourceEncodingDescriptor(value: unknown, context: string): void {
-    const descriptor = asRecord(value, context);
-    requireString(descriptor.encodingId, `${context}.encodingId`);
-    requireOptionalString(descriptor.rid, `${context}.rid`);
-    requireOptionalNonNegativeInteger(descriptor.maxBitrate, `${context}.maxBitrate`);
-    requireOptionalPositiveNumber(descriptor.resolutionScale, `${context}.resolutionScale`);
-    requireOptionalNonNegativeInteger(descriptor.maxFramerate, `${context}.maxFramerate`);
-    validateOptionalPolicyRole(descriptor.policyRole, `${context}.policyRole`);
-    requireOptionalTemporalLayerId(descriptor.maxTemporalLayerId, `${context}.maxTemporalLayerId`);
-}
-
-function validateNegotiationUploadSlot(value: unknown, context: string): void {
-    const uploadSlot = asRecord(value, context);
-    requireString(uploadSlot.mid, `${context}.mid`);
-    validateStringEnum(uploadSlot.kind, UPLOAD_KINDS, `${context}.kind`);
-    validateOptionalArray(uploadSlot.codecs, `${context}.codecs`, requireString);
-    validateOptionalArray(
-        uploadSlot.simulcastEncodings,
-        `${context}.simulcastEncodings`,
-        validateNegotiationUploadEncoding
-    );
-}
-
-function validateNegotiationUploadEncoding(value: unknown, context: string): void {
-    const uploadEncoding = asRecord(value, context);
-    requireString(uploadEncoding.rid, `${context}.rid`);
-    requireOptionalNonNegativeInteger(uploadEncoding.maxBitrate, `${context}.maxBitrate`);
-    requireOptionalFiniteNumber(uploadEncoding.resolutionScale, `${context}.resolutionScale`);
-    requireOptionalNonNegativeInteger(uploadEncoding.maxFramerate, `${context}.maxFramerate`);
-}
-
-function requireOptionalPositiveNumber(value: unknown, context: string): void {
-    requireOptionalNumber(
-        value,
-        context,
-        "must be a positive number",
-        (number) => Number.isFinite(number) && number > 0
-    );
-}
-
-function requireOptionalFiniteNumber(value: unknown, context: string): void {
-    requireOptionalNumber(value, context, "must be a finite number", Number.isFinite);
-}
-
-function validateOptionalPolicyRole(value: unknown, context: string): void {
-    if (value !== undefined) {
-        validateStringEnum(
-            value,
-            SOURCE_ENCODING_POLICY_ROLES,
-            context,
-            `${context} must be a supported upload layer policy role`
-        );
-    }
-}
-
-function validateAvailableFeatures(value: unknown, context: string): AvailableFeatures {
-    const features = asRecord(value, context);
-    requireBooleanFields(features, FEATURE_BOOLEAN_FIELDS, context);
-    return value as AvailableFeatures;
-}
-
-function validateRecordingState(value: unknown, context: string): RecordingState {
-    const state = asRecord(value, context);
-    requireBooleanFields(state, RECORDING_BOOLEAN_FIELDS, context, true);
-    return value as RecordingState;
-}
-
-function validateSessionInfo(value: unknown, context: string): SessionInfo {
-    const info = asRecord(value, context);
-    requireBooleanFields(info, SESSION_INFO_BOOLEAN_FIELDS, context, true);
-    return value as SessionInfo;
-}
-
-function validateConnectionState(value: unknown, context: string): ConnectionState {
-    return validateStringEnum(value, CONNECTION_STATES, context);
-}
-
-function validateStreamType(value: unknown, context: string): StreamType {
-    return validateStringEnum(value, STREAM_TYPES, context);
-}
-
-function validateSessionId(value: unknown, context: string): SessionId {
-    if (typeof value !== "string" && typeof value !== "number") {
-        throw new Error(`${context} must be a string or number session ID`);
-    }
-    if (typeof value === "number" && !Number.isFinite(value)) {
-        throw new Error(`${context} number session ID must be finite`);
-    }
-    return value;
-}
-
-function asRecord(value: unknown, context: string): Record<string, unknown> {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error(`${context} must be an object`);
-    }
-    return value as Record<string, unknown>;
-}
-
-function toStringKeyedRecord(value: unknown, context: string): Record<string, unknown> {
-    if (value instanceof Map) {
-        const record: Record<string, unknown> = {};
-        for (const [key, entryValue] of value) {
-            Object.defineProperty(record, requireString(key, `${context} map key`), {
-                configurable: true,
-                enumerable: true,
-                value: entryValue,
-                writable: true
-            });
-        }
-        return record;
-    }
-    return asRecord(value, context);
-}
-
-function requireString(value: unknown, context: string): string {
-    if (typeof value !== "string") {
-        throw new Error(`${context} must be a string`);
-    }
-    return value;
-}
-
-function requireOptionalString(value: unknown, context: string): void {
-    if (value !== undefined && typeof value !== "string") {
-        throw new Error(`${context} must be a string when provided`);
-    }
-}
-
-function requireBoolean(value: unknown, context: string, optional = false): boolean {
-    if (typeof value !== "boolean") {
-        throw new Error(`${context} must be a boolean${optional ? " when provided" : ""}`);
-    }
-    return value;
-}
-
-function requireBooleanFields(
-    record: Record<string, unknown>,
-    fields: readonly string[],
-    context: string,
-    optional = false
-): void {
-    for (const field of fields) {
-        const value = record[field];
-        if (!optional || value !== undefined) {
-            requireBoolean(value, `${context}.${field}`, optional);
-        }
-    }
-}
-
-function requireNonNegativeInteger(value: unknown, context: string): number {
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-        throw new Error(`${context} must be a non-negative integer`);
-    }
-    return value;
-}
-
-function requireOptionalNonNegativeInteger(value: unknown, context: string): void {
-    requireOptionalNumber(
-        value,
-        context,
-        "must be a non-negative integer when provided",
-        (number) => Number.isInteger(number) && number >= 0
-    );
-}
-
-function requireOptionalTemporalLayerId(value: unknown, context: string): void {
-    requireOptionalNumber(
-        value,
-        context,
-        `must be an integer from ${MIN_TEMPORAL_LAYER_ID} through ${MAX_TEMPORAL_LAYER_ID} when provided`,
-        (number) =>
-            Number.isInteger(number) &&
-            number >= MIN_TEMPORAL_LAYER_ID &&
-            number <= MAX_TEMPORAL_LAYER_ID
-    );
-}
-
-function validateArray<T>(
-    value: unknown,
-    context: string,
-    itemValidator: (item: unknown, context: string) => T,
-    arrayExpectation = "must be an array"
-): void {
-    if (!Array.isArray(value)) {
-        throw new Error(`${context} ${arrayExpectation}`);
-    }
-    for (let index = 0; index < value.length; index += 1) {
-        itemValidator(value[index], `${context}[${index}]`);
-    }
-}
-
-function validateOptionalArray<T>(
-    value: unknown,
-    context: string,
-    itemValidator: (item: unknown, context: string) => T
-): void {
-    if (value === undefined) {
-        return;
-    }
-    validateArray(value, context, itemValidator, "must be an array when provided");
-}
-
-function validateStringEnum<T extends string>(
-    value: unknown,
-    allowed: readonly T[],
-    context: string,
-    invalidMessage = `${context} is invalid: ${String(value)}`
-): T {
-    if (typeof value !== "string" || !allowed.includes(value as T)) {
-        throw new Error(invalidMessage);
-    }
-    return value as T;
-}
-
-function requireOptionalNumber(
-    value: unknown,
-    context: string,
-    expectation: string,
-    isValid: (value: number) => boolean
-): void {
-    if (value !== undefined && (typeof value !== "number" || !isValid(value))) {
-        throw new Error(`${context} ${expectation}`);
-    }
 }
