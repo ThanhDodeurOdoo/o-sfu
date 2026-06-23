@@ -1,10 +1,8 @@
 //! o-sfu is a Selective Forwading Unit for WebRTC rooms
 //!
-//! `o-sfu` owns room admission, routing topology, media policy, packet
+//! `o-sfu` is the orchestration layer, it handles room admission, routing topology, media policy, packet
 //! forwarding, diagnostics and verification for applications that need an
 //! embeddable SFU process
-//!
-//! the root crate owns the process edge:
 //!
 //! - configuration loading through [`config::Config`] and [`Runtime`]
 //!   construction through [`Runtime::new`]
@@ -25,7 +23,7 @@
 //! [`o_sfu_protocol::host::HostCommand`] values with WebSocket and
 //! `RTCPeerConnection` APIs
 //!
-//! # architecture at a glance
+//! # architecture
 //!
 //! ```text
 //! HTTP control API
