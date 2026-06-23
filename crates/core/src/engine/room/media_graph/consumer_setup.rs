@@ -33,6 +33,12 @@ pub struct ConsumerSetupTarget {
     pub routed: RoutedProducerId,
 }
 
+/// reserved consumer route waiting for media transport declaration
+///
+/// commit only after [`crate::engine::media_transport::MediaTransport::consume_media`]
+/// returns a consumer media id
+/// release the setup to unwind relay reservations when declaration or identity
+/// validation fails
 #[derive(Debug)]
 #[must_use = "pending consumer setups reserve route graph state and must be committed or released"]
 pub struct PendingConsumerSetup {

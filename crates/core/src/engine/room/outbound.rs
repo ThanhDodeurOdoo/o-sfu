@@ -427,6 +427,10 @@ impl UserOutboundReceiver {
             .map(|message| self.record_received(message))
     }
 
+    /// returns the overflow sentinel before any queued message
+    ///
+    /// `recv_event` is biased toward slow-consumer shutdown
+    /// websocket loops stop draining normal output after queue pressure crosses the limit
     pub async fn recv_event(&mut self) -> UserOutboundEvent {
         if let Some(overflow) = *self.overflow.borrow_and_update() {
             return UserOutboundEvent::Overflow(overflow);

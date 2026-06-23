@@ -1,3 +1,9 @@
+//! lock-free metric counters for runtime hot paths
+//!
+//! counters use relaxed atomics because snapshots are observational telemetry
+//! and never synchronize runtime state
+//! padded counters isolate high-frequency worker labels onto cache lines
+
 use std::{
     marker::PhantomData,
     sync::atomic::{AtomicI64, AtomicU64, Ordering},
@@ -222,6 +228,10 @@ impl<B: HistogramBucketLabel> Default for Histogram<B> {
 }
 
 impl<B: HistogramBucketLabel> Histogram<B> {
+    /// records one cumulative Prometheus histogram observation
+    ///
+    /// every bucket at or above the selected bound is incremented so snapshots can
+    /// be rendered directly as `_bucket{le=...}` samples
     pub(super) fn observe(&self, duration: Duration) {
         self.count.increment();
         self.sum_micros

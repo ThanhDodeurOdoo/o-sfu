@@ -7,6 +7,10 @@ use crate::{
     shared::StreamType,
 };
 
+/// wasm-bindgen facade for the browser [`ProtocolCore`] contract
+///
+/// each method returns projected host commands as plain JS objects so the TS
+/// runtime can validate and execute side effects outside [`ProtocolCore`]
 #[wasm_bindgen(js_name = ProtocolCoreWasm)]
 pub struct WasmProtocolCore {
     inner: ProtocolCore,

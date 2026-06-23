@@ -208,11 +208,11 @@ pub(super) struct Vp8PayloadIdentity {
     pub(super) tl0_pic_idx: Option<u8>,
 }
 
-/// calculates the next sequential identity for a packet
+/// projects one publisher packet into the destination stream identity
 ///
-/// fresh consumers must start from a clean counter because the browser
-/// is not aware of the publisher's history. it also ensures that switching
-/// between quality levels is invisible to the browser.
+/// returns `None` when the route holds a released stream handle
+/// sequence numbers, timestamps and VP8 picture ids stay monotonic across
+/// simulcast SSRC switches
 pub(super) fn next_projected_rtp_identity(
     streams: &mut ConsumerStreamStore,
     stream_handle: ConsumerStreamHandle,

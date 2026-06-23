@@ -61,7 +61,7 @@ pub(crate) use self::{
 /// retry sweep cadence for retained rooms with pending transport cleanup
 const CLEANUP_RETRY_DRAIN_INTERVAL: Duration = Duration::from_secs(1);
 
-/// process-global shell for the server process
+/// state for shared runtime services
 ///
 /// [`Runtime`] keeps boot-time configuration plus the long-lived services
 /// shared by every request. It exists to keep process lifecycle decisions together:

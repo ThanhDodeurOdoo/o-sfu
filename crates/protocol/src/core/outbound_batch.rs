@@ -11,6 +11,11 @@ pub(super) enum FlushMode {
     Batched,
 }
 
+/// buffers control-plane envelopes behind one host flush timer
+///
+/// the first batched envelope schedules [`BATCH_FLUSH_TIMER_ID`]
+/// later batched envelopes join the same frame until the timer fires or the batch
+/// reaches [`MAX_OUTBOUND_BATCH_LEN`]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct OutboundBatcher {
     pending_batch: EnvelopeBatch,

@@ -162,6 +162,12 @@ impl RoomTopology {
             .map(TransportSessionKey::media_worker_id)
     }
 
+    /// requires committed placement for `user_id` and `connection_id`
+    /// use [`Self::committed_transport_user_key`] for stale callbacks or teardown races
+    ///
+    /// # Panics
+    ///
+    /// panics when no committed router placement exists
     #[must_use]
     #[expect(
         clippy::unreachable,
@@ -738,6 +744,9 @@ impl RoomTopology {
         Ok(true)
     }
 
+    /// commits the new connection before returning cleanup for displaced placement
+    ///
+    /// `previous_connection` must name the currently committed session for replacement joins
     pub fn commit_session_placement(
         &mut self,
         user_id: &UserId,

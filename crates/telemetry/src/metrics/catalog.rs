@@ -288,6 +288,11 @@ impl RuntimeMetrics {
         self.active_transport_users.add(delta);
     }
 
+    /// records one transport-health edge and keeps current-state gauges balanced
+    ///
+    /// callers must pass the previously recorded health value
+    /// `None -> Some` joins the gauge
+    /// `Some -> None` leaves it
     pub fn record_transport_health_transition(
         &self,
         previous: Option<TransportHealthState>,

@@ -172,6 +172,10 @@ const fn media_negotiation_operation(kind: NegotiationKind) -> &'static str {
     }
 }
 
+/// tracks the one server negotiation request that the client may answer
+///
+/// a new request id replaces the pending answer slot, so caller code must not
+/// issue concurrent server offers for the same user session
 #[derive(Debug, Default)]
 pub(super) struct NegotiationRequests {
     next: u64,

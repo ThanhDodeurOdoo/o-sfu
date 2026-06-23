@@ -78,7 +78,10 @@ pub(super) fn flush_pending_kf_reqs(
     flush_pending_kf_reqs_at(state, metrics, buffers, Instant::now());
 }
 
-/// resolves staged keyframe requests at a supplied time for tests and benchmarks
+/// drains turn-local feedback into producer-scoped keyframe requests
+///
+/// duplicate feedback for one `(src_media, rid)` sends the strongest request once
+/// distinct rids stay separate so simulcast feedback is not widened
 pub fn flush_pending_kf_reqs_at(
     state: &mut PacketLoopState,
     metrics: &impl RtcRouteControlMetrics,

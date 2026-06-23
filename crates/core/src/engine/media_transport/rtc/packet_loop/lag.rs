@@ -7,6 +7,10 @@ const NO_PACKET_LOOP_LAG_SAMPLE: u64 = u64::MAX;
 const PACKET_LOOP_LAG_SAMPLE_TTL: Duration = Duration::from_secs(1);
 const PACKET_LOOP_LAG_PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 
+/// atomic packet-loop lag sample read by worker placement
+///
+/// `NO_PACKET_LOOP_LAG_SAMPLE` and expired samples both report `0`
+/// `0` means no recent lag signal, not proof that the loop is idle
 #[derive(Debug)]
 pub struct PacketLoopLagSnapshot {
     started_at: Instant,

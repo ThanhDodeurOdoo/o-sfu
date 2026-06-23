@@ -256,6 +256,11 @@ impl MediaTransport {
         .await
     }
 
+    /// applies receiver BWE, producer state and consumer route controls as one batch
+    ///
+    /// consumer packet gates run before activity and keyframes for the same route
+    /// a packet-gate failure suppresses later route work so transport state does not
+    /// advertise activity for a packet policy that was not installed
     pub(crate) async fn apply_route_control(
         &self,
         plan: RouteControlPlan<Ready>,
