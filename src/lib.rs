@@ -1,7 +1,9 @@
 //! o-sfu is a Selective Forwading Unit for audio/video calls
 //!
-//! `o-sfu/src` is the orchestration layer, it handles room admission, routing topology, media policy, packet
+//! This handles room admission, routing topology, media policy, packet
 //! forwarding, diagnostics and verification for applications that need a dedicated SFU server.
+//!
+//! root crate (`o-sfu/src`) contains:
 //!
 //! - configuration loading through [`config::Config`] and [`Runtime`]
 //!   construction through [`Runtime::new`]
@@ -17,8 +19,9 @@
 //!
 //! media routing and packet forwarding live below this crate in
 //! [`core::server::transport::MediaTransport`] and `o-sfu-router`
+//!
 //! browser signaling state is in [`o_sfu_protocol::host::ProtocolCore`]
-//! and the browser integration executes the returned
+//! and the browser integration (client crate) executes the returned
 //! [`o_sfu_protocol::host::HostCommand`] values with WebSocket and
 //! `RTCPeerConnection` APIs
 //!
@@ -40,10 +43,21 @@
 //! [`core::server::room::Room`], [`o_sfu_router::topology::RoutingTopology`]
 //! and [`core::server::transport::MediaTransport`]
 //!
-//! # client bundle
+//! ## sub crates
 //!
-//! The server that implements the call (like odoo) imports the generated browser bundle from `crates/client`
-//! and implements the calls features with `SfuClient`
+//! | crate | role |
+//! | --- | --- |
+//! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC vocabulary |
+//! | `o-sfu-model` | shared call data surfaced through [`o_sfu_protocol::wire::UserId`], [`o_sfu_protocol::wire::StreamType`], [`o_sfu_protocol::wire::RecordingState`] and [`o_sfu_protocol::wire::WebSocketCloseCode`] |
+//! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] state for sessions, transports, producers, consumers and [`o_sfu_router::topology::RoutingTopology`] |
+//! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, cleanup effects and [`core::server::transport::MediaTransport`] projection |
+//! | [`o_sfu_protocol`] | sans-I/O [`o_sfu_protocol::host::ProtocolCore`] and typed [`o_sfu_protocol::host::Command`] values |
+//! | [`o_sfu_telemetry`] | tracing setup, [`o_sfu_telemetry::metrics::RuntimeMetrics`], [`o_sfu_telemetry::diagnostics::DiagnosticsStore`], [`o_sfu_telemetry::prometheus::render_prometheus`] and graph payloads |
+//!
+//! ## client bundle
+//!
+//! The server that implements the call (like odoo) imports the generated browser bundle from `crates/client` (part of the release artifacts)
+//! and implements the calls features with `SfuClient`.
 //!
 //! ```text
 //! SfuClient
@@ -53,8 +67,8 @@
 //!     -> WebSocket, RTCPeerConnection and timers
 //! ```
 //!
-//! `SfuClient` keeps compatibility for `connect`, `publish`, `subscribe`,
-//! recording, stats and update events
+//! `SfuClient` exposes a small and simple API with `connect`, `publish`, `subscribe`,
+//! recording, stats and update events.
 //! signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and returns
 //! ordered [`o_sfu_protocol::host::CommandBatch`] values
 //! `BrowserRuntime` executes the projected
@@ -69,45 +83,7 @@
 //! hot packet code applies verififid route state, packet gates and
 //! recording taps rather than making room-level policy decisions
 //!
-//! # crate tour
-//!
-//! start at the layer that owns the boundary you need to change
-//!
-//! - [`run`] and [`Runtime`] own boot, serving, background tasks and shutdown
-//! - [`config`] is the environment-to-runtime boundary
-//!   lower crates receive typed options, not raw environment state
-//! - [`auth`], [`http`] and [`websocket`] are the admision edge
-//!   they bound request shape, frame size and identity before room state is
-//!   touched
-//! - [`crate::core`] turns accepted control-plane intent into room mutations
-//!   and transport effects
-//! - [`o_sfu_protocol::host::ProtocolCore`] keeps browser signaling sans-I/O
-//!   host commands are ordered effects for the browser integration
-//! - [`core::server::transport::MediaTransport`] is the packet boundary
-//!   workers consume route state that room and router state already approved
-//!
-//! sub crates
-//!
-//! | crate | role |
-//! | --- | --- |
-//! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC vocabulary |
-//! | `o-sfu-model` | shared call data surfaced through [`o_sfu_protocol::wire::UserId`], [`o_sfu_protocol::wire::StreamType`], [`o_sfu_protocol::wire::RecordingState`] and [`o_sfu_protocol::wire::WebSocketCloseCode`] |
-//! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] state for sessions, transports, producers, consumers and [`o_sfu_router::topology::RoutingTopology`] |
-//! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, cleanup effects and [`core::server::transport::MediaTransport`] projection |
-//! | [`o_sfu_protocol`] | sans-I/O [`o_sfu_protocol::host::ProtocolCore`] and typed [`o_sfu_protocol::host::Command`] values |
-//! | [`o_sfu_telemetry`] | tracing setup, [`o_sfu_telemetry::metrics::RuntimeMetrics`], [`o_sfu_telemetry::diagnostics::DiagnosticsStore`], [`o_sfu_telemetry::prometheus::render_prometheus`] and graph payloads |
-//!
 //! # runtime
-//!
-//! ```no_run
-//! # async fn example(config: o_sfu::config::Config) -> anyhow::Result<()> {
-//! let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-//! let runtime = o_sfu::Runtime::new(&config)?;
-//!
-//! runtime.serve_listener(listener).await?;
-//! # Ok(())
-//! # }
-//! ```
 //!
 //! [`Runtime`] owns the full process lifecycle
 //! request handlers receive a smaller internal state handle so HTTP extractors
@@ -201,7 +177,7 @@
 //!
 //! # packet path
 //!
-//! the str0m-backed [`core::server::transport::MediaTransport`] owns
+//! the [`core::server::transport::MediaTransport`] owns
 //! worker-local packet loops
 //! those loops receive UDP datagrams, drive WebRTC state, apply route tables,
 //! forward RTP and publish bounded metrics
@@ -220,7 +196,7 @@
 //! they consume stable transport keys and route controls projected from room
 //! and router state
 //! that split keeps hot packet work close to worker-local state while keeping
-//! policy changes auditable in the room engine
+//! policy changes in the room engine
 //!
 //! # observability
 //!
@@ -244,34 +220,10 @@
 //!
 //! # scaling
 //!
-//! the current topology is process-local
 //! rooms use one local [`o_sfu_router::Router`] by default and can opt into
 //! same-process local spillover through [`config::RoomWorkerPolicy`]
 //!
-//! distributed room ownership, owner epochs, room directory lookup and remote
-//! SFU relays are future control-plane concepts
-//! the current packet path uses local worker state and local relay plumbing
-//! only
-//!
-//! # deployment requirements
-//!
-//! this crate runs the server process, but the deployment must still provide
-//! the network shape that WebRTC expects
-//!
-//! - `PUBLIC_IP` configures [`config::TransportConfig::public_ip`] and must be
-//!   reachable by browsers for RTP and RTCP over UDP
-//! - `AUTH_KEY` configures [`config::AuthConfig::key`] and authenticates the
-//!   HTTP control plane used by the embedding application
-//! - `RTC_MIN_PORT` and `RTC_MAX_PORT` configure
-//!   [`config::TransportConfig::rtc_port_range`] and define the UDP media range
-//!   to expose
-//! - TLS termination and reverse-proxy forwarding live outside the Rust process
-//! - diagnostics endpoints must remain protected by token or loopback-only
-//!   access
-//!
-//! the default UDP backend uses Tokio
-//! the `io_uring` UDP backend is selected through
-//! [`config::RtcUdpIoBackend`] as an opt-in runtime configuration for Linux
+//! it is later possible to extend the SFU for cross server scaling, but it's not a priority.
 //!
 //! # feature flags
 //!
@@ -283,12 +235,25 @@
 //!
 //! # reading map
 //!
+//! - [`run`] and [`Runtime`] own boot, serving, background tasks and shutdown
+//! - [`config`] is the environment-to-runtime boundary
+//!   lower crates receive typed options, not raw environment state
+//! - [`auth`], [`http`] and [`websocket`] are the admision edge
+//!   they bound request shape, frame size and identity before room state is
+//!   touched
+//! - [`crate::core`] turns accepted control-plane intent into room mutations
+//!   and transport effects
+//! - [`o_sfu_protocol::host::ProtocolCore`] keeps browser signaling sans-I/O
+//!   host commands are ordered effects for the browser integration
+//! - [`core::server::transport::MediaTransport`] is the packet boundary
+//!   workers consume route state that room and router state already approved
+//!
 //! start with [`Runtime`] when following process startup, HTTP serving or
 //! shutdown
 //! then read [`http`] for the HTTP control-plane contract and [`websocket`] for
 //! frame decoding
 //!
-//! for media behavior, jump into [`core::prelude::SfuCore`],
+//! for media behavior,read [`core::prelude::SfuCore`],
 //! [`core::prelude::MediaSession`], [`core::prelude::SourcePolicy`],
 //! [`core::server::room::RoomManager`] and
 //! [`core::server::transport::MediaTransport`]
