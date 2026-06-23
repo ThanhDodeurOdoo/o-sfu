@@ -693,10 +693,9 @@ impl RoomTopology {
             .media
             .transport_removals_for_producer_target(user_id, target);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
-        let affected_consumers = self.media.routed_consumer_ids_for_source(target.source_id);
         if let Some(error) = self
             .routing
-            .remove_producer(target.routed_producer_id, affected_consumers)
+            .remove_producer(target.routed_producer_id)
             .err()
         {
             error!(
@@ -755,17 +754,12 @@ impl RoomTopology {
         } else {
             None
         };
-        let affected_consumers = if previous_connection.is_some() {
-            self.media.routed_consumer_ids_affected_by_user(user_id)
-        } else {
-            Vec::new()
-        };
         let RoutingPlacementCommit {
             receipt: router_receipt,
             displaced_connection,
         } = self
             .routing
-            .commit_session_placement(user_id, connection_id, home_placement, affected_consumers)
+            .commit_session_placement(user_id, connection_id, home_placement)
             .map_err(SessionPlacementRejection::Router)?;
         let session_key = self.transport_session_key(
             user_id,
@@ -805,13 +799,10 @@ impl RoomTopology {
     ) -> MediaTopologyEffects {
         let transport_removals = self.media.transport_removals_for_user(user_id);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
-        let affected_consumers = self.media.routed_consumer_ids_affected_by_user(user_id);
         let relay_effects = self.media.remove_user_media(user_id);
         let relay_effects = self.resolved_relay_route_effects(relay_effects);
         self.transport_session_by_connection.remove(&connection_id);
-        let routing_repair = self
-            .routing
-            .remove_session_repairing(user_id, affected_consumers);
+        let routing_repair = self.routing.remove_session_repairing(user_id);
         if !routing_repair.is_clean() {
             error!(
                 ?user_id,

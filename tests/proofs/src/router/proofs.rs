@@ -16,7 +16,8 @@ use o_sfu_router::{
     test_support::{
         proof::{
             RouterProofView, assert_routing_placement_replacement_retires_stale_connection,
-            assert_routing_shadow_refcounts_prune_after_last_consumer,
+            assert_routing_shadow_tracker_prunes_by_producer,
+            assert_routing_shadow_tracker_prunes_by_receiver_user,
         },
         router_satisfies_invariants,
     },
@@ -691,11 +692,18 @@ fn assert_concrete_reverse_index_memberships(router: &Router) {
     );
 }
 
-/// prove topology shadow reference counts keep a shared shadow until the last consumer leaves
+/// prove topology shadow tracker prunes shadows by producer
 #[kani::proof]
-#[kani::unwind(8)]
-fn routing_shadow_refcounts_prune_after_last_consumer() {
-    assert_routing_shadow_refcounts_prune_after_last_consumer();
+#[kani::unwind(5)]
+fn routing_shadow_tracker_prunes_by_producer() {
+    assert_routing_shadow_tracker_prunes_by_producer();
+}
+
+/// prove topology shadow tracker prunes shadows by receiver user
+#[kani::proof]
+#[kani::unwind(5)]
+fn routing_shadow_tracker_prunes_by_receiver_user() {
+    assert_routing_shadow_tracker_prunes_by_receiver_user();
 }
 
 /// prove session replacement cannot leave a stale committed connection active

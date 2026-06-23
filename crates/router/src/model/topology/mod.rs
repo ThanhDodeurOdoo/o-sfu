@@ -351,11 +351,9 @@ impl RoutingTopology {
         user_id: &UserId,
         connection_id: ConnectionId,
         placement: RouterPlacement,
-        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> Result<RoutingPlacementCommit, RoutingError> {
         let mut next = self.clone();
-        let commit =
-            next.apply_session_placement(user_id, connection_id, placement, affected_consumers)?;
+        let commit = next.apply_session_placement(user_id, connection_id, placement)?;
         *self = next;
         Ok(commit)
     }
@@ -365,14 +363,13 @@ impl RoutingTopology {
         user_id: &UserId,
         connection_id: ConnectionId,
         placement: RouterPlacement,
-        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
     ) -> Result<RoutingPlacementCommit, RoutingError> {
         let displaced_connection = self
             .sessions
             .active(user_id)
             .map(|session| session.connection_id);
         if displaced_connection.is_some() {
-            self.remove_session(user_id, affected_consumers)?;
+            self.remove_session(user_id)?;
         }
         self.attach_placement(placement);
         let router_session_seed = connection_id.as_u64();
@@ -471,7 +468,10 @@ impl RoutingTopology {
         let producer_id = self
             .router_mut_for_user(user_id, router_id)?
             .add_producer(user_id, media_kind)?;
-        Ok(RoutedProducerId::new(router_id, producer_id))
+        let routed_producer_id = RoutedProducerId::new(router_id, producer_id);
+        self.shadow_sessions
+            .register_producer(routed_producer_id, user_id.clone());
+        Ok(routed_producer_id)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -530,8 +530,11 @@ impl RoutingTopology {
             }
         };
         let routed_consumer_id = RoutedConsumerId::new(producer_id.router_id(), consumer_id);
-        self.shadow_sessions
-            .register_consumer(routed_consumer_id, receiver_session.shadow_key);
+        self.shadow_sessions.register_consumer(
+            routed_consumer_id,
+            producer_id,
+            receiver_session.shadow_key,
+        );
         Ok(routed_consumer_id)
     }
 
@@ -576,7 +579,7 @@ impl RoutingTopology {
     pub fn remove_consumer(&mut self, consumer_id: RoutedConsumerId) -> Result<(), RoutingError> {
         self.router_mut(consumer_id.router_id())?
             .remove_consumer(consumer_id.consumer_id())?;
-        let shadow_sessions = self.shadow_sessions.unregister_consumers([consumer_id]);
+        let shadow_sessions = self.shadow_sessions.release_consumers([consumer_id]);
         self.prune_shadow_sessions(shadow_sessions)?;
         Ok(())
     }
@@ -587,16 +590,10 @@ impl RoutingTopology {
     ///
     /// returns [`RoutingError::MissingRouter`] when the producer router is absent
     /// or [`RoutingError::Router`] when the pure router rejects teardown
-    pub fn remove_producer(
-        &mut self,
-        producer_id: RoutedProducerId,
-        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
-    ) -> Result<(), RoutingError> {
+    pub fn remove_producer(&mut self, producer_id: RoutedProducerId) -> Result<(), RoutingError> {
         self.router_mut(producer_id.router_id())?
             .remove_producer(producer_id.producer_id())?;
-        let shadow_sessions = self
-            .shadow_sessions
-            .unregister_consumers(affected_consumers);
+        let shadow_sessions = self.shadow_sessions.unregister_producer(producer_id);
         self.prune_shadow_sessions(shadow_sessions)?;
         Ok(())
     }
@@ -609,11 +606,7 @@ impl RoutingTopology {
     /// home placement, [`RoutingError::MissingRouterForSession`] when the home
     /// router was detached or [`RoutingError::Router`] when a pure router
     /// rejects teardown
-    pub fn remove_session(
-        &mut self,
-        user_id: &UserId,
-        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
-    ) -> Result<(), RoutingError> {
+    pub fn remove_session(&mut self, user_id: &UserId) -> Result<(), RoutingError> {
         let home_router_id = self.require_session(user_id)?.runtime.router;
         if !self.routers.contains_key(&home_router_id) {
             return Err(RoutingError::MissingRouterForSession {
@@ -624,19 +617,13 @@ impl RoutingTopology {
         for router in self.routers.values_mut() {
             router.remove_session(user_id)?;
         }
-        let shadow_sessions = self
-            .shadow_sessions
-            .unregister_consumers(affected_consumers);
+        let shadow_sessions = self.shadow_sessions.unregister_user(user_id);
         self.prune_shadow_sessions(shadow_sessions)?;
         self.sessions.remove(user_id);
         Ok(())
     }
 
-    pub fn remove_session_repairing(
-        &mut self,
-        user_id: &UserId,
-        affected_consumers: impl IntoIterator<Item = RoutedConsumerId>,
-    ) -> RoutingRepairReport {
+    pub fn remove_session_repairing(&mut self, user_id: &UserId) -> RoutingRepairReport {
         let mut report = RoutingRepairReport::default();
         match self
             .require_session(user_id)
@@ -659,9 +646,7 @@ impl RoutingTopology {
                 report.record(error);
             }
         }
-        let shadow_sessions = self
-            .shadow_sessions
-            .unregister_consumers(affected_consumers);
+        let shadow_sessions = self.shadow_sessions.unregister_user(user_id);
         self.prune_shadow_sessions_repairing(shadow_sessions, &mut report);
         self.sessions.remove(user_id);
         report

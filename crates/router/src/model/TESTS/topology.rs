@@ -34,7 +34,6 @@ fn join_on_router(
             user_id,
             ConnectionId::from_raw(connection_id_raw),
             placement(router, media_worker),
-            [],
         )
         .map(|_| ())
 }
@@ -108,23 +107,40 @@ fn topology_attaches_spillover_router_for_bounded_policy() {
 }
 
 #[test]
-fn topology_replacement_rehomes_from_the_new_connection_seed() {
+fn topology_replacement_rehomes_and_prunes_old_receiver_shadow() {
     let mut topology = RoutingTopology::new_for_test(RouterId(9));
-    let user_id = UserId::Integer(10);
+    let producer_user_id = UserId::Integer(10);
+    let consumer_user_id = UserId::Integer(20);
 
-    assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());
+    assert!(join_on_router(&mut topology, &producer_user_id, 0, 9, 0).is_ok());
+    assert!(join_on_router(&mut topology, &consumer_user_id, 1, 10, 1).is_ok());
+
+    let producer = topology
+        .add_producer(&producer_user_id, RouterMediaKind::Audio)
+        .expect("producer should be routed");
+    topology
+        .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
+        .expect("consumer should be routed");
+
     assert_eq!(
-        topology.home_router_id_for_user(&user_id),
-        Some(RouterId(9))
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(2)
     );
-
-    assert!(join_on_router(&mut topology, &user_id, 1, 10, 1).is_ok());
+    assert!(join_on_router(&mut topology, &consumer_user_id, 2, 11, 2).is_ok());
 
     assert_eq!(
-        topology.home_router_id_for_user(&user_id),
-        Some(RouterId(10))
+        topology.home_router_id_for_user(&consumer_user_id),
+        Some(RouterId(11))
     );
-    assert_eq!(topology.user_count(), 1);
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(1)
+    );
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(10)),
+        Some(0)
+    );
+    assert_eq!(topology.user_count(), 2);
 }
 
 #[test]
@@ -142,7 +158,6 @@ fn topology_rolls_back_replacement_after_duplicate_session_failure() {
             &second_user_id,
             ConnectionId::from_raw(colliding_connection),
             placement(9, 0),
-            [],
         ),
         Err(RoutingError::Router(RouterError::DuplicateSession(
             SessionId(colliding_connection),
@@ -192,43 +207,44 @@ fn topology_routes_cross_router_consumers_through_source_router() {
 }
 
 #[test]
-fn topology_prunes_receiver_shadow_when_cross_router_source_leaves_first() {
-    let mut topology = RoutingTopology::new_for_test(RouterId(9));
-    let producer_user_id = UserId::Integer(10);
-    let consumer_user_id = UserId::Integer(20);
+fn topology_prunes_receiver_shadow_when_cross_router_endpoint_leaves() {
+    for (removed_user_id, expected_source_sessions, expected_receiver_sessions, expected_home) in [
+        (UserId::Integer(10), Some(0), Some(1), Some(RouterId(10))),
+        (UserId::Integer(20), Some(1), Some(0), None),
+    ] {
+        let mut topology = RoutingTopology::new_for_test(RouterId(9));
+        let producer_user_id = UserId::Integer(10);
+        let consumer_user_id = UserId::Integer(20);
 
-    assert!(join_on_router(&mut topology, &producer_user_id, 0, 9, 0).is_ok());
-    assert!(join_on_router(&mut topology, &consumer_user_id, 1, 10, 1).is_ok());
+        assert!(join_on_router(&mut topology, &producer_user_id, 0, 9, 0).is_ok());
+        assert!(join_on_router(&mut topology, &consumer_user_id, 1, 10, 1).is_ok());
 
-    let producer = topology
-        .add_producer(&producer_user_id, RouterMediaKind::Audio)
-        .expect("producer should be routed");
-    let consumer = topology
-        .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
-        .expect("consumer should be routed");
-
-    assert_eq!(
-        topology.mapped_session_count_for_router(RouterId(9)),
-        Some(2)
-    );
-    assert!(
+        let producer = topology
+            .add_producer(&producer_user_id, RouterMediaKind::Audio)
+            .expect("producer should be routed");
         topology
-            .remove_session(&producer_user_id, [consumer])
-            .is_ok()
-    );
+            .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
+            .expect("consumer should be routed");
 
-    assert_eq!(
-        topology.mapped_session_count_for_router(RouterId(9)),
-        Some(0)
-    );
-    assert_eq!(
-        topology.mapped_session_count_for_router(RouterId(10)),
-        Some(1)
-    );
-    assert_eq!(
-        topology.home_router_id_for_user(&consumer_user_id),
-        Some(RouterId(10))
-    );
+        assert_eq!(
+            topology.mapped_session_count_for_router(RouterId(9)),
+            Some(2)
+        );
+        assert!(topology.remove_session(&removed_user_id).is_ok());
+
+        assert_eq!(
+            topology.mapped_session_count_for_router(RouterId(9)),
+            expected_source_sessions
+        );
+        assert_eq!(
+            topology.mapped_session_count_for_router(RouterId(10)),
+            expected_receiver_sessions
+        );
+        assert_eq!(
+            topology.home_router_id_for_user(&consumer_user_id),
+            expected_home
+        );
+    }
 }
 
 #[test]
@@ -236,9 +252,11 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
     let mut topology = RoutingTopology::new_for_test(RouterId(9));
     let producer_user_id = UserId::Integer(10);
     let consumer_user_id = UserId::Integer(20);
+    let second_consumer_user_id = UserId::Integer(30);
 
     assert!(join_on_router(&mut topology, &producer_user_id, 0, 9, 0).is_ok());
     assert!(join_on_router(&mut topology, &consumer_user_id, 1, 10, 1).is_ok());
+    assert!(join_on_router(&mut topology, &second_consumer_user_id, 2, 11, 2).is_ok());
     let first_producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .expect("first producer should be routed");
@@ -246,14 +264,21 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .expect("second producer should be routed");
 
-    let first_consumer = topology
+    topology
         .add_consumer(
             &consumer_user_id,
             first_producer,
             ConsumerCapability::Compatible,
         )
         .expect("first consumer should be routed");
-    let second_consumer = topology
+    topology
+        .add_consumer(
+            &second_consumer_user_id,
+            first_producer,
+            ConsumerCapability::Compatible,
+        )
+        .expect("second consumer should be routed");
+    topology
         .add_consumer(
             &consumer_user_id,
             second_producer,
@@ -263,22 +288,14 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
-        Some(2)
+        Some(3)
     );
-    assert!(
-        topology
-            .remove_producer(first_producer, [first_consumer])
-            .is_ok()
-    );
+    assert!(topology.remove_producer(first_producer).is_ok());
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
         Some(2)
     );
-    assert!(
-        topology
-            .remove_producer(second_producer, [second_consumer])
-            .is_ok()
-    );
+    assert!(topology.remove_producer(second_producer).is_ok());
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
         Some(1)
@@ -361,7 +378,7 @@ fn topology_reports_idle_spillover_router_after_last_home_session_leaves() {
     assert!(join_on_router(&mut topology, &second_user_id, 1, 10, 1).is_ok());
     assert_eq!(topology.router_count(), 2);
 
-    assert!(topology.remove_session(&second_user_id, []).is_ok());
+    assert!(topology.remove_session(&second_user_id).is_ok());
 
     assert_eq!(topology.router_count(), 2);
     assert_eq!(topology.idle_spillover_routers(), vec![RouterId(10)]);
@@ -376,7 +393,7 @@ fn topology_never_reports_primary_router_as_idle_spillover() {
     let user_id = UserId::Integer(10);
 
     assert!(join_on_router(&mut topology, &user_id, 0, 9, 0).is_ok());
-    assert!(topology.remove_session(&user_id, []).is_ok());
+    assert!(topology.remove_session(&user_id).is_ok());
 
     assert!(topology.idle_spillover_routers().is_empty());
     topology.detach_spillover_routers(&[RouterId(9)]);
@@ -391,7 +408,7 @@ fn topology_reports_missing_router_for_user_lookup() {
     topology.remove_router_for_test(RouterId(7));
 
     assert_eq!(
-        topology.remove_session(&user_id, []),
+        topology.remove_session(&user_id),
         Err(RoutingError::MissingRouterForSession {
             user_id,
             router_id: RouterId(7),
@@ -425,10 +442,7 @@ fn topology_preserves_pure_router_errors_without_synthetic_user_ids() {
     let mut topology = RoutingTopology::new_for_test(RouterId(9));
 
     assert_eq!(
-        topology.remove_producer(
-            RoutedProducerId::new(RouterId(9), RouterProducerId(99),),
-            []
-        ),
+        topology.remove_producer(RoutedProducerId::new(RouterId(9), RouterProducerId(99))),
         Err(RoutingError::Router(RouterError::MissingProducer(
             RouterProducerId(99)
         )))

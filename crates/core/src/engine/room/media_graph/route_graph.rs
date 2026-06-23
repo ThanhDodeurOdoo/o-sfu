@@ -1,7 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
-use o_sfu_router::topology::RoutedConsumerId;
-
 use super::{
     ConsumerKey, ConsumerSourceSelection, ConsumerState, TransportMediaRemoval,
     consumer_setup::ConsumerSetupTarget, remove_from_index_set,
@@ -246,29 +244,6 @@ impl RouteGraph {
             }
         }
         keys
-    }
-
-    pub(super) fn routed_consumer_ids_for_keys(
-        &self,
-        keys: impl IntoIterator<Item = ConsumerKey>,
-    ) -> Vec<RoutedConsumerId> {
-        keys.into_iter()
-            .filter_map(|key| self.consumer_state(&key))
-            .map(|state| state.routed_consumer_id)
-            .collect()
-    }
-
-    pub(super) fn routed_consumer_ids_for_source(
-        &self,
-        source_id: PublishedSourceId,
-    ) -> Vec<RoutedConsumerId> {
-        self.by_source
-            .get(&source_id)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .filter_map(|key| self.consumer_state(key))
-            .map(|state| state.routed_consumer_id)
-            .collect()
     }
 
     pub(super) fn transport_removals_for_keys(

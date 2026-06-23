@@ -357,22 +357,6 @@ impl RoomMediaGraph {
         self.routes.keys_for_source(source_id)
     }
 
-    pub fn routed_consumer_ids_for_source(
-        &self,
-        source_id: PublishedSourceId,
-    ) -> Vec<RoutedConsumerId> {
-        self.routes.routed_consumer_ids_for_source(source_id)
-    }
-
-    pub fn routed_consumer_ids_affected_by_user(&self, user_id: &UserId) -> Vec<RoutedConsumerId> {
-        let mut consumer_ids = self
-            .routes
-            .routed_consumer_ids_for_keys(self.consumer_keys_affected_by_user(user_id));
-        consumer_ids.sort_unstable();
-        consumer_ids.dedup();
-        consumer_ids
-    }
-
     fn consumer_keys_affected_by_user(&self, user_id: &UserId) -> BTreeSet<ConsumerKey> {
         self.routes
             .affected_keys_for_user(user_id, self.sources.ids_for_owner(user_id))

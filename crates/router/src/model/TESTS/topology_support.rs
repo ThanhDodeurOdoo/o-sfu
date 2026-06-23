@@ -57,41 +57,48 @@ pub mod proof {
     use o_sfu_model::UserId;
 
     use super::super::{
-        CommittedSessionPlacement, CommittedSessionPlacements, RoutedConsumerId, RouterPlacement,
+        CommittedSessionPlacement, CommittedSessionPlacements, RoutedConsumerId, RoutedProducerId,
+        RouterPlacement,
         shadow::{ShadowSessionKey, ShadowSessionTracker},
     };
-    use crate::model::{ConnectionId, ConsumerId, MediaWorkerId, RouterId};
+    use crate::model::{ConnectionId, ConsumerId, MediaWorkerId, ProducerId, RouterId};
 
-    pub fn assert_routing_shadow_refcounts_prune_after_last_consumer() {
+    pub fn assert_routing_shadow_tracker_prunes_by_producer() {
+        let source_user_id = UserId::Integer(10);
         let receiver_user_id = UserId::Integer(20);
         let source_router_id = RouterId(9);
-        let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id);
-        let first_consumer = RoutedConsumerId::new(source_router_id, ConsumerId(1));
-        let second_consumer = RoutedConsumerId::new(source_router_id, ConsumerId(2));
-        let same_router_consumer = RoutedConsumerId::new(RouterId(10), ConsumerId(3));
+        let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id.clone());
+        let producer = RoutedProducerId::new(source_router_id, ProducerId(1));
+        let consumer = RoutedConsumerId::new(source_router_id, ConsumerId(1));
         let mut tracker = ShadowSessionTracker::default();
 
-        tracker.register_consumer(first_consumer, Some(shadow.clone()));
-        tracker.register_consumer(second_consumer, Some(shadow.clone()));
-        tracker.register_consumer(same_router_consumer, None);
+        tracker.register_producer(producer, source_user_id);
+        tracker.register_consumer(consumer, producer, Some(shadow.clone()));
 
-        let (first_removed, second_removed) = if kani::any() {
-            (first_consumer, second_consumer)
-        } else {
-            (second_consumer, first_consumer)
-        };
-
-        let first_prune = tracker.unregister_consumers([first_removed]);
-        assert!(first_prune.is_empty());
-        assert!(tracker.contains_shadow_session(&shadow));
-
-        let second_prune = tracker.unregister_consumers([second_removed]);
-        assert!(second_prune.len() == 1);
-        assert!(second_prune.contains(&shadow));
+        let prune = tracker.unregister_producer(producer);
+        assert!(prune.len() == 1);
+        assert!(prune.contains(&shadow));
         assert!(!tracker.contains_shadow_session(&shadow));
+        assert!(tracker.unregister_producer(producer).is_empty());
+    }
 
-        let stale_prune = tracker.unregister_consumers([second_removed, same_router_consumer]);
-        assert!(stale_prune.is_empty());
+    pub fn assert_routing_shadow_tracker_prunes_by_receiver_user() {
+        let source_user_id = UserId::Integer(10);
+        let receiver_user_id = UserId::Integer(20);
+        let source_router_id = RouterId(9);
+        let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id.clone());
+        let producer = RoutedProducerId::new(source_router_id, ProducerId(1));
+        let consumer = RoutedConsumerId::new(source_router_id, ConsumerId(1));
+        let mut tracker = ShadowSessionTracker::default();
+
+        tracker.register_producer(producer, source_user_id);
+        tracker.register_consumer(consumer, producer, Some(shadow.clone()));
+
+        let prune = tracker.unregister_user(&receiver_user_id);
+        assert!(prune.len() == 1);
+        assert!(prune.contains(&shadow));
+        assert!(!tracker.contains_shadow_session(&shadow));
+        assert!(tracker.unregister_user(&receiver_user_id).is_empty());
     }
 
     pub fn assert_routing_placement_replacement_retires_stale_connection() {
