@@ -8,14 +8,16 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         scenario.stage_scalable_video().await,
         PublishStageOutcome::Staged
     );
-    let transport_media_id = scenario.staged_media_id(TestSourceKind::ScalableVideo);
+    let transport_media_id = scenario
+        .staged_media_id(TestSourceKind::ScalableVideo)
+        .await;
 
     assert_eq!(
         scenario.rollback_scalable_video().await,
         Some(crate::TransportEffectOutcome::Applied)
     );
 
-    assert_eq!(scenario.staged_count(), 0);
+    assert_eq!(scenario.staged_count().await, 0);
     assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
     assert!(
         !scenario
@@ -37,7 +39,7 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
         scenario.stage_scalable_video().await,
         PublishStageOutcome::Duplicate
     );
-    assert_eq!(scenario.staged_count(), 1);
+    assert_eq!(scenario.staged_count().await, 1);
     assert_eq!(
         scenario.rollback_scalable_video().await,
         Some(crate::TransportEffectOutcome::Applied)
@@ -73,9 +75,11 @@ async fn staged_publish_duplicate_after_transport_reservation_cleans_second_medi
         .duplicate_cleanup_target_for_test()
         .expect("test hook should record duplicate cleanup target");
 
-    assert_eq!(scenario.staged_count(), 1);
+    assert_eq!(scenario.staged_count().await, 1);
     assert_eq!(
-        scenario.staged_media_id(TestSourceKind::ScalableVideo),
+        scenario
+            .staged_media_id(TestSourceKind::ScalableVideo)
+            .await,
         pre_reserved_media_id
     );
     assert!(
@@ -106,11 +110,13 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
         scenario.stage_scalable_video().await,
         PublishStageOutcome::Staged
     );
-    let transport_media_id = scenario.staged_media_id(TestSourceKind::ScalableVideo);
+    let transport_media_id = scenario
+        .staged_media_id(TestSourceKind::ScalableVideo)
+        .await;
 
     scenario.commit().await;
 
-    assert_eq!(scenario.staged_count(), 0);
+    assert_eq!(scenario.staged_count().await, 0);
     assert!(scenario.scalable_video_is_published().await);
     assert!(
         scenario
@@ -143,7 +149,7 @@ async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
 
     scenario.close_user().await;
 
-    assert_eq!(scenario.staged_count(), 0);
+    assert_eq!(scenario.staged_count().await, 0);
     assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
     let publisher_output = scenario.drain_publisher();
     assert!(

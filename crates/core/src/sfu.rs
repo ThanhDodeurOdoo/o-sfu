@@ -594,8 +594,9 @@ impl MediaSession {
     /// the call is idempotent
     /// it returns `true` only when the room manager removed the current
     /// connection
-    /// stale sessions still roll back staged media during cleanup, but they do
-    /// not remove a replacement connection for the same user
+    /// current-session cleanup drains connection-scoped staged media through
+    /// room state
+    /// stale sessions do not remove a replacement connection for the same user
     pub async fn close(&mut self, rooms: &RoomManager) -> bool {
         if self.closed {
             return false;

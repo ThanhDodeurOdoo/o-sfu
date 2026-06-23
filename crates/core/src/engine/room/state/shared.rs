@@ -6,6 +6,7 @@ use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
     media_graph::{ConsumerRouteView, RoomTopology},
     outbound::OutboundSender,
+    transition::StagedPublishes,
     user_negotiation::UserNegotiation,
 };
 use crate::{
@@ -30,6 +31,7 @@ pub struct RoomState {
     pub next_producer_id: u64,
     pub next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
+    pub(in crate::engine::room) staged_publishes: StagedPublishes,
     pub(in crate::engine::room) topology: RoomTopology,
 }
 
@@ -94,6 +96,7 @@ impl RoomState {
                 transcription: Some(false),
                 video: Some(false),
             },
+            staged_publishes: StagedPublishes::default(),
             topology: RoomTopology::new(runtime_context, router_rtp_capabilities),
         }
     }

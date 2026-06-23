@@ -118,7 +118,6 @@ pub fn build_connection_close(
     state_outcome: Option<LeaveUserOutcome>,
     user_id: UserId,
     connection_id: ConnectionId,
-    staged_cleanup: Vec<TransportCleanupOperation>,
     transport_close: Option<TransportCleanupOperation>,
 ) -> RoomEffects {
     let media_worker_id = transport_close
@@ -139,7 +138,6 @@ pub fn build_connection_close(
         batch.observability.forget_user(user_id);
         batch.source_policy.route_graph_changed();
     }
-    batch.transport.extend_cleanup(staged_cleanup);
     if let Some(transport_close) = transport_close {
         batch.push_transport_user_close_cleanup(transport_close);
     }
@@ -150,11 +148,9 @@ pub fn build_disconnect(
     room: &Room,
     counts: RoomGaugeDelta,
     outcome: DisconnectUsersOutcome,
-    staged_cleanup: Vec<TransportCleanupOperation>,
 ) -> RoomEffects {
     let mut batch = RoomEffects::default();
     batch.observability.push_gauge(counts);
-    batch.transport.extend_cleanup(staged_cleanup);
     batch.extend_media_topology_effects(outcome.media_effects);
     batch.source_policy.route_graph_changed();
     batch.output.push_lifecycle(outcome.effects);

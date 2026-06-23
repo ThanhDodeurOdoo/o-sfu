@@ -2,7 +2,6 @@ use std::{
     collections::{BTreeMap, btree_map::Entry},
     marker::PhantomData,
     slice,
-    sync::Mutex,
 };
 
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
@@ -22,21 +21,20 @@ use crate::{
             media_graph::ValidatedPublish,
         },
         source_model::UserStreamId,
-        sync::lock_unpoisoned,
     },
 };
 
 #[derive(Debug, Default)]
 pub struct StagedPublishes {
-    staged: Mutex<BTreeMap<StagedPublishKey, StagedPublish>>,
+    staged: BTreeMap<StagedPublishKey, StagedPublish>,
 }
 
 type StagedPublishKey = (UserId, ConnectionId, UserStreamId);
 
 #[derive(Debug)]
 pub struct StagedPublish {
-    descriptor: ValidatedPublish,
-    media: TransportMediaId,
+    pub(super) descriptor: ValidatedPublish,
+    pub(super) media: TransportMediaId,
     reservation: PublishReservation<Reserved>,
 }
 
@@ -47,66 +45,21 @@ impl StagedPublishes {
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> bool {
-        lock_unpoisoned(&self.staged).contains_key(&staged_publish_key(
-            user_id,
-            connection_id,
-            stream_id,
-        ))
+        self.staged
+            .contains_key(&staged_publish_key(user_id, connection_id, stream_id))
     }
 
-    /// publishes the staged slot only if no stream reservation already exists
-    ///
-    /// duplicate reservations are released before returning `false`
-    pub async fn stage(
-        &self,
-        publish: StagedPublish,
-        operation: RoomUserOperation<'_>,
-        failure_message: &str,
-    ) -> bool {
+    pub fn stage(&mut self, publish: StagedPublish) -> Option<StagedPublish> {
         let key = publish.key();
-        {
-            let mut staged = lock_unpoisoned(&self.staged);
-            if let Entry::Vacant(slot) = staged.entry(key) {
-                slot.insert(publish);
-                return true;
-            }
+        if let Entry::Vacant(slot) = self.staged.entry(key) {
+            slot.insert(publish);
+            return None;
         }
-        publish
-            .cleanup_reserved_media(operation, failure_message)
-            .await;
-        false
-    }
-
-    pub async fn rollback(
-        &self,
-        stream_id: &UserStreamId,
-        operation: RoomUserOperation<'_>,
-        failure_message: &str,
-    ) -> Option<TransportEffectOutcome> {
-        let staged = self.take(operation.user_id, operation.connection_id, stream_id)?;
-        Some(
-            staged
-                .cleanup_reserved_media(operation, failure_message)
-                .await,
-        )
-    }
-
-    pub async fn commit_answer(
-        &self,
-        operation: RoomUserOperation<'_>,
-        applied_answer: &AppliedSessionAnswer,
-    ) -> Vec<UserStreamId> {
-        let mut committed = Vec::new();
-        for staged in self.take_for_connection(operation.user_id, operation.connection_id) {
-            if let Some(stream_id) = staged.commit_from_answer(operation, applied_answer).await {
-                committed.push(stream_id);
-            }
-        }
-        committed
+        Some(publish)
     }
 
     pub fn cleanup_operations_for_connection(
-        &self,
+        &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Vec<TransportCleanupOperation> {
@@ -116,21 +69,22 @@ impl StagedPublishes {
             .collect()
     }
 
-    fn take(
-        &self,
+    pub(in crate::engine::room) fn take(
+        &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> Option<StagedPublish> {
-        lock_unpoisoned(&self.staged).remove(&staged_publish_key(user_id, connection_id, stream_id))
+        self.staged
+            .remove(&staged_publish_key(user_id, connection_id, stream_id))
     }
 
-    fn take_for_connection(
-        &self,
+    pub(in crate::engine::room) fn take_for_connection(
+        &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Vec<StagedPublish> {
-        lock_unpoisoned(&self.staged)
+        self.staged
             .extract_if(.., |key, _publish| {
                 &key.0 == user_id && key.1 == connection_id
             })
@@ -139,19 +93,18 @@ impl StagedPublishes {
     }
 
     #[cfg(test)]
-    pub fn insert_for_test(&self, transaction: StagedPublish) {
+    pub fn insert_for_test(&mut self, transaction: StagedPublish) {
         let key = transaction.key();
-        let mut staged = lock_unpoisoned(&self.staged);
         assert!(
-            !staged.contains_key(&key),
+            !self.staged.contains_key(&key),
             "test duplicate staged publish slot should be empty before injection"
         );
-        staged.insert(key, transaction);
+        self.staged.insert(key, transaction);
     }
 
     #[cfg(test)]
     pub fn staged_count(&self, user_id: &UserId, connection_id: ConnectionId) -> usize {
-        lock_unpoisoned(&self.staged)
+        self.staged
             .keys()
             .filter(|(user, connection, _stream)| user == user_id && *connection == connection_id)
             .count()
@@ -165,12 +118,9 @@ impl StagedPublishes {
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
         let stream_id = stream_id_for_source(stream_type);
-        lock_unpoisoned(&self.staged)
-            .iter()
-            .find(|((user, connection, stream), _publish)| {
-                user == user_id && *connection == connection_id && stream == &stream_id
-            })
-            .map(|(_, publish)| publish.media)
+        self.staged
+            .get(&staged_publish_key(user_id, connection_id, &stream_id))
+            .map(|publish| publish.media)
     }
 }
 

@@ -25,13 +25,18 @@ impl StagedPublish {
 
 #[cfg(test)]
 impl Room {
-    pub(crate) fn staged_count(&self, user_id: &UserId, connection_id: ConnectionId) -> usize {
-        self.staged_publishes.staged_count(user_id, connection_id)
+    pub(crate) async fn staged_count(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+    ) -> usize {
+        self.state
+            .read()
+            .await
+            .staged_publishes
+            .staged_count(user_id, connection_id)
     }
-}
 
-#[cfg(test)]
-impl Room {
     pub(crate) fn stage_next_duplicate_for_test(&self, transport_media_id: TransportMediaId) {
         *lock_unpoisoned(&self.duplicate_staged_publish_after_reservation) =
             Some(transport_media_id);
@@ -42,7 +47,7 @@ impl Room {
         *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target)
     }
 
-    pub(super) fn inject_next_duplicate_for_test(
+    pub(super) async fn inject_next_duplicate_for_test(
         &self,
         descriptor: &ValidatedPublish,
         cleanup_target: TransportMediaId,
@@ -54,16 +59,23 @@ impl Room {
         };
         *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target) = Some(cleanup_target);
         let transaction = StagedPublish::new(descriptor.clone(), staged_transport_media_id);
-        self.staged_publishes.insert_for_test(transaction);
+        self.state
+            .write()
+            .await
+            .staged_publishes
+            .insert_for_test(transaction);
     }
 
-    pub(crate) fn staged_media_id(
+    pub(crate) async fn staged_media_id(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        self.staged_publishes
-            .staged_media_id(user_id, connection_id, stream_type)
+        self.state.read().await.staged_publishes.staged_media_id(
+            user_id,
+            connection_id,
+            stream_type,
+        )
     }
 }

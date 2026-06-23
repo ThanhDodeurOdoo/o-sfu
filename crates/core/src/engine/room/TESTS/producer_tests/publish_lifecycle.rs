@@ -115,11 +115,11 @@ async fn duplicate_publish_intent_reactivates_committed_stream() {
         1,
         "duplicate publish should reuse the committed producer"
     );
-    assert!(!room.test_api().media().has_staged_publish(
-        &publisher_id,
-        user_connection_id(&room, &publisher_id).await,
-        &stream_id_for_source(TestSourceKind::ScalableVideo),
-    ));
+    assert!(
+        !room
+            .has_staged_publish(&publisher_id, connection_id, &stream_id)
+            .await
+    );
     assert_track_binding_activity_update(
         &drain_outbound(&mut rx1)[0],
         &publisher_id,

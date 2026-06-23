@@ -213,9 +213,8 @@ impl StagedPublishScenario {
     }
 
     pub(super) async fn commit(&self) {
-        let staged_transport_media_id = self.staged_media_id(TestSourceKind::ScalableVideo);
         let applied_answer = AppliedSessionAnswer::from_negotiated_producers([(
-            staged_transport_media_id,
+            self.staged_media_id(TestSourceKind::ScalableVideo).await,
             test_simulcast_video_rtp_parameters(),
         )]);
         self.operation()
@@ -229,8 +228,10 @@ impl StagedPublishScenario {
             .await;
     }
 
-    pub(super) fn staged_count(&self) -> usize {
-        self.room.staged_count(&self.user_id, self.connection_id)
+    pub(super) async fn staged_count(&self) -> usize {
+        self.room
+            .staged_count(&self.user_id, self.connection_id)
+            .await
     }
 
     pub(super) async fn scalable_video_is_published(&self) -> bool {
@@ -242,9 +243,10 @@ impl StagedPublishScenario {
             .await
     }
 
-    pub(super) fn staged_media_id(&self, stream_type: TestSourceKind) -> TransportMediaId {
+    pub(super) async fn staged_media_id(&self, stream_type: TestSourceKind) -> TransportMediaId {
         self.room
             .staged_media_id(&self.user_id, self.connection_id, stream_type)
+            .await
             .expect("staged publish should expose its transport media id")
     }
 

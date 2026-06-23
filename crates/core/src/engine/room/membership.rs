@@ -143,14 +143,12 @@ impl Room {
             (outcome, transport_close, counts)
         };
         let had_state = outcome.is_some();
-        let staged_cleanup = self.drain_staged_publish_cleanup_operations(user_id, connection_id);
         effects::batch::build_connection_close(
             self,
             counts,
             outcome,
             user_id.clone(),
             connection_id,
-            staged_cleanup,
             transport_close,
         )
         .execute(self, context)
@@ -239,17 +237,7 @@ impl Room {
             drop(state);
             (outcome, counts)
         };
-        let staged_cleanup = outcome
-            .disconnected_users
-            .iter()
-            .flat_map(|session| {
-                self.drain_staged_publish_cleanup_operations(
-                    &session.user_id,
-                    session.connection_id,
-                )
-            })
-            .collect::<Vec<_>>();
-        effects::batch::build_disconnect(self, counts, outcome, staged_cleanup)
+        effects::batch::build_disconnect(self, counts, outcome)
             .execute(self, context)
             .await;
         self.reconcile_spillover_routers().await;

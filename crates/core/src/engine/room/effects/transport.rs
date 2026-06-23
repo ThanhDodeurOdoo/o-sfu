@@ -42,10 +42,6 @@ impl RoomTransportPlan {
         self.topology.extend(effects);
     }
 
-    pub(super) fn extend_cleanup(&mut self, cleanup: Vec<TransportCleanupOperation>) {
-        self.topology.extend_cleanup(cleanup);
-    }
-
     pub(super) fn push_cleanup(&mut self, operation: TransportCleanupOperation) {
         self.topology.push_cleanup(operation);
     }
