@@ -67,7 +67,7 @@
 //! recording, stats and update events.
 //! signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and returns
 //! ordered [`o_sfu_protocol::host::CommandBatch`] values
-//! `BrowserRuntime` executes the projected
+//! `BrowserRuntime` executes the
 //! [`o_sfu_protocol::host::HostCommand`] values against browser `WebSocket`,
 //! `RTCPeerConnection` and timer APIs
 //!
@@ -90,13 +90,13 @@
 //! `crates/client/README.md` for the client file map
 //!
 //! the idea is that room and router state approve topology
-//! before packet-loop workers forward media
+//! before packet-loop workers forward media,
 //! hot packet code applies verififid route state, packet gates and
 //! recording taps rather than making room-level policy decisions
 //!
 //! # runtime
 //!
-//! [`Runtime`] owns the full process lifecycle
+//! [`Runtime`] owns the full process lifecycle,
 //! request handlers receive a smaller internal state handle so HTTP extractors
 //! and WebSocket loops cannot depend on boot details or shutdown ownership
 //!
@@ -123,7 +123,7 @@
 //!     +-> return server result
 //! ```
 //!
-//! user and media cleanup is explicit async work
+//! user and media cleanup is explicit async work,
 //! closing a WebSocket user drains room cleanup through
 //! [`core::server::room::RoomManager`], [`core::server::room::UserCloseReason`]
 //! and [`core::server::transport::MediaTransport`]
@@ -133,7 +133,7 @@
 //! # HTTP and WebSocket admission
 //!
 //! applications create rooms through HTTP and clients join through
-//! the WebSocket
+//! the WebSocket,
 //! both paths are authenticated before they reach room state
 //!
 //!
@@ -145,14 +145,13 @@
 //! [`websocket::ClientBatchDecodeError`]
 //!
 //! decoded JWT claims are not trusted until the token is verified with the key
-//! selected for that room
+//! selected for that room,
 //! an unsigned room hint may select verification material, but it does not
 //! become authenticated identity or room access
 //!
 //! # room, router and transport ownership
 //!
-//! room transitions are planned while holding short exclusive room state
-//! locks
+//! room transitions are planned while holding short exclusive room state locks,
 //! asyn transport and diagnostics work is executed later through effect plans
 //!
 //! ```text
@@ -165,15 +164,14 @@
 //! +--------------------------------+    +------------------------------+
 //! ```
 //!
-//! [`o_sfu_router::Router`] is pure and synchronous
+//! [`o_sfu_router::Router`] is pure and synchronous,
 //! it owns router topology facts such as sessions, receive transports,
 //! producers, send transports, consumers, reverse indexes and cross-router
 //! receiver shadows
 //!
-//! [`o_sfu_router::topology::RoutingTopology`] composes routers into room-local
-//! placement
+//! [`o_sfu_router::topology::RoutingTopology`] composes routers into room-local placement,
 //! [`core::prelude::SfuCore`] and [`core::prelude::MediaSession`] own the
-//! bridge from room intent to transport effects
+//! bridge from room intent to transport effects,
 //! they decide which [`core::prelude::SourcePublishIntent`] values exist, which
 //! receivers want them, which [`core::server::transport::SourcePacketGate`]
 //! should be installed and which cleanup work must be retried after transport
@@ -181,8 +179,7 @@
 //!
 //! # packet path
 //!
-//! the [`core::server::transport::MediaTransport`] owns
-//! worker-local packet loops
+//! the [`core::server::transport::MediaTransport`] owns worker-local packet loops.
 //! those loops receive UDP datagrams, drive WebRTC state, apply route tables,
 //! forward RTP and publish bounded metrics
 //!
@@ -211,9 +208,8 @@
 //!     +-> packet sinks
 //! ```
 //!
-//! packet loops do not own room membership
-//! they consume stable transport keys and route controls projected from room
-//! and router state
+//! packet loops do not own room membership,
+//! they consume stable transport keys and route controls projected from room and router state,
 //! that split keeps hot packet work close to worker-local state while keeping
 //! policy changes in the room engine
 //!
@@ -233,20 +229,20 @@
 //! - [`o_sfu_telemetry::graph`] payloads used by the diagnostics UI and
 //!   Grafana-style views
 //!
-//! diagnostics routes are separate from metrics
-//! metrics are intended for time series
-//! diagnostics expose live room and transport state
+//! diagnostics routes are separate from metrics,
+//! metrics are intended for time series,
+//! diagnostics expose live room and transport state.
 //!
 //! # scaling
 //!
 //! rooms use one local [`o_sfu_router::Router`] by default and can opt into
 //! same-process local spillover through [`config::RoomWorkerPolicy`]
 //!
-//! it is later possible to extend the SFU for cross server scaling, but it's not a priority.
+//! note: it is later possible to extend the SFU for cross server scaling, but it's not a priority.
 //!
 //! # feature flags
 //!
-//! the root package has a small feature surface
+//! the root package has a small feature surface,
 //! the default feature enables `otel-tracing`, which turns on OpenTelemetry
 //! tracing support through [`o_sfu_telemetry::TraceExportConfig`]
 //! core media behavior is configured at runtime through [`config`], not cargo
