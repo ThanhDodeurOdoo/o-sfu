@@ -155,7 +155,7 @@ async fn set_remote_relay_and_consumer_active(
     plan.push_consumer(
         ConsumerRouteControl::new(route).activity(ConsumerActivity::from_active(active)),
     );
-    let outcome = adapter.apply_route_control(plan.into_ready()).await;
+    let outcome = adapter.apply_route_control(plan).await;
     let [consumer_outcome] = outcome.consumers.as_slice() else {
         panic!("one consumer route-control outcome should be returned");
     };
@@ -333,12 +333,8 @@ async fn media_transport_route_control_plan_updates_source_route() {
         ConsumerRouteControl::new(missing_route).activity(ConsumerActivity::Inactive),
     );
 
-    let outcome = adapter.apply_route_control(plan.into_ready()).await;
+    let outcome = adapter.apply_route_control(plan).await;
 
-    assert_eq!(
-        outcome.receiver_bwe_targets,
-        &[Ok(()), Err(TransportAdapterError::InvalidInput)]
-    );
     assert_eq!(
         outcome.producers,
         &[Ok(()), Err(TransportAdapterError::TransportUnavailable)]
@@ -350,6 +346,13 @@ async fn media_transport_route_control_plan_updates_source_route() {
     assert!(!valid_consumer.activity_failed());
     assert!(!valid_consumer.keyframe_failed());
     assert!(missing_consumer.activity_failed());
+    assert_eq!(
+        adapter
+            .test_api()
+            .session_receiver_bwe_target(route.consumer_session_key())
+            .await,
+        Some(Bitrate::from_kbps(600))
+    );
 
     let route_entry = adapter
         .test_api()

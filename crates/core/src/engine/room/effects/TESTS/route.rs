@@ -26,11 +26,10 @@ use crate::{
 };
 
 #[tokio::test]
-async fn room_route_effects_apply_transport_route_work() -> Result<(), Box<dyn Error>> {
+async fn room_route_batch_applies_transport_route_work() -> Result<(), Box<dyn Error>> {
     let fixture = RouteFixture::new().await?;
     fixture.request_standalone_keyframe().await;
     fixture.pause_route_activity().await?;
-    fixture.reactivate_source().await;
     fixture.apply_source_selection().await?;
     Ok(())
 }
@@ -106,14 +105,14 @@ impl RouteFixture {
     }
 
     async fn request_standalone_keyframe(&self) {
-        let mut effects = RoomRouteEffects::default();
+        let mut effects = RoomRouteBatch::default();
         effects.push_keyframe(self.target.clone());
         effects.execute(&self.media_transport).await;
         assert_eq!(self.metrics.snapshot().rtc_keyframe_requests_forwarded(), 1);
     }
 
     async fn pause_route_activity(&self) -> Result<(), io::Error> {
-        let mut effects = RoomRouteEffects::default();
+        let mut effects = RoomRouteBatch::default();
         effects.push_producer(
             self.route.source().clone(),
             false,
@@ -150,7 +149,7 @@ impl RouteFixture {
     }
 
     async fn reactivate_source(&self) {
-        let mut effects = RoomRouteEffects::default();
+        let mut effects = RoomRouteBatch::default();
         effects.push_producer(
             self.route.source().clone(),
             true,
@@ -160,6 +159,10 @@ impl RouteFixture {
     }
 
     async fn apply_source_selection(&self) -> Result<(), io::Error> {
+        self.reactivate_source().await;
+        let snapshot = self.metrics.snapshot();
+        let keyframes_before =
+            snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed();
         let mut current_selection = ConsumerSourceSelection::open(true);
         current_selection.set_policy_pause_reason(Some(PolicyPauseReason::BudgetPressure));
         let mut update = ConsumerPacketSelectionUpdate::route_activity(
@@ -173,7 +176,7 @@ impl RouteFixture {
             SourcePacketOperatingPoint::new(None, 0),
         ));
         update.request_keyframe = true;
-        let mut effects = RoomRouteEffects::default();
+        let mut effects = RoomRouteBatch::default();
         effects.push_source_selection(TransportPacketSelectionUpdate {
             update: update.clone(),
             target: self.target.clone(),
@@ -189,7 +192,7 @@ impl RouteFixture {
         let snapshot = self.metrics.snapshot();
         assert_eq!(
             snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed(),
-            2
+            keyframes_before + 1
         );
         assert_eq!(
             self.media_transport

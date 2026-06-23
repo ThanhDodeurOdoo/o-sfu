@@ -3,8 +3,6 @@
 pub mod batch;
 mod observability;
 mod output;
-mod receiver_routes;
-mod route;
 mod transport;
 
-pub(super) use route::RoomRouteEffects;
+pub(super) use transport::RoomRouteBatch;

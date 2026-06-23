@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use tracing::{debug, warn};
 
 use super::{
@@ -9,28 +7,20 @@ use super::{
     rtc::{RouteControlRequest, RtcWorkerCommand},
 };
 
-#[derive(Debug)]
-pub(crate) enum Draft {}
-
-#[derive(Debug)]
-pub(crate) enum Ready {}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[must_use = "route-control plans must be executed or intentionally dropped"]
-pub(crate) struct RouteControlPlan<State = Draft> {
+pub(crate) struct RouteControlPlan {
     producers: Vec<ProducerRouteControl>,
     consumers: Vec<ConsumerRouteControl>,
     receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
-    _state: PhantomData<fn() -> State>,
 }
 
-impl RouteControlPlan<Draft> {
+impl RouteControlPlan {
     pub(crate) const fn new() -> Self {
         Self {
             producers: Vec::new(),
             consumers: Vec::new(),
             receiver_bwe_targets: Vec::new(),
-            _state: PhantomData,
         }
     }
 
@@ -45,15 +35,6 @@ impl RouteControlPlan<Draft> {
 
     pub(crate) fn set_receiver_bwe_targets(&mut self, updates: Vec<ReceiverBweTargetUpdate>) {
         self.receiver_bwe_targets = updates;
-    }
-
-    pub(crate) fn into_ready(self) -> RouteControlPlan<Ready> {
-        RouteControlPlan {
-            producers: self.producers,
-            consumers: self.consumers,
-            receiver_bwe_targets: self.receiver_bwe_targets,
-            _state: PhantomData,
-        }
     }
 }
 
@@ -101,7 +82,6 @@ impl ConsumerRouteControl {
 pub(crate) struct RouteControlOutcome {
     pub(crate) producers: Vec<TransportResult<()>>,
     pub(crate) consumers: Vec<ConsumerRouteControlOutcome>,
-    pub(crate) receiver_bwe_targets: Vec<TransportResult<()>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -261,25 +241,18 @@ impl MediaTransport {
     /// consumer packet gates run before activity and keyframes for the same route
     /// a packet-gate failure suppresses later route work so transport state does not
     /// advertise activity for a packet policy that was not installed
-    pub(crate) async fn apply_route_control(
-        &self,
-        plan: RouteControlPlan<Ready>,
-    ) -> RouteControlOutcome {
+    pub(crate) async fn apply_route_control(&self, plan: RouteControlPlan) -> RouteControlOutcome {
         let RouteControlPlan {
             producers,
             consumers,
             receiver_bwe_targets: receiver_bwe_updates,
-            _state,
         } = plan;
-        let receiver_bwe_results = if receiver_bwe_updates.is_empty() {
-            Vec::new()
-        } else {
-            self.set_receiver_bwe_targets(&receiver_bwe_updates).await
-        };
+        if !receiver_bwe_updates.is_empty() {
+            self.set_receiver_bwe_targets(&receiver_bwe_updates).await;
+        }
         let mut outcome = RouteControlOutcome {
             producers: Vec::with_capacity(producers.len()),
             consumers: Vec::with_capacity(consumers.len()),
-            receiver_bwe_targets: receiver_bwe_results,
         };
         for control in producers {
             outcome.producers.push(

@@ -12,8 +12,7 @@ use crate::engine::{
     },
     metrics::{self, BudgetSolverOutcome},
     room::{
-        Room, RoomEventMessage, effects::RoomRouteEffects, outbound::MessageFanout,
-        state::RoomState,
+        Room, RoomEventMessage, effects::RoomRouteBatch, outbound::MessageFanout, state::RoomState,
     },
 };
 
@@ -177,7 +176,7 @@ impl SourcePolicyPlan {
             featured_users,
         } = self;
         let mut applied_packet_updates = state_packet_updates;
-        let mut routes = RoomRouteEffects::default();
+        let mut routes = RoomRouteBatch::default();
         routes.set_receiver_bwe_targets(receiver_bwe_targets);
         for update in transport_packet_updates {
             routes.push_source_selection(update);
