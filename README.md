@@ -4,7 +4,8 @@
 
 <div align="center">
 
-  <a href="">[![Rustdoc](https://img.shields.io/badge/rustdoc-deployed-0CB9FF)](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/)</a>
+[![Rustdoc](https://img.shields.io/badge/rustdoc-deployed-0CB9FF)](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/)
+[![Release](https://img.shields.io/github/v/release/ThanhDodeurOdoo/o-sfu)](https://github.com/ThanhDodeurOdoo/o-sfu/releases/latest)
 
 </div>
 
