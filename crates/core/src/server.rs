@@ -1,21 +1,51 @@
+//! server-runtime integration surface for `o-sfu-core`
+//!
+//! this module xposes the pieces the top-level runtime needs to assemble a
+//! process: diagnostics stores, metric catalogs, room managers, packet sink
+//! registries and the media transport
+
+/// diagnostics store and event payloads used by runtime inspection endpoints
+///
+/// room and transport code record typed diagnostics here
+/// HTTP diagnostics routes read the same store to render operator-facing
+/// summaries and room detail views
 pub mod diagnostics {
     pub use crate::engine::diagnostics::{DiagnosticsEventData, DiagnosticsStore, types::*};
 }
 
+/// process-local metric catalog and typed recorders
+///
+/// runtime edges record through this facade instead of assembling metric names
+/// or label sets manually
+/// the Prometheus renderer consumes snapshots produced by these types
 pub mod metrics {
     pub use crate::engine::metrics::*;
 }
 
+/// recording sink trait used by media routing code
+///
+/// recording integrations register packet sinks through the packet-sink
+/// registry while transport code only depends on this narrow sink contract
 pub mod recording {
     pub use crate::engine::recording::MediaPacketSink;
 }
 
+/// room packet-sink registry shared by transport workers
+///
+/// packet sinks are looked up by room when media has to fan out to recording or
+/// other non-local destinations
+/// the registry keeps that routing concern out of packet-loop callers
 pub mod packet_sinks {
     pub use crate::engine::packet_sink_registry::{
         PacketSink, RegisteredPacketSink, RoomPacketSinkRegistry,
     };
 }
 
+/// room manager, room runtime and user-session integration types
+///
+/// this facade is the server crate's entry point for admitting users, sending
+/// outbound messages and reading room statistics
+/// pure routing and transport details remain behind the room API
 pub mod room {
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {
@@ -52,6 +82,12 @@ pub mod room {
     };
 }
 
+/// signaling-domain payloads shared by rooms and WebSocket sessions
+///
+/// these types describe users, features, permissionsm recording state and
+/// host-visible close codes
+/// they are re-exported here so the runtime does not import private room or
+/// engine modules for protocol payload construction
 pub mod session {
     pub use crate::engine::{
         AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState,
@@ -60,6 +96,10 @@ pub mod session {
     };
 }
 
+/// source descriptor model accepted by publication and subscription flows
+///
+/// source-model types make published media identity explicit before it reaches
+/// room routing or transport negotiation
 pub mod source_model {
     pub use crate::engine::source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
@@ -68,8 +108,14 @@ pub mod source_model {
     };
 }
 
+/// media transport construction and extension boundary
+///
+/// the runtime builds one `MediaTransport` from `CoreOptions` and process
+/// services, then room code uses the opaque handle for offers, answers,
+/// publications, subscriptions and transport diagnostics
+///
+/// code above this module should not branch on RTC worker internals
 pub mod transport {
-    //! media transport construction and extension boundary
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {

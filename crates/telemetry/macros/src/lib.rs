@@ -1,3 +1,65 @@
+//! these macros keep repetitive timing and HTTP metric boilerplate out of
+//! runtime handlers while leaving metric ownership in normal rust values
+//! each macro expands at the annotated function boundary and records through
+//! expressions supplied by the caller
+//!
+//! attribute syntax:
+//!
+//! ```rust,ignore
+//! #[measure_duration(metrics = "metrics", record = "record_operation")]
+//! #[measure_http_request(
+//!     metrics = "metrics",
+//!     request = "record_http_noop_request",
+//!     route = "HttpRoute::Noop",
+//! )]
+//! ```
+//!
+//! example:
+//!
+//! ```rust,ignore
+//! #[measure_duration(metrics = "metrics", record = "record_operation")]
+//! async fn handle_request() -> Result<(), Error> {
+//!     do_work().await
+//! }
+//! ```
+//!
+//! expands roughly to:
+//!
+//! ```rust,ignore
+//! async fn handle_request() -> Result<(), Error> {
+//!     let __telemetry_metrics = &metrics;
+//!     let __telemetry_record = |__telemetry_elapsed| {
+//!         __telemetry_metrics.record_operation(__telemetry_elapsed);
+//!     };
+//!     struct __TelemetryGuard<F>
+//!     where
+//!         F: FnOnce(std::time::Duration),
+//!     {
+//!         started_at: std::time::Instant,
+//!         record: Option<F>,
+//!     }
+//!     impl<F> Drop for __TelemetryGuard<F>
+//!     where
+//!         F: FnOnce(std::time::Duration),
+//!     {
+//!         fn drop(&mut self) {
+//!             if let Some(record) = self.record.take() {
+//!                 record(self.started_at.elapsed());
+//!             }
+//!         }
+//!     }
+//!     let _telemetry_guard = __TelemetryGuard {
+//!         started_at: std::time::Instant::now(),
+//!         record: Some(__telemetry_record),
+//!     };
+//!     do_work().await
+//! }
+//! ```
+//!
+//! the macros are optional behind the `o-sfu-telemetry` `macros` feature
+//! projects that prefer explicit timing calls can use the telemetry crate
+//! without enabling this proc-macro crate
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

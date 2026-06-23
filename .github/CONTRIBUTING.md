@@ -18,6 +18,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 ## Learning resources
 
 - [The Rust Book](https://doc.rust-lang.org/book/)
+- [Comprehensive Rust by Google](https://google.github.io/comprehensive-rust)
 - [The Rustonomicon (unsafe/advanced)](https://doc.rust-lang.org/nomicon/)
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
 - [Rust Cookbook](https://github.com/rust-lang-nursery/rust-cookbook/)
