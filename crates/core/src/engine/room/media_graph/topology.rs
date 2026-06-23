@@ -379,10 +379,10 @@ impl RoomTopology {
         self.media.sources.producer(producer_id)
     }
 
-    pub(in crate::engine::room) fn consumer_targets_for_producer<'a>(
+    pub(super) fn missing_consumer_targets_for_producer<'a>(
         &self,
         producer_id: ProducerRuntimeId,
-        consumers: impl IntoIterator<Item = (&'a UserId, ConnectionId)>,
+        receivers: impl IntoIterator<Item = (&'a UserId, ConnectionId)>,
     ) -> Vec<ConsumerSetupTarget> {
         let Some(producer) = self.producer(producer_id) else {
             return Vec::new();
@@ -395,12 +395,12 @@ impl RoomTopology {
         else {
             return Vec::new();
         };
-        consumers
+        receivers
             .into_iter()
-            .filter_map(|(user_id, connection_id)| {
+            .filter_map(|(user, connection)| {
                 self.consumer_target(
-                    user_id,
-                    connection_id,
+                    user,
+                    connection,
                     producer_id,
                     producer,
                     media,
@@ -438,7 +438,7 @@ impl RoomTopology {
         ))
     }
 
-    pub(in crate::engine::room) fn missing_consumer_targets(
+    pub(super) fn missing_consumer_targets(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,

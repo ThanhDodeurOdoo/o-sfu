@@ -26,9 +26,8 @@ use crate::{
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
             media_graph::{
-                ConsumerKey, ConsumerSetupOutcome, ConsumerSetupTarget, ConsumerState,
-                ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
-                ResolvedRelayRouteEffect,
+                ConsumerKey, ConsumerSetupOutcome, ConsumerState, ProducerRuntimeId,
+                PublishedProducer, PublishedSourceInstall, ResolvedRelayRouteEffect,
             },
             rtp_capabilities::router_rtp_capabilities,
         },
@@ -173,7 +172,7 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
         .routing_mut_for_test()
         .add_producer(&publisher, MediaKind::Video)
         .expect("relayed source producer route should be added");
-    let (producer_id, source_id) = install_test_published_producer(
+    install_test_published_producer(
         state,
         &publisher,
         publisher_connection,
@@ -182,22 +181,9 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
         source_media,
         sample_video_rtp_parameters(None, 77_777),
     );
-    let target = {
-        let producer = state
-            .topology
-            .producer_for_source(source_id)
-            .expect("relayed source producer should exist");
-        ConsumerSetupTarget::new(
-            subscriber.clone(),
-            subscriber_connection,
-            state.transport_user_key(&subscriber, subscriber_connection),
-            state.transport_user_key(&publisher, publisher_connection),
-            producer_id,
-            producer,
-            source_media,
-        )
-    };
-    let mut setups = state.plan_consumers(vec![target]);
+    let mut setups = state
+        .plan_missing_consumers(&subscriber, subscriber_connection)
+        .expect("subscriber should still be current");
     let setup = setups
         .pop()
         .expect("relay consumer setup should be planned");

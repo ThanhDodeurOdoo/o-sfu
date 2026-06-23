@@ -179,9 +179,12 @@ pub fn build_publish_commit(room: &Room, commit: PublishCommit) -> RoomEffects {
         commit.setup_before,
         commit.setup_after,
     ));
-    batch
-        .transport
-        .push_pending_consumer_setups(commit.setups, ConsumerSetupOrigin::Publish);
+    batch.push_receiver_work(
+        room,
+        RoomDiagnosticsContext::new(&commit.user, commit.connection, commit.worker),
+        commit.receiver_route_work,
+        ConsumerSetupOrigin::Publish,
+    );
     batch.source_policy.route_graph_changed();
     batch.observability.record(diagnostics);
     batch

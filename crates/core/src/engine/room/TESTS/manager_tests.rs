@@ -184,7 +184,10 @@ async fn apply_subscription_route_activity(
         );
         let route_update = ReceiverRouteActivity::new(target, false);
         let counts = state.media_counts();
-        let work = ReceiverRouteWork::new(vec![route_update], Vec::new(), Vec::new());
+        let work = ReceiverRouteWork {
+            activities: vec![route_update],
+            ..Default::default()
+        };
         drop(state);
         ReceiverRouteCommit {
             before: counts,

@@ -581,11 +581,7 @@ fn stale_replaced_connection_cannot_update_download_state() {
         &producer_user_id,
         &intents,
     );
-    let (activities, setups, relays) = change.into_parts();
-
-    assert!(activities.is_empty());
-    assert!(setups.is_empty());
-    assert!(relays.is_empty());
+    assert!(!change.route_graph_changed());
     assert!(
         state.desired_source_active(
             &consumer_user_id,
@@ -626,11 +622,9 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
         &publisher_user_id,
         &intents,
     );
-    let (activities, setups, relays) = change.into_parts();
-
-    assert!(activities.is_empty());
-    assert!(relays.is_empty());
-    assert_eq!(setups.len(), 1);
+    assert!(change.activities.is_empty());
+    assert!(change.relays.is_empty());
+    assert_eq!(change.setups.len(), 1);
     let selection = state
         .topology
         .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, source_id))
@@ -674,8 +668,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
         &publisher_user_id,
         &intents,
     );
-    let (_, setups, _) = change.into_parts();
-    assert!(setups.is_empty());
+    assert!(change.setups.is_empty());
 
     let ConsumerSetupOutcome::Committed {
         track,
