@@ -247,7 +247,7 @@ impl RoomState {
         })
     }
 
-    fn validate_publish_commit(
+    pub(in crate::engine::room) fn validate_publish_commit(
         &self,
         publish: &ValidatedPublish,
         transport_media_id: TransportMediaId,

@@ -94,11 +94,7 @@ async fn media_session_keeps_pending_offer_after_invalid_answer() {
         .expect("initial offer should be created")
         .expect("initial offer should be present");
 
-    let error = session
-        .answer("not an SDP answer")
-        .await
-        .expect_err("invalid answer should be rejected");
-    assert!(error.is_client_error());
+    assert_invalid_answer_is_rejected(&mut session).await;
 
     let answer_sdp = remote_answer_sdp(&mut remote, &offer.sdp);
     let events = session
@@ -106,6 +102,28 @@ async fn media_session_keeps_pending_offer_after_invalid_answer() {
         .await
         .expect("pending offer should accept a later valid answer");
     assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn media_session_keeps_staged_publish_after_invalid_answer() {
+    let (mut session, mut remote) = build_publisher_session(55_225).await;
+    establish_session(&mut session, &mut remote).await;
+    let events = session
+        .publish(source_publish_intent_for_source(
+            TestSourceKind::ScalableVideo,
+        ))
+        .await
+        .expect("publish should stage through the media session");
+    let offer = single_renegotiation(&events);
+
+    assert_invalid_answer_is_rejected(&mut session).await;
+
+    let answer_sdp = remote_answer_sdp(&mut remote, &offer.sdp);
+    let events = session
+        .answer(&answer_sdp)
+        .await
+        .expect("staged publish should accept a later valid answer");
+    assert_active_publish(&events, TestSourceKind::ScalableVideo);
 }
 
 #[tokio::test]
@@ -136,13 +154,7 @@ async fn media_session_queues_publish_until_initial_answer_is_accepted() {
         .answer(&answer_sdp)
         .await
         .expect("queued publish renegotiation answer should apply");
-    assert_eq!(
-        events,
-        vec![SessionEvent::Publication {
-            stream_id: stream_id_for_source(TestSourceKind::ScalableVideo),
-            active: true
-        }]
-    );
+    assert_active_publish(&events, TestSourceKind::ScalableVideo);
 }
 
 #[tokio::test]
@@ -195,13 +207,7 @@ async fn media_session_queues_renegotiation_requested_while_waiting_for_answer()
         .answer(&answer_sdp)
         .await
         .expect("queued publish renegotiation answer should apply");
-    assert_eq!(
-        events,
-        vec![SessionEvent::Publication {
-            stream_id: stream_id_for_source(TestSourceKind::ReadableVideo),
-            active: true,
-        }]
-    );
+    assert_active_publish(&events, TestSourceKind::ReadableVideo);
 }
 
 #[tokio::test]
@@ -217,11 +223,11 @@ async fn media_session_close_rolls_back_staged_publish_and_removes_room_session(
     } = build_publisher_fixture(55_206).await;
     establish_session(&mut session, &mut remote).await;
     stage_scalable_video(&mut session).await;
-    assert!(has_staged_scalable_video(&room, &user_id, connection_id));
+    assert!(has_staged_scalable_video(&room, &user_id, connection_id).await);
 
     assert!(session.close(&manager).await);
 
-    assert!(!has_staged_scalable_video(&room, &user_id, connection_id));
+    assert!(!has_staged_scalable_video(&room, &user_id, connection_id).await);
     assert!(!room.test_api().inspect().has_session(&user_id).await);
 }
 
@@ -244,7 +250,7 @@ async fn media_session_close_is_idempotent_after_completed_cleanup() {
 }
 
 #[tokio::test]
-async fn stale_media_session_close_rolls_back_staged_publish_without_removing_replacement() {
+async fn replacement_drains_staged_publish_before_stale_close() {
     let PublisherFixture {
         manager,
         room,
@@ -256,11 +262,23 @@ async fn stale_media_session_close_rolls_back_staged_publish_without_removing_re
     } = build_publisher_fixture(55_208).await;
     establish_session(&mut session, &mut remote).await;
     stage_scalable_video(&mut session).await;
+    let staged_media_id = room
+        .staged_media_id(&user_id, connection_id, TestSourceKind::ScalableVideo)
+        .await
+        .expect("test publish should be staged");
     let replacement = admit_user(&manager, &room, user_id.clone(), &media_transport).await;
+
+    assert!(!has_staged_scalable_video(&room, &user_id, connection_id).await);
+    assert!(
+        media_transport
+            .test_api()
+            .route_entry_by_media_id(staged_media_id)
+            .await
+            .is_none()
+    );
 
     assert!(!session.close(&manager).await);
 
-    assert!(!has_staged_scalable_video(&room, &user_id, connection_id));
     assert_eq!(
         room.test_api().inspect().user_connection_id(&user_id).await,
         Some(replacement.connection_id)
@@ -377,21 +395,38 @@ async fn publish_scalable_video(session: &mut MediaSession, remote: &mut Rtc) {
         .answer(&answer_sdp)
         .await
         .expect("publisher renegotiation answer should commit staged publish");
+    assert_active_publish(&events, TestSourceKind::ScalableVideo);
+}
+
+async fn assert_invalid_answer_is_rejected(session: &mut MediaSession) {
+    let error = session
+        .answer("not an SDP answer")
+        .await
+        .expect_err("invalid answer should be rejected");
+    assert!(error.is_client_error());
+}
+
+fn assert_active_publish(events: &[SessionEvent], stream_type: TestSourceKind) {
     assert_eq!(
         events,
-        vec![SessionEvent::Publication {
-            stream_id: stream_id_for_source(TestSourceKind::ScalableVideo),
-            active: true
+        &[SessionEvent::Publication {
+            stream_id: stream_id_for_source(stream_type),
+            active: true,
         }]
     );
 }
 
-fn has_staged_scalable_video(room: &Room, user_id: &UserId, connection_id: ConnectionId) -> bool {
-    room.test_api().media().has_staged_publish(
+async fn has_staged_scalable_video(
+    room: &Room,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+) -> bool {
+    room.has_staged_publish(
         user_id,
         connection_id,
         &stream_id_for_source(TestSourceKind::ScalableVideo),
     )
+    .await
 }
 
 fn single_renegotiation(events: &[SessionEvent]) -> &NegotiationOffer {

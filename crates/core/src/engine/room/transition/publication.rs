@@ -25,14 +25,14 @@ use tracing::warn;
 
 use super::super::{
     Room, RoomUserOperation,
-    cleanup::TransportCleanupOperation,
     effects::{self, batch::RoomEffectContext},
     media_graph::{ProducerActivityCommit, PublishIntentPlan, ValidatedPublish},
 };
+#[cfg(any(test, feature = "testing-transport"))]
+use crate::engine::{ConnectionId, UserId};
 use crate::{
     PublishIntentOutcome, TransportEffectOutcome, UnpublishIntentOutcome,
     engine::{
-        ConnectionId, UserId,
         media_transport::{AppliedSessionAnswer, TransportAdapterError},
         source_model::{SourcePublishIntent, UserStreamId},
     },
@@ -75,19 +75,22 @@ impl RoomUserOperation<'_> {
         validated_descriptor: ValidatedPublish,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
         let room = self.room;
-        if room.staged_publishes.contains(
-            self.user_id,
-            self.connection_id,
-            &validated_descriptor.stream_id,
-        ) {
+        let is_duplicate = {
+            let state = room.state.read().await;
+            state.staged_publishes.contains(
+                self.user_id,
+                self.connection_id,
+                &validated_descriptor.stream_id,
+            )
+        };
+        if is_duplicate {
             return Ok(PublishStageOutcome::Duplicate);
         }
-        let session_key = validated_descriptor.session_key.clone();
         let rtp_parameters = RouterRtpParameters::default();
         let media = match self
             .media_transport
             .publish_media(
-                &session_key,
+                &validated_descriptor.session_key,
                 validated_descriptor.media_kind,
                 &rtp_parameters,
             )
@@ -106,17 +109,27 @@ impl RoomUserOperation<'_> {
             }
         };
         #[cfg(test)]
-        room.inject_next_duplicate_for_test(&validated_descriptor, media);
+        room.inject_next_duplicate_for_test(&validated_descriptor, media)
+            .await;
         let reserved_publish = StagedPublish::new(validated_descriptor, media);
-        if !room
-            .staged_publishes
-            .stage(
-                reserved_publish,
-                self,
-                "media transport failed to remove duplicated staged publish media",
-            )
-            .await
-        {
+        let duplicate = {
+            let mut state = room.state.write().await;
+            if state
+                .validate_publish_commit(&reserved_publish.descriptor, reserved_publish.media)
+                .is_some()
+            {
+                state.staged_publishes.stage(reserved_publish)
+            } else {
+                Some(reserved_publish)
+            }
+        };
+        if let Some(duplicate) = duplicate {
+            duplicate
+                .cleanup_reserved_media(
+                    self,
+                    "media transport failed to remove duplicated staged publish media",
+                )
+                .await;
             return Ok(PublishStageOutcome::DuplicateAfterReservation);
         }
         Ok(PublishStageOutcome::Staged)
@@ -127,12 +140,13 @@ impl RoomUserOperation<'_> {
         intent: &SourcePublishIntent,
         can_stage: bool,
     ) -> Result<PublishIntentOutcome, TransportAdapterError> {
-        let stream_id = intent.stream_id();
-        if self
-            .room
-            .staged_publishes
-            .contains(self.user_id, self.connection_id, stream_id)
-        {
+        let has_staged_publish = {
+            let state = self.room.state.read().await;
+            state
+                .staged_publishes
+                .contains(self.user_id, self.connection_id, intent.stream_id())
+        };
+        if has_staged_publish {
             return Ok(PublishIntentOutcome::Noop);
         }
         let plan = {
@@ -160,14 +174,20 @@ impl RoomUserOperation<'_> {
         self,
         stream_id: &UserStreamId,
     ) -> Option<TransportEffectOutcome> {
-        self.room
-            .staged_publishes
-            .rollback(
-                stream_id,
-                self,
-                "media transport failed to remove staged publish media during rollback",
-            )
-            .await
+        let staged = {
+            let mut state = self.room.state.write().await;
+            state
+                .staged_publishes
+                .take(self.user_id, self.connection_id, stream_id)
+        }?;
+        Some(
+            staged
+                .cleanup_reserved_media(
+                    self,
+                    "media transport failed to remove staged publish media during rollback",
+                )
+                .await,
+        )
     }
 
     pub(crate) async fn stop_publish(self, stream_id: &UserStreamId) -> UnpublishIntentOutcome {
@@ -185,10 +205,19 @@ impl RoomUserOperation<'_> {
         self,
         applied_answer: &AppliedSessionAnswer,
     ) -> Vec<UserStreamId> {
-        self.room
-            .staged_publishes
-            .commit_answer(self, applied_answer)
-            .await
+        let staged = {
+            let mut state = self.room.state.write().await;
+            state
+                .staged_publishes
+                .take_for_connection(self.user_id, self.connection_id)
+        };
+        let mut committed = Vec::new();
+        for publish in staged {
+            if let Some(stream_id) = publish.commit_from_answer(self, applied_answer).await {
+                committed.push(stream_id);
+            }
+        }
+        committed
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -243,23 +272,17 @@ impl RoomUserOperation<'_> {
 impl Room {
     #[cfg(any(test, feature = "testing-transport"))]
     #[must_use]
-    pub fn has_staged_publish(
+    pub async fn has_staged_publish(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
     ) -> bool {
-        self.staged_publishes
+        self.state
+            .read()
+            .await
+            .staged_publishes
             .contains(user_id, connection_id, stream_id)
-    }
-
-    pub fn drain_staged_publish_cleanup_operations(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> Vec<TransportCleanupOperation> {
-        self.staged_publishes
-            .cleanup_operations_for_connection(user_id, connection_id)
     }
 }
 

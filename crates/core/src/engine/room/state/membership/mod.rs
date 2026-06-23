@@ -211,14 +211,21 @@ impl RoomState {
         home_placement: RouterPlacement,
     ) -> Result<JoinUserOutcome, RoomJoinError> {
         let permissions = permissions.into();
-        let is_new = !self.users.contains_key(user_id);
+        let previous_connection = self.users.get(user_id).map(|user| user.connection_id);
+        let is_new = previous_connection.is_none();
         if is_new && self.users.len() >= self.admission_policy.max_sessions {
             return Err(RoomJoinError::RoomFull);
         }
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
         let placement = self.apply_join_routing(user_id, connection_id, is_new, home_placement)?;
         let routing_receipt = placement.receipt;
-        let media_effects = placement.replacement_effects;
+        let mut media_effects = placement.replacement_effects;
+        if let Some(previous_connection) = previous_connection {
+            media_effects.extend_cleanup(
+                self.staged_publishes
+                    .cleanup_operations_for_connection(user_id, previous_connection),
+            );
+        }
 
         let previous_sender =
             self.install_joined_session(user_id, permissions, sender, connection_id);
@@ -264,7 +271,11 @@ impl RoomState {
 
     fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
         let user = self.users.remove(user_id)?;
-        let media_effects = self.topology.remove_session(user_id, user.connection_id);
+        let mut media_effects = self.topology.remove_session(user_id, user.connection_id);
+        media_effects.extend_cleanup(
+            self.staged_publishes
+                .cleanup_operations_for_connection(user_id, user.connection_id),
+        );
         Some((user, media_effects))
     }
 

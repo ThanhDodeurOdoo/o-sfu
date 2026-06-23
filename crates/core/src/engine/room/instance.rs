@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 
 use super::{
     cleanup::CleanupReconciler, definition::RoomDefinition, factory::RoomInit,
-    placement::LoadTriggeredPlacementState, state::RoomState, transition::StagedPublishes,
+    placement::LoadTriggeredPlacementState, state::RoomState,
 };
 #[cfg(test)]
 use crate::engine::media_transport::TransportMediaId;
@@ -56,7 +56,6 @@ pub struct Room {
     pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) cleanup_reconciler: Mutex<CleanupReconciler>,
-    pub(super) staged_publishes: StagedPublishes,
     pub(super) state: RwLock<RoomState>,
     #[cfg(test)]
     pub(super) duplicate_staged_publish_after_reservation: Mutex<Option<TransportMediaId>>,
@@ -82,7 +81,6 @@ impl Room {
             load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
             metrics: services.metrics,
             cleanup_reconciler: Mutex::new(CleanupReconciler::default()),
-            staged_publishes: StagedPublishes::default(),
             #[cfg(test)]
             duplicate_staged_publish_after_reservation: Mutex::new(None),
             #[cfg(test)]

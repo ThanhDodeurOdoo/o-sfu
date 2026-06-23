@@ -310,11 +310,12 @@ async fn websocket_finish_rolls_back_staged_publish_before_room_cleanup() {
         "publish intent should stage media and request renegotiation"
     );
     assert!(
-        room.test_api().media().has_staged_publish(
+        room.has_staged_publish(
             &core_user_id,
             connection_id,
             &stream_id_for_stream_type(StreamType::Camera),
-        ),
+        )
+        .await,
         "publish should be staged before the user finishes"
     );
 
@@ -489,11 +490,13 @@ async fn wait_for_staged_publish_cleanup(
 ) -> Option<()> {
     timeout(Duration::from_secs(1), async {
         loop {
-            let publish_cleaned = !room.test_api().media().has_staged_publish(
-                user_id,
-                connection_id,
-                &stream_id_for_stream_type(StreamType::Camera),
-            );
+            let publish_cleaned = !room
+                .has_staged_publish(
+                    user_id,
+                    connection_id,
+                    &stream_id_for_stream_type(StreamType::Camera),
+                )
+                .await;
             let connection_closed =
                 room.test_api().inspect().user_connection_id(user_id).await != Some(connection_id);
             if publish_cleaned && connection_closed {

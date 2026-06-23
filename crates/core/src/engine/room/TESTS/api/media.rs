@@ -198,15 +198,4 @@ impl RoomTestMedia<'_> {
             .await
             .is_some()
     }
-
-    #[must_use]
-    pub fn has_staged_publish(
-        self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        stream_id: &UserStreamId,
-    ) -> bool {
-        self.room
-            .has_staged_publish(user_id, connection_id, stream_id)
-    }
 }

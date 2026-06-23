@@ -236,6 +236,7 @@ async fn stage_scalable_video(
         publisher_connection_id,
         TestSourceKind::ScalableVideo,
     )
+    .await
     .expect("test publish should be staged")
 }
 
