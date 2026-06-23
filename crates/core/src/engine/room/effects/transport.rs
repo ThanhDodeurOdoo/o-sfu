@@ -61,13 +61,12 @@ impl RoomTransportPlan {
         origin: ConsumerSetupOrigin,
         mut diagnostics: impl FnMut(&ReceiverRouteActivity) -> DiagnosticsEventData,
     ) {
-        let (activities, setups, relays) = work.into_parts();
-        self.receiver_route_relays.extend(relays);
-        for activity in activities {
+        self.receiver_route_relays.extend(work.relays);
+        for activity in work.activities {
             let event = diagnostics(&activity);
             self.routes.push_activity(activity, event);
         }
-        self.push_pending_consumer_setups(setups, origin);
+        self.push_pending_consumer_setups(work.setups, origin);
     }
 
     pub(super) fn push_keyframes(&mut self, targets: Vec<ConsumerRouteTarget>) {

@@ -6,8 +6,8 @@ use tracing::{error, warn};
 
 use super::{
     super::{RoomMediaCounts, TrackBindingUpdate, outbound::OutboundSender, state::RoomState},
-    ProducerRouteTarget, ProducerRuntimeId, SourceTransportMediaIndexEntry,
-    consumer_setup::PendingConsumerSetup,
+    ProducerRouteTarget, ProducerRuntimeId, ReceiverRouteWork, SourceTransportMediaIndexEntry,
+    subscription::ReceiverRouteScope,
     topology::MediaTopologyEffects,
 };
 use crate::{
@@ -46,7 +46,7 @@ pub struct PublishCommit {
     pub publish_after: RoomMediaCounts,
     pub setup_before: RoomMediaCounts,
     pub setup_after: RoomMediaCounts,
-    pub setups: Vec<PendingConsumerSetup>,
+    pub receiver_route_work: ReceiverRouteWork,
 }
 
 #[derive(Debug)]
@@ -218,21 +218,10 @@ impl RoomState {
             );
             return None;
         }
-        let consume_ready_users = self
-            .users
-            .iter()
-            .filter_map(|(remote_user_id, remote_user)| {
-                remote_user
-                    .negotiation
-                    .can_consume()
-                    .then_some((remote_user_id, remote_user.connection_id))
-            });
-        let consumers = self
-            .topology
-            .consumer_targets_for_producer(producer_id, consume_ready_users);
         let publish_after = self.media_counts();
-        let setup_before = self.media_counts();
-        let setups = self.plan_consumers(consumers);
+        let setup_before = publish_after;
+        let receiver_route_work =
+            self.plan_missing_receiver_routes(ReceiverRouteScope::Producer(producer_id));
         let setup_after = self.media_counts();
         Some(PublishCommit {
             user: owner_user_id,
@@ -243,7 +232,7 @@ impl RoomState {
             publish_after,
             setup_before,
             setup_after,
-            setups,
+            receiver_route_work,
         })
     }
 

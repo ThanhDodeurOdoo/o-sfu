@@ -7,7 +7,7 @@ use tracing::error;
 use super::ConsumerKey;
 use super::{
     super::{RoomMediaCounts, state::RoomState},
-    ConsumerRouteTarget, ConsumerRuntimeId,
+    ConsumerRouteTarget, ConsumerRuntimeId, ProducerRuntimeId,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup, RemoteTrackSetup},
     route_graph::ResolvedRelayRouteEffect,
 };
@@ -51,36 +51,14 @@ pub enum ConsumerRouteState {
 
 #[derive(Debug, Default)]
 pub struct ReceiverRouteWork {
-    activities: Vec<ReceiverRouteActivity>,
-    setups: Vec<PendingConsumerSetup>,
-    relays: Vec<ResolvedRelayRouteEffect>,
+    pub(in crate::engine::room) activities: Vec<ReceiverRouteActivity>,
+    pub(in crate::engine::room) setups: Vec<PendingConsumerSetup>,
+    pub(in crate::engine::room) relays: Vec<ResolvedRelayRouteEffect>,
 }
 
 impl ReceiverRouteWork {
-    pub(in crate::engine::room) fn new(
-        activities: Vec<ReceiverRouteActivity>,
-        setups: Vec<PendingConsumerSetup>,
-        relays: Vec<ResolvedRelayRouteEffect>,
-    ) -> Self {
-        Self {
-            activities,
-            setups,
-            relays,
-        }
-    }
-
     pub(in crate::engine::room) fn route_graph_changed(&self) -> bool {
         !self.activities.is_empty() || !self.setups.is_empty() || !self.relays.is_empty()
-    }
-
-    pub(in crate::engine::room) fn into_parts(
-        self,
-    ) -> (
-        Vec<ReceiverRouteActivity>,
-        Vec<PendingConsumerSetup>,
-        Vec<ResolvedRelayRouteEffect>,
-    ) {
-        (self.activities, self.setups, self.relays)
     }
 }
 
@@ -90,6 +68,13 @@ pub struct ReceiverRouteCommit {
     pub(in crate::engine::room) after: RoomMediaCounts,
     pub(in crate::engine::room) media_worker_id: MediaWorkerId,
     pub(in crate::engine::room) work: ReceiverRouteWork,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ReceiverRouteScope<'a> {
+    Producer(ProducerRuntimeId),
+    Receiver(&'a UserId, ConnectionId),
+    SourceUser(&'a UserId, ConnectionId, &'a UserId),
 }
 
 impl RoomState {
@@ -141,12 +126,14 @@ impl RoomState {
         self.persist_intents(user_id, target_user_id, intents);
         let (updates, relays) =
             self.apply_route_updates(user_id, connection_id, target_user_id, intents);
-        let setups = self.plan_consumers(self.missing_targets_for_peer(
-            user_id,
-            connection_id,
-            target_user_id,
-        ));
-        ReceiverRouteWork::new(updates, setups, relays)
+        let ReceiverRouteWork { setups, .. } = self.plan_missing_receiver_routes(
+            ReceiverRouteScope::SourceUser(user_id, connection_id, target_user_id),
+        );
+        ReceiverRouteWork {
+            activities: updates,
+            setups,
+            relays,
+        }
     }
 
     fn persist_intents(
@@ -187,10 +174,10 @@ impl RoomState {
             user.negotiation.can_consume()
         };
         let before = self.media_counts();
-        let setups = if can_consume {
-            self.plan_consumers(self.missing_targets(user_id, connection_id))
+        let work = if can_consume {
+            self.plan_missing_receiver_routes(ReceiverRouteScope::Receiver(user_id, connection_id))
         } else {
-            Vec::new()
+            ReceiverRouteWork::default()
         };
         let after = self.media_counts();
         Some(ReceiverRouteCommit {
@@ -200,7 +187,7 @@ impl RoomState {
                 .topology
                 .routing()
                 .media_worker_id_for_connection(connection_id),
-            work: ReceiverRouteWork::new(Vec::new(), setups, Vec::new()),
+            work,
         })
     }
 
@@ -217,10 +204,22 @@ impl RoomState {
         if !user.negotiation.can_consume() {
             return Some(Vec::new());
         }
-        Some(self.plan_consumers(self.missing_targets(user_id, connection_id)))
+        let ReceiverRouteWork { setups, .. } =
+            self.plan_missing_receiver_routes(ReceiverRouteScope::Receiver(user_id, connection_id));
+        Some(setups)
     }
 
-    pub fn plan_consumers(
+    pub(super) fn plan_missing_receiver_routes(
+        &mut self,
+        scope: ReceiverRouteScope<'_>,
+    ) -> ReceiverRouteWork {
+        ReceiverRouteWork {
+            setups: self.plan_consumers(self.missing_receiver_route_targets(scope)),
+            ..Default::default()
+        }
+    }
+
+    fn plan_consumers(
         &mut self,
         mut targets: Vec<ConsumerSetupTarget>,
     ) -> Vec<PendingConsumerSetup> {
@@ -299,25 +298,30 @@ impl RoomState {
         (updates, relays)
     }
 
-    fn missing_targets(
+    fn missing_receiver_route_targets(
         &self,
-        user_id: &UserId,
-        consumer_connection_id: ConnectionId,
+        scope: ReceiverRouteScope<'_>,
     ) -> Vec<ConsumerSetupTarget> {
-        self.topology
-            .missing_consumer_targets(user_id, consumer_connection_id, |_| true)
-    }
-
-    fn missing_targets_for_peer(
-        &self,
-        user_id: &UserId,
-        consumer_connection_id: ConnectionId,
-        target_user_id: &UserId,
-    ) -> Vec<ConsumerSetupTarget> {
-        self.topology
-            .missing_consumer_targets(user_id, consumer_connection_id, |producer| {
-                producer.owner_user_id == *target_user_id
-            })
+        match scope {
+            ReceiverRouteScope::Producer(producer_id) => {
+                let receivers = self.users.iter().filter_map(|(user, state)| {
+                    state
+                        .negotiation
+                        .can_consume()
+                        .then_some((user, state.connection_id))
+                });
+                self.topology
+                    .missing_consumer_targets_for_producer(producer_id, receivers)
+            }
+            ReceiverRouteScope::Receiver(user, connection) => self
+                .topology
+                .missing_consumer_targets(user, connection, |_| true),
+            ReceiverRouteScope::SourceUser(user, connection, source_user_id) => self
+                .topology
+                .missing_consumer_targets(user, connection, |producer| {
+                    producer.owner_user_id == *source_user_id
+                }),
+        }
     }
 
     fn plan_consumer(&mut self, target: ConsumerSetupTarget) -> Option<PendingConsumerSetup> {
