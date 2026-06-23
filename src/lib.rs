@@ -1,3 +1,8 @@
+//! this crate is the main runtime of o-sfu
+//! it load config builds the runtime services, exposes the
+//! HTTP contract and hosts the WebSocket protocol used by discuss clients
+//! TODO: write more doc
+
 pub mod config;
 pub mod core {
     pub use o_sfu_core::{prelude, server};

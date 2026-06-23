@@ -1,3 +1,65 @@
+//! `SfuCore` turns a process media transport into [`MediaSession`] handles
+//! each handle represent one admitted user connection in one room
+//! callers use it to drive the browser offer/answer lifecycle and then express
+//! publish, subscribe, recording and cleanup intent without improting room or
+//! transport internals
+//!
+//! ```text
+//! SfuCore -> MediaSession
+//!
+//! establish -> send offer -> answer
+//! publish   -> maybe send renegotiation -> answer
+//! subscribe -> room state only
+//! close     -> rollback staged media and remove the connection
+//! ```
+//!
+//! negotiation is serialize through `&mut MediaSession`
+//! a new offer is not craeted while another offer is awaiting an answer
+//! publish intent received during that widnow is queued and replayed after the
+//! accepted answer
+//!
+//! # Examples
+//!
+//! the server runtime follows this shape when a websocket user enter a room
+//!
+//! ```no_run
+//! use std::sync::Arc;
+//!
+//! use o_sfu_core::{
+//!     prelude::{
+//!         ConnectionId, NegotiationOffer, SessionEvent, SfuCore, SourcePublishIntent,
+//!     },
+//!     server::{room::Room, session::UserId},
+//! };
+//!
+//! # async fn send_offer(_: NegotiationOffer) {}
+//! # async fn project_events(_: Vec<SessionEvent>) {}
+//! # async fn example(
+//! #     core: SfuCore,
+//! #     room: Arc<Room>,
+//! #     user_id: UserId,
+//! #     connection_id: ConnectionId,
+//! #     publish_intent: SourcePublishIntent,
+//! #     initial_answer_sdp: String,
+//! # ) -> Result<(), Box<dyn std::error::Error>> {
+//! let mut session = core.session(&room, &user_id, connection_id).await;
+//!
+//! if let Some(offer) = session.establish().await? {
+//!     send_offer(offer).await;
+//! }
+//!
+//! let events = session.answer(&initial_answer_sdp).await?;
+//! project_events(events).await;
+//!
+//! let events = session.publish(publish_intent).await?;
+//! project_events(events).await;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! [`SessionEvent::Renegotiation`] caries the follow-up offer that must be sent
+//! to the client before the matching answer is passed back to [`MediaSession::answer`]
+
 use std::{collections::BTreeMap, mem::take, sync::Arc};
 
 use crate::{
@@ -14,39 +76,68 @@ use crate::{
     },
 };
 
+/// server-authored SDP offer plus upload metadata for the client
+///
+/// the SDP is transport state
+/// callers should send it to the client unchanged and use `upload_slots` only
+/// to project browser-facing source setup hints
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegotiationOffer {
     /// do not parse this outside the transport boundary for routing decisions
     pub sdp: String,
+    /// media sections the client may publish after applying the offer
     pub upload_slots: Vec<UploadSlot>,
 }
 
+/// one offered upload media section
+///
+/// `mid` binds this slot to the SDP media section
+/// `kind`, `codecs` and `simulcast_encodings` are compatibility metadata for
+/// the protocol layer
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadSlot {
+    /// SDP media section id for this upload slot
     pub mid: String,
+    /// audio or video kind accepted on this media section
     pub kind: o_sfu_router::MediaKind,
+    /// codec names accepted for this upload slot
     pub codecs: Vec<String>,
+    /// simulcast layers the client may announce for this upload slot
     pub simulcast_encodings: Vec<UploadEncoding>,
 }
 
+/// one upload encoding offered to the client
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadEncoding {
+    /// RTP stream id that should appear in RID or simulcast signaling
     pub rid: String,
+    /// optional send bitrate ceiling for this encoding
     pub max_bitrate: Option<Bitrate>,
+    /// optional inverse scale from source resolution
     pub resolution_scale: Option<u16>,
+    /// optional frame-rate ceiling for this encoding
     pub max_framerate: Option<u16>,
 }
 
+/// media-session negotiation phase
+///
+/// queued publishes live beside the offer state so a user action that arrives
+/// while a browser answer is pneding cannot interleave with the in-flight SDP
+/// exchange
 #[derive(Debug, Default)]
 enum SessionPhase {
+    /// no initial offer has been created yet
     #[default]
     BeforeInitialOffer,
+    /// no offer is awaiting an answer
     Stable {
         queued_publishes: BTreeMap<UserStreamId, SourcePublishIntent>,
     },
+    /// one offer has been sent and must be answered before the next offer
     WaitingForAnswer(InFlightOffer),
 }
 
+/// in-flight offer state plus mutations deferred until its answer is accepted
 #[derive(Debug)]
 struct InFlightOffer {
     purpose: SessionOfferPurpose,
@@ -54,6 +145,7 @@ struct InFlightOffer {
     follow_up_renegotiation: bool,
 }
 
+/// outcome of asking the phase machine for a new renegotiation offer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenegotiationDecision {
     CreateOfferNow,
@@ -153,21 +245,29 @@ impl SessionPhase {
     }
 }
 
+/// reason an offer is waiting for an answer
 #[derive(Debug, Clone)]
 enum SessionOfferPurpose {
     EstablishSession,
     RefreshSession,
 }
 
+/// error returned by [`MediaSession`] operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SessionError {
+    /// [`MediaSession::answer`] was called without an in-flight offer
     #[error("no pending media request")]
     NoPendingRequest,
+    /// lower core operation failed or rejected the request
     #[error(transparent)]
     Core(#[from] SfuCoreError),
 }
 
 impl SessionError {
+    /// whether the runtime should report the error as a client or protocol fault
+    ///
+    /// transport failures that indicate malformed client input are client
+    /// errors, while infrastructure failures are internal errors
     #[must_use]
     pub const fn is_client_error(self) -> bool {
         match self {
@@ -177,9 +277,15 @@ impl SessionError {
     }
 }
 
+/// event produced by a media-session mutation
+///
+/// callers must project these events before accepting the next client command
+/// a renegotiation event starts a new offer-answer round
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
+    /// send the offer to the client and later call [`MediaSession::answer`]
     Renegotiation(NegotiationOffer),
+    /// update user publication info after a publish state change committed
     Publication {
         stream_id: UserStreamId,
         active: bool,
@@ -188,19 +294,25 @@ pub enum SessionEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SfuCoreError {
+    /// media transport command failed
     #[error("transport operation failed")]
     Transport(#[source] TransportAdapterError),
+    /// accepted answer did not yield client capabilities needed by room state
     #[error("capability projection failed")]
     CapabilityProjection(#[source] TransportAdapterError),
+    /// initial answer was valid transport input but stale for room state
     #[error("session negotiation rejected")]
     SessionNegotiationRejected,
+    /// refresh answer was valid transport input but stale for room state
     #[error("session refresh rejected")]
     SessionRefreshRejected,
+    /// subscription intent targeted a stale or invalid room connection
     #[error("subscription update rejected")]
     SubscriptionUpdateRejected,
 }
 
 impl SfuCoreError {
+    /// whether this error should close the client as a protocol fault
     #[must_use]
     pub const fn is_client_error(self) -> bool {
         matches!(
@@ -214,12 +326,23 @@ impl SfuCoreError {
     }
 }
 
+/// cloneable core handle used to create room-bound media sessions
+///
+/// `SfuCore` owns no room state
+/// it holds the media transport service that every [`MediaSession`] uses when a
+/// room mutation needs WebRTC work
 #[derive(Debug, Clone)]
 pub struct SfuCore {
     media_transport: MediaTransport,
 }
 
-/// mutating calls revalidate the connection before committing room state
+/// one user connection in one room
+///
+/// mutating methods revalidate the connection through `RoomUserOperation`
+/// before committing room state
+/// if another connection replaced the user, negotiation or subscription calls
+/// return client-visible errors and [`close`](Self::close) rolls back staged
+/// media without removing the replacement
 #[derive(Debug)]
 pub struct MediaSession {
     core: SfuCore,
@@ -237,6 +360,11 @@ impl SfuCore {
         Self { media_transport }
     }
 
+    /// builds a media session for a room user after deriving its transport key
+    ///
+    /// use this when the caller only knows the room, user id and connection id
+    /// `session_with_transport_key` is cheaper when admission already returned
+    /// the key
     #[must_use]
     pub async fn session(
         &self,
@@ -248,6 +376,7 @@ impl SfuCore {
         self.session_with_transport_key(room, user_id, connection_id, transport_user_key)
     }
 
+    /// builds a media session from the transport key returned by room admission
     #[must_use]
     pub fn session_with_transport_key(
         &self,
@@ -269,6 +398,12 @@ impl SfuCore {
 }
 
 impl MediaSession {
+    /// creates the first browser offer for this connection
+    ///
+    /// returns `Ok(None)` after the initial offer has already been requested
+    /// this lets reconnect or duplicate-start paths retry safely without
+    /// creating a second initial offer
+    ///
     /// # Errors
     ///
     /// returns [`SessionError::Core`] when the transport cannot create the
@@ -289,10 +424,18 @@ impl MediaSession {
         Ok(Some(offer))
     }
 
+    /// accepts the answer for the pending offer and commits any ready room work
+    ///
+    /// an invalid answer leaves the pending offer in place, so the caller may
+    /// pass a later valid answer for the same request
+    /// when queued publish intent needs another SDP round the returned events
+    /// contain [`SessionEvent::Renegotiation`]
+    ///
     /// # Errors
     ///
     /// returns [`SessionError::NoPendingRequest`] when no offer is pending
-    /// returns [`SessionError::Core`] when answer application fails
+    /// returns [`SessionError::Core`] when answer application fails, capability
+    /// projection fails or room state rejects the accepted answer as stale
     pub async fn answer(&mut self, sdp: &str) -> Result<Vec<SessionEvent>, SessionError> {
         let Some(purpose) = self.phase.pending_offer_purpose() else {
             return Err(SessionError::NoPendingRequest);
@@ -341,6 +484,44 @@ impl MediaSession {
         Ok(events)
     }
 
+    /// applies publish intent for one user stream
+    ///
+    /// returns no events when the intent is already queued, already active or
+    /// must wait for an in-flight answer
+    /// returns [`SessionEvent::Renegotiation`] when the browser must answer a
+    /// new offer before the publication can commit
+    ///
+    /// # Examples
+    ///
+    /// publish intent received before an in-flight offer is answered is queued
+    /// and replayed after the answer is accepted
+    ///
+    /// ```no_run
+    /// use o_sfu_core::prelude::{
+    ///     MediaSession, SessionError, SessionEvent, SourcePublishIntent,
+    /// };
+    ///
+    /// # async fn example(
+    /// #     mut session: MediaSession,
+    /// #     intent: SourcePublishIntent,
+    /// #     initial_answer_sdp: String,
+    /// # ) -> Result<(), SessionError> {
+    /// let Some(_initial_offer) = session.establish().await? else {
+    ///     return Ok(());
+    /// };
+    ///
+    /// let events = session.publish(intent).await?;
+    /// assert!(events.is_empty());
+    ///
+    /// let events = session.answer(&initial_answer_sdp).await?;
+    /// let _follow_up = events.into_iter().find_map(|event| match event {
+    ///     SessionEvent::Renegotiation(offer) => Some(offer),
+    ///     SessionEvent::Publication { .. } => None,
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Errors
     ///
     /// returns [`SessionError::Core`] when the media backend cannot stage a
@@ -371,6 +552,13 @@ impl MediaSession {
         }
     }
 
+    /// removes queued, staged or live publish intent for one stream
+    ///
+    /// queued and staged publishes are cancelled without a client-visible
+    /// publication event
+    /// live publications emit `Publication { active: false }` and may require a
+    /// refresh offer for the browser
+    ///
     /// # Errors
     ///
     /// returns [`SessionError::Core`] when follow-up renegotiation fails after
@@ -401,6 +589,13 @@ impl MediaSession {
         }
     }
 
+    /// closes this media session and removes its room connection if still current
+    ///
+    /// the call is idempotent
+    /// it returns `true` only when the room manager removed the current
+    /// connection
+    /// stale sessions still roll back staged media during cleanup, but they do
+    /// not remove a replacement connection for the same user
     pub async fn close(&mut self, rooms: &RoomManager) -> bool {
         if self.closed {
             return false;
@@ -418,6 +613,13 @@ impl MediaSession {
         did_close
     }
 
+    /// creates a refresh offer when the stable session needs renegotiation
+    ///
+    /// returns `Ok(None)` before the initial offer, while an answer is pending
+    /// or when the transport reports that the requested refresh is unsupported
+    /// a call made while an answer is pending records that another offer should
+    /// be created after the answer commits
+    ///
     /// # Errors
     ///
     /// returns [`SessionError::Core`] when the transport rejects
@@ -443,6 +645,13 @@ impl MediaSession {
         Ok(Some(offer))
     }
 
+    /// applies receiver intent for sources published by another user
+    ///
+    /// subscription intent is remembered even when no producer is currently
+    /// routable
+    /// once negotiation makes the receiver consumable, room effects create the
+    /// missing consumer routes
+    ///
     /// # Errors
     ///
     /// returns [`SessionError::Core`] when room state rejects this connection
@@ -531,6 +740,11 @@ impl MediaSession {
             .await
     }
 
+    /// starts recording if recording is enabled and this connection may control it
+    ///
+    /// the facade remains async for compatibility with callers that await the
+    /// recording API even when the current implementation rejects recording
+    /// synchronously
     #[must_use]
     #[expect(
         clippy::unused_async,
@@ -541,6 +755,10 @@ impl MediaSession {
             .apply_recording_start(&self.user_id, self.connection_id, options)
     }
 
+    /// stops recording if recording is enabled and this connection may control it
+    ///
+    /// returns `false` when recording is disabled or the room rejects the
+    /// control request
     #[must_use]
     #[expect(
         clippy::unused_async,

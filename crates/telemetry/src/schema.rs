@@ -1,3 +1,10 @@
+//! telemetry event and field names
+//!
+//! runtime logs, traces and diagnostics use these constants so observability
+//! names are reviewed in one place
+//! call sites should import schema names instead of hard-codding event or field
+//! strings when the name is part of the public telemetry contract
+
 #[allow(
     dead_code,
     reason = "The event catalog intentionally grows ahead of call-site rollout so observability names stay centralized across phases."
