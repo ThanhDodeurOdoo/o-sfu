@@ -68,7 +68,7 @@ jobs:
       - name: Configure GitHub Pages
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         # actions/configure-pages v5
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
 
       - name: Upload rustdoc site
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
