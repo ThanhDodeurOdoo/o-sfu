@@ -1,4 +1,4 @@
-import type { TrackBinding } from "../protocol.js";
+import type { TrackBinding } from "../protocol_contract.js";
 import type { StreamType } from "../public_api.js";
 import type { ProtocolCoreProvider } from "../runtime_contract.js";
 

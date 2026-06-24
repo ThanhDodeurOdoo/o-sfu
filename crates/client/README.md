@@ -29,8 +29,8 @@ still heavily logging the sfu_client.ts, maybe need to cleanup at some point
 ### public parts:
 
 - `src/public_api.ts`: Odoo-facing client API, events, states and compatibility types
-- `src/protocol.ts`: stable public facade for curated signaling envelope and payload types
-- `src/protocol_contract.ts`: handwritten browser signaling contract with host-command literals plus envelope and payload aliases
+- `src/protocol.ts`: source-package facade for `WS_CLOSE_CODE`
+- `src/protocol_contract.ts`: internal browser signaling contract with host-command literals and envelope and payload aliases
 - `src/runtime_contract.ts`: protocol-core provider boundary and provider wrapping
 - `src/protocol_host_commands.ts`: host-command types, shape validation and injected-core order validation
 - `src/public_api_validation.ts`: public state, update and source descriptor validation
@@ -47,7 +47,7 @@ still heavily logging the sfu_client.ts, maybe need to cleanup at some point
 - `src/internals/validation.ts`: input validation and cloning helpers.
 - `scripts/odoo_entry.ts`: sync Odoo bundle entrypoint to bootstrap the protocol WASM.
 - `scripts/build_odoo_bundle.mjs`: builds and validates `dist/odoo_sfu.js`,
-  including the exported `__info__` metadata
+  including the exported `__info__` metadata and the absence of protocol internals
 - `scripts/build_wasm_runtime.mjs`: regenerates the `client/generated/` WASM package from `protocol/`.
 - `test/`: Node unit tests
 - `playwright/`: full stack tests with playwright

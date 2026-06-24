@@ -1,4 +1,4 @@
-import type { TrackBinding } from "../protocol.js";
+import type { TrackBinding } from "../protocol_contract.js";
 import {
     CLIENT_UPDATE,
     type ClientUpdateDetail,

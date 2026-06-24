@@ -6,10 +6,9 @@ import {
     type SfuStats,
     type StreamType
 } from "../public_api.js";
-import type { NegotiationUploadSlot } from "../protocol.js";
 import type { NegotiationKind } from "../protocol_contract.js";
 import type { ClientPeerConnection } from "./browser_types.js";
-import type { LocalUploads } from "./local_uploads.js";
+import type { LocalUploads, UploadSlot } from "./local_uploads.js";
 import type { RemoteTracks } from "./remote_tracks.js";
 import { localDescriptionHasOnlyInactiveMedia } from "./sdp_media_direction.js";
 
@@ -105,7 +104,7 @@ export class PeerSession {
         requestId: string,
         negotiationKind: NegotiationKind,
         offerSdp: string,
-        uploadSlots: NegotiationUploadSlot[]
+        uploadSlots: UploadSlot[]
     ): Promise<NegotiationAnswer | null> {
         const peer = this._activePeer;
         if (!peer) {

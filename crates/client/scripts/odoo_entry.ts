@@ -28,6 +28,5 @@ configureDefaultWasmProtocolCoreProvider(() => {
     return new ProtocolCoreWasm() as unknown as ProtocolCoreBindings;
 });
 
-export * from "../src/protocol.ts";
 export * from "../src/public_api.ts";
 export * from "../src/sfu_client.ts";
