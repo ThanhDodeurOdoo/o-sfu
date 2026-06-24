@@ -1079,38 +1079,53 @@ pub const fn is_rtcp_mux_payload_type(payload_type: u8) -> bool {
             || payload_type > RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_END)
 }
 
-/// RTCP packet type codes defined by RFC 3550 section 12.1.
-pub const RTCP_PACKET_TYPE_SR: u8 = 200;
-pub const RTCP_PACKET_TYPE_RR: u8 = 201;
-pub const RTCP_PACKET_TYPE_SDES: u8 = 202;
-pub const RTCP_PACKET_TYPE_BYE: u8 = 203;
-pub const RTCP_PACKET_TYPE_APP: u8 = 204;
-/// RTCP transport-layer feedback packet type.
+/// rtcp common-header `PT` value namespace
 ///
-/// Reference: RFC 4585 section 6.1.
-pub const RTCP_PACKET_TYPE_RTPFB: u8 = 205;
-/// RTCP payload-specific feedback packet type.
-///
-/// Reference: RFC 4585 section 6.1.
-pub const RTCP_PACKET_TYPE_PSFB: u8 = 206;
+/// reference: RFC 3550 section 12.1 and RFC 4585 section 6.1
+pub mod rtcp_packet_type {
+    /// sender report packet
+    pub const SR: u8 = 200;
+    /// receiver report packet
+    pub const RR: u8 = 201;
+    /// source description packet
+    pub const SDES: u8 = 202;
+    /// goodbye packet
+    pub const BYE: u8 = 203;
+    /// application-defined packet
+    pub const APP: u8 = 204;
 
-/// RTCP SDES item type codes from RFC 3550 section 12.2.
-pub const RTCP_SDES_ITEM_CNAME: u8 = 1;
-pub const RTCP_SDES_ITEM_NAME: u8 = 2;
-pub const RTCP_SDES_ITEM_EMAIL: u8 = 3;
-pub const RTCP_SDES_ITEM_PHONE: u8 = 4;
-pub const RTCP_SDES_ITEM_LOC: u8 = 5;
-pub const RTCP_SDES_ITEM_TOOL: u8 = 6;
-pub const RTCP_SDES_ITEM_NOTE: u8 = 7;
-pub const RTCP_SDES_ITEM_PRIV: u8 = 8;
-/// RTCP SDES item type for `RtpStreamId`.
+    /// transport-layer feedback packet
+    pub const RTPFB: u8 = 205;
+    /// payload-specific feedback packet
+    pub const PSFB: u8 = 206;
+}
+
+/// rtcp SDES item `type` value namespace
 ///
-/// Reference: RFC 8852 section 4.1.
-pub const RTCP_SDES_ITEM_RTP_STREAM_ID: u8 = 12;
-/// RTCP SDES item type for `RepairedRtpStreamId`.
-///
-/// Reference: RFC 8852 section 4.2.
-pub const RTCP_SDES_ITEM_REPAIRED_RTP_STREAM_ID: u8 = 13;
+/// reference: RFC 3550 section 12.2 and RFC 8852 section 4
+pub mod rtcp_sdes_item {
+    /// canonical end-point identifier
+    pub const CNAME: u8 = 1;
+    /// user name
+    pub const NAME: u8 = 2;
+    /// email address
+    pub const EMAIL: u8 = 3;
+    /// phone number
+    pub const PHONE: u8 = 4;
+    /// geographic location
+    pub const LOC: u8 = 5;
+    /// application or tool name
+    pub const TOOL: u8 = 6;
+    /// transient note
+    pub const NOTE: u8 = 7;
+    /// private extension item
+    pub const PRIV: u8 = 8;
+
+    /// RTP stream identifier carried in an SDES packet
+    pub const RTP_STREAM_ID: u8 = 12;
+    /// RTP stream repaired by a redundancy stream
+    pub const REPAIRED_RTP_STREAM_ID: u8 = 13;
+}
 
 /// RTCP feedback FMT values.
 pub mod rtcp_feedback_format {
