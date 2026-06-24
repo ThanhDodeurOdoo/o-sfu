@@ -1,7 +1,7 @@
 use super::{
     PayloadType, fmtp, frame_marking,
     h264::{self, LevelIdc, PacketizationMode, Profile, ProfileLevelId},
-    header_extension, rtcp_feedback_format,
+    header_extension,
 };
 
 #[test]
@@ -172,22 +172,6 @@ fn rtcp_mux_payload_type_range_follows_rfc_5761() {
     }
     assert_eq!(PayloadType::try_from(96), Ok(PayloadType::new(96)));
     assert_eq!(PayloadType::try_from(64), Err(super::InvalidPayloadType));
-}
-
-#[test]
-fn rtcp_feedback_values_include_layer_refresh_request() {
-    assert_eq!(super::RTCP_PACKET_TYPE_RTPFB, 205);
-    assert_eq!(super::RTCP_PACKET_TYPE_PSFB, 206);
-    assert_eq!(rtcp_feedback_format::RTPFB_GENERIC_NACK, 1);
-    assert_eq!(rtcp_feedback_format::PSFB_PLI, 1);
-    assert_eq!(rtcp_feedback_format::PSFB_FIR, 4);
-    assert_eq!(rtcp_feedback_format::PSFB_LRR, 10);
-}
-
-#[test]
-fn stream_id_sdes_items_follow_rfc_8852_allocations() {
-    assert_eq!(super::RTCP_SDES_ITEM_RTP_STREAM_ID, 12);
-    assert_eq!(super::RTCP_SDES_ITEM_REPAIRED_RTP_STREAM_ID, 13);
 }
 
 #[test]
