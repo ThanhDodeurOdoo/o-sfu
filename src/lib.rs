@@ -36,8 +36,10 @@
 //!                            |
 //!                            v
 //!                  core::MediaTransport
-//!                            |
-//!                            v
+//!                          | | |
+//!                          | | |  (multi-threaded)
+//!                          | | |
+//!                          v v v
 //!                       core::Worker
 //!  UDP Socket IN ----->  RTP fanout ------>  relays / sinks / UDP socket OUT
 //! ```
@@ -137,12 +139,12 @@
 //! both paths are authenticated before they reach room state
 //!
 //!
-//! the HTTP path is repersented by [`http::CHANNEL_PATH`],
-//! [`http::CreateRoomQuery`], [`auth::HttpRoomClaims`] and
-//! [`http::RoomResponse`]
-//! the WebSocket path is represented by [`websocket::decode_auth_payload_text`],
-//! [`auth::WebSocketConnectClaims`], [`auth::MAX_JWT_TOKEN_BYTES`] and
-//! [`websocket::ClientBatchDecodeError`]
+//! the HTTP controller parses server-to-server requests using [`http::CreateRoomQuery`]
+//! and validates authorization via [`auth::HttpRoomClaims`] before returning a [`http::RoomResponse`].
+//!
+//! the WebSocket client connection frame is parsed by [`websocket::decode_auth_payload_text`],
+//! enforcing bounds like [`auth::MAX_JWT_TOKEN_BYTES`] and validating user authorization
+//! via [`auth::WebSocketConnectClaims`] before establishing a session.
 //!
 //! decoded JWT claims are not trusted until the token is verified with the key
 //! selected for that room,
