@@ -11,7 +11,8 @@ use o_sfu_router::test_support::rtp_samples::{
 
 use super::super::super::{
     Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
-    UserOutboundSender, media_graph::ConsumerRouteState, transition::PublishStageOutcome,
+    UserOutbound, UserOutboundReceiver, UserOutboundSender, media_graph::ConsumerRouteState,
+    transition::PublishStageOutcome,
 };
 use crate::{
     MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
@@ -38,7 +39,11 @@ fn media_transport() -> MediaTransport {
 }
 
 fn test_sender() -> UserOutboundSender {
-    UserOutboundSender::channel(1024, Arc::new(RuntimeMetrics::default())).0
+    test_outbound().0
+}
+
+fn test_outbound() -> (UserOutboundSender, UserOutboundReceiver) {
+    UserOutboundSender::channel(1024, Arc::new(RuntimeMetrics::default()))
 }
 
 fn pause_scalable_video_intents() -> BTreeMap<UserStreamId, SourceSubscriptionIntent> {
@@ -61,15 +66,27 @@ async fn join_negotiated_user(
     user_id: &UserId,
     create_transport_session: bool,
 ) -> ConnectionId {
+    join_negotiated_user_with_sender(
+        room,
+        media_transport,
+        user_id,
+        create_transport_session,
+        test_sender(),
+    )
+    .await
+}
+
+async fn join_negotiated_user_with_sender(
+    room: &Arc<Room>,
+    media_transport: &MediaTransport,
+    user_id: &UserId,
+    create_transport_session: bool,
+    sender: UserOutboundSender,
+) -> ConnectionId {
     let connection_id = room
         .test_api()
         .lifecycle()
-        .join_user(
-            user_id.clone(),
-            None,
-            UserPermissions::default(),
-            test_sender(),
-        )
+        .join_user(user_id.clone(), None, UserPermissions::default(), sender)
         .await
         .expect("test user should join");
     if create_transport_session {
@@ -90,6 +107,14 @@ async fn join_negotiated_user(
         Some(())
     );
     connection_id
+}
+
+fn drain_setup_track(rx: &mut UserOutboundReceiver) -> bool {
+    let mut found = false;
+    while let Ok(message) = rx.try_recv() {
+        found |= matches!(message, UserOutbound::SetupRemoteTrack(_));
+    }
+    found
 }
 
 async fn setup_subscription_room(
@@ -172,6 +197,28 @@ async fn setup_subscription_room_with_manager(
     UserId,
     ConnectionId,
 ) {
+    setup_subscription_room_with_sender(
+        manager,
+        issuer,
+        create_subscriber_transport_session,
+        test_sender(),
+    )
+    .await
+}
+
+async fn setup_subscription_room_with_sender(
+    manager: RoomManager,
+    issuer: &str,
+    create_subscriber_transport_session: bool,
+    subscriber_sender: UserOutboundSender,
+) -> (
+    Arc<Room>,
+    MediaTransport,
+    UserId,
+    ConnectionId,
+    UserId,
+    ConnectionId,
+) {
     let room = manager
         .serve_room(issuer, "room", &RoomConfig::default(), None)
         .await;
@@ -180,11 +227,12 @@ async fn setup_subscription_room_with_manager(
     let subscriber_id = UserId::Integer(2);
     let publisher_connection_id =
         join_negotiated_user(&room, &media_transport, &publisher_id, true).await;
-    let subscriber_connection_id = join_negotiated_user(
+    let subscriber_connection_id = join_negotiated_user_with_sender(
         &room,
         &media_transport,
         &subscriber_id,
         create_subscriber_transport_session,
+        subscriber_sender,
     )
     .await;
     (
@@ -373,6 +421,7 @@ async fn receiver_intent_updates_transport_route_activity() {
 
 #[tokio::test]
 async fn transport_consume_failure_releases_pending_setup_for_retry() {
+    let (subscriber_sender, mut subscriber_rx) = test_outbound();
     let (
         room,
         media_transport,
@@ -380,7 +429,14 @@ async fn transport_consume_failure_releases_pending_setup_for_retry() {
         publisher_connection_id,
         subscriber_id,
         subscriber_connection_id,
-    ) = setup_subscription_room(false).await;
+    ) = setup_subscription_room_with_sender(
+        RoomManager::for_test(),
+        "issuer-transition-subscription-outbound",
+        false,
+        subscriber_sender,
+    )
+    .await;
+    assert!(!drain_setup_track(&mut subscriber_rx));
     let source_media_id = publish_scalable_video(
         &room,
         &media_transport,
@@ -389,7 +445,18 @@ async fn transport_consume_failure_releases_pending_setup_for_retry() {
     )
     .await;
 
-    assert_eq!(room.test_api().inspect().consumer_count().await, 0);
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .consumer_route_state(
+                &subscriber_id,
+                &publisher_id,
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+            )
+            .await,
+        Some(ConsumerRouteState::Absent)
+    );
+    assert!(!drain_setup_track(&mut subscriber_rx));
     let subscriber_session_key = room
         .transport_user_key(&subscriber_id, subscriber_connection_id)
         .await;
@@ -405,6 +472,7 @@ async fn transport_consume_failure_releases_pending_setup_for_retry() {
         Some(())
     );
     assert_eq!(room.test_api().inspect().consumer_count().await, 1);
+    assert!(drain_setup_track(&mut subscriber_rx));
     assert!(
         media_transport
             .test_api()
