@@ -8,6 +8,10 @@ import { CLIENT_UPDATE, SFU_CLIENT_STATE, SfuClient, __info__ } from "/bundle/od
 const sfu = new SfuClient();
 ```
 
+The Odoo bundle public surface is the client facade plus the public API
+catalogs. Browser integrations should not construct websocket protocol
+envelopes directly from this bundle.
+
 The compatibility bundle is built with:
 
 ```bash
