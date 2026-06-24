@@ -229,6 +229,8 @@ jobs:
 
           the container SBOM is attached to this release as \`${{ steps.release.outputs.sbom_asset }}\`
 
+          Read the [DEPLOYMENT.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/DEPLOYMENT.md) for more information.
+
           EOF
 
       - name: Create GitHub release
