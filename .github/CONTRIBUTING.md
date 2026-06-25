@@ -52,10 +52,6 @@ If you want to make a PR that does substantial changes to the codebase, before w
 - **Defined Assertions**: Use the `!` operator only when you are absolutely certain the value is neither `null` nor `undefined`. It may require a comment.
 - **Enforce immutability**: When possible, enforce immutability (`as const` / `readonly`).
 
-## Tooling
-
-if running rust-analyzer and on an OS that is not linux, I recommend adding `"rust-analyzer.cargo.target": "x86_64-unknown-linux-gnu"` to your settngs.
-
 ## Verification
 
 Verification commands and the `tests/` layout are at [tests/README.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/tests/README.md).
