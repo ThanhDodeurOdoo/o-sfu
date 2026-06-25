@@ -8,10 +8,10 @@ use o_sfu_model::UserId;
 use crate::{
     ids::{ConnectionId, MediaWorkerId, ProducerId as RouterProducerId, RouterId, SessionId},
     rtp::MediaKind as RouterMediaKind,
-    state::{ConsumerCapability, RouterError},
+    state::{ConsumerCapability, ConsumerRouteState, RouterError},
     topology::{
-        RoutedProducerId, RouterPlacement, RouterPlacements, RouterPlacementsError, RoutingError,
-        RoutingTopology,
+        RoutedConsumerId, RoutedProducerId, RouterPlacement, RouterPlacements,
+        RouterPlacementsError, RoutingError, RoutingTopology,
     },
 };
 
@@ -36,6 +36,20 @@ fn join_on_router(
             placement(router, media_worker),
         )
         .map(|_| ())
+}
+
+fn add_active_consumer(
+    topology: &mut RoutingTopology,
+    consumer_user_id: &UserId,
+    producer_id: RoutedProducerId,
+    capability: ConsumerCapability,
+) -> Result<RoutedConsumerId, RoutingError> {
+    topology.add_consumer_with_route_state(
+        consumer_user_id,
+        producer_id,
+        capability,
+        ConsumerRouteState::Active,
+    )
 }
 
 #[test]
@@ -77,9 +91,13 @@ fn topology_returns_router_scoped_entity_handles() {
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .expect("producer should be routed");
 
-    let consumer = topology
-        .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
-        .expect("consumer should be routed");
+    let consumer = add_active_consumer(
+        &mut topology,
+        &consumer_user_id,
+        producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("consumer should be routed");
 
     assert_eq!(producer.router_id(), RouterId(9));
     assert_eq!(consumer.router_id(), RouterId(9));
@@ -118,9 +136,13 @@ fn topology_replacement_rehomes_and_prunes_old_receiver_shadow() {
     let producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .expect("producer should be routed");
-    topology
-        .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
-        .expect("consumer should be routed");
+    add_active_consumer(
+        &mut topology,
+        &consumer_user_id,
+        producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("consumer should be routed");
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
@@ -199,9 +221,13 @@ fn topology_routes_cross_router_consumers_through_source_router() {
     let producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .expect("producer should be routed");
-    let consumer = topology
-        .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
-        .expect("consumer should be routed");
+    let consumer = add_active_consumer(
+        &mut topology,
+        &consumer_user_id,
+        producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("consumer should be routed");
 
     assert_eq!(producer.router_id(), RouterId(9));
     assert_eq!(consumer.router_id(), RouterId(9));
@@ -227,9 +253,13 @@ fn topology_prunes_receiver_shadow_when_cross_router_endpoint_leaves() {
         let producer = topology
             .add_producer(&producer_user_id, RouterMediaKind::Audio)
             .expect("producer should be routed");
-        topology
-            .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
-            .expect("consumer should be routed");
+        add_active_consumer(
+            &mut topology,
+            &consumer_user_id,
+            producer,
+            ConsumerCapability::Compatible,
+        )
+        .expect("consumer should be routed");
 
         assert_eq!(
             topology.mapped_session_count_for_router(RouterId(9)),
@@ -269,27 +299,27 @@ fn topology_keeps_receiver_shadow_until_last_source_router_consumer_is_removed()
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .expect("second producer should be routed");
 
-    topology
-        .add_consumer(
-            &consumer_user_id,
-            first_producer,
-            ConsumerCapability::Compatible,
-        )
-        .expect("first consumer should be routed");
-    topology
-        .add_consumer(
-            &second_consumer_user_id,
-            first_producer,
-            ConsumerCapability::Compatible,
-        )
-        .expect("second consumer should be routed");
-    topology
-        .add_consumer(
-            &consumer_user_id,
-            second_producer,
-            ConsumerCapability::Compatible,
-        )
-        .expect("second consumer should be routed");
+    add_active_consumer(
+        &mut topology,
+        &consumer_user_id,
+        first_producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("first consumer should be routed");
+    add_active_consumer(
+        &mut topology,
+        &second_consumer_user_id,
+        first_producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("second consumer should be routed");
+    add_active_consumer(
+        &mut topology,
+        &consumer_user_id,
+        second_producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("second consumer should be routed");
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
@@ -318,9 +348,13 @@ fn topology_remove_consumer_prunes_cross_router_shadow() {
     let producer = topology
         .add_producer(&producer_user_id, RouterMediaKind::Audio)
         .expect("producer should be accepted");
-    let consumer = topology
-        .add_consumer(&consumer_user_id, producer, ConsumerCapability::Compatible)
-        .expect("consumer should be accepted");
+    let consumer = add_active_consumer(
+        &mut topology,
+        &consumer_user_id,
+        producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("consumer should be accepted");
 
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
@@ -344,7 +378,8 @@ fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
     let missing_consumer_user_id = UserId::Integer(20);
 
     assert_eq!(
-        topology.add_consumer(
+        add_active_consumer(
+            &mut topology,
             &missing_consumer_user_id,
             RoutedProducerId::new(RouterId(9), RouterProducerId(1)),
             ConsumerCapability::Compatible,
@@ -362,7 +397,8 @@ fn topology_rejects_consumer_on_missing_attached_router() {
     assert!(join_on_router(&mut topology, &consumer_user_id, 0, 9, 0).is_ok());
 
     assert_eq!(
-        topology.add_consumer(
+        add_active_consumer(
+            &mut topology,
             &consumer_user_id,
             RoutedProducerId::new(RouterId(99), RouterProducerId(1)),
             ConsumerCapability::Compatible,

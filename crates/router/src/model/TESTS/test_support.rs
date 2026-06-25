@@ -103,6 +103,13 @@ impl RouterStateSnapshot {
     }
 
     #[must_use]
+    pub fn session_state(&self, session_id: SessionId) -> Option<SessionState> {
+        self.sessions
+            .iter()
+            .find_map(|(id, state)| (*id == session_id).then_some(*state))
+    }
+
+    #[must_use]
     pub fn contains_transport(&self, transport_id: TransportId) -> bool {
         self.transport(transport_id).is_some()
     }
@@ -427,6 +434,11 @@ pub mod proof {
         #[must_use]
         pub fn contains_consumer(&self, consumer_id: ConsumerId) -> bool {
             self.router.consumers.contains_key(&consumer_id)
+        }
+
+        #[must_use]
+        pub fn session_count(&self) -> usize {
+            self.router.sessions.len()
         }
 
         #[must_use]

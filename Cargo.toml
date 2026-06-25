@@ -157,6 +157,7 @@ workspace = true
 
 [dev-dependencies]
 o-sfu-core = { workspace = true, features = ["testing-transport"] }
+o-sfu-protocol = { workspace = true, features = ["test-support"] }
 o-sfu-telemetry = { workspace = true, features = ["test-support"] }
 o-sfu-router = { workspace = true, features = ["test-support"] }
 str0m.workspace = true

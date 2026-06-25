@@ -296,24 +296,6 @@ impl RuntimeState {
             pre_auth_websocket_admission,
         }
     }
-
-    #[cfg(test)]
-    fn for_config_parts(
-        config: &Config,
-        rooms: Arc<RoomManager>,
-        diagnostics: Arc<DiagnosticsStore>,
-        metrics: Arc<RuntimeMetrics>,
-        media_transport: MediaTransport,
-    ) -> Self {
-        let runtime_config = RuntimeConfig::from_config(config);
-        Self::from_parts(
-            &runtime_config,
-            rooms,
-            diagnostics,
-            metrics,
-            media_transport,
-        )
-    }
 }
 
 /// room state decides which producer layers should remain routable from room-level

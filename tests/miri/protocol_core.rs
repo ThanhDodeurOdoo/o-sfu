@@ -32,8 +32,9 @@ fn recovery_replay_splits_session_and_publication_phases() {
     let mut core = ProtocolCore::new();
 
     assert_eq!(
-        core.connect("wss://sfu.example.com/socket", "signed-token", None),
-        vec![
+        core.connect("wss://sfu.example.com/socket", "signed-token", None)
+            .as_slice(),
+        &[
             Command::EmitStateChange {
                 state: ConnectionState::Connecting,
                 cause: None,
@@ -145,8 +146,8 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
 
     assert!(core.on_timer(99_999).is_empty());
     assert_eq!(
-        core.on_timer(stop_request.timeout_timer_id),
-        vec![
+        core.on_timer(stop_request.timeout_timer_id).as_slice(),
+        &[
             Command::CancelTimer {
                 id: stop_request.timeout_timer_id,
             },
@@ -158,8 +159,8 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
     );
     assert!(core.on_timer(stop_request.timeout_timer_id).is_empty());
     assert_eq!(
-        core.on_timer(start_request.timeout_timer_id),
-        vec![
+        core.on_timer(start_request.timeout_timer_id).as_slice(),
+        &[
             Command::CancelTimer {
                 id: start_request.timeout_timer_id,
             },
@@ -185,8 +186,8 @@ fn negotiation_answer_mismatches_do_not_resolve_pending_request() {
         }),
     });
     assert_eq!(
-        core.on_ws_message(&offer_frame),
-        vec![
+        core.on_ws_message(&offer_frame).as_slice(),
+        &[
             Command::CreatePeerConnection,
             Command::ApplyNegotiation {
                 request_id: RequestId::new("offer-1"),
@@ -244,16 +245,16 @@ fn malformed_server_batches_close_the_socket_with_protocol_error() {
     let mut core = ProtocolCore::new();
 
     assert_eq!(
-        core.on_ws_message("{not json"),
-        vec![Command::CloseWebSocket {
+        core.on_ws_message("{not json").as_slice(),
+        &[Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
     );
 
     let invalid_envelope = r#"[{"t":"offer","p":{"sdp":"v=0\r\n"},"q":"1","r":"2"}]"#;
     assert_eq!(
-        core.on_ws_message(invalid_envelope),
-        vec![Command::CloseWebSocket {
+        core.on_ws_message(invalid_envelope).as_slice(),
+        &[Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
     );
@@ -276,8 +277,8 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
         binding.clone(),
     ])));
     assert_eq!(
-        core.on_ws_message(&track_frame),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&track_frame).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::TrackSnapshot {
                 bindings: vec![binding],
             },
@@ -296,8 +297,8 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
         source.clone(),
     ])));
     assert_eq!(
-        core.on_ws_message(&source_frame),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&source_frame).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::SourceSnapshot {
                 sources: vec![source],
             },
@@ -316,8 +317,8 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
     };
 
     assert_eq!(
-        core.disconnect(),
-        vec![
+        core.disconnect().as_slice(),
+        &[
             Command::CancelTimer { id: 1 },
             Command::CancelTimer { id: 2 },
             Command::CancelTimer {

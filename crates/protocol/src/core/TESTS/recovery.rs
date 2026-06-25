@@ -12,8 +12,8 @@ fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
 
     assert_eq!(core.state(), ConnectionState::Disconnected);
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::CancelTimer {
                 id: RECOVERY_TIMER_ID,
             },
@@ -58,8 +58,8 @@ fn protocol_core_terminal_close_resolves_request_before_recovery_cancel() -> Res
 
     assert_eq!(core.state(), ConnectionState::Closed);
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::CancelTimer {
                 id: timeout_timer_id,
             },
@@ -118,8 +118,8 @@ fn protocol_core_non_terminal_close_enters_recovering() {
 
     assert_eq!(core.state(), ConnectionState::Recovering);
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::ClosePeerConnection,
             Command::EmitStateChange {
                 state: ConnectionState::Recovering,
@@ -169,8 +169,8 @@ fn protocol_core_replays_sticky_session_intents_after_recovery_authentication() 
         })
     );
     assert_eq!(
-        envelopes,
-        vec![
+        envelopes.as_slice(),
+        &[
             ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
                 user_id: String::from("peer-7").into(),
                 states: DownloadStates {
@@ -226,8 +226,8 @@ fn protocol_core_replays_sticky_publish_when_recovery_transport_is_ready() {
         })
     );
     assert_eq!(
-        envelopes,
-        vec![ClientEnvelope::Message(ClientMessage::Publish(
+        envelopes.as_slice(),
+        &[ClientEnvelope::Message(ClientMessage::Publish(
             StreamIntentPayload {
                 stream_type: StreamType::Camera,
             },
@@ -281,8 +281,8 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
     let envelopes = decode_sent_client_envelopes(&commands);
 
     assert_eq!(
-        envelopes,
-        vec![
+        envelopes.as_slice(),
+        &[
             ClientEnvelope::Message(ClientMessage::Subscribe(SubscribePayload {
                 user_id: String::from("peer-7").into(),
                 states: DownloadStates {
@@ -314,8 +314,8 @@ fn protocol_core_recovery_timer_retries_the_saved_url() {
 
     assert_eq!(core.state(), ConnectionState::Connecting);
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::EmitStateChange {
                 state: ConnectionState::Connecting,
                 cause: None,
@@ -343,8 +343,8 @@ fn protocol_core_fresh_connect_supersedes_pending_recovery() {
 
     assert_eq!(core.state(), ConnectionState::Connecting);
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::CancelTimer {
                 id: RECOVERY_TIMER_ID,
             },
@@ -386,8 +386,8 @@ fn protocol_core_successful_recovery_resets_backoff_delay() {
     let commands = core.on_ws_close(1011);
 
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::ClosePeerConnection,
             Command::EmitStateChange {
                 state: ConnectionState::Recovering,
@@ -411,8 +411,8 @@ fn protocol_core_terminal_close_enters_closed_with_cause() {
 
     assert_eq!(core.state(), ConnectionState::Closed);
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::CancelTimer {
                 id: RECOVERY_TIMER_ID,
             },
@@ -437,8 +437,8 @@ fn protocol_core_protocol_error_close_is_terminal() {
     assert_eq!(core.state(), ConnectionState::Closed);
     assert!(core.connect_context.is_none());
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::CancelTimer {
                 id: RECOVERY_TIMER_ID,
             },

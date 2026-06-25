@@ -76,7 +76,7 @@ async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() -> TestRes
             ProtocolSessionId::Integer(91),
             ProtocolSessionInfo {
                 is_camera_on: Some(true),
-                ..ProtocolSessionInfo::snapshot_defaults()
+                ..ProtocolSessionInfo::default().snapshot_complete()
             },
         )
         .await,
@@ -290,7 +290,7 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() -> TestR
             ProtocolSessionInfo {
                 is_self_muted: Some(false),
                 is_raising_hand: Some(true),
-                ..ProtocolSessionInfo::snapshot_defaults()
+                ..ProtocolSessionInfo::default().snapshot_complete()
             },
         )])))
     );
@@ -318,7 +318,7 @@ async fn protocol_core_propagates_raise_hand_info_over_real_server_user_flow() -
             bundle_session_info_key(&ProtocolSessionId::Integer(92)),
             ProtocolSessionInfo {
                 is_raising_hand: Some(true),
-                ..ProtocolSessionInfo::snapshot_defaults()
+                ..ProtocolSessionInfo::default().snapshot_complete()
             },
         )])))
     );

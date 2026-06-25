@@ -1,3 +1,5 @@
+use o_sfu_protocol::host::test_support::track_binding as protocol_track_binding;
+
 use super::support::*;
 
 #[tokio::test]
@@ -56,7 +58,7 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         "bob should consume the translated track-removal snapshot",
     )?;
     assert!(removed_tracks.is_empty());
-    assert_eq!(bob.core.track_binding(&track_mid), None);
+    assert_eq!(protocol_track_binding(&bob.core, &track_mid), None);
     require_some(
         bob.read_server_frame().await,
         "subscriber should receive the removal renegotiation request",
@@ -100,7 +102,7 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
     assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
     assert!(published_track.active);
     assert_eq!(
-        bob.core.track_binding(&published_track.mid),
+        protocol_track_binding(&bob.core, &published_track.mid),
         Some(published_track)
     );
 
@@ -404,7 +406,7 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
         "committed unpublish should clear the authoritative track snapshot"
     );
     assert_eq!(
-        bob.core.track_binding(&published_track.mid),
+        protocol_track_binding(&bob.core, &published_track.mid),
         None,
         "committed unpublish should remove the cached track binding"
     );
@@ -422,7 +424,7 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
             bundle_session_info_key(&ProtocolSessionId::Integer(77)),
             ProtocolSessionInfo {
                 is_camera_on: Some(false),
-                ..ProtocolSessionInfo::snapshot_defaults()
+                ..ProtocolSessionInfo::default().snapshot_complete()
             },
         )]))),
         "committed unpublish should clear the publisher camera flag in the observable peer info"
@@ -546,7 +548,7 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
     let unpublish_info = ProtocolSessionInfo {
         is_camera_on: Some(false),
         is_screen_sharing_on: Some(true),
-        ..ProtocolSessionInfo::snapshot_defaults()
+        ..ProtocolSessionInfo::default().snapshot_complete()
     };
     let unpublish_update = BundleUpdate::SessionInfoChange(BTreeMap::from([(
         bundle_session_info_key(&ProtocolSessionId::Integer(79)),

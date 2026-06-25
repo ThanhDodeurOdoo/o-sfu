@@ -9,7 +9,7 @@ pub(crate) async fn consume_peer_joined_update(
         peer.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&user_id),
-            ProtocolSessionInfo::snapshot_defaults(),
+            ProtocolSessionInfo::default().snapshot_complete(),
         )]))),
         "peer join should project into the post-auth user-info update surface"
     );

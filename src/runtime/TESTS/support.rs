@@ -16,6 +16,7 @@ use crate::{
             MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits,
             test_support::test_rtc_port_range,
         },
+        options::RuntimeConfig,
         room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
             RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps,
@@ -158,8 +159,9 @@ impl RuntimeTestBuilder {
                 metrics: Arc::clone(&metrics),
             },
         ));
-        let state = RuntimeState::for_config_parts(
-            &self.config,
+        let runtime_config = RuntimeConfig::from_config(&self.config);
+        let state = RuntimeState::from_parts(
+            &runtime_config,
             Arc::clone(&room_manager),
             diagnostics,
             metrics,

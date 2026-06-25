@@ -10,7 +10,7 @@ use crate::engine::{
     RoomInstanceId, UserId,
     media_transport::{
         TransportMediaId, TransportSessionKey,
-        test_support::{sample_forwarded_packet, test_transport_session_key},
+        test_support::{ForwardedPacket, sample_forwarded_packet, test_transport_session_key},
     },
     metrics::RtpForwardDestinationKind,
     packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache, RoomPacketSinkRegistry},
@@ -76,13 +76,32 @@ fn register_recording_sink<T>(
     registry.register_room(room_instance_id, sink, RtpForwardDestinationKind::Recording);
 }
 
+fn write_packet(
+    registry: &RoomPacketSinkRegistry,
+    packet: &ForwardedPacket,
+    transport_media_id: TransportMediaId,
+) {
+    let Some(src_key) = packet.stable_src_key() else {
+        return;
+    };
+    let Some(sink) = registry.sink_for_room(src_key.room_instance_id()) else {
+        return;
+    };
+    sink.record_packet(
+        src_key,
+        transport_media_id,
+        packet.received_at(),
+        packet.payload(),
+    );
+}
+
 #[test]
 fn packet_sink_registry_is_a_noop_when_no_room_is_active() {
     let registry = RoomPacketSinkRegistry::default();
     let session_key = test_transport_session_key(10, 0, 1, UserId::Integer(1));
     let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
 
-    registry.write_packet(&packet, TransportMediaId::default());
+    write_packet(&registry, &packet, TransportMediaId::default());
 }
 
 #[test]
@@ -105,8 +124,8 @@ fn packet_sink_registry_routes_packets_only_for_active_rooms() {
         RoomInstanceId::from_raw(10),
         Arc::<CountingSink>::clone(&counting_sink),
     );
-    registry.write_packet(&active_packet, TransportMediaId::new(3));
-    registry.write_packet(&inactive_packet, TransportMediaId::new(4));
+    write_packet(&registry, &active_packet, TransportMediaId::new(3));
+    write_packet(&registry, &inactive_packet, TransportMediaId::new(4));
 
     assert_eq!(counting_sink.frames.load(Ordering::Relaxed), 1);
 }
@@ -188,8 +207,8 @@ fn packet_sink_registry_keeps_multiple_rooms_active_at_once() {
         RoomInstanceId::from_raw(11),
         Arc::<CountingSink>::clone(&second_sink),
     );
-    registry.write_packet(&first_packet, TransportMediaId::new(3));
-    registry.write_packet(&second_packet, TransportMediaId::new(4));
+    write_packet(&registry, &first_packet, TransportMediaId::new(3));
+    write_packet(&registry, &second_packet, TransportMediaId::new(4));
 
     assert_eq!(first_sink.frames.load(Ordering::Relaxed), 1);
     assert_eq!(second_sink.frames.load(Ordering::Relaxed), 1);
@@ -210,7 +229,7 @@ fn packet_sink_registry_records_forwarded_payload_bytes_through_the_shared_bound
         RoomInstanceId::from_raw(12),
         Arc::<PayloadCapturingSink>::clone(&sink),
     );
-    registry.write_packet(&packet, TransportMediaId::new(5));
+    write_packet(&registry, &packet, TransportMediaId::new(5));
 
     let payloads = lock_unpoisoned(&sink.payloads).clone();
     assert_eq!(payloads.as_slice(), [b"captured".to_vec()]);

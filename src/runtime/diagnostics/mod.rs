@@ -32,5 +32,3 @@ pub(crate) use queries::{
     user_detail_response, workers_response,
 };
 pub(crate) use types::DiagnosticsUserLookup;
-#[cfg(test)]
-pub(crate) use types::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection};

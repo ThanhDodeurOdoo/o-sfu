@@ -12,7 +12,7 @@ use crate::{
     bundle_api::BundleConnectionState,
     core::{
         Command, CommandBatch, NegotiationKind, PendingRequest, PendingRequestKind, ProtocolCore,
-        ProtocolEvent, ProtocolRequestResult,
+        ProtocolEvent, ProtocolRequestResult, test_support::command_batch,
     },
     shared::{StreamType, UserId},
     signaling::{RequestId, SourceDescriptor, TrackBinding},
@@ -44,7 +44,7 @@ fn core_snapshot_uses_public_state_labels() {
 #[test]
 fn host_command_bridge_converts_commands_to_camel_case_payloads() {
     let host_commands = project_commands(
-        CommandBatch::try_from_vec(vec![
+        command_batch(vec![
             Command::ApplyNegotiation {
                 request_id: RequestId::new("7"),
                 kind: NegotiationKind::Renegotiate,
@@ -139,7 +139,7 @@ fn host_request_result_serializes_pending_request_fields() {
 #[test]
 fn host_command_bridge_emits_source_update_for_source_snapshot() {
     let host_commands = project_commands(
-        CommandBatch::try_from_vec(vec![Command::EmitEvent {
+        command_batch(vec![Command::EmitEvent {
             event: ProtocolEvent::SourceSnapshot {
                 sources: vec![SourceDescriptor {
                     source_id: String::from("source-7"),
@@ -177,7 +177,7 @@ fn host_command_bridge_emits_source_update_for_source_snapshot() {
 #[test]
 fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
     let host_commands = project_commands(
-        CommandBatch::try_from_vec(vec![Command::EmitEvent {
+        command_batch(vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
                 user_id: UserId::Integer(9),
             },
@@ -210,7 +210,7 @@ fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
 #[test]
 fn host_command_bridge_preserves_simple_commands() {
     let host_command = project_commands(
-        CommandBatch::try_from_vec(vec![Command::CloseWebSocket { code: 4107 }])
+        command_batch(vec![Command::CloseWebSocket { code: 4107 }])
             .expect("valid test command batch"),
     )
     .into_iter()

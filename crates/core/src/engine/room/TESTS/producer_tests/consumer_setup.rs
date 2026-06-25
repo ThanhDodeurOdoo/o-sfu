@@ -141,7 +141,7 @@ async fn negotiated_publish_commit_sets_up_consumers_on_real_rtc() {
         &scenario.media_transport,
         &publisher_session_key,
         &mut publisher_remote,
-        scenario.publisher_initial_offer.into_sdp(),
+        scenario.publisher_initial_offer.into_parts().0,
     )
     .await;
 
@@ -163,7 +163,7 @@ async fn negotiated_publish_commit_sets_up_consumers_on_real_rtc() {
         &scenario.media_transport,
         &publisher_session_key,
         &mut publisher_remote,
-        publish_offer.into_sdp(),
+        publish_offer.into_parts().0,
     )
     .await;
     let negotiated_parameters = scenario

@@ -113,7 +113,7 @@ pub(crate) async fn consume_camera_publish_setup(
         publisher_user_id.clone(),
         ProtocolSessionInfo {
             is_camera_on: Some(true),
-            ..ProtocolSessionInfo::snapshot_defaults()
+            ..ProtocolSessionInfo::default().snapshot_complete()
         },
     )
     .await?;

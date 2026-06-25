@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::test_support::track_binding;
 
 #[test]
 fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() {
@@ -33,27 +34,27 @@ fn protocol_core_tracks_server_mid_bindings_and_clears_stale_snapshot_entries() 
     ])));
 
     assert_eq!(
-        core.on_ws_message(&first_tracks),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&first_tracks).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::TrackSnapshot {
                 bindings: vec![peer_1_audio.clone(), peer_2_camera.clone()],
             },
         }]
     );
-    assert_eq!(core.track_binding("0"), Some(&peer_1_audio));
-    assert_eq!(core.track_binding("1"), Some(&peer_2_camera));
+    assert_eq!(track_binding(&core, "0"), Some(&peer_1_audio));
+    assert_eq!(track_binding(&core, "1"), Some(&peer_2_camera));
 
     assert_eq!(
-        core.on_ws_message(&second_tracks),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&second_tracks).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::TrackSnapshot {
                 bindings: vec![peer_2_camera_inactive.clone()],
             },
         }]
     );
-    assert_eq!(core.track_binding("0"), None);
-    assert_eq!(core.track_binding("1"), None);
-    assert_eq!(core.track_binding("2"), Some(&peer_2_camera_inactive));
+    assert_eq!(track_binding(&core, "0"), None);
+    assert_eq!(track_binding(&core, "1"), None);
+    assert_eq!(track_binding(&core, "2"), Some(&peer_2_camera_inactive));
 }
 
 #[test]
@@ -85,15 +86,15 @@ fn protocol_core_peer_left_clears_track_bindings_for_that_session() {
     )));
 
     assert_eq!(
-        core.on_ws_message(&peer_left),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&peer_left).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
                 user_id: String::from("peer-1").into(),
             },
         }]
     );
-    assert_eq!(core.track_binding("0"), None);
-    assert!(core.track_binding("1").is_some());
+    assert_eq!(track_binding(&core, "0"), None);
+    assert!(track_binding(&core, "1").is_some());
 }
 
 #[test]
@@ -115,8 +116,8 @@ fn protocol_core_peer_left_does_not_rewrite_source_snapshots() {
     ])));
 
     assert_eq!(
-        core.on_ws_message(&sources),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&sources).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::SourceSnapshot {
                 sources: vec![source],
             },
@@ -130,8 +131,8 @@ fn protocol_core_peer_left_does_not_rewrite_source_snapshots() {
     )));
 
     assert_eq!(
-        core.on_ws_message(&peer_left),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&peer_left).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
                 user_id: String::from("peer-1").into(),
             },
@@ -178,8 +179,8 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
     )));
 
     assert_eq!(
-        core.on_ws_message(&peer_info_frame),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&peer_info_frame).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::PeerInfo {
                 user_id: String::from("peer-1").into(),
                 info: UserInfo {
@@ -190,16 +191,16 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
         }]
     );
     assert_eq!(
-        core.on_ws_message(&peer_left_frame),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&peer_left_frame).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
                 user_id: String::from("peer-1").into(),
             },
         }]
     );
     assert_eq!(
-        core.on_ws_message(&broadcast_frame),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&broadcast_frame).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::Broadcast {
                 sender_id: String::from("peer-2").into(),
                 message: serde_json::json!({ "body": "hello" }),
@@ -207,8 +208,8 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
         }]
     );
     assert_eq!(
-        core.on_ws_message(&recording_frame),
-        vec![Command::EmitEvent {
+        core.on_ws_message(&recording_frame).as_slice(),
+        &[Command::EmitEvent {
             event: ProtocolEvent::RecordingStateChanged {
                 state: RecordingStateUpdate {
                     state: RecordingState {

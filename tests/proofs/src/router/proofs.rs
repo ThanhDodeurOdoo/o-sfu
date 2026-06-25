@@ -281,7 +281,7 @@ fn assert_symbolic_trace_invariants(router: &Router) {
     let consumer_40 = view.contains_consumer(ConsumerId(40));
     let consumer_41 = view.contains_consumer(ConsumerId(41));
 
-    assert!(router.session_count() == present(session_1) + present(session_2));
+    assert!(view.session_count() == present(session_1) + present(session_2));
     assert!(
         view.transport_count()
             == present(transport_10)
@@ -401,7 +401,7 @@ fn assert_route_trace_invariants(router: &Router, command: RouteTraceCommand) {
     assert!(view.contains_producer(ProducerId(31)));
     assert!(view.contains_consumer(ConsumerId(40)));
     assert!(view.contains_consumer(ConsumerId(41)));
-    assert!(router.session_count() == 2);
+    assert!(view.session_count() == 2);
     assert!(view.transport_count() == 4);
     assert!(view.producer_count() == 2);
     assert!(view.consumer_count() == 2);
