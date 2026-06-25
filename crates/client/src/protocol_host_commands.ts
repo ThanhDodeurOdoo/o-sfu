@@ -21,7 +21,6 @@ import {
     validateClientUpdate,
     validateOptionalArray,
     validateSessionId,
-    validateSourceDescriptor,
     validateStreamType,
     validateStringEnum,
     validateConnectionState
@@ -263,9 +262,6 @@ function validateTrackBinding(value: unknown, context: string): void {
     validateSessionId(binding.sessionId, `${context}.sessionId`);
     validateStreamType(binding.type, `${context}.type`);
     requireBoolean(binding.active, `${context}.active`);
-    if (binding.source !== undefined) {
-        validateSourceDescriptor(binding.source, `${context}.source`);
-    }
 }
 
 function validateNegotiationUploadSlot(value: unknown, context: string): void {

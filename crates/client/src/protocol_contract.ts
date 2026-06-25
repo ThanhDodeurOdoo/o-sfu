@@ -88,7 +88,6 @@ export type TrackBinding = {
     sessionId: SessionId;
     type: StreamType;
     active: boolean;
-    source?: SourceDescriptor;
 };
 
 export type PeerInfoPayload = {
