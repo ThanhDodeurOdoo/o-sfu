@@ -1,3 +1,5 @@
+use std::mem;
+
 use o_sfu_router::MediaKind;
 use tracing::warn;
 
@@ -19,7 +21,8 @@ use crate::{
                 ReceiverRouteActivity, ReceiverRouteWork, ResolvedRelayRouteEffect,
             },
             source_policy::{
-                ConsumerPacketSelectionUpdate, SourcePolicyWakeups, TransportPacketSelectionUpdate,
+                ConsumerPacketSelectionUpdate, SourcePolicyCommit, SourcePolicyWakeups,
+                TransportPacketSelectionUpdate,
             },
         },
     },
@@ -48,7 +51,11 @@ impl RoomTransportPlan {
         active: bool,
         diagnostics: DiagnosticsEventData,
     ) {
-        self.routes.push_producer(source, active, diagnostics);
+        self.routes.producers.push(ProducerEffect {
+            source,
+            active,
+            diagnostics,
+        });
     }
 
     pub(super) fn push_receiver_work(
@@ -60,7 +67,9 @@ impl RoomTransportPlan {
         self.receiver_route_relays.extend(work.relays);
         for activity in work.activities {
             let event = diagnostics(&activity);
-            self.routes.push_activity(activity, event);
+            self.routes
+                .consumers
+                .push(ConsumerEffect::Activity(activity, event));
         }
         self.setups.extend(
             work.setups
@@ -71,7 +80,7 @@ impl RoomTransportPlan {
 
     pub(super) fn push_keyframes(&mut self, targets: Vec<ConsumerRouteTarget>) {
         for target in targets {
-            self.routes.push_keyframe(target);
+            self.routes.consumers.push(ConsumerEffect::Keyframe(target));
         }
     }
 
@@ -98,6 +107,27 @@ impl RoomTransportPlan {
         }
         outcome
     }
+
+    pub(super) async fn execute_source_policy_route_control(
+        commit: SourcePolicyCommit,
+        media_transport: &MediaTransport,
+    ) -> SourcePolicyCommit {
+        let SourcePolicyCommit(mut plan) = commit;
+        let receiver_bwe_targets = mem::take(&mut plan.receiver_bwe_targets);
+        let packet_updates = mem::take(&mut plan.route_packet_updates);
+        let routes = RoomRouteBatch {
+            producers: Vec::new(),
+            consumers: packet_updates
+                .into_iter()
+                .map(ConsumerEffect::SourceSelection)
+                .collect(),
+            receiver_bwe_targets,
+        };
+        let route_outcome = routes.execute(media_transport).await;
+        plan.state_packet_updates
+            .extend(route_outcome.packet_updates);
+        SourcePolicyCommit(plan)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -109,40 +139,14 @@ pub(super) struct RoomTransportOutcome {
 
 #[derive(Debug, Default)]
 #[must_use = "room route batches must be executed after being populated"]
-pub struct RoomRouteBatch {
+pub(super) struct RoomRouteBatch {
     producers: Vec<ProducerEffect>,
     consumers: Vec<ConsumerEffect>,
     receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
 }
 
 impl RoomRouteBatch {
-    pub fn push_producer(
-        &mut self,
-        source: TransportSourceKey,
-        active: bool,
-        diagnostics: DiagnosticsEventData,
-    ) {
-        self.producers.push(ProducerEffect {
-            source,
-            active,
-            diagnostics,
-        });
-    }
-
-    pub fn push_activity(
-        &mut self,
-        activity: ReceiverRouteActivity,
-        diagnostics: DiagnosticsEventData,
-    ) {
-        self.consumers
-            .push(ConsumerEffect::Activity(activity, diagnostics));
-    }
-
-    pub fn push_keyframe(&mut self, target: ConsumerRouteTarget) {
-        self.consumers.push(ConsumerEffect::Keyframe(target));
-    }
-
-    pub fn push_setup_activity(
+    pub(super) fn push_setup_activity(
         &mut self,
         route: TransportConsumerRoute,
         kind: MediaKind,
@@ -155,15 +159,7 @@ impl RoomRouteBatch {
         });
     }
 
-    pub fn push_source_selection(&mut self, update: TransportPacketSelectionUpdate) {
-        self.consumers.push(ConsumerEffect::SourceSelection(update));
-    }
-
-    pub fn set_receiver_bwe_targets(&mut self, updates: Vec<ReceiverBweTargetUpdate>) {
-        self.receiver_bwe_targets = updates;
-    }
-
-    pub async fn execute(self, media_transport: &MediaTransport) -> RoomRouteOutcome {
+    pub(super) async fn execute(self, media_transport: &MediaTransport) -> RoomRouteOutcome {
         let Self {
             producers,
             consumers,
@@ -193,16 +189,14 @@ impl RoomRouteBatch {
         }
         plan.set_receiver_bwe_targets(receiver_bwe_targets);
         let route_outcome = media_transport.apply_route_control(plan).await;
-        let producer_results = route_outcome.producers;
-        let consumer_results = route_outcome.consumers;
-        debug_assert_eq!(producers.len(), producer_results.len());
-        debug_assert_eq!(consumers.len(), consumer_results.len());
+        debug_assert_eq!(producers.len(), route_outcome.producers.len());
+        debug_assert_eq!(consumers.len(), route_outcome.consumers.len());
 
         let mut outcome = RoomRouteOutcome::default();
-        for (producer, result) in producers.into_iter().zip(producer_results) {
+        for (producer, result) in producers.into_iter().zip(route_outcome.producers) {
             producer.finish(result.is_err(), &mut outcome);
         }
-        for (consumer, result) in consumers.into_iter().zip(consumer_results) {
+        for (consumer, result) in consumers.into_iter().zip(route_outcome.consumers) {
             consumer.finish(result, &mut outcome);
         }
         outcome
@@ -210,9 +204,9 @@ impl RoomRouteBatch {
 }
 
 #[derive(Debug, Default)]
-pub struct RoomRouteOutcome {
-    pub diagnostics: Vec<DiagnosticsEventData>,
-    pub packet_updates: Vec<ConsumerPacketSelectionUpdate>,
+pub(super) struct RoomRouteOutcome {
+    diagnostics: Vec<DiagnosticsEventData>,
+    packet_updates: Vec<ConsumerPacketSelectionUpdate>,
 }
 
 #[derive(Debug)]
@@ -257,8 +251,7 @@ impl ConsumerEffect {
             Self::SetupActivity { route, active, .. } => {
                 finish_setup_activity(&route, active, result);
             }
-            Self::SourceSelection(selection) => {
-                let TransportPacketSelectionUpdate { update, target } = selection;
+            Self::SourceSelection(TransportPacketSelectionUpdate { update, target }) => {
                 finish_source_selection(update, &target, result, outcome);
             }
         }
@@ -334,9 +327,7 @@ fn finish_setup_activity(
             ?route,
             active, "media transport failed to correct in-flight consumer setup activity"
         );
-        return;
-    }
-    if result.keyframe_failed() {
+    } else if result.keyframe_failed() {
         warn!(
             ?route,
             "media transport failed to request keyframe after consumer setup activity correction"

@@ -2,7 +2,7 @@ use super::support::*;
 use crate::engine::{
     media_transport::ReceiverBandwidthSnapshot,
     room::source_policy::SourcePolicyPlan,
-    source_model::{SourcePolicy, SourcePublishIntent},
+    source_model::{PublishedSourceId, SourcePolicy, SourcePublishIntent},
 };
 
 #[tokio::test]
@@ -130,7 +130,7 @@ async fn source_bitrate_cap_pause_survives_receiver_overload() {
             &receiver_bandwidth_snapshot,
         )
     };
-    plan.execute(&scenario.room, &scenario.adapter).await;
+    execute_source_policy_plan(&scenario, plan).await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -227,7 +227,7 @@ async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
         replacement_tx,
     )
     .await;
-    plan.execute(&scenario.room, &scenario.adapter).await;
+    execute_source_policy_plan(&scenario, plan).await;
 
     let info = scenario
         .room
@@ -267,7 +267,7 @@ async fn source_policy_ignores_receiver_bandwidth_from_replaced_connection() {
         let state = scenario.room.state.read().await;
         SourcePolicyPlan::from_state(&state, &[], &receiver_bandwidth_snapshot)
     };
-    plan.execute(&scenario.room, &scenario.adapter).await;
+    execute_source_policy_plan(&scenario, plan).await;
 
     let diagnostics = scenario
         .room
@@ -614,32 +614,7 @@ async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
     )
     .await;
     scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
-    let third_audio_media_id = scenario.audio_media_id(3).await;
-
-    assert_subscription_policy_pause_reason(
-        &scenario.room,
-        &scenario.adapter,
-        &UserId::Integer(2),
-        &UserId::Integer(3),
-        TestSourceKind::ScalableVideo,
-        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
-    )
-    .await;
-    scenario.mark_active_speaker(third_audio_media_id).await;
-    let third_camera_source_id = scenario
-        .room
-        .test_api()
-        .inspect()
-        .source_id_for_owner_stream(&UserId::Integer(3), TestSourceKind::ScalableVideo)
-        .await
-        .expect("third camera should have a source id before unpublish");
-    let mut plan = source_policy_plan_from_transport_snapshot(&scenario).await;
-    assert!(
-        plan.retain_updates_for_consumer_source_for_test(
-            &UserId::Integer(2),
-            third_camera_source_id
-        )
-    );
+    let (plan, third_camera_source_id) = retained_third_camera_policy_plan(&scenario).await;
 
     assert!(
         scenario
@@ -653,7 +628,7 @@ async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
             )
             .await
     );
-    plan.execute(&scenario.room, &scenario.adapter).await;
+    execute_source_policy_plan(&scenario, plan).await;
 
     assert!(
         !scenario
@@ -673,8 +648,35 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
     )
     .await;
     scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
-    let third_audio_media_id = scenario.audio_media_id(3).await;
+    let (plan, _) = retained_third_camera_policy_plan(&scenario).await;
+    let receiver_connection_id = user_connection_id(&scenario.room, &UserId::Integer(2)).await;
+    let receiver_session_key = scenario
+        .room
+        .transport_user_key(&UserId::Integer(2), receiver_connection_id)
+        .await;
 
+    scenario
+        .adapter
+        .close_session(&receiver_session_key)
+        .await
+        .expect("test should close receiver transport before source policy commit");
+    execute_source_policy_plan(&scenario, plan).await;
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
+    )
+    .await;
+}
+
+async fn retained_third_camera_policy_plan(
+    scenario: &SourcePolicyScenario,
+) -> (SourcePolicyPlan, PublishedSourceId) {
+    let third_audio_media_id = scenario.audio_media_id(3).await;
     assert_subscription_policy_pause_reason(
         &scenario.room,
         &scenario.adapter,
@@ -691,36 +693,13 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
         .inspect()
         .source_id_for_owner_stream(&UserId::Integer(3), TestSourceKind::ScalableVideo)
         .await
-        .expect("third camera should have a source id before transport close");
-    let mut plan = source_policy_plan_from_transport_snapshot(&scenario).await;
-    assert!(
-        plan.retain_updates_for_consumer_source_for_test(
-            &UserId::Integer(2),
-            third_camera_source_id
-        )
-    );
-    let receiver_connection_id = user_connection_id(&scenario.room, &UserId::Integer(2)).await;
-    let receiver_session_key = scenario
-        .room
-        .transport_user_key(&UserId::Integer(2), receiver_connection_id)
-        .await;
-
-    scenario
-        .adapter
-        .close_session(&receiver_session_key)
-        .await
-        .expect("test should close receiver transport before source policy commit");
-    plan.execute(&scenario.room, &scenario.adapter).await;
-
-    assert_subscription_policy_pause_reason(
-        &scenario.room,
-        &scenario.adapter,
+        .expect("third camera should have a source id before stale source policy work");
+    let mut plan = source_policy_plan_from_transport_snapshot(scenario).await;
+    assert!(plan.retain_packet_updates_for_consumer_source_for_test(
         &UserId::Integer(2),
-        &UserId::Integer(3),
-        TestSourceKind::ScalableVideo,
-        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
-    )
-    .await;
+        third_camera_source_id
+    ));
+    (plan, third_camera_source_id)
 }
 
 async fn source_policy_plan_from_transport_snapshot(
@@ -742,4 +721,11 @@ async fn source_policy_plan_from_transport_snapshot(
         &active_speaker_sources,
         &receiver_bandwidth_snapshot,
     )
+}
+
+async fn execute_source_policy_plan(scenario: &SourcePolicyScenario, plan: SourcePolicyPlan) {
+    let commit = plan
+        .into_commit()
+        .expect("source policy plan should contain work before execution");
+    RoomEffects::execute_source_policy_commit(&scenario.room, &scenario.adapter, commit).await;
 }

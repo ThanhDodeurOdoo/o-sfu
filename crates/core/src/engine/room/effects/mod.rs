@@ -7,4 +7,3 @@ mod receiver_route;
 mod transport;
 
 pub(in crate::engine::room) use observability::RoomGaugeDelta;
-pub(super) use transport::RoomRouteBatch;

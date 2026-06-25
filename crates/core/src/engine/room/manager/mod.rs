@@ -13,7 +13,7 @@ use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
     RoomUserStatsSnapshot,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
-    effects::batch::RoomEffectContext,
+    effects::batch::{RoomEffectContext, RoomEffects},
     factory::RoomFactory,
     membership::JoinUserRequest,
     placement::WorkerLoadIndex,
@@ -213,13 +213,16 @@ impl RoomManager {
         }
         let active_speaker_sources = media_transport.active_speaker_source_snapshot().await;
         for room in rooms {
-            source_policy::apply(
+            if let Some(commit) = source_policy::plan(
                 &room,
                 SourcePolicyTrigger::PacketSelection,
                 Some(media_transport),
                 Some(&active_speaker_sources),
             )
-            .await;
+            .await
+            {
+                RoomEffects::execute_source_policy_commit(&room, media_transport, commit).await;
+            }
         }
     }
 

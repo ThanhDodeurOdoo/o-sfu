@@ -9,5 +9,5 @@ pub(super) use self::turn::SourcePolicyPlan;
 pub use self::video::VideoAdmissionRank;
 pub(super) use self::{
     action::{ConsumerPacketSelectionUpdate, TransportPacketSelectionUpdate},
-    turn::{SourcePolicyTrigger, SourcePolicyWakeups, apply},
+    turn::{SourcePolicyCommit, SourcePolicyTrigger, SourcePolicyWakeups, plan},
 };

@@ -4,7 +4,7 @@ use crate::engine::{
 };
 
 impl SourcePolicyPlan {
-    pub fn retain_updates_for_consumer_source_for_test(
+    pub fn retain_packet_updates_for_consumer_source_for_test(
         &mut self,
         consumer_user_id: &UserId,
         source_id: PublishedSourceId,
@@ -13,14 +13,14 @@ impl SourcePolicyPlan {
             &update.transport_ref.consumer_user_id == consumer_user_id
                 && update.source_id == source_id
         });
-        self.transport_packet_updates.retain(|packet| {
+        self.route_packet_updates.retain(|packet| {
             let update = &packet.update;
             &update.transport_ref.consumer_user_id == consumer_user_id
                 && update.source_id == source_id
         });
         self.receiver_bwe_targets.clear();
         self.featured_users.clear();
-        !self.state_packet_updates.is_empty() || !self.transport_packet_updates.is_empty()
+        !self.state_packet_updates.is_empty() || !self.route_packet_updates.is_empty()
     }
 
     pub fn has_captured_transport_route_for_consumer_source_for_test(
@@ -29,7 +29,7 @@ impl SourcePolicyPlan {
         source_id: PublishedSourceId,
         transport_route: &TransportConsumerRoute,
     ) -> bool {
-        self.transport_packet_updates.iter().any(|packet| {
+        self.route_packet_updates.iter().any(|packet| {
             let update = &packet.update;
             let target = &packet.target;
             &update.transport_ref.consumer_user_id == consumer_user_id
@@ -44,7 +44,7 @@ impl SourcePolicyPlan {
         source_id: PublishedSourceId,
     ) -> bool {
         let mut state_update = false;
-        for packet in &self.transport_packet_updates {
+        for packet in &self.route_packet_updates {
             let update = &packet.update;
             if &update.transport_ref.consumer_user_id == consumer_user_id
                 && update.source_id == source_id

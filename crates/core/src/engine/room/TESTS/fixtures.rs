@@ -18,6 +18,7 @@ pub(super) use super::super::{
     JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
     RoomJoinError, RoomManager, UserCloseReason, UserOutbound, UserOutboundReceiver,
     UserOutboundSender,
+    effects::batch::RoomEffects,
     source_policy::{self, SourcePolicyTrigger},
     transition::PublishStageOutcome,
 };
@@ -41,13 +42,16 @@ pub(super) use crate::{
 };
 
 pub(super) async fn refresh_source_policy(room: &Room, adapter: &MediaTransport) {
-    source_policy::apply(
+    if let Some(commit) = source_policy::plan(
         room,
         SourcePolicyTrigger::PacketSelection,
         Some(adapter),
         None,
     )
-    .await;
+    .await
+    {
+        RoomEffects::execute_source_policy_commit(room, adapter, commit).await;
+    }
 }
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
