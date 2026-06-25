@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::{
     shared::{DownloadStates, StreamType, UserId, UserInfo},
@@ -11,7 +11,9 @@ use crate::{
 /// transport-ready replay sends active publications
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct StickyReplayState {
-    active_publications: BTreeSet<StreamType>,
+    audio_publication_active: bool,
+    camera_publication_active: bool,
+    screen_publication_active: bool,
     desired_subscriptions: BTreeMap<UserId, DownloadStates>,
     desired_info: Option<UserInfo>,
 }
@@ -22,21 +24,38 @@ impl StickyReplayState {
     }
 
     pub(super) fn clear(&mut self) {
-        self.active_publications.clear();
+        self.audio_publication_active = false;
+        self.camera_publication_active = false;
+        self.screen_publication_active = false;
         self.desired_subscriptions.clear();
         self.desired_info = None;
     }
 
+    #[cfg(feature = "verification-models")]
+    pub(super) fn is_empty(&self) -> bool {
+        !self.audio_publication_active
+            && !self.camera_publication_active
+            && !self.screen_publication_active
+            && self.desired_subscriptions.is_empty()
+            && self.desired_info.is_none()
+    }
+
     pub(super) fn set_publish_active(&mut self, stream_type: StreamType, active: bool) {
-        if active {
-            self.active_publications.insert(stream_type);
-        } else {
-            self.active_publications.remove(&stream_type);
+        match stream_type {
+            StreamType::Audio => self.audio_publication_active = active,
+            StreamType::Camera => self.camera_publication_active = active,
+            StreamType::Screen => self.screen_publication_active = active,
         }
     }
 
     pub(super) fn active_publications(&self) -> impl Iterator<Item = StreamType> + '_ {
-        self.active_publications.iter().copied()
+        [
+            (StreamType::Audio, self.audio_publication_active),
+            (StreamType::Camera, self.camera_publication_active),
+            (StreamType::Screen, self.screen_publication_active),
+        ]
+        .into_iter()
+        .filter_map(|(stream_type, active)| active.then_some(stream_type))
     }
 
     pub(super) fn remember_subscription_states(
