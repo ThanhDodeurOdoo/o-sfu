@@ -5,44 +5,26 @@
 //! call sites should import schema names instead of hard-codding event or field
 //! strings when the name is part of the public telemetry contract
 
-#[allow(
-    dead_code,
-    reason = "The event catalog intentionally grows ahead of call-site rollout so observability names stay centralized across phases."
-)]
 pub mod event {
     pub const RUNTIME_LOG: &str = "runtime.log";
     pub const HTTP_LISTENER_READY: &str = "http.listener.ready";
     pub const RUNTIME_BOOT: &str = "runtime.boot";
-    pub const RUNTIME_SHUTDOWN: &str = "runtime.shutdown";
     pub const RUNTIME_TELEMETRY_INITIALIZED: &str = "runtime.telemetry_initialized";
     pub const ROOM_CREATED: &str = "room.created";
     pub const USER_JOINED: &str = "user.joined";
     pub const USER_CLOSED: &str = "user.closed";
     pub const USER_DISCONNECTED: &str = "user.disconnected";
-    pub const WS_CONNECTION_ACCEPTED: &str = "ws.accepted";
     pub const WS_CONNECTION_CLOSED: &str = "ws.closed";
-    pub const WS_AUTH_REJECTED: &str = "ws.auth_rejected";
     pub const WS_HANDSHAKE_REJECTED: &str = "ws.handshake_rejected";
     pub const WS_JOIN_FAILED: &str = "ws.join_failed";
-    pub const WS_JOIN_SUCCEEDED: &str = "ws.join_succeeded";
-    pub const WS_USER_ESTABLISHED: &str = "ws.user.established";
-    pub const NEGOTIATION_STARTED: &str = "negotiation.started";
-    pub const NEGOTIATION_SUCCEEDED: &str = "negotiation.succeeded";
     pub const NEGOTIATION_FAILED: &str = "negotiation.failed";
-    pub const PUBLISH_PREPARED: &str = "publish.prepared";
     pub const PUBLISH_COMMITTED: &str = "publish.committed";
     pub const PUBLISH_ABORTED: &str = "publish.aborted";
-    pub const SUBSCRIBE_PREPARED: &str = "subscribe.prepared";
     pub const SUBSCRIBE_SUCCEEDED: &str = "subscribe.succeeded";
     pub const SUBSCRIBE_REJECTED: &str = "subscribe.rejected";
     pub const SUBSCRIPTION_ACTIVITY_CHANGED: &str = "subscription.activity_changed";
     pub const PUBLICATION_ACTIVITY_CHANGED: &str = "publication.activity_changed";
-    pub const TRANSPORT_ICE_STATE_CHANGED: &str = "transport.ice_state.changed";
     pub const TRANSPORT_HEALTH_CHANGED: &str = "transport.health.changed";
-    pub const TRANSPORT_DTLS_CONNECTED: &str = "transport.dtls.connected";
-    pub const RECORDING_STARTED: &str = "recording.started";
-    pub const RECORDING_STOPPED: &str = "recording.stopped";
-    pub const RECORDING_FINALIZED: &str = "recording.finalized";
 }
 
 #[allow(
