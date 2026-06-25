@@ -1,6 +1,12 @@
 <!-- Write your PR message here -->
 
-## AI
+
+#### Guidelines
+<!-- You must check both -->
+- [ ] I read [CONTRIBUTING.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/.github/CONTRIBUTING.md)
+- [ ] I will not use AI to fabricate answsers to comments in this PR
+
+#### AI
 <!-- if no checkbox is closed, the PR will be closed without a review -->
 
 - [ ] No AI involvement at all.
