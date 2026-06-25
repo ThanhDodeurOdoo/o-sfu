@@ -40,7 +40,7 @@ fn core_snapshot_uses_public_state_labels() {
 
 #[test]
 fn host_command_bridge_converts_commands_to_camel_case_payloads() {
-    let commands = project_commands(
+    let host_commands = project_commands(
         CommandBatch::try_from_vec(vec![
             Command::ApplyNegotiation {
                 request_id: RequestId::new("7"),
@@ -68,9 +68,6 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                     }],
                 },
             },
-            Command::DetachTrack {
-                stream_type: StreamType::Screen,
-            },
             Command::SetLocalUploadIntent {
                 stream_type: StreamType::Camera,
                 active: true,
@@ -79,7 +76,7 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
         .expect("valid test command batch"),
     );
 
-    let encoded = serde_json::to_value(commands).unwrap_or_default();
+    let encoded = serde_json::to_value(host_commands).unwrap_or_default();
 
     assert_eq!(
         encoded,
@@ -115,10 +112,6 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                 ]
             },
             {
-                "kind": "detachTrack",
-                "streamType": "screen"
-            },
-            {
                 "kind": "setLocalUploadIntent",
                 "streamType": "camera",
                 "active": true
@@ -129,7 +122,7 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
 
 #[test]
 fn host_command_bridge_emits_source_update_for_source_snapshot() {
-    let commands = project_commands(
+    let host_commands = project_commands(
         CommandBatch::try_from_vec(vec![Command::EmitEvent {
             event: ProtocolEvent::SourceSnapshot {
                 sources: vec![SourceDescriptor {
@@ -146,7 +139,7 @@ fn host_command_bridge_emits_source_update_for_source_snapshot() {
     );
 
     assert_eq!(
-        serde_json::to_value(commands).unwrap_or_default(),
+        serde_json::to_value(host_commands).unwrap_or_default(),
         json!([{
             "kind": "emitUpdate",
             "update": {
@@ -167,7 +160,7 @@ fn host_command_bridge_emits_source_update_for_source_snapshot() {
 
 #[test]
 fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
-    let commands = project_commands(
+    let host_commands = project_commands(
         CommandBatch::try_from_vec(vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
                 user_id: UserId::Integer(9),
@@ -176,7 +169,7 @@ fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
         .expect("valid test command batch"),
     );
 
-    let encoded = serde_json::to_value(commands).unwrap_or_default();
+    let encoded = serde_json::to_value(host_commands).unwrap_or_default();
 
     assert_eq!(
         encoded,
@@ -200,7 +193,7 @@ fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
 
 #[test]
 fn host_command_bridge_preserves_simple_commands() {
-    let command = project_commands(
+    let host_command = project_commands(
         CommandBatch::try_from_vec(vec![Command::CloseWebSocket { code: 4107 }])
             .expect("valid test command batch"),
     )
@@ -208,7 +201,7 @@ fn host_command_bridge_preserves_simple_commands() {
     .next()
     .unwrap_or(HostCommand::ClosePeerConnection);
 
-    let encoded = serde_json::to_value(command).unwrap_or_default();
+    let encoded = serde_json::to_value(host_command).unwrap_or_default();
 
     assert_eq!(
         encoded,

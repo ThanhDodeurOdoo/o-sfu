@@ -44,8 +44,6 @@ export type HostCommand =
           sdp: string;
           uploadSlots: NegotiationUploadSlot[];
       }
-    | { kind: typeof COMMAND_KIND.ATTACH_TRACK; mid: string; streamType: StreamType }
-    | { kind: typeof COMMAND_KIND.DETACH_TRACK; streamType: StreamType }
     | { kind: typeof COMMAND_KIND.CREATE_PEER_CONNECTION }
     | { kind: typeof COMMAND_KIND.CLOSE_PEER_CONNECTION }
     | { kind: typeof COMMAND_KIND.CLOSE_WEB_SOCKET; code: number }
@@ -188,13 +186,6 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
                 `${context}.uploadSlots`,
                 validateNegotiationUploadSlot
             );
-            break;
-        case COMMAND_KIND.ATTACH_TRACK:
-            requireString(command.mid, `${context}.mid`);
-            validateStreamType(command.streamType, `${context}.streamType`);
-            break;
-        case COMMAND_KIND.DETACH_TRACK:
-            validateStreamType(command.streamType, `${context}.streamType`);
             break;
         case COMMAND_KIND.CREATE_PEER_CONNECTION:
         case COMMAND_KIND.CLOSE_PEER_CONNECTION:

@@ -51,15 +51,6 @@ pub enum HostCommand {
         #[serde(rename = "uploadSlots")]
         upload_slots: Vec<NegotiationUploadSlot>,
     },
-    AttachTrack {
-        mid: String,
-        #[serde(rename = "streamType")]
-        stream_type: StreamType,
-    },
-    DetachTrack {
-        #[serde(rename = "streamType")]
-        stream_type: StreamType,
-    },
     CreatePeerConnection,
     ClosePeerConnection,
     CloseWebSocket {
@@ -106,10 +97,10 @@ pub enum HostCommand {
     },
 }
 
-fn push_commands_for_event(commands: &mut Vec<HostCommand>, event: ProtocolEvent) {
+fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: ProtocolEvent) {
     let update = match event {
         ProtocolEvent::TrackSnapshot { bindings } => {
-            commands.push(HostCommand::ReplaceTrackBindings { bindings });
+            host_commands.push(HostCommand::ReplaceTrackBindings { bindings });
             return;
         }
         ProtocolEvent::SourceSnapshot { sources } => {
@@ -125,7 +116,7 @@ fn push_commands_for_event(commands: &mut Vec<HostCommand>, event: ProtocolEvent
             BundleSessionInfoSnapshotById::from([(bundle_session_info_key(&user_id), info)]),
         ),
         ProtocolEvent::PeerLeft { user_id } => {
-            commands.push(HostCommand::RemoveSessionTracks {
+            host_commands.push(HostCommand::RemoveSessionTracks {
                 user_id: user_id.clone(),
             });
             BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id })
@@ -135,22 +126,22 @@ fn push_commands_for_event(commands: &mut Vec<HostCommand>, event: ProtocolEvent
         }
         ProtocolEvent::RecordingStateChanged { state } => BundleUpdate::ChannelInfoChange(state),
     };
-    commands.push(HostCommand::EmitUpdate { update });
+    host_commands.push(HostCommand::EmitUpdate { update });
 }
 
 #[must_use]
-pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
-    let mut project_commands = Vec::with_capacity(commands.len());
-    for command in commands {
+pub fn project_commands(core_commands: CommandBatch) -> Vec<HostCommand> {
+    let mut host_commands = Vec::with_capacity(core_commands.len());
+    for command in core_commands {
         match command {
             Command::SendWebSocket(frame) => {
-                project_commands.push(HostCommand::SendWebSocket { frame });
+                host_commands.push(HostCommand::SendWebSocket { frame });
             }
             Command::SetLocalUploadIntent {
                 stream_type,
                 active,
             } => {
-                project_commands.push(HostCommand::SetLocalUploadIntent {
+                host_commands.push(HostCommand::SetLocalUploadIntent {
                     stream_type,
                     active,
                 });
@@ -160,33 +151,27 @@ pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
                 kind,
                 sdp,
                 upload_slots,
-            } => project_commands.push(HostCommand::ApplyNegotiation {
+            } => host_commands.push(HostCommand::ApplyNegotiation {
                 request_id,
                 negotiation_kind: kind,
                 sdp,
                 upload_slots,
             }),
-            Command::AttachTrack { mid, stream_type } => {
-                project_commands.push(HostCommand::AttachTrack { mid, stream_type });
-            }
-            Command::DetachTrack { stream_type } => {
-                project_commands.push(HostCommand::DetachTrack { stream_type });
-            }
             Command::CreatePeerConnection => {
-                project_commands.push(HostCommand::CreatePeerConnection);
+                host_commands.push(HostCommand::CreatePeerConnection);
             }
-            Command::ClosePeerConnection => project_commands.push(HostCommand::ClosePeerConnection),
+            Command::ClosePeerConnection => host_commands.push(HostCommand::ClosePeerConnection),
             Command::CloseWebSocket { code } => {
-                project_commands.push(HostCommand::CloseWebSocket { code });
+                host_commands.push(HostCommand::CloseWebSocket { code });
             }
             Command::EmitStateChange { state, cause } => {
-                project_commands.push(HostCommand::EmitStateChange {
+                host_commands.push(HostCommand::EmitStateChange {
                     state: connection_state_tag(state).to_owned(),
                     cause,
                 });
             }
             Command::EmitEvent { event } => {
-                push_commands_for_event(&mut project_commands, event);
+                push_host_commands_for_event(&mut host_commands, event);
             }
             Command::BeginPendingRequest {
                 request_id,
@@ -194,7 +179,7 @@ pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
                 timeout_timer_id,
                 timeout_ms,
             } => {
-                project_commands.push(HostCommand::BeginPendingRequest {
+                host_commands.push(HostCommand::BeginPendingRequest {
                     request_id,
                     request_kind: kind,
                     timeout_timer_id,
@@ -202,16 +187,16 @@ pub fn project_commands(commands: CommandBatch) -> Vec<HostCommand> {
                 });
             }
             Command::ResolvePendingRequest { request_id, ok } => {
-                project_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
+                host_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
             }
             Command::ScheduleTimer { id, ms } => {
-                project_commands.push(HostCommand::ScheduleTimer { id, ms });
+                host_commands.push(HostCommand::ScheduleTimer { id, ms });
             }
-            Command::CancelTimer { id } => project_commands.push(HostCommand::CancelTimer { id }),
-            Command::Connect { url } => project_commands.push(HostCommand::Connect { url }),
+            Command::CancelTimer { id } => host_commands.push(HostCommand::CancelTimer { id }),
+            Command::Connect { url } => host_commands.push(HostCommand::Connect { url }),
         }
     }
-    project_commands
+    host_commands
 }
 
 #[must_use]

@@ -178,6 +178,20 @@ test("injected protocol core rejects malformed host commands", () => {
     assert.deepEqual(core.onWsOpen(), [{ kind: "sendWebSocket", frame: "auth" }]);
 });
 
+test("injected protocol core rejects obsolete attach and detach host commands", () => {
+    for (const command of [
+        { kind: "attachTrack", mid: "0", streamType: "camera" },
+        { kind: "detachTrack", streamType: "camera" }
+    ]) {
+        assertInjectedCoreThrows(
+            {
+                connect: () => [command]
+            },
+            (core) => core.connect("ws://example.test", "jwt", null)
+        );
+    }
+});
+
 test("injected protocol core validates host command ordering", () => {
     for (const [method, commands, args = []] of [
         ["onWsMessage", [negotiationCommand(NEGOTIATION_KIND.OFFER)], ["offer"]],
