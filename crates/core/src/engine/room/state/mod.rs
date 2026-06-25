@@ -6,6 +6,6 @@ mod shared;
 mod test_support;
 
 pub use self::{
-    membership::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome, LifecycleEffects},
+    membership::{ConnectionCloseCommit, DisconnectCommit, JoinCommit, LifecycleEffects},
     shared::RoomState,
 };

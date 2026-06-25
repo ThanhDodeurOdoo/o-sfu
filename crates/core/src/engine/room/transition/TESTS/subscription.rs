@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use o_sfu_router::test_support::rtp_samples::{
     sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
 };
+use o_sfu_telemetry::schema::event as telemetry_event;
 
 use super::super::super::{
     Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
@@ -308,11 +309,11 @@ async fn commit_scalable_video(
     );
 }
 
-async fn destination_active(
+async fn destination_state(
     media_transport: &MediaTransport,
     source_media_id: TransportMediaId,
     user_id: &UserId,
-) -> Option<bool> {
+) -> Option<(TransportMediaId, bool)> {
     media_transport
         .test_api()
         .route_entry_by_media_id(source_media_id)
@@ -320,7 +321,17 @@ async fn destination_active(
         .destinations
         .into_iter()
         .find(|destination| destination.dest_session.user_id() == user_id)
-        .map(|destination| destination.active)
+        .map(|destination| (destination.dest_transport_media_id, destination.active))
+}
+
+async fn destination_active(
+    media_transport: &MediaTransport,
+    source_media_id: TransportMediaId,
+    user_id: &UserId,
+) -> Option<bool> {
+    destination_state(media_transport, source_media_id, user_id)
+        .await
+        .map(|(_media_id, active)| active)
 }
 
 #[tokio::test]
@@ -368,7 +379,7 @@ async fn receiver_intent_updates_transport_route_activity() {
         publisher_connection_id,
         subscriber_id,
         subscriber_connection_id,
-    ) = setup_subscription_room(true).await;
+    ) = setup_spillover_subscription_room().await;
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
     let source_media_id = publish_scalable_video(
         &room,
@@ -395,9 +406,31 @@ async fn receiver_intent_updates_transport_route_activity() {
             .await,
         Some(ConsumerRouteState::Inactive)
     );
+    let (consumer_media_id, active) =
+        destination_state(&media_transport, source_media_id, &subscriber_id)
+            .await
+            .expect("subscriber route should still exist");
+    assert!(!active);
+    let subscriber_worker = room
+        .transport_user_key(&subscriber_id, subscriber_connection_id)
+        .await
+        .media_worker_id()
+        .as_usize();
+    let events = room
+        .diagnostics
+        .user_recent_events(room.uuid(), &subscriber_id);
+    let event = events
+        .iter()
+        .find(|event| {
+            event.event == telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED
+                && event.connection_id == Some(subscriber_connection_id.as_u64())
+                && event.transport_media_id == Some(consumer_media_id.as_u64())
+        })
+        .expect("expected subscription activity diagnostics event");
+    assert_eq!(event.media_worker_id, Some(subscriber_worker));
     assert_eq!(
-        destination_active(&media_transport, source_media_id, &subscriber_id).await,
-        Some(false)
+        event.fields.get("active"),
+        Some(&serde_json::Value::Bool(false))
     );
 
     assert_eq!(

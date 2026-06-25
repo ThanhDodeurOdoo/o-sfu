@@ -8,7 +8,7 @@ pub use o_sfu_router::topology::{
 use super::{
     Room, RoomJoinError,
     membership::JoinUserRequest,
-    state::{JoinUserOutcome, RoomState},
+    state::{JoinCommit, RoomState},
 };
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
@@ -217,7 +217,7 @@ impl PendingJoinPlacement {
         request: JoinUserRequest,
         emit_joined_fanout: bool,
         allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> Result<JoinUserOutcome, RoomJoinError> {
+    ) -> Result<JoinCommit, RoomJoinError> {
         let placement = self.resolve(&state.placement_usage_snapshot(), allocate_spillover_router);
         state.apply_join_on_placement(
             &request.user_id,

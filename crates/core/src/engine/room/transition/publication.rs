@@ -25,7 +25,7 @@ use tracing::warn;
 
 use super::super::{
     Room, RoomUserOperation,
-    effects::{self, batch::RoomEffectContext},
+    effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
     media_graph::{ProducerActivityCommit, PublishIntentPlan, ValidatedPublish},
 };
 #[cfg(any(test, feature = "testing-transport"))]
@@ -237,14 +237,9 @@ impl RoomUserOperation<'_> {
     }
 
     async fn execute_publication_activity(self, commit: ProducerActivityCommit) {
-        effects::batch::build_publication_activity(
-            self.room,
-            self.user_id,
-            self.connection_id,
-            commit,
-        )
-        .execute(self.room, RoomEffectContext::runtime(self.media_transport))
-        .await;
+        RoomEffects::from_commit(self.room, RoomCommit::PublicationActivity(commit))
+            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
+            .await;
     }
 
     async fn unpublish(self, stream_id: &UserStreamId) -> bool {
@@ -261,7 +256,7 @@ impl RoomUserOperation<'_> {
         let Some(commit) = commit else {
             return false;
         };
-        effects::batch::build_unpublish(commit)
+        RoomEffects::from_commit(room, RoomCommit::Unpublish(commit))
             .execute(room, RoomEffectContext::runtime(media_port))
             .await;
         room.reconcile_spillover_routers().await;

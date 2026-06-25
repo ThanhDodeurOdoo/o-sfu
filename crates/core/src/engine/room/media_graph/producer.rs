@@ -60,9 +60,6 @@ pub enum PublishIntentPlan {
 #[derive(Debug)]
 pub struct ProducerActivityCommit {
     pub source: TransportSourceKey,
-    pub media: TransportMediaId,
-    pub worker: MediaWorkerId,
-    pub stream: UserStreamId,
     pub active: bool,
     pub recipients: Vec<OutboundSender>,
     pub update: TrackBindingUpdate,
@@ -443,7 +440,6 @@ impl RoomState {
         else {
             return Err(ProducerActivityRejection::MissingPublication);
         };
-        let media_worker_id = transport_user_key.media_worker_id();
         let Some(update) =
             self.apply_producer_activity(user_id, &producer_target, stream_id, active)
         else {
@@ -451,9 +447,6 @@ impl RoomState {
         };
         Ok(ProducerActivityCommit {
             source: TransportSourceKey::new(transport_user_key, transport_media_id),
-            media: transport_media_id,
-            worker: media_worker_id,
-            stream: stream_id.clone(),
             active,
             recipients: self
                 .users

@@ -3,7 +3,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::warn;
 
 use super::{
-    batch::RoomGaugeDelta,
+    RoomGaugeDelta,
     transport::{RoomRouteBatch, RoomTransportOutcome, execute_relay_route_effects},
 };
 use crate::engine::{

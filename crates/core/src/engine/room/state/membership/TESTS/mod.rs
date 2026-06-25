@@ -220,38 +220,38 @@ fn has_source_relay_release(effects: &[ResolvedRelayRouteEffect], relay: &Relaye
 #[test]
 fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
     let mut state = test_state();
+    let user_a = UserId::Integer(1);
+    let user_b = UserId::Integer(2);
     let sender_a = test_sender();
     let sender_b = test_sender();
     assert!(
         state
-            .apply_join(
-                &UserId::Integer(1),
-                UserPermissions::default(),
-                sender_a,
-                false,
-            )
+            .apply_join(&user_a, UserPermissions::default(), sender_a, false)
             .is_ok()
     );
     assert!(
         state
-            .apply_join(
-                &UserId::Integer(2),
-                UserPermissions::default(),
-                sender_b,
-                false,
-            )
+            .apply_join(&user_b, UserPermissions::default(), sender_b, false)
             .is_ok()
     );
+    let connection_a = state
+        .user_connection_id(&user_a)
+        .expect("joined user should have a connection");
+    let connection_b = state
+        .user_connection_id(&user_b)
+        .expect("joined user should have a connection");
 
-    let outcome = state.apply_disconnect_users(&[UserId::Integer(1), UserId::Integer(2)]);
+    let outcome = state.apply_disconnect_users(&[user_a.clone(), user_b.clone()]);
 
     assert_eq!(state.users.len(), 0);
-    assert_eq!(outcome.disconnected_users.len(), 2);
-    assert!(outcome.disconnected_users.iter().any(|user| {
-        user.user_id == UserId::Integer(1) && user.connection_id == ConnectionId::from_raw(0)
+    assert_eq!(outcome.close_operations.len(), 2);
+    assert!(outcome.close_operations.iter().any(|operation| {
+        let session = operation.session_key();
+        session.user_id() == &user_a && session.connection_id() == connection_a
     }));
-    assert!(outcome.disconnected_users.iter().any(|user| {
-        user.user_id == UserId::Integer(2) && user.connection_id == ConnectionId::from_raw(1)
+    assert!(outcome.close_operations.iter().any(|operation| {
+        let session = operation.session_key();
+        session.user_id() == &user_b && session.connection_id() == connection_b
     }));
     assert_eq!(outcome.effects.close_requests.len(), 2);
     assert_eq!(outcome.effects.fanouts.len(), 2);
@@ -275,11 +275,48 @@ fn leave_repairs_missing_topology_router_and_removes_member() {
         .routing_mut_for_test()
         .remove_router_for_test(RouterId(1));
 
-    let outcome = state.apply_leave(&user_id, connection_id);
+    let outcome = state.close_connection(&user_id, connection_id);
 
     assert!(outcome.is_some());
     assert!(!state.users.contains_key(&user_id));
     assert_eq!(state.routing_home_router_id(&user_id), None);
+}
+
+#[test]
+fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
+    let mut state = test_state();
+    let user_id = UserId::Integer(1);
+    assert!(
+        state
+            .apply_join(&user_id, UserPermissions::default(), test_sender(), false,)
+            .is_ok()
+    );
+    let connection_id = state
+        .user_connection_id(&user_id)
+        .expect("joined user should have a connection id");
+    let session_key = state.transport_user_key(&user_id, connection_id);
+    state
+        .users
+        .remove(&user_id)
+        .expect("test should leave a stale committed placement");
+
+    let commit = state
+        .close_connection(&user_id, connection_id)
+        .expect("stale committed placement should close");
+
+    assert!(matches!(
+        commit,
+        ConnectionCloseCommit::StalePlacement {
+            cleanup: TransportCleanupOperation::CloseUser {
+                session_key: cleanup_key,
+            },
+            ..
+        } if cleanup_key == session_key
+    ));
+    assert_eq!(
+        state.committed_transport_user_key(&user_id, connection_id),
+        None
+    );
 }
 
 #[test]
@@ -299,7 +336,7 @@ fn disconnect_repairs_missing_topology_router_and_removes_member() {
 
     let outcome = state.apply_disconnect_users(from_ref(&user_id));
 
-    assert_eq!(outcome.disconnected_users.len(), 1);
+    assert_eq!(outcome.close_operations.len(), 1);
     assert!(!state.users.contains_key(&user_id));
     assert_eq!(state.routing_home_router_id(&user_id), None);
 }
@@ -358,7 +395,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
         ConsumerSourceSelection::open(true),
     ));
 
-    let outcome = state.apply_leave(&UserId::Integer(2), consumer_connection_id);
+    let outcome = state.close_connection(&UserId::Integer(2), consumer_connection_id);
 
     assert!(outcome.is_some());
     assert_eq!(state.consumer_count(), 0);
@@ -528,9 +565,12 @@ fn leave_releases_relay_before_forgetting_source_session() {
     let relay = install_relayed_source(&mut state);
 
     let outcome = state
-        .apply_leave(&relay.publisher, relay.publisher_connection)
+        .close_connection(&relay.publisher, relay.publisher_connection)
         .expect("publisher leave should succeed");
-    let (relays, _cleanup) = outcome.media_effects.into_parts();
+    let ConnectionCloseCommit::Current { media_effects, .. } = outcome else {
+        panic!("publisher leave should remove the current user");
+    };
+    let (relays, _cleanup) = media_effects.into_parts();
 
     assert!(has_source_relay_release(&relays, &relay));
 }

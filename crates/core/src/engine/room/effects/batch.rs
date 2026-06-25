@@ -1,8 +1,8 @@
 use o_sfu_telemetry::schema::event as telemetry_event;
 
-pub use super::observability::RoomGaugeDelta;
 use super::{
-    observability::RoomObservabilityPlan, output::RoomOutputPlan, transport::RoomTransportPlan,
+    RoomGaugeDelta, observability::RoomObservabilityPlan, output::RoomOutputPlan,
+    transport::RoomTransportPlan,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
@@ -10,15 +10,13 @@ use crate::engine::{
     media_transport::MediaTransport,
     room::{
         Room,
-        cleanup::TransportCleanupOperation,
         media_graph::{
-            CommittedTransportReceipt, ConsumerRouteTarget, ConsumerSetupOrigin,
-            MediaTopologyEffects, ProducerActivityCommit, PublishCommit, ReceiverRouteCommit,
-            ReceiverRouteWork, UnpublishCommit,
+            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, ProducerActivityCommit,
+            PublishCommit, ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
         },
         outbound::MessageFanout,
         source_policy::SourcePolicyWakeups,
-        state::{DisconnectUsersOutcome, JoinUserOutcome, LeaveUserOutcome},
+        state::{ConnectionCloseCommit, DisconnectCommit, JoinCommit},
     },
 };
 
@@ -85,220 +83,228 @@ pub struct RoomEffects {
     source_policy: SourcePolicyWakeups,
 }
 
-pub fn build_join(
-    room: &Room,
-    counts: RoomGaugeDelta,
-    outcome: JoinUserOutcome,
-) -> (RoomEffects, CommittedTransportReceipt) {
-    let JoinUserOutcome {
-        effects,
-        user_id,
-        routing_receipt,
-        media_effects,
-    } = outcome;
-    let diagnostics = RoomDiagnosticsContext::new(
-        &user_id,
-        routing_receipt.connection_id,
-        routing_receipt.transport_session_key.media_worker_id(),
-    )
-    .event_data(room, telemetry_event::USER_JOINED);
-    let mut batch = RoomEffects::default();
-    batch.observability.push_gauge(counts);
-    batch.extend_media_topology_effects(media_effects);
-    batch.source_policy.route_graph_changed();
-    batch.output.push_lifecycle(effects);
-    batch.observability.register_user(user_id);
-    batch.observability.record(diagnostics);
-    (batch, routing_receipt)
-}
-
-pub fn build_connection_close(
-    room: &Room,
-    counts: RoomGaugeDelta,
-    state_outcome: Option<LeaveUserOutcome>,
-    user_id: UserId,
-    connection_id: ConnectionId,
-    transport_close: Option<TransportCleanupOperation>,
-) -> RoomEffects {
-    let media_worker_id = transport_close
-        .as_ref()
-        .map(|operation| operation.session_key().media_worker_id());
-    let mut batch = RoomEffects::default();
-    batch.observability.push_gauge(counts);
-    if let Some(outcome) = state_outcome {
-        let mut diagnostics =
-            DiagnosticsEventData::for_user(room.uuid(), &user_id, telemetry_event::USER_CLOSED)
-                .with_connection_id(connection_id.as_u64());
-        if let Some(media_worker_id) = media_worker_id {
-            diagnostics = diagnostics.with_media_worker_id(media_worker_id.as_usize());
-        }
-        batch.extend_media_topology_effects(outcome.media_effects);
-        batch.output.push_lifecycle(outcome.effects);
-        batch.observability.record(diagnostics);
-        batch.observability.forget_user(user_id);
-        batch.source_policy.route_graph_changed();
-    }
-    if let Some(transport_close) = transport_close {
-        batch.push_transport_user_close_cleanup(transport_close);
-    }
-    batch
-}
-
-pub fn build_disconnect(
-    room: &Room,
-    counts: RoomGaugeDelta,
-    outcome: DisconnectUsersOutcome,
-) -> RoomEffects {
-    let mut batch = RoomEffects::default();
-    batch.observability.push_gauge(counts);
-    batch.extend_media_topology_effects(outcome.media_effects);
-    batch.source_policy.route_graph_changed();
-    batch.output.push_lifecycle(outcome.effects);
-    for user in outcome.disconnected_users {
-        let media_worker_id = user.close_operation.session_key().media_worker_id();
-        batch.push_transport_user_close_cleanup(user.close_operation);
-        batch.observability.record(
-            RoomDiagnosticsContext::new(&user.user_id, user.connection_id, media_worker_id)
-                .event_data(room, telemetry_event::USER_DISCONNECTED),
-        );
-        batch.observability.forget_user(user.user_id);
-    }
-    batch
-}
-
-pub fn build_publish_commit(room: &Room, commit: PublishCommit) -> RoomEffects {
-    let diagnostics = RoomDiagnosticsContext::new(&commit.user, commit.connection, commit.worker)
-        .event_data(room, telemetry_event::PUBLISH_COMMITTED)
-        .with_transport_media_id(commit.media.as_u64());
-    let mut batch = RoomEffects::default();
-    batch.observability.push_gauge(RoomGaugeDelta::media(
-        commit.publish_before,
-        commit.publish_after,
-    ));
-    batch.observability.push_gauge(RoomGaugeDelta::media(
-        commit.setup_before,
-        commit.setup_after,
-    ));
-    batch.push_receiver_work(
-        room,
-        RoomDiagnosticsContext::new(&commit.user, commit.connection, commit.worker),
-        commit.receiver_route_work,
-        ConsumerSetupOrigin::Publish,
-    );
-    batch.source_policy.route_graph_changed();
-    batch.observability.record(diagnostics);
-    batch
-}
-
-pub fn build_publication_activity(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    commit: ProducerActivityCommit,
-) -> RoomEffects {
-    let ProducerActivityCommit {
-        source,
-        media,
-        worker,
-        stream,
-        active,
-        recipients,
-        update,
-    } = commit;
-    let diagnostics = RoomDiagnosticsContext::new(user_id, connection_id, worker)
-        .event_data(room, telemetry_event::PUBLICATION_ACTIVITY_CHANGED)
-        .with_transport_media_id(media.as_u64())
-        .insert_field("active", active)
-        .insert_field("stream_id", stream.to_string());
-    let mut batch = RoomEffects::default();
-    batch.transport.push_producer(source, active, diagnostics);
-    batch.output.push_track_binding(recipients, update);
-    batch.source_policy.fanout_pressure_changed();
-    batch
-}
-
-pub fn build_unpublish(commit: UnpublishCommit) -> RoomEffects {
-    let mut batch = RoomEffects::default();
-    batch
-        .observability
-        .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
-    batch.extend_media_topology_effects(commit.media_effects);
-    batch
-        .output
-        .push_track_binding(commit.recipients, commit.update);
-    batch.source_policy.route_graph_changed();
-    batch
-}
-
-pub fn build_consumer_readiness(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    commit: ReceiverRouteCommit,
-) -> RoomEffects {
-    let mut batch = RoomEffects::default();
-    batch
-        .observability
-        .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
-    batch.push_receiver_work(
-        room,
-        RoomDiagnosticsContext::new(user_id, connection_id, commit.media_worker_id),
-        commit.work,
-        ConsumerSetupOrigin::Readiness,
-    );
-    batch.source_policy.route_graph_changed();
-    batch
-}
-
-pub fn build_keyframe_refresh(targets: Vec<ConsumerRouteTarget>) -> RoomEffects {
-    let mut batch = RoomEffects::default();
-    batch.transport.push_keyframes(targets);
-    batch
-}
-
-pub fn build_user_info_update(fanout: MessageFanout) -> RoomEffects {
-    let mut batch = RoomEffects::default();
-    batch.source_policy.receiver_intent_changed();
-    batch.output.push_user_info(fanout);
-    batch
-}
-
-pub fn build_receiver_intent(
-    room: &Room,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    commit: ReceiverRouteCommit,
-) -> RoomEffects {
-    let route_graph_changed = commit.work.route_graph_changed();
-    let mut batch = RoomEffects::default();
-    batch
-        .observability
-        .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
-    batch.push_receiver_work(
-        room,
-        RoomDiagnosticsContext::new(user_id, connection_id, commit.media_worker_id),
-        commit.work,
-        ConsumerSetupOrigin::Subscribe,
-    );
-    if route_graph_changed {
-        batch.source_policy.route_graph_changed();
-    } else {
-        batch.source_policy.receiver_intent_changed();
-    }
-    batch
+pub(in crate::engine::room) enum RoomCommit {
+    Join(JoinCommit),
+    ConnectionClose(ConnectionCloseCommit),
+    Disconnect(DisconnectCommit),
+    UserInfo(MessageFanout),
+    Publish(PublishCommit),
+    PublicationActivity(ProducerActivityCommit),
+    Unpublish(UnpublishCommit),
+    ReceiverIntent(ReceiverRouteCommit),
+    ConsumerReadiness(ReceiverRouteCommit),
 }
 
 impl RoomEffects {
-    fn extend_media_topology_effects(&mut self, effects: MediaTopologyEffects) {
-        self.transport.extend_topology(effects);
+    pub(in crate::engine::room) fn from_commit(room: &Room, commit: RoomCommit) -> Self {
+        match commit {
+            RoomCommit::Join(commit) => Self::from_join(room, commit),
+            RoomCommit::ConnectionClose(commit) => Self::from_connection_close(room, commit),
+            RoomCommit::Disconnect(commit) => Self::from_disconnect(room, commit),
+            RoomCommit::UserInfo(commit) => {
+                let mut batch = Self::default();
+                batch.source_policy.receiver_intent_changed();
+                batch.output.push_user_info(commit);
+                batch
+            }
+            RoomCommit::Publish(commit) => Self::from_publish(room, commit),
+            RoomCommit::PublicationActivity(commit) => {
+                Self::from_publication_activity(room, commit)
+            }
+            RoomCommit::Unpublish(commit) => {
+                let mut batch = Self::default();
+                batch
+                    .observability
+                    .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
+                batch.extend_media_topology_effects(commit.media_effects);
+                batch
+                    .output
+                    .push_track_binding(commit.recipients, commit.update);
+                batch.source_policy.route_graph_changed();
+                batch
+            }
+            RoomCommit::ReceiverIntent(commit) => {
+                let changed = commit.work.route_graph_changed();
+                let mut batch =
+                    Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Subscribe);
+                if changed {
+                    batch.source_policy.route_graph_changed();
+                } else {
+                    batch.source_policy.receiver_intent_changed();
+                }
+                batch
+            }
+            RoomCommit::ConsumerReadiness(commit) => {
+                let mut batch =
+                    Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Readiness);
+                batch.source_policy.route_graph_changed();
+                batch
+            }
+        }
     }
 
-    fn push_transport_user_close_cleanup(&mut self, operation: TransportCleanupOperation) {
-        debug_assert!(matches!(
-            &operation,
-            TransportCleanupOperation::CloseUser { .. }
+    pub(in crate::engine::room) fn keyframe_refresh(targets: Vec<ConsumerRouteTarget>) -> Self {
+        let mut batch = Self::default();
+        batch.transport.push_keyframes(targets);
+        batch
+    }
+
+    fn from_join(room: &Room, commit: JoinCommit) -> Self {
+        let JoinCommit {
+            counts,
+            effects,
+            receipt,
+            media_effects,
+        } = commit;
+        let user_id = receipt.transport_session_key.user_id().clone();
+        let diagnostics = RoomDiagnosticsContext::new(
+            &user_id,
+            receipt.connection_id,
+            receipt.transport_session_key.media_worker_id(),
+        )
+        .event_data(room, telemetry_event::USER_JOINED);
+        let mut batch = Self::default();
+        batch.observability.push_gauge(counts);
+        batch.extend_media_topology_effects(media_effects);
+        batch.source_policy.route_graph_changed();
+        batch.output.push_lifecycle(effects);
+        batch.observability.register_user(user_id);
+        batch.observability.record(diagnostics);
+        batch
+    }
+
+    fn from_connection_close(room: &Room, commit: ConnectionCloseCommit) -> Self {
+        let mut batch = Self::default();
+        match commit {
+            ConnectionCloseCommit::Current {
+                counts,
+                user_id,
+                connection_id,
+                cleanup,
+                effects,
+                media_effects,
+            } => {
+                batch.observability.push_gauge(counts);
+                let mut diagnostics = DiagnosticsEventData::for_user(
+                    room.uuid(),
+                    &user_id,
+                    telemetry_event::USER_CLOSED,
+                )
+                .with_connection_id(connection_id.as_u64());
+                if let Some(cleanup) = cleanup.as_ref() {
+                    diagnostics = diagnostics
+                        .with_media_worker_id(cleanup.session_key().media_worker_id().as_usize());
+                }
+                batch.extend_media_topology_effects(media_effects);
+                batch.output.push_lifecycle(effects);
+                batch.observability.record(diagnostics);
+                batch.observability.forget_user(user_id);
+                batch.source_policy.route_graph_changed();
+                if let Some(cleanup) = cleanup {
+                    batch.transport.push_cleanup(cleanup);
+                }
+            }
+            ConnectionCloseCommit::StalePlacement { counts, cleanup } => {
+                batch.observability.push_gauge(counts);
+                batch.transport.push_cleanup(cleanup);
+            }
+        }
+        batch
+    }
+
+    fn from_disconnect(room: &Room, commit: DisconnectCommit) -> Self {
+        let mut batch = Self::default();
+        batch.observability.push_gauge(commit.counts);
+        batch.extend_media_topology_effects(commit.media_effects);
+        batch.source_policy.route_graph_changed();
+        batch.output.push_lifecycle(commit.effects);
+        for close_operation in commit.close_operations {
+            let session = close_operation.session_key();
+            batch.observability.record(
+                RoomDiagnosticsContext::new(
+                    session.user_id(),
+                    session.connection_id(),
+                    session.media_worker_id(),
+                )
+                .event_data(room, telemetry_event::USER_DISCONNECTED),
+            );
+            batch.observability.forget_user(session.user_id().clone());
+            batch.transport.push_cleanup(close_operation);
+        }
+        batch
+    }
+
+    fn from_publish(room: &Room, commit: PublishCommit) -> Self {
+        let context = RoomDiagnosticsContext::new(&commit.user, commit.connection, commit.worker);
+        let diagnostics = context
+            .event_data(room, telemetry_event::PUBLISH_COMMITTED)
+            .with_transport_media_id(commit.media.as_u64());
+        let mut batch = Self::default();
+        batch.observability.push_gauge(RoomGaugeDelta::media(
+            commit.publish_before,
+            commit.publish_after,
         ));
-        self.transport.push_cleanup(operation);
+        batch.observability.push_gauge(RoomGaugeDelta::media(
+            commit.setup_before,
+            commit.setup_after,
+        ));
+        batch.push_receiver_work(
+            room,
+            context,
+            commit.receiver_route_work,
+            ConsumerSetupOrigin::Publish,
+        );
+        batch.source_policy.route_graph_changed();
+        batch.observability.record(diagnostics);
+        batch
+    }
+
+    fn from_publication_activity(room: &Room, commit: ProducerActivityCommit) -> Self {
+        let ProducerActivityCommit {
+            source,
+            active,
+            recipients,
+            update,
+        } = commit;
+        let session = source.session_key();
+        let diagnostics = RoomDiagnosticsContext::new(
+            &update.user_id,
+            session.connection_id(),
+            session.media_worker_id(),
+        )
+        .event_data(room, telemetry_event::PUBLICATION_ACTIVITY_CHANGED)
+        .with_transport_media_id(source.transport_media_id().as_u64())
+        .insert_field("active", active)
+        .insert_field("stream_id", update.stream_id.to_string());
+        let mut batch = Self::default();
+        batch.transport.push_producer(source, active, diagnostics);
+        batch.output.push_track_binding(recipients, update);
+        batch.source_policy.fanout_pressure_changed();
+        batch
+    }
+
+    fn from_receiver_route(
+        room: &Room,
+        commit: ReceiverRouteCommit,
+        origin: ConsumerSetupOrigin,
+    ) -> Self {
+        let mut batch = Self::default();
+        batch.observability.push_gauge(commit.counts);
+        batch.push_receiver_work(
+            room,
+            RoomDiagnosticsContext::new(
+                &commit.receiver_user_id,
+                commit.receiver_connection_id,
+                commit.media_worker_id,
+            ),
+            commit.work,
+            origin,
+        );
+        batch
+    }
+
+    fn extend_media_topology_effects(&mut self, effects: MediaTopologyEffects) {
+        self.transport.extend_topology(effects);
     }
 
     fn push_receiver_work(
