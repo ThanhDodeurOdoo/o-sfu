@@ -105,12 +105,6 @@ pub enum Command {
     EmitEvent {
         event: ProtocolEvent,
     },
-    BeginPendingRequest {
-        request_id: RequestId,
-        kind: PendingRequestKind,
-        timeout_timer_id: u32,
-        timeout_ms: u32,
-    },
     ResolvePendingRequest {
         request_id: RequestId,
         ok: bool,
@@ -171,6 +165,21 @@ pub enum NegotiationKind {
 pub enum PendingRequestKind {
     StartRecording,
     StopRecording,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingRequest {
+    pub request_id: RequestId,
+    pub kind: PendingRequestKind,
+    pub timeout_timer_id: u32,
+    pub timeout_ms: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProtocolRequestResult {
+    pub commands: CommandBatch,
+    pub pending_request: Option<PendingRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -609,11 +618,11 @@ impl ProtocolCore {
         ))
     }
 
-    pub fn start_recording(&mut self, options: RecordingOptions) -> CommandBatch {
-        command_batch(request_flow::start_recording(self, options))
+    pub fn start_recording(&mut self, options: RecordingOptions) -> ProtocolRequestResult {
+        request_flow::start_recording(self, options)
     }
-    pub fn stop_recording(&mut self) -> CommandBatch {
-        command_batch(request_flow::stop_recording(self))
+    pub fn stop_recording(&mut self) -> ProtocolRequestResult {
+        request_flow::stop_recording(self)
     }
 
     /// Replies to the currently pending negotiation request.

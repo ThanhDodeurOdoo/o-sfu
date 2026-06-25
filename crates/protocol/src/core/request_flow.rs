@@ -1,13 +1,16 @@
 use super::{
-    CommandBatch, Commands, FlushMode, NegotiationKind, NegotiationRejection, PendingRequestKind,
-    ProtocolCore,
+    CommandBatch, Commands, FlushMode, NegotiationKind, NegotiationRejection, PendingRequest,
+    PendingRequestKind, ProtocolCore, ProtocolRequestResult, REQUEST_TIMEOUT_MS,
 };
 use crate::signaling::{
     ClientEnvelope, ClientRequest, ClientResponse, RecordingOptions, RequestId, ServerRequest,
     ServerResponse, SessionDescriptionPayload,
 };
 
-pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions) -> Commands {
+pub(super) fn start_recording(
+    core: &mut ProtocolCore,
+    options: RecordingOptions,
+) -> ProtocolRequestResult {
     begin_request(
         core,
         ClientRequest::StartRecording(options),
@@ -15,7 +18,7 @@ pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions
     )
 }
 
-pub(super) fn stop_recording(core: &mut ProtocolCore) -> Commands {
+pub(super) fn stop_recording(core: &mut ProtocolCore) -> ProtocolRequestResult {
     begin_request(
         core,
         ClientRequest::StopRecording,
@@ -114,25 +117,33 @@ fn begin_request(
     core: &mut ProtocolCore,
     request: ClientRequest,
     kind: PendingRequestKind,
-) -> Commands {
+) -> ProtocolRequestResult {
     if !core.can_send_client_messages() || core.request_tracker.has_pending_kind(kind) {
-        return Vec::new();
+        return ProtocolRequestResult::default();
     }
     let request_start = core.request_tracker.begin_request(kind);
+    let request_id = request_start.request_id;
+    let pending_request = PendingRequest {
+        request_id: request_id.clone(),
+        kind: request_start.kind,
+        timeout_timer_id: request_start.timeout_timer_id.raw(),
+        timeout_ms: REQUEST_TIMEOUT_MS,
+    };
     let Some(envelope) = ClientEnvelope::Request {
-        request_id: request_start.request_id.clone(),
+        request_id,
         request,
     }
     .into_envelope()
     .ok() else {
-        return Vec::new();
+        return ProtocolRequestResult::default();
     };
 
-    CommandBatch::begin_pending_request(
-        request_start,
-        core.enqueue_envelope(envelope, FlushMode::Batched),
-    )
-    .into_vec()
+    ProtocolRequestResult {
+        commands: CommandBatch::from_core_commands(
+            core.enqueue_envelope(envelope, FlushMode::Batched),
+        ),
+        pending_request: Some(pending_request),
+    }
 }
 
 fn resolve_request(

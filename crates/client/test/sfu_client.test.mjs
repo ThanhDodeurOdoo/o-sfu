@@ -137,26 +137,28 @@ for (const [name, startRequest, ok, expected] of [
 
 test("recording requests without protocol registration resolve false", async () => {
     const core = new FakeProtocolCore();
-    core.startRecording = () => [];
-    core.stopRecording = () => [];
+    core.startRecording = () => requestResult();
+    core.stopRecording = () => requestResult();
     const { client } = createSfuClientHarness({ protocolCore: core });
 
     assert.equal(await client.startRecording({ audio: true }), false);
     assert.equal(await client.stopRecording(), false);
 });
 
-test("duplicate recording request begin is handled as a runtime error", async () => {
+test("duplicate recording request id is handled as a runtime error", async () => {
     const core = new FakeProtocolCore();
-    core.startRecording = () => [
-        beginPendingRequest("record-1", PENDING_REQUEST_KIND.START_RECORDING, 10000),
-        beginPendingRequest("record-2", PENDING_REQUEST_KIND.START_RECORDING, 10001)
-    ];
+    core.startRecording = () =>
+        requestResult(pendingRequest("record-1", PENDING_REQUEST_KIND.START_RECORDING, 10000));
     const { client, handledErrors } = createSfuClientHarness({ protocolCore: core });
 
+    const registeredPromise = client.startRecording({ audio: true });
+    const registeredRejection = assert.rejects(registeredPromise, Error);
+    await tick();
     await assert.rejects(client.startRecording({ audio: true }), Error);
 
     assert.equal(client.errors.length, 1);
     assert.equal(handledErrors[0], client.errors[0]);
+    await registeredRejection;
 });
 
 test("runtime errors reject registered recording requests", async () => {
@@ -185,17 +187,7 @@ test("runtime errors reject registered recording requests", async () => {
 test("pending request rejection includes registered recordings", async () => {
     const pendingRequests = new PendingRequests();
     const registeredPromise = pendingRequests.begin(
-        () => [
-            {
-                ...beginPendingRequest(
-                    "start-recording",
-                    PENDING_REQUEST_KIND.START_RECORDING,
-                    10000
-                )
-            }
-        ],
-        () => undefined,
-        () => undefined
+        pendingRequest("start-recording", PENDING_REQUEST_KIND.START_RECORDING, 10000)
     );
     pendingRequests.rejectAll(new Error("recording runtime failure"));
 
@@ -238,14 +230,17 @@ function createRecoveryHarness(options = {}) {
     };
 }
 
-function beginPendingRequest(requestId, requestKind, timeoutTimerId) {
+function pendingRequest(requestId, kind, timeoutTimerId) {
     return {
-        kind: "beginPendingRequest",
         requestId,
-        requestKind,
+        kind,
         timeoutTimerId,
         timeoutMs: 5000
     };
+}
+
+function requestResult(pendingRequest = null, commands = []) {
+    return { commands, pendingRequest };
 }
 
 async function resolveRealRecordingRequest(startRequest, ok) {

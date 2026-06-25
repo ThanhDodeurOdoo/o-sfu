@@ -5,11 +5,14 @@
 
 use serde_json::json;
 
-use super::{CoreSnapshot, HostCommand, connection_state_tag, project_commands};
+use super::{
+    CoreSnapshot, HostCommand, connection_state_tag, project_commands, project_request_result,
+};
 use crate::{
     bundle_api::BundleConnectionState,
     core::{
-        Command, CommandBatch, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
+        Command, CommandBatch, NegotiationKind, PendingRequest, PendingRequestKind, ProtocolCore,
+        ProtocolEvent, ProtocolRequestResult,
     },
     shared::{StreamType, UserId},
     signaling::{RequestId, SourceDescriptor, TrackBinding},
@@ -52,12 +55,6 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                 state: BundleConnectionState::Connected,
                 cause: Some(String::from("recovered")),
             },
-            Command::BeginPendingRequest {
-                request_id: RequestId::new("11"),
-                kind: PendingRequestKind::StartRecording,
-                timeout_timer_id: 10_000,
-                timeout_ms: 5_000,
-            },
             Command::EmitEvent {
                 event: ProtocolEvent::TrackSnapshot {
                     bindings: vec![TrackBinding {
@@ -94,13 +91,6 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                 "cause": "recovered"
             },
             {
-                "kind": "beginPendingRequest",
-                "requestId": "11",
-                "requestKind": "startRecording",
-                "timeoutTimerId": 10_000,
-                "timeoutMs": 5_000
-            },
-            {
                 "kind": "replaceTrackBindings",
                 "bindings": [
                     {
@@ -117,6 +107,32 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                 "active": true
             }
         ])
+    );
+}
+
+#[test]
+fn host_request_result_serializes_pending_request_fields() {
+    let result = project_request_result(ProtocolRequestResult {
+        commands: CommandBatch::default(),
+        pending_request: Some(PendingRequest {
+            request_id: RequestId::new("11"),
+            kind: PendingRequestKind::StartRecording,
+            timeout_timer_id: 10_000,
+            timeout_ms: 5_000,
+        }),
+    });
+
+    assert_eq!(
+        serde_json::to_value(result).unwrap_or_default(),
+        json!({
+            "commands": [],
+            "pendingRequest": {
+                "requestId": "11",
+                "kind": "startRecording",
+                "timeoutTimerId": 10_000,
+                "timeoutMs": 5_000
+            }
+        })
     );
 }
 

@@ -1,9 +1,6 @@
 use std::{error::Error, fmt, ops::Deref, slice, vec::IntoIter};
 
-use super::{
-    Command, Commands, NegotiationKind, RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS,
-    request_tracker::PendingRequestStart, timers::RequestTimeoutId,
-};
+use super::{Command, NegotiationKind, RECOVERY_TIMER_ID, timers::RequestTimeoutId};
 use crate::signaling::{RequestId, SessionDescriptionPayload, WebSocketCloseCode};
 
 /// ordered host side effects emitted by one protocol-core transition
@@ -40,20 +37,6 @@ impl CommandBatch {
             NegotiationKind::Renegotiate,
             payload,
         )])
-    }
-
-    pub(super) fn begin_pending_request(
-        request_start: PendingRequestStart,
-        outbound: Commands,
-    ) -> Self {
-        let mut commands = vec![Command::BeginPendingRequest {
-            request_id: request_start.request_id,
-            kind: request_start.kind,
-            timeout_timer_id: request_start.timeout_timer_id.raw(),
-            timeout_ms: REQUEST_TIMEOUT_MS,
-        }];
-        commands.extend(outbound);
-        Self::from_core_commands(commands)
     }
 
     /// builds a batch from manually assembled commands
@@ -120,18 +103,6 @@ impl CommandBatch {
                 } => {
                     recovery_index.get_or_insert(index);
                 }
-                Command::BeginPendingRequest {
-                    timeout_timer_id,
-                    timeout_ms,
-                    ..
-                } => {
-                    if RequestTimeoutId::try_from_raw(*timeout_timer_id).is_none() {
-                        return Err(CommandBatchError::InvalidPendingRequestTimeout { index });
-                    }
-                    if *timeout_ms == 0 {
-                        return Err(CommandBatchError::InvalidPendingRequestTimeout { index });
-                    }
-                }
                 _ => {}
             }
         }
@@ -151,7 +122,7 @@ impl CommandBatch {
                 peer_index,
             });
         }
-        validate_request_resolution(commands, close_peer_index.is_some())?;
+        validate_request_resolution(commands, close_peer_index)?;
         Ok(())
     }
 }
@@ -220,9 +191,6 @@ pub enum CommandBatchError {
         request_id: RequestId,
         index: usize,
     },
-    InvalidPendingRequestTimeout {
-        index: usize,
-    },
 }
 
 impl fmt::Display for CommandBatchError {
@@ -254,10 +222,6 @@ impl fmt::Display for CommandBatchError {
                 formatter,
                 "request resolution at index {index} references unknown pending request {request_id:?}"
             ),
-            Self::InvalidPendingRequestTimeout { index } => write!(
-                formatter,
-                "pending request start at index {index} uses invalid timeout configuration"
-            ),
         }
     }
 }
@@ -279,13 +243,15 @@ fn apply_negotiation(
 
 fn validate_request_resolution(
     commands: &[Command],
-    closes_peer: bool,
+    close_peer_index: Option<usize>,
 ) -> Result<(), CommandBatchError> {
     for (index, command) in commands.iter().enumerate() {
         let Command::ResolvePendingRequest { request_id, .. } = command else {
             continue;
         };
-        if closes_peer || has_prior_resolution_evidence(commands, request_id, index) {
+        if close_peer_index.is_some_and(|close_index| close_index < index)
+            || has_prior_timeout_cancel(commands, index)
+        {
             continue;
         }
         return Err(CommandBatchError::UnknownResolvedRequest {
@@ -296,19 +262,7 @@ fn validate_request_resolution(
     Ok(())
 }
 
-fn has_prior_resolution_evidence(
-    commands: &[Command],
-    request_id: &RequestId,
-    resolve_index: usize,
-) -> bool {
-    if commands.iter().take(resolve_index).any(|command| {
-        matches!(
-            command,
-            Command::BeginPendingRequest { request_id: id, .. } if id == request_id
-        )
-    }) {
-        return true;
-    }
+fn has_prior_timeout_cancel(commands: &[Command], resolve_index: usize) -> bool {
     let Some(previous_index) = resolve_index.checked_sub(1) else {
         return false;
     };

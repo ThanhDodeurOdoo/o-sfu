@@ -211,7 +211,8 @@ async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend
         connect_protocol_recording_peer(&server, &room).await,
         "recording protocol peer should connect",
     )?;
-    peer.pending_request_commands.clear();
+    peer.pending_request_starts.clear();
+    peer.pending_request_resolutions.clear();
     peer.updates.clear();
 
     require_some(
@@ -223,7 +224,8 @@ async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend
         "start recording request should be rejected",
     )?;
 
-    peer.pending_request_commands.clear();
+    peer.pending_request_starts.clear();
+    peer.pending_request_resolutions.clear();
     peer.updates.clear();
 
     require_some(

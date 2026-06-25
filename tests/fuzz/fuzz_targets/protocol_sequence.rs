@@ -15,22 +15,21 @@
 //! 3. emitted commands may be followed up with negotiation answers or request
 //!    responses so multi-step flows keep progressing.
 
-use libfuzzer_sys::arbitrary;
 use libfuzzer_sys::{
+    arbitrary,
     arbitrary::{Arbitrary, Error, Unstructured},
     fuzz_target,
 };
 use o_sfu_protocol::{
-    host::{Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID},
-    wire::{
-        AvailableFeatures, RecordingState, RecordingStateUpdate, UserId, UserInfo, StopCode,
-        StreamType,
+    host::{
+        Command, ConnectionState, PendingRequest, PendingRequestKind, ProtocolCore,
+        RECOVERY_TIMER_ID,
     },
     wire::{
-        PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions,
-        RequestId, ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest,
-        ServerResponse, SessionDescriptionPayload, TrackBinding, WebSocketCloseCode,
-        WelcomePayload,
+        AvailableFeatures, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
+        RecordingOptions, RecordingState, RecordingStateUpdate, RequestId, ServerBroadcastPayload,
+        ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload,
+        StopCode, StreamType, TrackBinding, UserId, UserInfo, WebSocketCloseCode, WelcomePayload,
     },
 };
 use serde_json::Value;
@@ -77,7 +76,7 @@ struct ConnectInput {
 struct HandshakeInput {
     welcome: WelcomeInput,
     extra_events: Vec<ServerEventInput>,
-    followups: FollowupInput,
+    negotiation_followup: NegotiationFollowup,
 }
 
 impl<'a> Arbitrary<'a> for HandshakeInput {
@@ -85,7 +84,7 @@ impl<'a> Arbitrary<'a> for HandshakeInput {
         Ok(Self {
             welcome: u.arbitrary()?,
             extra_events: arbitrary_vec(u, MAX_HANDSHAKE_EVENTS)?,
-            followups: u.arbitrary()?,
+            negotiation_followup: u.arbitrary()?,
         })
     }
 }
@@ -94,7 +93,7 @@ impl<'a> Arbitrary<'a> for HandshakeInput {
 enum Step {
     ServerBatch {
         batch: BatchInput,
-        followups: FollowupInput,
+        negotiation_followup: NegotiationFollowup,
     },
     TransportReady,
     Timer(TimerInput),
@@ -124,12 +123,6 @@ impl<'a> Arbitrary<'a> for BatchInput {
         }
         Ok(Self { events })
     }
-}
-
-#[derive(Debug, Clone, Copy, Arbitrary)]
-struct FollowupInput {
-    negotiation: NegotiationFollowup,
-    pending_request: PendingRequestFollowup,
 }
 
 #[derive(Debug, Clone, Copy, Arbitrary)]
@@ -337,15 +330,22 @@ fuzz_target!(|scenario: Scenario| {
 
     if let Some(frame) = initial_handshake_frame(&scenario.handshake) {
         let commands = core.on_ws_message(&frame);
-        process_followups(&mut core, &commands, scenario.handshake.followups);
+        process_negotiation_followup(
+            &mut core,
+            &commands,
+            scenario.handshake.negotiation_followup,
+        );
     }
 
     for step in scenario.steps {
         match step {
-            Step::ServerBatch { batch, followups } => {
+            Step::ServerBatch {
+                batch,
+                negotiation_followup,
+            } => {
                 if let Some(frame) = batch.frame_for_state(core.state()) {
                     let commands = core.on_ws_message(&frame);
-                    process_followups(&mut core, &commands, followups);
+                    process_negotiation_followup(&mut core, &commands, negotiation_followup);
                 }
             }
             Step::TransportReady => {
@@ -361,25 +361,19 @@ fuzz_target!(|scenario: Scenario| {
                 let _ = core.disconnect();
             }
             Step::StartRecording { options, followup } => {
-                let commands = core.start_recording(options.into_protocol());
-                process_followups(
+                let result = core.start_recording(options.into_protocol());
+                process_pending_request_followup(
                     &mut core,
-                    &commands,
-                    FollowupInput {
-                        negotiation: NegotiationFollowup::Ignore,
-                        pending_request: followup,
-                    },
+                    result.pending_request.as_ref(),
+                    followup,
                 );
             }
             Step::StopRecording { followup } => {
-                let commands = core.stop_recording();
-                process_followups(
+                let result = core.stop_recording();
+                process_pending_request_followup(
                     &mut core,
-                    &commands,
-                    FollowupInput {
-                        negotiation: NegotiationFollowup::Ignore,
-                        pending_request: followup,
-                    },
+                    result.pending_request.as_ref(),
+                    followup,
                 );
             }
             Step::Connect(connect) => {
@@ -749,27 +743,35 @@ impl CloseInput {
     }
 }
 
-fn process_followups(core: &mut ProtocolCore, commands: &[Command], followups: FollowupInput) {
+fn process_negotiation_followup(
+    core: &mut ProtocolCore,
+    commands: &[Command],
+    followup: NegotiationFollowup,
+) {
+    if !matches!(followup, NegotiationFollowup::Answer) {
+        return;
+    }
     for command in commands {
-        match command {
-            Command::ApplyNegotiation {
-                request_id, kind, ..
-            } if matches!(followups.negotiation, NegotiationFollowup::Answer) => {
-                let _ = core.submit_negotiation_answer(request_id, *kind, ANSWER_SDP);
-            }
-            Command::BeginPendingRequest {
-                request_id, kind, ..
-            }
-                if !matches!(followups.pending_request, PendingRequestFollowup::Ignore) =>
-            {
-                if let Some(frame) =
-                    pending_request_response_frame(request_id, *kind, followups.pending_request)
-                {
-                    let _ = core.on_ws_message(&frame);
-                }
-            }
-            _ => {}
+        if let Command::ApplyNegotiation {
+            request_id, kind, ..
+        } = command
+        {
+            let _ = core.submit_negotiation_answer(request_id, *kind, ANSWER_SDP);
         }
+    }
+}
+
+fn process_pending_request_followup(
+    core: &mut ProtocolCore,
+    request: Option<&PendingRequest>,
+    followup: PendingRequestFollowup,
+) {
+    let Some(request) = request else {
+        return;
+    };
+    if let Some(frame) = pending_request_response_frame(&request.request_id, request.kind, followup)
+    {
+        let _ = core.on_ws_message(&frame);
     }
 }
 

@@ -16,11 +16,17 @@ import {
 import type { NegotiationKind } from "./protocol_contract.js";
 import {
     type HostCommand,
+    type ProtocolRequestResult,
     validateHostCommandBatch,
-    validateHostCommandShapes
+    validateHostCommandShapes,
+    validateProtocolRequestResult
 } from "./protocol_host_commands.js";
 
-export type { HostCommand } from "./protocol_host_commands.js";
+export type {
+    HostCommand,
+    PendingRequest,
+    ProtocolRequestResult
+} from "./protocol_host_commands.js";
 
 export interface ProtocolCoreBindings {
     readonly state: ConnectionState;
@@ -37,8 +43,8 @@ export interface ProtocolCoreBindings {
     subscribe(sessionId: SessionId, states: DownloadStates): HostCommand[];
     updateInfo(info: SessionInfo): HostCommand[];
     broadcast(message: unknown): HostCommand[];
-    startRecording(options?: RecordingOptions): HostCommand[];
-    stopRecording(): HostCommand[];
+    startRecording(options?: RecordingOptions): ProtocolRequestResult;
+    stopRecording(): ProtocolRequestResult;
     submitNegotiationAnswer(
         requestId: string,
         negotiationKind: NegotiationKind,
@@ -100,9 +106,17 @@ function wrapProtocolCoreBindingsWith(
         broadcast: (message) =>
             validateCommands(bindings.broadcast(message), "protocol core broadcast()"),
         startRecording: (options) =>
-            validateCommands(bindings.startRecording(options), "protocol core startRecording()"),
+            validateProtocolRequestResult(
+                bindings.startRecording(options),
+                "protocol core startRecording()",
+                validateCommands
+            ),
         stopRecording: () =>
-            validateCommands(bindings.stopRecording(), "protocol core stopRecording()"),
+            validateProtocolRequestResult(
+                bindings.stopRecording(),
+                "protocol core stopRecording()",
+                validateCommands
+            ),
         submitNegotiationAnswer: (requestId, negotiationKind, sdp) =>
             validateCommands(
                 bindings.submitNegotiationAnswer(requestId, negotiationKind, sdp),
