@@ -150,14 +150,19 @@ export class BrowserRuntime {
         );
         if (replacing) {
             if (transition.boundMid) {
-                this.enqueue([
-                    { kind: COMMAND_KIND.ATTACH_TRACK, mid: transition.boundMid, streamType: type }
-                ]);
+                const mid = transition.boundMid;
+                this.enqueueTask(async () => {
+                    this.log(CLIENT_LOG_LEVEL.INFO, `attaching ${type} track to mid ${mid}`);
+                    await this._peerSession.attachTrack(mid, type);
+                });
             }
             return;
         }
         if (transition.hadTrack) {
-            this.enqueue([{ kind: COMMAND_KIND.DETACH_TRACK, streamType: type }]);
+            this.enqueueTask(async () => {
+                this.log(CLIENT_LOG_LEVEL.INFO, `detaching ${type} track from the peer connection`);
+                await this._peerSession.detachTrack(type);
+            });
         }
         this.enqueueProtocolCommands(() => this._core.publish(type, transition.hasTrack));
     }
@@ -251,20 +256,6 @@ export class BrowserRuntime {
                 }
                 return commands;
             }
-            case COMMAND_KIND.ATTACH_TRACK:
-                this.log(
-                    CLIENT_LOG_LEVEL.INFO,
-                    `attaching ${command.streamType} track to mid ${command.mid}`
-                );
-                await this._peerSession.attachTrack(command.mid, command.streamType);
-                return [];
-            case COMMAND_KIND.DETACH_TRACK:
-                this.log(
-                    CLIENT_LOG_LEVEL.INFO,
-                    `detaching ${command.streamType} track from the peer connection`
-                );
-                await this._peerSession.detachTrack(command.streamType);
-                return [];
             case COMMAND_KIND.CREATE_PEER_CONNECTION:
                 this._peerSession.create();
                 return [];

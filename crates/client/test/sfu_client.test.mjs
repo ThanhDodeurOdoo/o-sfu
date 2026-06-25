@@ -1097,7 +1097,7 @@ test("publish replaces an already attached local sender track without re-publish
     client.publish("camera", firstTrack);
     await tick();
 
-    await emitMessage("offer-with-attach-camera");
+    await emitMessage("offer");
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, firstTrack);
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
@@ -1123,7 +1123,7 @@ test("publish detaches the local sender before signaling unpublish", async () =>
 
     client.publish("camera", track);
     await tick();
-    await emitMessage("offer-with-attach-camera");
+    await emitMessage("offer");
 
     assert.equal(peerConnections[0].transceivers[1].sender.track, track);
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
@@ -1412,7 +1412,7 @@ test("getStats exposes compatibility-shaped transport and producer stats", async
     client.updateUpload("camera", createCameraTrack("camera-track-compat"));
     await tick();
 
-    await emitMessage("offer-with-attach-camera");
+    await emitMessage("offer");
 
     const stats = await client.getStats();
 

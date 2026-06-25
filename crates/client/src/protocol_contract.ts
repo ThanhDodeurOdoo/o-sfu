@@ -136,8 +136,6 @@ export const COMMAND_KIND = {
     APPLY_NEGOTIATION: "applyNegotiation",
     CREATE_PEER_CONNECTION: "createPeerConnection",
     CLOSE_PEER_CONNECTION: "closePeerConnection",
-    ATTACH_TRACK: "attachTrack",
-    DETACH_TRACK: "detachTrack",
     REPLACE_TRACK_BINDINGS: "replaceTrackBindings",
     REMOVE_SESSION_TRACKS: "removeSessionTracks",
     EMIT_STATE_CHANGE: "emitStateChange",

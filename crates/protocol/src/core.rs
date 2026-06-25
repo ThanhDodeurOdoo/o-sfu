@@ -90,15 +90,6 @@ pub enum Command {
         sdp: String,
         upload_slots: Vec<NegotiationUploadSlot>,
     },
-    /// Bind an incoming RTP track (identified by its SDP mid) to a stream type.
-    AttachTrack {
-        mid: String,
-        stream_type: StreamType,
-    },
-    /// Remove the local track for the given stream type.
-    DetachTrack {
-        stream_type: StreamType,
-    },
     CreatePeerConnection,
     ClosePeerConnection,
     CloseWebSocket {

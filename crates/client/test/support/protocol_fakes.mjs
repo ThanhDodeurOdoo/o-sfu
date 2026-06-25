@@ -108,17 +108,6 @@ export class FakeProtocolCore {
                     initialOfferCommand("7"),
                     ...this._replaceTrackBindings()
                 ]);
-            case "offer-with-attach-camera":
-                return this._withPendingNegotiationKind([
-                    { kind: "createPeerConnection" },
-                    initialOfferCommand("8"),
-                    {
-                        kind: "attachTrack",
-                        mid: "1",
-                        streamType: "camera"
-                    },
-                    ...this._replaceTrackBindings()
-                ]);
             case "info-change-map":
                 return [
                     {
