@@ -128,6 +128,11 @@ fn topology_replacement_rehomes_and_prunes_old_receiver_shadow() {
     );
     assert!(join_on_router(&mut topology, &consumer_user_id, 2, 11, 2).is_ok());
 
+    assert!(
+        topology
+            .retire_committed_placement(&consumer_user_id, ConnectionId::from_raw(1))
+            .is_none()
+    );
     assert_eq!(
         topology.home_router_id_for_user(&consumer_user_id),
         Some(RouterId(11))

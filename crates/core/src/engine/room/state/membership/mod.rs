@@ -303,21 +303,22 @@ impl RoomState {
     ) -> Option<ConnectionCloseCommit> {
         let users_before = self.users.len();
         let media_before = self.media_counts();
-        let cleanup = self
-            .committed_transport_user_key(user_id, connection_id)
-            .map(|session_key| TransportCleanupOperation::CloseUser { session_key });
         if self
             .users
             .get(user_id)
             .is_none_or(|user| user.connection_id != connection_id)
         {
-            self.topology
-                .unregister_committed_placement(user_id, connection_id);
-            return cleanup.map(|cleanup| ConnectionCloseCommit::StalePlacement {
+            let session_key = self
+                .topology
+                .retire_committed_placement(user_id, connection_id)?;
+            return Some(ConnectionCloseCommit::StalePlacement {
                 counts: self.membership_delta(users_before, media_before),
-                cleanup,
+                cleanup: TransportCleanupOperation::CloseUser { session_key },
             });
         }
+        let cleanup = self
+            .committed_transport_user_key(user_id, connection_id)
+            .map(|session_key| TransportCleanupOperation::CloseUser { session_key });
         let (user, media_effects) = self.remove_runtime_user(user_id)?;
         Some(ConnectionCloseCommit::Current {
             counts: self.membership_delta(users_before, media_before),
