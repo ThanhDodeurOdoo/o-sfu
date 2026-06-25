@@ -19,7 +19,6 @@ pub(super) use crate::{
 };
 
 mod batching;
-mod command_batch;
 mod connection;
 mod negotiation;
 mod recovery;

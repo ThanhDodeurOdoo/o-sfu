@@ -3,6 +3,7 @@ use o_sfu_router::{
     MediaKind, Router, RouterError, RouterId,
     ids::{ConsumerId, ProducerId, SessionId as RouterSessionId, TransportId},
     state::{ConsumerCapability, ConsumerSpec, ProducerSpec, Session},
+    test_support::router_state_snapshot,
 };
 
 fn user(id: RouterSessionId) -> Session {
@@ -51,7 +52,7 @@ fn router_session_teardown_keeps_remaining_routing_consistent() {
     );
 
     assert_eq!(router.remove_session(RouterSessionId(10)), Ok(()));
-    assert_eq!(router.session_count(), 1);
+    assert_eq!(router_state_snapshot(&router).session_count(), 1);
     assert_eq!(
         router
             .session(RouterSessionId(20))

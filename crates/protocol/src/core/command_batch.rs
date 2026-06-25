@@ -9,6 +9,15 @@ pub struct CommandBatch {
     commands: Vec<Command>,
 }
 
+#[cfg(test)]
+#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[path = "command_batch/TESTS/mod.rs"]
+mod TESTS;
+
+#[cfg(any(test, feature = "test-support"))]
+#[path = "command_batch/TESTS/test_support.rs"]
+pub mod test_support;
+
 impl CommandBatch {
     pub(super) fn from_core_commands(commands: Vec<Command>) -> Self {
         assert!(
@@ -37,21 +46,6 @@ impl CommandBatch {
             NegotiationKind::Renegotiate,
             payload,
         )])
-    }
-
-    /// builds a batch from manually assembled commands
-    ///
-    /// this is intended for tests and host bridges that need to validate an
-    /// externally assembled batch before projecting it to host-specific work
-    ///
-    /// # Errors
-    ///
-    /// returns [`CommandBatchError`] when the command order can make the host
-    /// execute negotiation, close, recovery, or request-resolution effects in an
-    /// invalid sequence
-    pub fn try_from_vec(commands: Vec<Command>) -> Result<Self, CommandBatchError> {
-        Self::validate_commands(&commands)?;
-        Ok(Self { commands })
     }
 
     #[must_use]
@@ -159,20 +153,8 @@ impl<'a> IntoIterator for &'a CommandBatch {
     }
 }
 
-impl PartialEq<Vec<Command>> for CommandBatch {
-    fn eq(&self, other: &Vec<Command>) -> bool {
-        self.commands == *other
-    }
-}
-
-impl PartialEq<CommandBatch> for Vec<Command> {
-    fn eq(&self, other: &CommandBatch) -> bool {
-        *self == other.commands
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommandBatchError {
+enum CommandBatchError {
     InitialNegotiationWithoutPeerCreate {
         index: usize,
     },

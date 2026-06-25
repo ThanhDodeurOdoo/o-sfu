@@ -802,12 +802,6 @@ impl SessionOffer {
     }
 
     #[must_use]
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn into_sdp(self) -> String {
-        self.sdp
-    }
-
-    #[must_use]
     pub fn into_parts(self) -> (String, Vec<SessionUploadSlot>) {
         (self.sdp, self.upload_slots)
     }

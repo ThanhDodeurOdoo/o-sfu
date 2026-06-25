@@ -54,8 +54,8 @@ fn protocol_core_tracks_recording_request_until_matching_response() -> Result<()
     let response_commands = core.on_ws_message(&response_frame);
 
     assert_eq!(
-        response_commands,
-        vec![
+        response_commands.as_slice(),
+        &[
             Command::CancelTimer {
                 id: pending_request.timeout_timer_id,
             },
@@ -83,8 +83,8 @@ fn protocol_core_request_timeout_resolves_pending_request_as_failed() -> Result<
     let timeout_commands = core.on_timer(pending_request.timeout_timer_id);
 
     assert_eq!(
-        timeout_commands,
-        vec![
+        timeout_commands.as_slice(),
+        &[
             Command::CancelTimer {
                 id: pending_request.timeout_timer_id,
             },

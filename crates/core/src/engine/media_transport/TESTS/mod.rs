@@ -436,9 +436,9 @@ async fn rtc_workers_room_bootstrap_by_explicit_media_worker() {
     let second_offer = expect_initial_offer(&adapter, &second_room_session).await;
     let same_worker_offer = expect_initial_offer(&adapter, &same_worker_session).await;
 
-    let first_port = expect_first_candidate_port(&first_offer.into_sdp());
-    let second_port = expect_first_candidate_port(&second_offer.into_sdp());
-    let same_worker_port = expect_first_candidate_port(&same_worker_offer.into_sdp());
+    let first_port = expect_first_candidate_port(&first_offer.into_parts().0);
+    let second_port = expect_first_candidate_port(&second_offer.into_parts().0);
+    let same_worker_port = expect_first_candidate_port(&same_worker_offer.into_parts().0);
 
     let mut worker_ranges = rtc_port_range
         .split_for_workers(2)

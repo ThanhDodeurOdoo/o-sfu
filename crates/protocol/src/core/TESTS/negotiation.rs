@@ -8,8 +8,8 @@ fn protocol_core_emits_negotiation_command_and_accepts_matching_answer() {
     let offer_commands = core.on_ws_message(&offer_frame);
 
     assert_eq!(
-        offer_commands,
-        vec![
+        offer_commands.as_slice(),
+        &[
             Command::CreatePeerConnection,
             Command::ApplyNegotiation {
                 request_id: RequestId::new("offer-1"),
@@ -46,8 +46,8 @@ fn protocol_core_rejects_overlapping_negotiation_requests() {
     let commands = core.on_ws_message(&second_offer);
 
     assert_eq!(
-        commands,
-        vec![Command::CloseWebSocket {
+        commands.as_slice(),
+        &[Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
     );
@@ -61,8 +61,8 @@ fn protocol_core_rejects_initial_offer_after_transport_ready() {
     let commands = core.on_ws_message(&late_offer);
 
     assert_eq!(
-        commands,
-        vec![Command::CloseWebSocket {
+        commands.as_slice(),
+        &[Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
     );
@@ -77,8 +77,8 @@ fn protocol_core_rejects_renegotiation_before_transport_ready() {
     let commands = core.on_ws_message(&renegotiation_frame);
 
     assert_eq!(
-        commands,
-        vec![Command::CloseWebSocket {
+        commands.as_slice(),
+        &[Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
     );
@@ -102,8 +102,8 @@ fn protocol_core_waits_for_initial_answer_before_transport_ready() {
     assert_eq!(decode_sent_batch(&answer_commands).len(), 1);
 
     assert_eq!(
-        core.on_transport_ready(),
-        vec![Command::EmitStateChange {
+        core.on_transport_ready().as_slice(),
+        &[Command::EmitStateChange {
             state: ConnectionState::Connected,
             cause: None,
         }]
@@ -120,8 +120,8 @@ fn protocol_core_accepts_renegotiation_after_transport_ready() {
     let commands = core.on_ws_message(&renegotiation_frame);
 
     assert_eq!(
-        commands,
-        vec![Command::ApplyNegotiation {
+        commands.as_slice(),
+        &[Command::ApplyNegotiation {
             request_id: RequestId::new("renegotiate-1"),
             kind: NegotiationKind::Renegotiate,
             sdp: String::from("v=0\r\ns=renegotiate\r\n"),

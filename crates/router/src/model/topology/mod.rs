@@ -490,26 +490,6 @@ impl RoutingTopology {
         Ok(routed_producer_id)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    /// create an active routed consumer on the producer's source router
-    ///
-    /// # Errors
-    ///
-    /// returns the same errors as [`RoutingTopology::add_consumer_with_route_state`]
-    pub fn add_consumer(
-        &mut self,
-        consumer_user_id: &UserId,
-        producer_id: RoutedProducerId,
-        capability: ConsumerCapability,
-    ) -> Result<RoutedConsumerId, RoutingError> {
-        self.add_consumer_with_route_state(
-            consumer_user_id,
-            producer_id,
-            capability,
-            ConsumerRouteState::Active,
-        )
-    }
-
     /// create a routed consumer on the producer's source router
     ///
     /// cross-router receivers get a temporary shadow session before consumer insertion

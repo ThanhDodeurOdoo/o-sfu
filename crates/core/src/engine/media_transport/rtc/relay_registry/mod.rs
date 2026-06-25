@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 use super::{forwarded_packet::ForwardedPacket, state::PacketLoopState};
 use crate::engine::media_transport::TransportMediaId;
 
-#[cfg(any(test, feature = "testing-transport"))]
+#[cfg(test)]
 #[path = "TESTS/support.rs"]
 mod test_support;
 

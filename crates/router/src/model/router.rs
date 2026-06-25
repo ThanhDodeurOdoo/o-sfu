@@ -60,20 +60,6 @@ impl<O: RouterObserver> Router<O> {
         self.id
     }
 
-    #[must_use]
-    pub fn session_count(&self) -> usize {
-        self.sessions.len()
-    }
-
-    /// iterate live sessions without exposing mutable router state
-    ///
-    /// callers should treat this as an inspection surface only
-    /// topology changes still have to go through the mutation methods so reverse
-    /// indexes remain exact
-    pub fn sessions(&self) -> impl Iterator<Item = &Session> {
-        self.sessions.values()
-    }
-
     /// admit a new session to the router
     ///
     /// this is the first state transition for a participant

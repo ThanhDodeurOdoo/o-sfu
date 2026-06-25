@@ -201,14 +201,6 @@ pub struct UserInfo {
 }
 
 impl UserInfo {
-    /// return a complete snapshot with every presence field set to `false`
-    ///
-    /// this avoids missing-field ambiguity in initial empty room projections
-    #[must_use]
-    pub fn snapshot_defaults() -> Self {
-        Self::default().snapshot_complete()
-    }
-
     /// fill missing presence fields with `false` for snapshot emission
     ///
     /// partial updates keep `None` to mean "unchanged"
@@ -304,20 +296,6 @@ impl DownloadStates {
             camera_layout: update.camera_layout.or(self.camera_layout),
             screen_layout: update.screen_layout.or(self.screen_layout),
         };
-    }
-
-    /// iterate over explicit stream toggles in this update
-    ///
-    /// layout preferences are not yielded because they do not map one-to-one to
-    /// enabling or disabling a media stream
-    pub fn iter(&self) -> impl Iterator<Item = (StreamType, bool)> + '_ {
-        [
-            self.audio.map(|v| (StreamType::Audio, v)),
-            self.camera.map(|v| (StreamType::Camera, v)),
-            self.screen.map(|v| (StreamType::Screen, v)),
-        ]
-        .into_iter()
-        .flatten()
     }
 }
 

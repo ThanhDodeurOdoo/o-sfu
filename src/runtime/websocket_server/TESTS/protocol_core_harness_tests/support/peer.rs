@@ -7,7 +7,7 @@ use futures_util::SinkExt;
 use o_sfu_protocol::{
     host::{
         Command, CommandBatch, HostCommand, NegotiationKind, PendingRequest, ProtocolCore,
-        project_commands,
+        project_commands, test_support::command_batch,
     },
     wire::RecordingOptions,
 };
@@ -213,8 +213,7 @@ impl ProtocolHarnessPeer {
                 .submit_negotiation_answer(&pending.request_id, pending.kind, &answer_sdp);
         let mut raw_commands = commands.into_vec();
         raw_commands.extend(self.core.on_transport_ready());
-        self.run_commands(CommandBatch::try_from_vec(raw_commands).ok()?)
-            .await
+        self.run_commands(command_batch(raw_commands).ok()?).await
     }
 
     pub(crate) async fn run_commands(&mut self, commands: CommandBatch) -> Option<()> {
@@ -239,7 +238,7 @@ impl ProtocolHarnessPeer {
                     Vec::new()
                 }
                 command @ Command::EmitEvent { .. } => {
-                    let batch = CommandBatch::try_from_vec(vec![command]).ok()?;
+                    let batch = command_batch(vec![command]).ok()?;
                     for host_command in project_commands(batch) {
                         if let HostCommand::EmitUpdate { update } = host_command {
                             self.updates.push(update);

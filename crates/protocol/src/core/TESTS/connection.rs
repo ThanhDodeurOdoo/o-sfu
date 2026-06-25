@@ -12,8 +12,8 @@ fn protocol_core_connect_emits_connecting_state_and_socket_command() {
 
     assert_eq!(core.state(), ConnectionState::Connecting);
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::EmitStateChange {
                 state: ConnectionState::Connecting,
                 cause: None,
@@ -73,8 +73,8 @@ fn protocol_core_welcome_transitions_to_authenticated_and_emits_peer_snapshot() 
     assert!(core.features().video_recording);
     assert_eq!(core.recording_state().recording, Some(false));
     assert_eq!(
-        commands,
-        vec![
+        commands.as_slice(),
+        &[
             Command::EmitStateChange {
                 state: ConnectionState::Authenticated,
                 cause: None,
@@ -104,8 +104,8 @@ fn protocol_core_transport_ready_transitions_to_connected() {
 
     assert_eq!(core.state(), ConnectionState::Connected);
     assert_eq!(
-        commands,
-        vec![Command::EmitStateChange {
+        commands.as_slice(),
+        &[Command::EmitStateChange {
             state: ConnectionState::Connected,
             cause: None,
         }]
@@ -129,8 +129,8 @@ fn protocol_core_closes_on_invalid_server_batch() {
     let commands = core.on_ws_message("{not json");
 
     assert_eq!(
-        commands,
-        vec![Command::CloseWebSocket {
+        commands.as_slice(),
+        &[Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
     );
@@ -149,8 +149,8 @@ fn protocol_core_rejects_malformed_batch_without_partial_state() -> serde_json::
     let commands = core.on_ws_message(&frame);
 
     assert_eq!(
-        commands,
-        vec![Command::CloseWebSocket {
+        commands.as_slice(),
+        &[Command::CloseWebSocket {
             code: u16::from(WebSocketCloseCode::ProtocolError),
         }]
     );

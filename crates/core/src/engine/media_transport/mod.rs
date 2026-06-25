@@ -50,8 +50,6 @@ pub mod fuzz_support {
         client_rtp_capabilities_from_answer, fuzz_support::route_packet_loop_ingress_demux,
     };
 }
-#[cfg(any(test, feature = "testing-transport"))]
-pub use rtc::ForwardedPacket;
 use rtc::{RtcWorker, RtcWorkerCommand, RtcWorkerResponse};
 use tracing::warn;
 pub use types::{

@@ -1,34 +1,39 @@
 use super::*;
-use crate::core::{CommandBatch, CommandBatchError};
 
 macro_rules! assert_invalid {
     ($commands:expr, $error:pat) => {
-        assert!(matches!(CommandBatch::try_from_vec($commands), Err($error)));
+        assert!(matches!(
+            CommandBatch::validate_commands($commands),
+            Err($error)
+        ));
     };
 }
 
 #[test]
-fn try_from_vec_rejects_invalid_command_order() {
+fn validation_rejects_invalid_command_order() {
     assert_invalid!(
-        vec![apply_negotiation("offer-1", NegotiationKind::Offer)],
+        &[apply_negotiation_for_test(
+            "offer-1",
+            NegotiationKind::Offer
+        )],
         CommandBatchError::InitialNegotiationWithoutPeerCreate { index: 0 }
     );
     assert_invalid!(
-        vec![
+        &[
             Command::CreatePeerConnection,
-            apply_negotiation("renegotiate-1", NegotiationKind::Renegotiate),
+            apply_negotiation_for_test("renegotiate-1", NegotiationKind::Renegotiate),
         ],
         CommandBatchError::RenegotiationRecreatesPeer { index: 1 }
     );
     assert_invalid!(
-        vec![Command::ClosePeerConnection, close_websocket()],
+        &[Command::ClosePeerConnection, close_websocket()],
         CommandBatchError::WebSocketCloseAfterPeerClose {
             websocket_index: 1,
             peer_index: 0
         }
     );
     assert_invalid!(
-        vec![
+        &[
             Command::ClosePeerConnection,
             close_websocket(),
             Command::ClosePeerConnection,
@@ -39,14 +44,14 @@ fn try_from_vec_rejects_invalid_command_order() {
         }
     );
     assert_invalid!(
-        vec![recovery_timer(), Command::ClosePeerConnection],
+        &[recovery_timer(), Command::ClosePeerConnection],
         CommandBatchError::RecoveryScheduledBeforePeerClose {
             recovery_index: 0,
             peer_index: 1
         }
     );
     assert_invalid!(
-        vec![
+        &[
             recovery_timer(),
             Command::ClosePeerConnection,
             recovery_timer(),
@@ -57,7 +62,7 @@ fn try_from_vec_rejects_invalid_command_order() {
         }
     );
     assert_invalid!(
-        vec![Command::ResolvePendingRequest {
+        &[Command::ResolvePendingRequest {
             request_id: RequestId::new("missing"),
             ok: false,
         }],
@@ -71,7 +76,10 @@ fn try_from_vec_rejects_invalid_command_order() {
 #[test]
 #[should_panic(expected = "protocol core emitted an invalid command batch")]
 fn from_core_commands_panics_on_invalid_order() {
-    CommandBatch::from_core_commands(vec![apply_negotiation("offer-1", NegotiationKind::Offer)]);
+    CommandBatch::from_core_commands(vec![apply_negotiation_for_test(
+        "offer-1",
+        NegotiationKind::Offer,
+    )]);
 }
 
 const fn close_websocket() -> Command {
@@ -85,7 +93,7 @@ const fn recovery_timer() -> Command {
     }
 }
 
-fn apply_negotiation(request_id: &str, kind: NegotiationKind) -> Command {
+fn apply_negotiation_for_test(request_id: &str, kind: NegotiationKind) -> Command {
     Command::ApplyNegotiation {
         request_id: RequestId::new(request_id),
         kind,

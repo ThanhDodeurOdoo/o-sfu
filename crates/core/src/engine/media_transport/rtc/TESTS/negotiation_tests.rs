@@ -27,7 +27,7 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     let session_key = transport_key(1, 34, UserId::Integer(34));
 
     let offer = expect_initial_offer(&adapter, &session_key).await;
-    let offer_sdp = offer.into_sdp();
+    let offer_sdp = offer.into_parts().0;
     assert!(offer_sdp.contains("m=audio"));
     assert!(offer_sdp.contains("m=video"));
     assert!(offer_sdp.contains("a=recvonly"));
@@ -274,7 +274,8 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
 
     let offer_sdp = expect_initial_offer(&adapter, &session_key)
         .await
-        .into_sdp();
+        .into_parts()
+        .0;
     let mut remote = reduced_capability_probe_rtc();
     remote
         .add_local_candidate(
@@ -344,7 +345,8 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged simulcast renegotiation offer should be available")
-        .into_sdp();
+        .into_parts()
+        .0;
     assert!(
         renegotiation_offer.contains(&sdp_rid_line(
             "lo",
@@ -432,7 +434,8 @@ async fn rtc_simulcast_answer_rejects_unoffered_rid_alternatives() {
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged simulcast renegotiation offer should be available")
-        .into_sdp();
+        .into_parts()
+        .0;
     let answer_sdp = remote
         .sdp_api()
         .accept_offer(
@@ -488,7 +491,8 @@ async fn rtc_simulcast_answer_rejects_unoffered_plain_rid() {
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged simulcast renegotiation offer should be available")
-        .into_sdp();
+        .into_parts()
+        .0;
     let answer_sdp = remote
         .sdp_api()
         .accept_offer(
@@ -533,7 +537,8 @@ async fn rtc_simulcast_answer_rejects_larger_max_br_than_offer() {
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged simulcast renegotiation offer should be available")
-        .into_sdp();
+        .into_parts()
+        .0;
     let answer_sdp = remote
         .sdp_api()
         .accept_offer(
@@ -577,7 +582,8 @@ async fn rtc_producer_answer_rejects_non_one_byte_extmap_id() {
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged renegotiation offer should be available")
-        .into_sdp();
+        .into_parts()
+        .0;
     let answer_sdp = remote
         .sdp_api()
         .accept_offer(
@@ -633,7 +639,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged renegotiation offer should be available");
-    let renegotiation_sdp = renegotiation_offer.into_sdp();
+    let renegotiation_sdp = renegotiation_offer.into_parts().0;
     assert!(renegotiation_sdp.contains("m=video"));
 
     let negotiated_mid = adapter
@@ -773,7 +779,7 @@ async fn rtc_session_renegotiation_projects_multiple_protocol_producers_from_one
         &adapter,
         &session_key,
         &mut remote,
-        renegotiation_offer.into_sdp(),
+        renegotiation_offer.into_parts().0,
     )
     .await;
 
@@ -826,7 +832,7 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("staged renegotiation offer should be available");
-    let renegotiation_sdp = renegotiation_offer.into_sdp();
+    let renegotiation_sdp = renegotiation_offer.into_parts().0;
     assert!(renegotiation_sdp.contains("m=video"));
 
     let renegotiated_mid = adapter
@@ -887,7 +893,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         &adapter,
         &consumer_key,
         &mut remote,
-        addition_offer.into_sdp(),
+        addition_offer.into_parts().0,
     )
     .await;
 
@@ -906,7 +912,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
         .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("removal should stage a renegotiation offer");
-    let removal_sdp = removal_offer.into_sdp();
+    let removal_sdp = removal_offer.into_parts().0;
     let removal_section = media_section_for_mid(&removal_sdp, &consumer_mid)
         .expect("removed consumer mid should remain in the renegotiation offer");
     assert!(removal_section.contains("a=inactive"));
@@ -947,7 +953,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("removal should stage a renegotiation offer");
-    let removal_sdp = removal_offer.into_sdp();
+    let removal_sdp = removal_offer.into_parts().0;
     let removal_section = media_section_for_mid(&removal_sdp, &producer_mid)
         .expect("removed producer mid should remain in the renegotiation offer");
     assert!(removal_section.contains("a=inactive"));
@@ -990,7 +996,7 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("addition offer should be available");
-    let addition_sdp = addition_offer.into_sdp();
+    let addition_sdp = addition_offer.into_parts().0;
 
     assert!(
         adapter
@@ -1011,7 +1017,7 @@ async fn rtc_session_renegotiation_stages_follow_up_removal_for_cancelled_pendin
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("cancelled pending producer should stage a follow-up removal offer");
-    let removal_sdp = removal_offer.into_sdp();
+    let removal_sdp = removal_offer.into_parts().0;
     let removal_section = media_section_for_mid(&removal_sdp, &producer_mid)
         .expect("cancelled producer mid should remain in the follow-up offer");
     assert!(removal_section.contains("a=inactive"));
@@ -1057,7 +1063,7 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
     let answer = remote
         .sdp_api()
         .accept_offer(
-            SdpOffer::from_sdp_string(&addition_offer.into_sdp())
+            SdpOffer::from_sdp_string(&addition_offer.into_parts().0)
                 .expect("addition offer should parse"),
         )
         .expect("remote answer should build")
@@ -1128,7 +1134,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
         .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("second addition offer should be available");
-    let second_addition_sdp = second_addition_offer.into_sdp();
+    let second_addition_sdp = second_addition_offer.into_parts().0;
 
     assert!(
         adapter
@@ -1155,7 +1161,7 @@ async fn rtc_session_renegotiation_queues_consumer_removal_while_answer_is_pendi
         .create_session_renegotiation_offer(&consumer_key)
         .await
         .expect("queued removal should stage after the in-flight answer lands");
-    let queued_removal_sdp = queued_removal_offer.into_sdp();
+    let queued_removal_sdp = queued_removal_offer.into_parts().0;
     let removal_section = media_section_for_mid(&queued_removal_sdp, &first_consumer_mid)
         .expect("queued removal mid should remain in the follow-up offer");
     assert!(removal_section.contains("a=inactive"));
@@ -1323,7 +1329,13 @@ async fn complete_initial_offer_answer(
 ) -> Rtc {
     let initial_offer = expect_initial_offer(adapter, session_key).await;
     let mut remote = build_remote_rtc(port);
-    apply_offer_answer(adapter, session_key, &mut remote, initial_offer.into_sdp()).await;
+    apply_offer_answer(
+        adapter,
+        session_key,
+        &mut remote,
+        initial_offer.into_parts().0,
+    )
+    .await;
     remote
 }
 
@@ -1423,7 +1435,7 @@ async fn add_negotiated_consumer_media(
         .create_session_renegotiation_offer(consumer_key)
         .await
         .expect("addition offer should be available");
-    apply_offer_answer(adapter, consumer_key, remote, addition_offer.into_sdp()).await;
+    apply_offer_answer(adapter, consumer_key, remote, addition_offer.into_parts().0).await;
     (consumer_media_id, consumer_mid)
 }
 
@@ -1450,6 +1462,6 @@ async fn add_negotiated_producer_media(
         .create_session_renegotiation_offer(session_key)
         .await
         .expect("addition offer should be available");
-    apply_offer_answer(adapter, session_key, remote, addition_offer.into_sdp()).await;
+    apply_offer_answer(adapter, session_key, remote, addition_offer.into_parts().0).await;
     (producer_media_id, producer_mid)
 }

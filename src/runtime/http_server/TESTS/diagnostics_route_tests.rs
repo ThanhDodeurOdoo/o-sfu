@@ -23,7 +23,7 @@ use crate::{
     application::stream_catalog::source_publish_intent_for_stream_type,
     core::server::session::{UserId, UserInfo, UserPermissions},
     runtime::{
-        diagnostics::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
+        diagnostics::types::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
         room::Room,
     },
 };

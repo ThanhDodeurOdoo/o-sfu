@@ -20,8 +20,7 @@
 //!
 //! The command system is more cumbersome than inlining I/O calls, but that
 //! cost is what keeps the protocol verifiable and portable. Browser hosts
-//! should consume the commands as [`CommandBatch`] values. Rust exposes checked
-//! construction externally while core transitions use semantic constructors.
+//! should consume the commands as [`CommandBatch`] values.
 
 use std::{collections::BTreeMap, mem::replace};
 
@@ -38,7 +37,19 @@ mod timers;
 #[cfg(feature = "verification-models")]
 pub mod verification;
 
-pub use command_batch::{CommandBatch, CommandBatchError};
+pub use command_batch::CommandBatch;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use super::ProtocolCore;
+    pub use super::command_batch::test_support::command_batch;
+    use crate::signaling::TrackBinding;
+
+    #[must_use]
+    pub fn track_binding<'a>(core: &'a ProtocolCore, mid: &str) -> Option<&'a TrackBinding> {
+        core.track_bindings.get(mid)
+    }
+}
 use outbound_batch::{FlushMode, OutboundBatcher};
 use request_tracker::RequestTracker;
 use sticky_replay::StickyReplayState;
@@ -415,11 +426,6 @@ impl ProtocolCore {
     #[must_use]
     pub const fn recording_state(&self) -> &RecordingState {
         &self.recording_state
-    }
-
-    #[must_use]
-    pub fn track_binding(&self, mid: &str) -> Option<&TrackBinding> {
-        self.track_bindings.get(mid)
     }
 
     /// Starts a fresh connection attempt and replaces any earlier user context.

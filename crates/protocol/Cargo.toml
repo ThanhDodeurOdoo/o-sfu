@@ -13,6 +13,7 @@ rust-version = "1.93"
 version.workspace = true
 
 [features]
+test-support = []
 verification-models = []
 
 [dependencies]

@@ -8,8 +8,6 @@ use std::{
     time::Instant,
 };
 
-#[cfg(any(test, feature = "testing-transport"))]
-use super::media_transport::ForwardedPacket;
 use super::{
     RoomInstanceId,
     media_transport::{TransportMediaId, TransportSessionKey},
@@ -178,27 +176,6 @@ impl RoomPacketSinkRegistry {
             .store(!active_rooms.is_empty(), Ordering::Release);
         self.generation.fetch_add(1, Ordering::AcqRel);
         drop(active_rooms);
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn write_packet(&self, packet: &ForwardedPacket, transport_media_id: TransportMediaId) {
-        let Some(src_key) = packet.stable_src_key() else {
-            return;
-        };
-        let Some(sink) = self.sink_for_room(src_key.room_instance_id()) else {
-            return;
-        };
-        sink.record_packet(
-            src_key,
-            transport_media_id,
-            packet.received_at(),
-            packet.payload(),
-        );
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn has_active_room(&self, room_instance_id: RoomInstanceId) -> bool {
-        read_unpoisoned(&self.active_rooms).contains_key(&room_instance_id)
     }
 
     fn active_room_count(&self) -> usize {

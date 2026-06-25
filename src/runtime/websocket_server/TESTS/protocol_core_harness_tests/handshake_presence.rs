@@ -43,7 +43,7 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() -> TestResult
         peer.updates,
         vec![BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(31)),
-            ProtocolSessionInfo::snapshot_defaults(),
+            ProtocolSessionInfo::default().snapshot_complete(),
         )]))]
     );
     Ok(())
@@ -157,7 +157,7 @@ async fn protocol_core_receives_protocol_broadcast_and_peer_updates() -> TestRes
             bundle_session_info_key(&ProtocolSessionId::Integer(41)),
             ProtocolSessionInfo {
                 is_talking: Some(true),
-                ..ProtocolSessionInfo::snapshot_defaults()
+                ..ProtocolSessionInfo::default().snapshot_complete()
             },
         )])))
     );
@@ -255,7 +255,7 @@ async fn protocol_user_replacement_emits_peerleft_then_peerjoined_for_existing_p
         alice.updates.last(),
         Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
             bundle_session_info_key(&ProtocolSessionId::Integer(46)),
-            ProtocolSessionInfo::snapshot_defaults(),
+            ProtocolSessionInfo::default().snapshot_complete(),
         )]))),
     );
     require_some(

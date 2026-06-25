@@ -590,10 +590,11 @@ fn joined_sessions_store_only_router_lifecycle_state() {
 
     assert_eq!(router.join(Session::new(PUBLISHER_SESSION)), Ok(()));
 
-    let Some(session) = router.sessions().next() else {
-        panic!("joined session should be visible through the public iterator");
-    };
-    assert_eq!(session.state(), SessionState::Active);
+    let snapshot = router_state_snapshot(&router);
+    assert_eq!(
+        snapshot.session_state(PUBLISHER_SESSION),
+        Some(SessionState::Active)
+    );
     assert_router_is_consistent(&router);
 }
 

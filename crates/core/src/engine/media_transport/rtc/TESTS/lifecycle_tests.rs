@@ -40,7 +40,8 @@ async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
-        .into_sdp();
+        .into_parts()
+        .0;
 
     assert!(offer_sdp.contains("a=ice-ufrag:"));
     assert!(offer_sdp.contains("a=ice-pwd:"));

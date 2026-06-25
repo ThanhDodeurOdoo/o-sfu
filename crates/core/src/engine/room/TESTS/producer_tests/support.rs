@@ -273,7 +273,7 @@ pub(super) async fn setup_real_rtc_refresh_scenario() -> RealRtcRefreshScenario 
         &media_transport,
         &subscriber_session_key,
         &mut subscriber_remote,
-        subscriber_initial_offer.into_sdp(),
+        subscriber_initial_offer.into_parts().0,
     )
     .await;
 
@@ -320,7 +320,7 @@ pub(super) async fn settle_refresh_offer(
         &scenario.media_transport,
         &scenario.subscriber_session_key,
         &mut scenario.subscriber_remote,
-        offer.into_sdp(),
+        offer.into_parts().0,
     )
     .await;
 

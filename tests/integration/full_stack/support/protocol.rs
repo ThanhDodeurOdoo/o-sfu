@@ -13,7 +13,7 @@ pub(crate) async fn publish_camera_track(
         UserId::Integer(10),
         UserInfo {
             is_camera_on: Some(true),
-            ..UserInfo::snapshot_defaults()
+            ..UserInfo::default().snapshot_complete()
         },
     )
     .await;
@@ -84,7 +84,7 @@ pub(crate) async fn assert_camera_unpublish_updates_snapshot_and_info(
         peer_info.info,
         UserInfo {
             is_camera_on: Some(false),
-            ..UserInfo::snapshot_defaults()
+            ..UserInfo::default().snapshot_complete()
         }
     );
 }

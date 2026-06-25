@@ -76,16 +76,6 @@ impl PreAuthWebSocketAdmission {
             per_origin_capacity: self.per_origin_capacity,
         })
     }
-
-    #[cfg(test)]
-    pub(super) fn available_global_permits(&self) -> usize {
-        self.global.available_permits()
-    }
-
-    #[cfg(test)]
-    pub(super) fn tracked_origin_count(&self) -> usize {
-        lock_origins(&self.origins).len()
-    }
 }
 
 impl Drop for PreAuthWebSocketPermit {

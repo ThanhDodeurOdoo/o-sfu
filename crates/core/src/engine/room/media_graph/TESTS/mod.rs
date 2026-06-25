@@ -13,7 +13,7 @@ use o_sfu_router::{
     ids::{ConsumerId, ProducerId},
     negotiation::derive_consumable_rtp_parameters,
     rtp::{MediaStream, Mid, Rid, Ssrc},
-    state::ConsumerCapability,
+    state::{ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState},
     test_support::rtp_samples::{
         sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
         sample_video_rtp_parameters,
@@ -199,10 +199,11 @@ fn install_test_consumer_route(
     let routed_consumer_id = state
         .topology
         .routing_mut_for_test()
-        .add_consumer(
+        .add_consumer_with_route_state(
             consumer_user_id,
             routed_producer_id,
             ConsumerCapability::Compatible,
+            RouterConsumerRouteState::Active,
         )
         .unwrap_or_else(|error| panic!("failed to create test consumer route: {error:?}"));
     let source_id = install_test_published_producer_with_route(
