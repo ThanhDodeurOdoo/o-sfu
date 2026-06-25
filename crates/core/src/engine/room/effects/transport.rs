@@ -1,7 +1,7 @@
 use o_sfu_router::MediaKind;
 use tracing::warn;
 
-use super::{batch::RoomGaugeDelta, receiver_route::ReceiverRouteSetup};
+use super::{RoomGaugeDelta, receiver_route::ReceiverRouteSetup};
 use crate::{
     TransportEffectOutcome,
     engine::{

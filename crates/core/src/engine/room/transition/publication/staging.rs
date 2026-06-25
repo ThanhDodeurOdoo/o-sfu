@@ -17,7 +17,7 @@ use crate::{
         room::{
             RoomUserOperation,
             cleanup::TransportCleanupOperation,
-            effects::{self, batch::RoomEffectContext},
+            effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
             media_graph::ValidatedPublish,
         },
         source_model::UserStreamId,
@@ -212,7 +212,7 @@ impl StagedPublish {
             return None;
         };
         self.commit_reservation();
-        effects::batch::build_publish_commit(room, commit)
+        RoomEffects::from_commit(room, RoomCommit::Publish(commit))
             .execute(room, RoomEffectContext::runtime(operation.media_transport))
             .await;
         Some(stream_id)

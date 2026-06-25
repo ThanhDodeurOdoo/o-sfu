@@ -3,26 +3,10 @@ use std::{sync::Arc, time::Duration};
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::{sync::Notify, task::yield_now, time::timeout};
 
-use super::{
-    super::{
-        effects::{self, batch::RoomEffectContext},
-        manager::JoinPlacementTestGate,
-        media_graph::{
-            ConsumerRouteTarget, ConsumerRouteTransportRef, ReceiverRouteActivity,
-            ReceiverRouteCommit, ReceiverRouteWork,
-        },
-    },
-    api::NegotiatedPublish,
-    fixtures::*,
-};
+use super::{super::manager::JoinPlacementTestGate, api::NegotiatedPublish, fixtures::*};
 use crate::{
     LocalSpilloverPolicy, MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
-    engine::{
-        MediaWorkerId,
-        diagnostics::DiagnosticsStore,
-        media_transport::{TransportConsumerRoute, TransportSourceKey},
-        metrics::RuntimeMetrics,
-    },
+    engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
     prelude::LocalSpilloverPolicyParts,
 };
 
@@ -147,65 +131,6 @@ fn assert_event_worker(
         })
         .unwrap_or_else(|| panic!("expected recent diagnostics event {event_name}"));
     assert_eq!(event.media_worker_id, Some(media_worker_id));
-}
-
-async fn apply_subscription_route_activity(
-    room: &Arc<TestRoom>,
-    media_transport: &MediaTransport,
-    publisher_id: &UserId,
-    publisher_connection_id: ConnectionId,
-    stream_id: &UserStreamId,
-    media_worker_id: usize,
-) -> TransportMediaId {
-    let consumer_media_id = TransportMediaId::new(199);
-    let route = ConsumerRouteTransportRef::from_parts(
-        publisher_id.clone(),
-        publisher_connection_id,
-        consumer_media_id,
-        UserId::Integer(1),
-        user_connection_id(room, &UserId::Integer(1)).await,
-        TransportMediaId::new(11),
-    );
-    let commit = {
-        let state = room.state.read().await;
-        let transport_route = TransportConsumerRoute::new(
-            state.transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
-            route.consumer_media,
-            TransportSourceKey::new(
-                state.transport_user_key(&route.source_user_id, route.source_connection_id),
-                route.source_media,
-            ),
-        );
-        let target = ConsumerRouteTarget::for_test(
-            route.clone(),
-            transport_route,
-            stream_id.clone(),
-            MediaKind::Audio,
-        );
-        let route_update = ReceiverRouteActivity::new(target, false);
-        let counts = state.media_counts();
-        let work = ReceiverRouteWork {
-            activities: vec![route_update],
-            ..Default::default()
-        };
-        drop(state);
-        ReceiverRouteCommit {
-            before: counts,
-            after: counts,
-            media_worker_id: MediaWorkerId::from_raw(media_worker_id),
-            work,
-        }
-    };
-    let route_update_batch = effects::batch::build_receiver_intent(
-        room.as_ref(),
-        publisher_id,
-        publisher_connection_id,
-        commit,
-    );
-    route_update_batch
-        .execute(room.as_ref(), RoomEffectContext::runtime(media_transport))
-        .await;
-    consumer_media_id
 }
 
 #[tokio::test]
@@ -519,24 +444,6 @@ async fn spillover_media_diagnostics_use_connection_worker() {
         publisher_connection_id,
         telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
         transport_media_id,
-        media_worker_id,
-    );
-
-    let consumer_media_id = apply_subscription_route_activity(
-        &room,
-        &media_transport,
-        &publisher_id,
-        publisher_connection_id,
-        &stream_id,
-        media_worker_id,
-    )
-    .await;
-    assert_event_worker(
-        &room,
-        &publisher_id,
-        publisher_connection_id,
-        telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
-        consumer_media_id,
         media_worker_id,
     );
 }

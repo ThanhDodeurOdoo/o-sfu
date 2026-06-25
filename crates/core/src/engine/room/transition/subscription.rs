@@ -10,7 +10,7 @@ use o_sfu_router::rtp::MediaCapabilities;
 
 use super::super::{
     RoomUserOperation,
-    effects::{self, batch::RoomEffectContext},
+    effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
     user_negotiation::UserNegotiationUpdate,
 };
 use crate::engine::{
@@ -64,7 +64,7 @@ impl RoomUserOperation<'_> {
             commit
         };
         let commit = commit?;
-        effects::batch::build_receiver_intent(room, self.user_id, self.connection_id, commit)
+        RoomEffects::from_commit(room, RoomCommit::ReceiverIntent(commit))
             .execute(room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())
@@ -79,7 +79,7 @@ impl RoomUserOperation<'_> {
             commit
         };
         let commit = commit?;
-        effects::batch::build_consumer_readiness(room, self.user_id, self.connection_id, commit)
+        RoomEffects::from_commit(room, RoomCommit::ConsumerReadiness(commit))
             .execute(room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())
@@ -95,7 +95,7 @@ impl RoomUserOperation<'_> {
         }) else {
             return;
         };
-        effects::batch::build_keyframe_refresh(targets)
+        RoomEffects::keyframe_refresh(targets)
             .execute(room, RoomEffectContext::runtime(self.media_transport))
             .await;
     }

@@ -6,15 +6,11 @@ use o_sfu_router::rtp::MediaCapabilities;
 use tracing::warn;
 
 use super::{
-    BroadcastPayloadError, Room, RoomJoinError, RoomMediaCounts, UserOutboundSender,
-    cleanup::TransportCleanupOperation,
-    effects::{
-        self,
-        batch::{RoomEffectContext, RoomGaugeDelta},
-    },
+    BroadcastPayloadError, Room, RoomJoinError, UserOutboundSender,
+    effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
     media_graph::CommittedTransportReceipt,
     placement::PendingJoinPlacement,
-    state::RoomState,
+    state::ConnectionCloseCommit,
 };
 use crate::engine::{
     ConnectionId, UserId, UserInfo, UserPermissions, media_transport::MediaTransport,
@@ -40,25 +36,6 @@ pub struct JoinUserRequest {
     pub label: Option<String>,
     pub permissions: UserPermissions,
     pub sender: UserOutboundSender,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MembershipCountSnapshot {
-    users: usize,
-    media: RoomMediaCounts,
-}
-
-impl MembershipCountSnapshot {
-    fn from_state(state: &RoomState) -> Self {
-        Self {
-            users: state.user_count(),
-            media: state.media_counts(),
-        }
-    }
-
-    fn delta_to(self, after: Self) -> RoomGaugeDelta {
-        RoomGaugeDelta::membership(self.users, after.users, self.media, after.media)
-    }
 }
 
 impl Room {
@@ -87,21 +64,19 @@ impl Room {
         context: RoomEffectContext<'_>,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> Result<CommittedTransportReceipt, RoomJoinError> {
-        let (outcome, counts) = {
+        let commit = {
             let mut state = self.state.write().await;
-            let before = MembershipCountSnapshot::from_state(&state);
-            let outcome = placement.commit_join(
+            placement.commit_join(
                 &mut state,
                 request,
                 emit_joined_fanout,
                 allocate_spillover_router,
-            )?;
-            let counts = before.delta_to(MembershipCountSnapshot::from_state(&state));
-            drop(state);
-            (outcome, counts)
+            )?
         };
-        let (batch, receipt) = effects::batch::build_join(self, counts, outcome);
-        batch.execute(self, context).await;
+        let receipt = commit.receipt.clone();
+        RoomEffects::from_commit(self, RoomCommit::Join(commit))
+            .execute(self, context)
+            .await;
         self.reconcile_spillover_routers().await;
         Ok(receipt)
     }
@@ -126,35 +101,18 @@ impl Room {
         connection_id: ConnectionId,
         context: RoomEffectContext<'_>,
     ) -> bool {
-        let (outcome, transport_close, counts) = {
+        let commit = {
             let mut state = self.state.write().await;
-            let before = MembershipCountSnapshot::from_state(&state);
-            let transport_close = state
-                .committed_transport_user_key(user_id, connection_id)
-                .map(|session_key| TransportCleanupOperation::CloseUser { session_key });
-            let outcome = state.apply_leave(user_id, connection_id);
-            if outcome.is_none() {
-                state
-                    .topology
-                    .unregister_committed_placement(user_id, connection_id);
-            }
-            let counts = before.delta_to(MembershipCountSnapshot::from_state(&state));
-            drop(state);
-            (outcome, transport_close, counts)
+            state.close_connection(user_id, connection_id)
         };
-        let had_state = outcome.is_some();
-        effects::batch::build_connection_close(
-            self,
-            counts,
-            outcome,
-            user_id.clone(),
-            connection_id,
-            transport_close,
-        )
-        .execute(self, context)
-        .await;
+        let removed_current_user = matches!(&commit, Some(ConnectionCloseCommit::Current { .. }));
+        if let Some(commit) = commit {
+            RoomEffects::from_commit(self, RoomCommit::ConnectionClose(commit))
+                .execute(self, context)
+                .await;
+        }
         self.reconcile_spillover_routers().await;
-        had_state
+        removed_current_user
     }
 
     /// The sender identity is checked against authoritative room state before
@@ -196,12 +154,12 @@ impl Room {
         media_transport: &MediaTransport,
         info: UserInfo,
     ) {
-        let outcome = {
+        let commit = {
             let mut state = self.state.write().await;
             state.apply_presence_update(user_id, connection_id, &info, false)
         };
-        if let Some(outcome) = outcome {
-            effects::batch::build_user_info_update(outcome)
+        if let Some(commit) = commit {
+            RoomEffects::from_commit(self, RoomCommit::UserInfo(commit))
                 .execute(self, RoomEffectContext::runtime(media_transport))
                 .await;
         } else {
@@ -229,15 +187,11 @@ impl Room {
         user_ids: &[UserId],
         context: RoomEffectContext<'_>,
     ) {
-        let (outcome, counts) = {
+        let commit = {
             let mut state = self.state.write().await;
-            let before = MembershipCountSnapshot::from_state(&state);
-            let outcome = state.apply_disconnect_users(user_ids);
-            let counts = before.delta_to(MembershipCountSnapshot::from_state(&state));
-            drop(state);
-            (outcome, counts)
+            state.apply_disconnect_users(user_ids)
         };
-        effects::batch::build_disconnect(self, counts, outcome)
+        RoomEffects::from_commit(self, RoomCommit::Disconnect(commit))
             .execute(self, context)
             .await;
         self.reconcile_spillover_routers().await;

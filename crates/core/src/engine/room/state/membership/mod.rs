@@ -5,9 +5,10 @@ use tracing::{debug, error, warn};
 
 use super::{
     super::{
-        BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError,
+        BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError, RoomMediaCounts,
         RoomUserPermissions, RouterPlacement, UserCloseReason,
         cleanup::TransportCleanupOperation,
+        effects::RoomGaugeDelta,
         media_graph::{
             CommittedTransportReceipt, MediaTopologyEffects, SessionPlacementCommit,
             SessionPlacementRejection,
@@ -25,7 +26,7 @@ use crate::engine::{ConnectionId, UserId, UserInfo};
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LifecycleEffects {
     pub close_requests: Vec<UserCloseRequest>,
     pub fanouts: Vec<MessageFanout>,
@@ -54,29 +55,33 @@ pub struct UserCloseRequest {
 type RuntimeUserRemoval = (ActiveUser, MediaTopologyEffects);
 
 #[derive(Debug)]
-pub struct JoinUserOutcome {
+pub struct JoinCommit {
+    pub counts: RoomGaugeDelta,
     pub effects: LifecycleEffects,
-    pub user_id: UserId,
-    pub routing_receipt: CommittedTransportReceipt,
+    pub receipt: CommittedTransportReceipt,
     pub media_effects: MediaTopologyEffects,
 }
 
 #[derive(Debug)]
-pub struct LeaveUserOutcome {
-    pub effects: LifecycleEffects,
-    pub media_effects: MediaTopologyEffects,
+pub enum ConnectionCloseCommit {
+    Current {
+        counts: RoomGaugeDelta,
+        user_id: UserId,
+        connection_id: ConnectionId,
+        cleanup: Option<TransportCleanupOperation>,
+        effects: LifecycleEffects,
+        media_effects: MediaTopologyEffects,
+    },
+    StalePlacement {
+        counts: RoomGaugeDelta,
+        cleanup: TransportCleanupOperation,
+    },
 }
 
 #[derive(Debug)]
-pub struct DisconnectedUser {
-    pub user_id: UserId,
-    pub connection_id: ConnectionId,
-    pub close_operation: TransportCleanupOperation,
-}
-
-#[derive(Debug)]
-pub struct DisconnectUsersOutcome {
-    pub disconnected_users: Vec<DisconnectedUser>,
+pub struct DisconnectCommit {
+    pub counts: RoomGaugeDelta,
+    pub close_operations: Vec<TransportCleanupOperation>,
     pub effects: LifecycleEffects,
     pub media_effects: MediaTopologyEffects,
 }
@@ -84,6 +89,19 @@ pub struct DisconnectUsersOutcome {
 impl RoomState {
     pub fn fanout_all(&self, message: &RoomEventMessage) -> MessageFanout {
         fanout_all(self.users.values().map(|user| user.sender.clone()), message)
+    }
+
+    fn membership_delta(
+        &self,
+        users_before: usize,
+        media_before: RoomMediaCounts,
+    ) -> RoomGaugeDelta {
+        RoomGaugeDelta::membership(
+            users_before,
+            self.users.len(),
+            media_before,
+            self.media_counts(),
+        )
     }
 
     pub fn fanout_all_except(
@@ -192,7 +210,7 @@ impl RoomState {
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
         emit_joined_fanout: bool,
-    ) -> Result<JoinUserOutcome, RoomJoinError> {
+    ) -> Result<JoinCommit, RoomJoinError> {
         self.apply_join_on_placement(
             user_id,
             permissions,
@@ -209,13 +227,15 @@ impl RoomState {
         sender: OutboundSender,
         emit_joined_fanout: bool,
         home_placement: RouterPlacement,
-    ) -> Result<JoinUserOutcome, RoomJoinError> {
+    ) -> Result<JoinCommit, RoomJoinError> {
         let permissions = permissions.into();
         let previous_connection = self.users.get(user_id).map(|user| user.connection_id);
         let is_new = previous_connection.is_none();
         if is_new && self.users.len() >= self.admission_policy.max_sessions {
             return Err(RoomJoinError::RoomFull);
         }
+        let users_before = self.users.len();
+        let media_before = self.media_counts();
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
         let placement = self.apply_join_routing(user_id, connection_id, is_new, home_placement)?;
         let routing_receipt = placement.receipt;
@@ -231,10 +251,7 @@ impl RoomState {
             self.install_joined_session(user_id, permissions, sender, connection_id);
         let had_previous_sender = previous_sender.is_some();
 
-        let mut effects = LifecycleEffects {
-            close_requests: Vec::new(),
-            fanouts: Vec::new(),
-        };
+        let mut effects = LifecycleEffects::default();
         effects.push_close_request(previous_sender.map(|sender| UserCloseRequest {
             sender,
             reason: UserCloseReason::Replaced,
@@ -261,10 +278,10 @@ impl RoomState {
         } else {
             None
         });
-        Ok(JoinUserOutcome {
+        Ok(JoinCommit {
+            counts: self.membership_delta(users_before, media_before),
             effects,
-            user_id: user_id.clone(),
-            routing_receipt,
+            receipt: routing_receipt,
             media_effects,
         })
     }
@@ -279,17 +296,34 @@ impl RoomState {
         Some((user, media_effects))
     }
 
-    pub fn apply_leave(
+    pub fn close_connection(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Option<LeaveUserOutcome> {
-        let user = self.users.get(user_id)?;
-        if user.connection_id != connection_id {
-            return None;
+    ) -> Option<ConnectionCloseCommit> {
+        let users_before = self.users.len();
+        let media_before = self.media_counts();
+        let cleanup = self
+            .committed_transport_user_key(user_id, connection_id)
+            .map(|session_key| TransportCleanupOperation::CloseUser { session_key });
+        if self
+            .users
+            .get(user_id)
+            .is_none_or(|user| user.connection_id != connection_id)
+        {
+            self.topology
+                .unregister_committed_placement(user_id, connection_id);
+            return cleanup.map(|cleanup| ConnectionCloseCommit::StalePlacement {
+                counts: self.membership_delta(users_before, media_before),
+                cleanup,
+            });
         }
         let (user, media_effects) = self.remove_runtime_user(user_id)?;
-        Some(LeaveUserOutcome {
+        Some(ConnectionCloseCommit::Current {
+            counts: self.membership_delta(users_before, media_before),
+            user_id: user_id.clone(),
+            connection_id,
+            cleanup,
             effects: LifecycleEffects {
                 close_requests: vec![UserCloseRequest {
                     sender: user.sender,
@@ -362,9 +396,11 @@ impl RoomState {
         Some(user.negotiation.mark_ready())
     }
 
-    pub fn apply_disconnect_users(&mut self, user_ids: &[UserId]) -> DisconnectUsersOutcome {
+    pub fn apply_disconnect_users(&mut self, user_ids: &[UserId]) -> DisconnectCommit {
+        let users_before = self.users.len();
+        let media_before = self.media_counts();
         let mut close_requests = Vec::new();
-        let mut disconnected_users = Vec::new();
+        let mut close_operations = Vec::new();
         let mut fanouts = Vec::new();
         let mut media_effects = MediaTopologyEffects::default();
         for user_id in user_ids {
@@ -378,11 +414,7 @@ impl RoomState {
                 continue;
             };
             media_effects.extend(user_media_effects);
-            disconnected_users.push(DisconnectedUser {
-                user_id: user_id.clone(),
-                connection_id,
-                close_operation,
-            });
+            close_operations.push(close_operation);
             close_requests.push(UserCloseRequest {
                 sender: user.sender,
                 reason: UserCloseReason::RemovedByRuntime,
@@ -391,8 +423,9 @@ impl RoomState {
                 user_id: user_id.clone(),
             }));
         }
-        DisconnectUsersOutcome {
-            disconnected_users,
+        DisconnectCommit {
+            counts: self.membership_delta(users_before, media_before),
+            close_operations,
             effects: LifecycleEffects {
                 close_requests,
                 fanouts,
