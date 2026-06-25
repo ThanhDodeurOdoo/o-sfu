@@ -15,7 +15,7 @@ use crate::engine::{
             PublishCommit, ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
         },
         outbound::MessageFanout,
-        source_policy::SourcePolicyWakeups,
+        source_policy::{SourcePolicyCommit, SourcePolicyWakeups},
         state::{ConnectionCloseCommit, DisconnectCommit, JoinCommit},
     },
 };
@@ -147,6 +147,17 @@ impl RoomEffects {
         let mut batch = Self::default();
         batch.transport.push_keyframes(targets);
         batch
+    }
+
+    pub(in crate::engine::room) async fn execute_source_policy_commit(
+        room: &Room,
+        media_transport: &MediaTransport,
+        commit: SourcePolicyCommit,
+    ) {
+        RoomTransportPlan::execute_source_policy_route_control(commit, media_transport)
+            .await
+            .commit(room)
+            .await;
     }
 
     fn from_join(room: &Room, commit: JoinCommit) -> Self {
@@ -348,7 +359,11 @@ impl RoomEffects {
         source_policy.extend(transport_outcome.source_policy);
         observability.record_gauges(room);
         output.emit_before_policy();
-        source_policy.execute(room, context.media_transport()).await;
+        let media_transport = context.media_transport();
+        let commit = source_policy.plan(room, media_transport).await;
+        if let Some((commit, media_transport)) = commit.zip(media_transport) {
+            Self::execute_source_policy_commit(room, media_transport, commit).await;
+        }
         output.emit_after_policy();
         observability.record_diagnostics(room);
     }

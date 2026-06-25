@@ -106,22 +106,24 @@ impl RouteFixture {
 
     async fn request_standalone_keyframe(&self) {
         let mut effects = RoomRouteBatch::default();
-        effects.push_keyframe(self.target.clone());
+        effects
+            .consumers
+            .push(ConsumerEffect::Keyframe(self.target.clone()));
         effects.execute(&self.media_transport).await;
         assert_eq!(self.metrics.snapshot().rtc_keyframe_requests_forwarded(), 1);
     }
 
     async fn pause_route_activity(&self) -> Result<(), io::Error> {
         let mut effects = RoomRouteBatch::default();
-        effects.push_producer(
-            self.route.source().clone(),
-            false,
-            diagnostics(self.route.source_session_key(), "producer.activity"),
-        );
-        effects.push_activity(
+        effects.producers.push(ProducerEffect {
+            source: self.route.source().clone(),
+            active: false,
+            diagnostics: diagnostics(self.route.source_session_key(), "producer.activity"),
+        });
+        effects.consumers.push(ConsumerEffect::Activity(
             ReceiverRouteActivity::new(self.target.clone(), false),
             diagnostics(self.route.consumer_session_key(), "consumer.activity"),
-        );
+        ));
 
         let outcome = effects.execute(&self.media_transport).await;
 
@@ -150,11 +152,11 @@ impl RouteFixture {
 
     async fn reactivate_source(&self) {
         let mut effects = RoomRouteBatch::default();
-        effects.push_producer(
-            self.route.source().clone(),
-            true,
-            diagnostics(self.route.source_session_key(), "producer.activity"),
-        );
+        effects.producers.push(ProducerEffect {
+            source: self.route.source().clone(),
+            active: true,
+            diagnostics: diagnostics(self.route.source_session_key(), "producer.activity"),
+        });
         effects.execute(&self.media_transport).await;
     }
 
@@ -176,15 +178,19 @@ impl RouteFixture {
             SourcePacketOperatingPoint::new(None, 0),
         ));
         update.request_keyframe = true;
-        let mut effects = RoomRouteBatch::default();
-        effects.push_source_selection(TransportPacketSelectionUpdate {
-            update: update.clone(),
-            target: self.target.clone(),
-        });
-        effects.set_receiver_bwe_targets(vec![ReceiverBweTargetUpdate::new(
-            self.route.consumer_session_key().clone(),
-            Bitrate::from_kbps(600),
-        )]);
+        let effects = RoomRouteBatch {
+            producers: Vec::new(),
+            consumers: vec![ConsumerEffect::SourceSelection(
+                TransportPacketSelectionUpdate {
+                    update: update.clone(),
+                    target: self.target.clone(),
+                },
+            )],
+            receiver_bwe_targets: vec![ReceiverBweTargetUpdate::new(
+                self.route.consumer_session_key().clone(),
+                Bitrate::from_kbps(600),
+            )],
+        };
 
         let outcome = effects.execute(&self.media_transport).await;
 
