@@ -34,7 +34,7 @@ impl RoutingTopology {
     pub fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
         self.sessions
             .active(user_id)
-            .map(|session| session.runtime.router)
+            .map(|session| session.placement.router)
     }
 
     pub fn remove_router_for_test(&mut self, router_id: RouterId) {
@@ -110,15 +110,15 @@ pub mod proof {
         placements.insert(user_id.clone(), session(first_connection, 9, 0));
         assert!(placements.active(&user_id).is_some_and(|session| {
             session.connection_id == first_connection
-                && session.runtime.media_worker == MediaWorkerId::from_raw(0)
+                && session.placement.media_worker == MediaWorkerId::from_raw(0)
         }));
         assert!(placements.by_connection.contains_key(&first_connection));
 
         placements.insert(user_id.clone(), session(second_connection, 10, 1));
         assert!(placements.active(&user_id).is_some_and(|session| {
             session.connection_id == second_connection
-                && session.runtime.router == RouterId(10)
-                && session.runtime.media_worker == MediaWorkerId::from_raw(1)
+                && session.placement.router == RouterId(10)
+                && session.placement.media_worker == MediaWorkerId::from_raw(1)
         }));
         assert!(!placements.by_connection.contains_key(&first_connection));
         assert!(placements.by_connection.contains_key(&second_connection));
@@ -137,7 +137,7 @@ pub mod proof {
         CommittedSessionPlacement {
             connection_id,
             router_session_seed: connection_id.as_u64(),
-            runtime: placement(router, media_worker),
+            placement: placement(router, media_worker),
         }
     }
 

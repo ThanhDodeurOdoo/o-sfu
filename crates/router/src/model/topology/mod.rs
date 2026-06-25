@@ -271,7 +271,7 @@ pub struct RoutingPlacementCommit {
 struct CommittedSessionPlacement {
     connection_id: ConnectionId,
     router_session_seed: u64,
-    runtime: RouterPlacement,
+    placement: RouterPlacement,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -300,6 +300,15 @@ impl CommittedSessionPlacements {
     fn remove(&mut self, user_id: &UserId) -> Option<CommittedSessionPlacement> {
         let connection_id = self.active_connection_by_user.remove(user_id)?;
         self.by_connection.remove(&connection_id)
+    }
+
+    fn remove_if_active(
+        &mut self,
+        user: &UserId,
+        conn: ConnectionId,
+    ) -> Option<CommittedSessionPlacement> {
+        (self.active_connection_by_user.get(user) == Some(&conn)).then_some(())?;
+        self.remove(user)
     }
 }
 
@@ -339,7 +348,7 @@ impl RoutingTopology {
         connection_id: ConnectionId,
     ) -> Option<MediaWorkerId> {
         let session = self.sessions.active(user_id)?;
-        (session.connection_id == connection_id).then_some(session.runtime.media_worker)
+        (session.connection_id == connection_id).then_some(session.placement.media_worker)
     }
 
     /// commit one user connection to a resolved router placement
@@ -384,7 +393,7 @@ impl RoutingTopology {
         let session = CommittedSessionPlacement {
             connection_id,
             router_session_seed,
-            runtime: placement,
+            placement,
         };
         self.sessions.insert(user_id.clone(), session);
         Ok(RoutingPlacementCommit {
@@ -396,14 +405,16 @@ impl RoutingTopology {
         })
     }
 
-    pub fn unregister_committed_placement(
+    pub fn retire_committed_placement(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) {
-        if self.sessions.active_connection_by_user.get(user_id) == Some(&connection_id) {
-            self.sessions.remove(user_id);
-        }
+    ) -> Option<RoutingCommitReceipt> {
+        let session = self.sessions.remove_if_active(user_id, connection_id)?;
+        Some(RoutingCommitReceipt {
+            connection_id: session.connection_id,
+            media_worker_id: session.placement.media_worker,
+        })
     }
 
     #[expect(
@@ -415,7 +426,7 @@ impl RoutingTopology {
         let Some(session) = self.sessions.by_connection.get(&connection_id) else {
             unreachable!("media worker lookup requires committed connection placement");
         };
-        session.runtime.media_worker
+        session.placement.media_worker
     }
 
     #[must_use]
@@ -469,7 +480,7 @@ impl RoutingTopology {
         user_id: &UserId,
         media_kind: RouterMediaKind,
     ) -> Result<RoutedProducerId, RoutingError> {
-        let router_id = self.require_session(user_id)?.runtime.router;
+        let router_id = self.require_session(user_id)?.placement.router;
         let producer_id = self
             .router_mut_for_user(user_id, router_id)?
             .add_producer(user_id, media_kind)?;
@@ -616,7 +627,7 @@ impl RoutingTopology {
     /// router was detached or [`RoutingError::Router`] when a pure router
     /// rejects teardown
     pub fn remove_session(&mut self, user_id: &UserId) -> Result<(), RoutingError> {
-        let home_router_id = self.require_session(user_id)?.runtime.router;
+        let home_router_id = self.require_session(user_id)?.placement.router;
         if !self.routers.contains_key(&home_router_id) {
             return Err(RoutingError::MissingRouterForSession {
                 user_id: user_id.clone(),
@@ -636,7 +647,7 @@ impl RoutingTopology {
         let mut report = RoutingRepairReport::default();
         match self
             .require_session(user_id)
-            .map(|session| session.runtime.router)
+            .map(|session| session.placement.router)
         {
             Ok(home_router_id) if !self.routers.contains_key(&home_router_id) => {
                 report.record(RoutingError::MissingRouterForSession {
@@ -680,7 +691,7 @@ impl RoutingTopology {
     ) -> Result<ReceiverRouterSession, RoutingError> {
         let session = self.require_session(user_id)?;
         let router_session_seed = session.router_session_seed;
-        let home_router_id = session.runtime.router;
+        let home_router_id = session.placement.router;
         let shadow_key = (home_router_id != router_id)
             .then(|| ShadowSessionKey::new(router_id, user_id.clone()));
         let created_untracked_shadow = shadow_key
@@ -736,7 +747,7 @@ impl RoutingTopology {
             .sessions
             .by_connection
             .values()
-            .map(|session| session.runtime.router)
+            .map(|session| session.placement.router)
             .collect::<BTreeSet<_>>();
         self.routers
             .iter()

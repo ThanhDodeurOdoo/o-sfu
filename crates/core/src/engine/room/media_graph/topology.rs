@@ -150,18 +150,6 @@ impl RoomTopology {
             .cloned()
     }
 
-    pub(in crate::engine::room) fn committed_media_worker_id(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> Option<MediaWorkerId> {
-        self.routing
-            .committed_media_worker_id(user_id, connection_id)?;
-        self.transport_session_by_connection
-            .get(&connection_id)
-            .map(TransportSessionKey::media_worker_id)
-    }
-
     /// requires committed placement for `user_id` and `connection_id`
     /// use [`Self::committed_transport_user_key`] for stale callbacks or teardown races
     ///
@@ -198,20 +186,16 @@ impl RoomTopology {
         )
     }
 
-    pub fn unregister_committed_placement(
+    pub fn retire_committed_placement(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) {
-        if self
+    ) -> Option<TransportSessionKey> {
+        let retired_id = self
             .routing
-            .committed_media_worker_id(user_id, connection_id)
-            .is_some()
-        {
-            self.transport_session_by_connection.remove(&connection_id);
-        }
-        self.routing
-            .unregister_committed_placement(user_id, connection_id);
+            .retire_committed_placement(user_id, connection_id)?
+            .connection_id;
+        self.transport_session_by_connection.remove(&retired_id)
     }
 
     pub fn reconcile_spillover_routers(
@@ -513,8 +497,11 @@ impl RoomTopology {
                 let Some(connection_id) = current_connection_id(&key.consumer_user_id) else {
                     continue;
                 };
-                let Some(media_worker) =
-                    self.committed_media_worker_id(&key.consumer_user_id, connection_id)
+                let Some(media_worker) = self
+                    .routing
+                    .committed_media_worker_id(&key.consumer_user_id, connection_id)
+                    .and_then(|_| self.transport_session_by_connection.get(&connection_id))
+                    .map(TransportSessionKey::media_worker_id)
                 else {
                     continue;
                 };
