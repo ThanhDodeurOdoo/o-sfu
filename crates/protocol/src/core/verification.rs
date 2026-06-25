@@ -1,42 +1,36 @@
-//! Verification helpers that still run shared production lifecycle logic.
+//! Verification projection for the protocol connection lifecycle.
 //!
-//! The protocol proof surface stays narrow here. This module only
-//! exposes the connection-lifecycle state machine because its transition model
-//! is shared with production code.
+//! The proof surface drives real `ProtocolCore` transitions, then projects only
+//! the state and command counts needed by the Kani recovery harnesses.
+
+use std::mem::ManuallyDrop;
 
 use super::{
-    ConnectionState, INITIAL_RECOVERY_DELAY_MS, RECOVERY_TIMER_ID,
-    connection_lifecycle::{
-        LifecycleAction, LifecycleCloseCause, LifecycleModel, LifecycleTransition, connect_model,
-        disconnect_model, handle_recovery_timer_model, on_transport_ready_model, on_ws_close_model,
-    },
+    Command, Commands, ConnectionState, ProtocolCore, RECOVERY_TIMER_ID, connection_lifecycle,
+    empty_features,
+};
+use crate::{
+    shared::{RecordingState, StreamType},
+    signaling::WelcomePayload,
 };
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+const VERIFICATION_URL: &str = "wss://sfu.example.test/socket";
+const VERIFICATION_JWT: &str = "signed-token";
+const PROJECTED_COMMANDS: usize = 8;
+
+#[derive(Default)]
 pub struct VerificationLifecycleEffects {
+    has_commands: bool,
     connect_count: usize,
     recovery_timer_ms: Option<u32>,
     recovery_timer_count: usize,
-    close_websocket_code: Option<u16>,
-    state_change: Option<(ConnectionState, Option<LifecycleCloseCause>)>,
     close_peer_connection_count: usize,
-    cancel_recovery_timer: bool,
 }
 
 impl VerificationLifecycleEffects {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.connect_count == 0
-            && self.recovery_timer_count == 0
-            && self.close_websocket_code.is_none()
-            && self.state_change.is_none()
-            && self.close_peer_connection_count == 0
-            && !self.cancel_recovery_timer
-    }
-
-    #[must_use]
-    pub fn has_connect(&self) -> bool {
-        self.connect_count > 0
+        !self.has_commands
     }
 
     #[must_use]
@@ -45,26 +39,13 @@ impl VerificationLifecycleEffects {
     }
 
     #[must_use]
-    pub fn recovery_timer_count(&self, timer_id: u32) -> usize {
-        if timer_id == RECOVERY_TIMER_ID {
-            self.recovery_timer_count
-        } else {
-            0
-        }
+    pub fn recovery_timer_count(&self) -> usize {
+        self.recovery_timer_count
     }
 
     #[must_use]
-    pub fn recovery_timer_delay(&self, timer_id: u32) -> Option<u32> {
-        if timer_id == RECOVERY_TIMER_ID {
-            self.recovery_timer_ms
-        } else {
-            None
-        }
-    }
-
-    #[must_use]
-    pub fn has_close_peer_connection(&self) -> bool {
-        self.close_peer_connection_count > 0
+    pub fn recovery_timer_delay(&self) -> Option<u32> {
+        self.recovery_timer_ms
     }
 
     #[must_use]
@@ -73,138 +54,112 @@ impl VerificationLifecycleEffects {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct VerificationConnectionLifecycle {
-    model: LifecycleModel,
-    sticky_state_present: bool,
-    runtime_state_present: bool,
-}
-
-impl Default for VerificationConnectionLifecycle {
-    fn default() -> Self {
-        Self::new()
-    }
+    core: ProtocolCore,
 }
 
 impl VerificationConnectionLifecycle {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            model: LifecycleModel::new(),
-            sticky_state_present: false,
-            runtime_state_present: false,
-        }
+        Self::default()
     }
 
     pub fn connect(&mut self) -> VerificationLifecycleEffects {
-        let transition = connect_model(&mut self.model);
-        self.apply_transition(&transition)
+        project_effects(connection_lifecycle::connect(
+            &mut self.core,
+            VERIFICATION_URL.to_owned(),
+            VERIFICATION_JWT.to_owned(),
+            None,
+        ))
     }
 
     pub fn on_transport_ready(&mut self) -> VerificationLifecycleEffects {
-        let transition = on_transport_ready_model(&mut self.model);
-        self.apply_transition(&transition)
+        project_effects(connection_lifecycle::on_transport_ready(&mut self.core))
     }
 
     pub fn on_welcome(&mut self) -> VerificationLifecycleEffects {
-        if !matches!(
-            self.model.state,
-            ConnectionState::Connecting | ConnectionState::Recovering
-        ) {
-            return VerificationLifecycleEffects::default();
-        }
-        self.model.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
-        self.model.state = ConnectionState::Authenticated;
-        VerificationLifecycleEffects {
-            state_change: Some((self.model.state, None)),
-            ..VerificationLifecycleEffects::default()
-        }
+        project_effects(self.core.accept_welcome(empty_welcome()))
     }
 
     pub fn disconnect(&mut self) -> VerificationLifecycleEffects {
-        let transition = disconnect_model(&mut self.model);
-        self.apply_transition(&transition)
+        project_effects(connection_lifecycle::disconnect(&mut self.core))
     }
 
     pub fn on_ws_close(&mut self, close_code: u16) -> VerificationLifecycleEffects {
-        let transition = on_ws_close_model(&mut self.model, close_code);
-        self.apply_transition(&transition)
+        project_effects(connection_lifecycle::on_ws_close(
+            &mut self.core,
+            close_code,
+        ))
     }
 
     pub fn on_timer(&mut self, timer_id: u32) -> VerificationLifecycleEffects {
-        if timer_id != RECOVERY_TIMER_ID {
-            return VerificationLifecycleEffects::default();
+        if timer_id == RECOVERY_TIMER_ID {
+            return project_effects(connection_lifecycle::handle_recovery_timer(&mut self.core));
         }
-        let transition = handle_recovery_timer_model(&mut self.model);
-        self.apply_transition(&transition)
+        VerificationLifecycleEffects::default()
     }
 
-    pub fn mark_sticky_state_present(&mut self) {
-        self.sticky_state_present = true;
+    pub fn seed_sticky_replay(&mut self) {
+        self.core
+            .sticky_replay
+            .set_publish_active(StreamType::Camera, true);
     }
 
-    pub fn mark_runtime_state_present(&mut self) {
-        self.runtime_state_present = true;
+    pub fn seed_source_snapshot(&mut self) {
+        self.core.has_source_descriptors = true;
     }
 
     #[must_use]
-    pub const fn state(&self) -> ConnectionState {
-        self.model.state
+    pub fn state(&self) -> ConnectionState {
+        self.core.state()
     }
 
     #[must_use]
     pub fn has_connect_context(&self) -> bool {
-        self.model.has_connect_context
+        self.core.connect_context.is_some()
     }
 
     #[must_use]
-    pub fn sticky_state_present(&self) -> bool {
-        self.sticky_state_present
+    pub fn has_sticky_replay(&self) -> bool {
+        !self.core.sticky_replay.is_empty()
     }
 
     #[must_use]
-    pub fn runtime_state_present(&self) -> bool {
-        self.runtime_state_present
+    pub fn has_source_snapshot(&self) -> bool {
+        self.core.has_source_descriptors
     }
+}
 
-    fn apply_transition(
-        &mut self,
-        transition: &LifecycleTransition,
-    ) -> VerificationLifecycleEffects {
-        let mut effects = VerificationLifecycleEffects::default();
-        for action in &transition.actions {
-            match *action {
-                LifecycleAction::StoreFreshConnectContext
-                | LifecycleAction::ClearConnectContext
-                | LifecycleAction::ClearWelcomeSnapshot => {}
-                LifecycleAction::ClearRuntimeStateSilently
-                | LifecycleAction::ClearRuntimeStateWithCommands => {
-                    self.runtime_state_present = false;
-                }
-                LifecycleAction::ClearStickyState => {
-                    self.sticky_state_present = false;
-                }
-                LifecycleAction::EmitStateChange { state, cause } => {
-                    effects.state_change = Some((state, cause));
-                }
-                LifecycleAction::ClosePeerConnection => {
-                    effects.close_peer_connection_count += 1;
-                }
-                LifecycleAction::CloseWebSocket { code } => {
-                    effects.close_websocket_code = Some(code);
-                }
-                LifecycleAction::ScheduleRecoveryTimer { ms } => {
-                    effects.recovery_timer_count += 1;
-                    effects.recovery_timer_ms = Some(ms);
-                }
-                LifecycleAction::CancelRecoveryTimer => {
-                    effects.cancel_recovery_timer = true;
-                }
-                LifecycleAction::EmitConnectCommand => {
-                    effects.connect_count += 1;
-                }
-            }
+fn project_effects(commands: Commands) -> VerificationLifecycleEffects {
+    let commands = ManuallyDrop::new(commands);
+    assert!(commands.len() <= PROJECTED_COMMANDS);
+    let mut effects = VerificationLifecycleEffects {
+        has_commands: !commands.is_empty(),
+        ..VerificationLifecycleEffects::default()
+    };
+    for command in commands.iter() {
+        project_command(command, &mut effects);
+    }
+    effects
+}
+
+fn project_command(command: &Command, effects: &mut VerificationLifecycleEffects) {
+    match command {
+        Command::Connect { .. } => effects.connect_count += 1,
+        Command::ScheduleTimer { id, ms } if *id == RECOVERY_TIMER_ID => {
+            effects.recovery_timer_ms = Some(*ms);
+            effects.recovery_timer_count += 1;
         }
-        effects
+        Command::ClosePeerConnection => effects.close_peer_connection_count += 1,
+        _ => {}
+    }
+}
+
+fn empty_welcome() -> WelcomePayload {
+    WelcomePayload {
+        features: empty_features(),
+        recording: RecordingState::default(),
+        peers: Vec::new(),
     }
 }

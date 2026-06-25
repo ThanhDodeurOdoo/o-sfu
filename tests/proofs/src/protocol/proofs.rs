@@ -5,9 +5,6 @@ use o_sfu_protocol::{
 
 const NON_TERMINAL_CLOSE_CODE: u16 = 1011;
 
-// Protocol lifecycle proofs use `unwind(9)`: transitions emit at most 8 actions
-// and Kani needs one extra unwind step for the action loop.
-
 // Proves terminal close codes cut off recovery completely: they move the client
 // to `Closed`, clear reconnect context and never leave a recovery timer path
 // behind. useful to check because these close codes are the public
@@ -21,7 +18,7 @@ fn protocol_core_terminal_close_codes_never_schedule_recovery() {
 
     let commands = core.on_ws_close(close_code);
     assert_eq!(core.state(), ConnectionState::Closed);
-    assert_eq!(commands.recovery_timer_count(RECOVERY_TIMER_ID), 0);
+    assert_eq!(commands.recovery_timer_count(), 0);
     assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
     assert!(!core.has_connect_context());
 
@@ -45,7 +42,7 @@ fn protocol_core_non_terminal_close_with_context_recovers_once() {
 
     let commands = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
     assert_eq!(core.state(), ConnectionState::Recovering);
-    assert_eq!(commands.recovery_timer_count(RECOVERY_TIMER_ID), 1);
+    assert_eq!(commands.recovery_timer_count(), 1);
     assert_eq!(commands.close_peer_connection_count(), 1);
     assert!(core.has_connect_context());
 
@@ -60,11 +57,11 @@ fn protocol_core_non_terminal_close_with_context_recovers_once() {
 #[kani::proof]
 #[kani::unwind(9)]
 fn protocol_core_recovery_timer_reconnects_only_from_recovering() {
-    let stage = kani::any::<u8>() % 6;
-    let mut core = lifecycle_at_lifecycle_state(stage);
+    let selector = kani::any::<u8>() % 6;
+    let mut core = lifecycle_at_state_selector(selector);
+    let expect_reconnect = core.state() == ConnectionState::Recovering;
 
     let commands = core.on_timer(RECOVERY_TIMER_ID);
-    let expect_reconnect = stage == 4;
     assert_eq!(commands.connect_count(), usize::from(expect_reconnect));
     if expect_reconnect {
         assert_eq!(core.state(), ConnectionState::Connecting);
@@ -84,15 +81,12 @@ fn protocol_core_welcome_resets_recovery_backoff() {
     let mut core = lifecycle_at_stage(2);
 
     let first_close = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
-    let first_delay = first_close
-        .recovery_timer_delay(RECOVERY_TIMER_ID)
-        .unwrap_or_default();
+    let first_delay = first_close.recovery_timer_delay();
+    assert!(first_delay.is_some());
     let _ = core.on_timer(RECOVERY_TIMER_ID);
     let _ = core.on_welcome();
     let second_close = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
-    let second_delay = second_close
-        .recovery_timer_delay(RECOVERY_TIMER_ID)
-        .unwrap_or_default();
+    let second_delay = second_close.recovery_timer_delay();
 
     assert_eq!(first_delay, second_delay);
 
@@ -108,17 +102,32 @@ fn protocol_core_welcome_resets_recovery_backoff() {
 // have very different recovery semantics.
 #[kani::proof]
 #[kani::unwind(9)]
-fn protocol_core_disconnect_suppresses_recovery_and_allows_fresh_connect() {
-    let stage = kani::any::<u8>() % 3;
+fn protocol_core_connecting_disconnect_suppresses_recovery() {
+    assert_disconnect_suppresses_recovery(0);
+}
+
+#[kani::proof]
+#[kani::unwind(9)]
+fn protocol_core_authenticated_disconnect_suppresses_recovery() {
+    assert_disconnect_suppresses_recovery(1);
+}
+
+#[kani::proof]
+#[kani::unwind(9)]
+fn protocol_core_connected_disconnect_suppresses_recovery() {
+    assert_disconnect_suppresses_recovery(2);
+}
+
+fn assert_disconnect_suppresses_recovery(stage: u8) {
     let mut core = lifecycle_at_stage(stage);
-    core.mark_sticky_state_present();
-    core.mark_runtime_state_present();
+    core.seed_sticky_replay();
+    core.seed_source_snapshot();
 
     let disconnect_commands = core.disconnect();
     assert_eq!(core.state(), ConnectionState::Disconnected);
     assert!(!core.has_connect_context());
-    assert!(!core.sticky_state_present());
-    assert!(!core.runtime_state_present());
+    assert!(!core.has_sticky_replay());
+    assert!(!core.has_source_snapshot());
     assert_eq!(disconnect_commands.close_peer_connection_count(), 1);
     assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
     assert!(core.on_ws_close(NON_TERMINAL_CLOSE_CODE).is_empty());
@@ -143,8 +152,8 @@ fn lifecycle_at_stage(stage: u8) -> VerificationConnectionLifecycle {
     core
 }
 
-fn lifecycle_at_lifecycle_state(stage: u8) -> VerificationConnectionLifecycle {
-    match stage {
+fn lifecycle_at_state_selector(selector: u8) -> VerificationConnectionLifecycle {
+    match selector {
         0 => VerificationConnectionLifecycle::new(),
         1 => lifecycle_at_stage(0),
         2 => lifecycle_at_stage(1),
