@@ -92,7 +92,7 @@ fn json_formatter_emits_common_fields_and_trace_id() {
         let span = activated_span(tracing::info_span!("ws.handshake", room_id = "room-a"));
         let _entered = span.enter();
         tracing::info!(
-            event = schema::event::WS_JOIN_SUCCEEDED,
+            event = schema::event::USER_JOINED,
             user_id = "user-1",
             message = "joined user"
         );
@@ -119,7 +119,7 @@ fn json_formatter_emits_common_fields_and_trace_id() {
         return;
     };
 
-    assert_json_string(&value, "event", schema::event::WS_JOIN_SUCCEEDED);
+    assert_json_string(&value, "event", schema::event::USER_JOINED);
     assert_json_string(&value, "message", "joined user");
     assert_json_string(&value, "service.name", "o-sfu-test");
     assert_json_string(&value, "service.version", env!("CARGO_PKG_VERSION"));
@@ -144,7 +144,7 @@ fn json_formatter_emits_common_fields_without_trace_id() {
         let span = activated_span(tracing::info_span!("ws.handshake", room_id = "room-a"));
         let _entered = span.enter();
         tracing::info!(
-            event = schema::event::WS_JOIN_SUCCEEDED,
+            event = schema::event::USER_JOINED,
             user_id = "user-1",
             message = "joined user"
         );
@@ -171,7 +171,7 @@ fn json_formatter_emits_common_fields_without_trace_id() {
         return;
     };
 
-    assert_json_string(&value, "event", schema::event::WS_JOIN_SUCCEEDED);
+    assert_json_string(&value, "event", schema::event::USER_JOINED);
     assert_json_string(&value, "message", "joined user");
     assert_json_string(&value, "service.name", "o-sfu-test");
     assert_json_string(&value, "service.version", env!("CARGO_PKG_VERSION"));
