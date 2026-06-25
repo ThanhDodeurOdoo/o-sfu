@@ -62,6 +62,21 @@ fn load_planner(policy: LocalSpilloverPolicy) -> RoomPlacementPlanner {
     RoomPlacementPlanner::new(RoomWorkerPolicy::load_triggered_local_spillover(2, policy))
 }
 
+fn resolve_stale_placement(
+    decision: RoomPlacementDecision,
+    loads: WorkerLoadIndex,
+    policy: RoomWorkerPolicy,
+    placement_usage: &RoutingPlacementSnapshot,
+    allocate_spillover_router: impl FnOnce() -> RouterId,
+) -> RouterPlacement {
+    JoinAdmission {
+        decision,
+        loads,
+        policy,
+    }
+    .resolve_placement(placement_usage, allocate_spillover_router)
+}
+
 #[test]
 fn first_join_uses_lowest_load_worker() {
     let mut loads = WorkerLoadIndex::new(2, Vec::new());
@@ -235,19 +250,21 @@ fn stale_spillover_allocation_reuses_existing_placement_at_cap()
     let second_decision = planner.choose(&stale_room, &hot_loads([0]));
     let mut allocation_count = 0;
 
-    let first_placement = PendingJoinPlacement::new(first_decision, hot_loads([0]), policy)
-        .resolve(&stale_room, || {
+    let first_placement =
+        resolve_stale_placement(first_decision, hot_loads([0]), policy, &stale_room, || {
             allocation_count += 1;
             RouterId(8)
         });
-    let second_placement = PendingJoinPlacement::new(second_decision, hot_loads([0]), policy)
-        .resolve(
-            &room_with(vec![primary_placement(), placement(8, 1)]),
-            || {
-                allocation_count += 1;
-                RouterId(9)
-            },
-        );
+    let second_placement = resolve_stale_placement(
+        second_decision,
+        hot_loads([0]),
+        policy,
+        &room_with(vec![primary_placement(), placement(8, 1)]),
+        || {
+            allocation_count += 1;
+            RouterId(9)
+        },
+    );
 
     assert_eq!(first_placement, placement(8, 1));
     assert_eq!(second_placement, placement(8, 1));
@@ -262,15 +279,16 @@ fn stale_primary_assignment_keeps_committed_primary_worker() {
     };
     let mut allocation_count = 0;
 
-    let placement = PendingJoinPlacement::new(
+    let placement = resolve_stale_placement(
         stale_decision,
         WorkerLoadIndex::new(2, Vec::new()),
         RoomWorkerPolicy::strict_single_router(),
-    )
-    .resolve(&primary_room(), || {
-        allocation_count += 1;
-        RouterId(8)
-    });
+        &primary_room(),
+        || {
+            allocation_count += 1;
+            RouterId(8)
+        },
+    );
 
     assert_eq!(placement, primary_placement());
     assert_eq!(allocation_count, 0);
@@ -281,20 +299,20 @@ fn stale_existing_placement_keeps_committed_worker() {
     let stale_decision = RoomPlacementDecision::UseExisting(placement(7, 1));
     let mut allocation_count = 0;
 
-    let placement = PendingJoinPlacement::new(
+    let placement = resolve_stale_placement(
         stale_decision,
         WorkerLoadIndex::new(2, Vec::new()),
         RoomWorkerPolicy::strict_single_router(),
-    )
-    .resolve(&primary_room(), || {
-        allocation_count += 1;
-        RouterId(8)
-    });
+        &primary_room(),
+        || {
+            allocation_count += 1;
+            RouterId(8)
+        },
+    );
 
     assert_eq!(placement, primary_placement());
     assert_eq!(allocation_count, 0);
 }
-
 #[test]
 fn source_fanout_pressure_participates_in_activation() -> Result<(), LocalSpilloverPolicyError> {
     let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {

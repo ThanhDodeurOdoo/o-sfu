@@ -61,6 +61,14 @@ fn test_sender() -> UserOutboundSender {
     UserOutboundSender::channel(128, Arc::new(RuntimeMetrics::default())).0
 }
 
+fn join_test_user(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
+    state
+        .apply_join(user_id, UserPermissions::default(), test_sender())
+        .expect("test user should join")
+        .receipt
+        .connection_id
+}
+
 fn install_test_published_producer(
     state: &mut RoomState,
     user_id: &UserId,
@@ -130,18 +138,14 @@ struct RelayedSource {
 fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let publisher = UserId::Integer(1);
     let subscriber = UserId::Integer(2);
-    assert!(
-        state
-            .apply_join(&publisher, UserPermissions::default(), test_sender(), false,)
-            .is_ok()
-    );
+    let publisher_connection = join_test_user(state, &publisher);
     assert!(
         state
             .apply_join_on_placement(
                 &subscriber,
                 UserPermissions::default(),
                 test_sender(),
-                false,
+                UserJoinedFanout::Suppress,
                 RouterPlacement {
                     router: RouterId(2),
                     media_worker: MediaWorkerId::from_raw(1),
@@ -149,9 +153,6 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
             )
             .is_ok()
     );
-    let publisher_connection = state
-        .user_connection_id(&publisher)
-        .expect("publisher should be joined");
     let subscriber_connection = state
         .user_connection_id(&subscriber)
         .expect("subscriber should be joined");
@@ -222,24 +223,8 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
     let mut state = test_state();
     let user_a = UserId::Integer(1);
     let user_b = UserId::Integer(2);
-    let sender_a = test_sender();
-    let sender_b = test_sender();
-    assert!(
-        state
-            .apply_join(&user_a, UserPermissions::default(), sender_a, false)
-            .is_ok()
-    );
-    assert!(
-        state
-            .apply_join(&user_b, UserPermissions::default(), sender_b, false)
-            .is_ok()
-    );
-    let connection_a = state
-        .user_connection_id(&user_a)
-        .expect("joined user should have a connection");
-    let connection_b = state
-        .user_connection_id(&user_b)
-        .expect("joined user should have a connection");
+    let connection_a = join_test_user(&mut state, &user_a);
+    let connection_b = join_test_user(&mut state, &user_b);
 
     let outcome = state.apply_disconnect_users(&[user_a.clone(), user_b.clone()]);
 
@@ -260,16 +245,8 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
 #[test]
 fn leave_repairs_missing_topology_router_and_removes_member() {
     let mut state = test_state();
-    let sender = test_sender();
     let user_id = UserId::Integer(1);
-    assert!(
-        state
-            .apply_join(&user_id, UserPermissions::default(), sender, false,)
-            .is_ok()
-    );
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .expect("joined user should have a connection id");
+    let connection_id = join_test_user(&mut state, &user_id);
     state
         .topology
         .routing_mut_for_test()
@@ -286,14 +263,7 @@ fn leave_repairs_missing_topology_router_and_removes_member() {
 fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
-    assert!(
-        state
-            .apply_join(&user_id, UserPermissions::default(), test_sender(), false,)
-            .is_ok()
-    );
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .expect("joined user should have a connection id");
+    let connection_id = join_test_user(&mut state, &user_id);
     let session_key = state.transport_user_key(&user_id, connection_id);
     state
         .users
@@ -322,13 +292,8 @@ fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
 #[test]
 fn disconnect_repairs_missing_topology_router_and_removes_member() {
     let mut state = test_state();
-    let sender = test_sender();
     let user_id = UserId::Integer(1);
-    assert!(
-        state
-            .apply_join(&user_id, UserPermissions::default(), sender, false,)
-            .is_ok()
-    );
+    join_test_user(&mut state, &user_id);
     state
         .topology
         .routing_mut_for_test()
@@ -344,34 +309,8 @@ fn disconnect_repairs_missing_topology_router_and_removes_member() {
 #[test]
 fn leave_removes_consumer_routes_for_departed_session() {
     let mut state = test_state();
-    let producer_sender = test_sender();
-    let consumer_sender = test_sender();
-    assert!(
-        state
-            .apply_join(
-                &UserId::Integer(1),
-                UserPermissions::default(),
-                producer_sender,
-                false,
-            )
-            .is_ok()
-    );
-    assert!(
-        state
-            .apply_join(
-                &UserId::Integer(2),
-                UserPermissions::default(),
-                consumer_sender,
-                false,
-            )
-            .is_ok()
-    );
-    let producer_connection_id = state
-        .user_connection_id(&UserId::Integer(1))
-        .expect("producer user should exist");
-    let consumer_connection_id = state
-        .user_connection_id(&UserId::Integer(2))
-        .expect("consumer user should exist");
+    let producer_connection_id = join_test_user(&mut state, &UserId::Integer(1));
+    let consumer_connection_id = join_test_user(&mut state, &UserId::Integer(2));
     let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(10));
     let (_, source_id) = install_test_published_producer(
         &mut state,
@@ -406,17 +345,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
 #[test]
 fn stale_connection_cannot_broadcast() {
     let mut state = test_state();
-    let sender = test_sender();
-    assert!(
-        state
-            .apply_join(
-                &UserId::Integer(1),
-                UserPermissions::default(),
-                sender,
-                false,
-            )
-            .is_ok()
-    );
+    join_test_user(&mut state, &UserId::Integer(1));
 
     let fanout = state.broadcast_fanout(
         &UserId::Integer(1),
@@ -430,17 +359,7 @@ fn stale_connection_cannot_broadcast() {
 #[test]
 fn presence_update_returns_none_for_stale_connection() {
     let mut state = test_state();
-    let sender = test_sender();
-    assert!(
-        state
-            .apply_join(
-                &UserId::Integer(1),
-                UserPermissions::default(),
-                sender,
-                false,
-            )
-            .is_ok()
-    );
+    join_test_user(&mut state, &UserId::Integer(1));
 
     let outcome = state.apply_presence_update(
         &UserId::Integer(1),
@@ -468,16 +387,7 @@ fn disconnect_sessions_ignores_missing_members() {
 fn replacement_join_clears_transport_media_owner_index() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
-    let sender = test_sender();
-    let replacement_sender = test_sender();
-    assert!(
-        state
-            .apply_join(&user_id, UserPermissions::default(), sender, false,)
-            .is_ok()
-    );
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .expect("user should have a connection id");
+    let connection_id = join_test_user(&mut state, &user_id);
     let transport_media_id = TransportMediaId::new(30);
     let routed_producer_id = state
         .topology
@@ -503,16 +413,7 @@ fn replacement_join_clears_transport_media_owner_index() {
         Some(connection_id)
     );
 
-    assert!(
-        state
-            .apply_join(
-                &user_id,
-                UserPermissions::default(),
-                replacement_sender,
-                false,
-            )
-            .is_ok()
-    );
+    join_test_user(&mut state, &user_id);
 
     assert_eq!(
         state.inspect_producer_owner_user_id_for_transport_media_id(transport_media_id),
@@ -531,12 +432,7 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
     let relay = install_relayed_source(&mut state);
 
     let outcome = state
-        .apply_join(
-            &relay.publisher,
-            UserPermissions::default(),
-            test_sender(),
-            false,
-        )
+        .apply_join(&relay.publisher, UserPermissions::default(), test_sender())
         .expect("replacement join should succeed");
     let (relays, cleanup) = outcome.media_effects.into_parts();
 

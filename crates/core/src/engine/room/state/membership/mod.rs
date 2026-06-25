@@ -16,6 +16,7 @@ use super::{
         outbound::{MessageFanout, OutboundSender, fanout_all},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
+    UserJoinedFanout,
     shared::{ActiveUser, RoomState},
 };
 #[cfg(test)]
@@ -209,13 +210,12 @@ impl RoomState {
         user_id: &UserId,
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
-        emit_joined_fanout: bool,
     ) -> Result<JoinCommit, RoomJoinError> {
         self.apply_join_on_placement(
             user_id,
             permissions,
             sender,
-            emit_joined_fanout,
+            UserJoinedFanout::Suppress,
             self.fallback_join_placement(),
         )
     }
@@ -225,7 +225,7 @@ impl RoomState {
         user_id: &UserId,
         permissions: impl Into<RoomUserPermissions>,
         sender: OutboundSender,
-        emit_joined_fanout: bool,
+        joined_fanout: UserJoinedFanout,
         home_placement: RouterPlacement,
     ) -> Result<JoinCommit, RoomJoinError> {
         let permissions = permissions.into();
@@ -264,7 +264,7 @@ impl RoomState {
                 user_id,
             )
         }));
-        effects.push_fanout(if emit_joined_fanout {
+        effects.push_fanout(if joined_fanout == UserJoinedFanout::Emit {
             self.user_info_snapshot(user_id)
                 .map(|(joined_user_id, info)| {
                     self.fanout_all_except(

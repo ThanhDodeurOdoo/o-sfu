@@ -9,3 +9,10 @@ pub use self::{
     membership::{ConnectionCloseCommit, DisconnectCommit, JoinCommit, LifecycleEffects},
     shared::RoomState,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UserJoinedFanout {
+    Emit,
+    #[cfg(any(test, feature = "testing-transport"))]
+    Suppress,
+}

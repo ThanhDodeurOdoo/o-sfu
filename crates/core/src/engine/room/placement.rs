@@ -8,7 +8,7 @@ pub use o_sfu_router::topology::{
 use super::{
     Room, RoomJoinError,
     membership::JoinUserRequest,
-    state::{JoinCommit, RoomState},
+    state::{JoinCommit, RoomState, UserJoinedFanout},
 };
 use crate::{
     LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
@@ -88,7 +88,7 @@ pub enum RoomPlacementDecision {
 }
 
 #[derive(Debug)]
-pub(super) struct PendingJoinPlacement {
+pub(super) struct JoinAdmission {
     decision: RoomPlacementDecision,
     loads: WorkerLoadIndex,
     policy: RoomWorkerPolicy,
@@ -144,35 +144,15 @@ impl LoadTriggeredPlacementState {
 }
 
 impl Room {
-    pub async fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {
+    pub(super) async fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {
         self.state.read().await.placement_usage_snapshot()
     }
 
-    pub async fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
+    pub(super) async fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
         self.state.read().await.record_worker_load(loads);
     }
 
-    pub(super) async fn plan_join_placement(
-        &self,
-        worker_loads: WorkerLoadIndex,
-    ) -> PendingJoinPlacement {
-        let room_snapshot = self.placement_usage_snapshot().await;
-        let policy = self.room_worker_policy();
-        let planner = RoomPlacementPlanner::new(policy);
-        let decision = match policy.spillover() {
-            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
-                self.observe_source_fanout_pressure().await;
-                let mut load_state = lock_unpoisoned(&self.load_triggered_placement);
-                planner.choose_with_load_state(&room_snapshot, &worker_loads, &mut load_state)
-            }
-            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
-                planner.choose(&room_snapshot, &worker_loads)
-            }
-        };
-        PendingJoinPlacement::new(decision, worker_loads, policy)
-    }
-
-    pub async fn observe_source_fanout_pressure(&self) {
+    pub(super) async fn observe_source_fanout_pressure(&self) {
         let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) =
             self.room_worker_policy().spillover()
         else {
@@ -198,12 +178,21 @@ impl RoomState {
     }
 }
 
-impl PendingJoinPlacement {
-    fn new(
-        decision: RoomPlacementDecision,
-        loads: WorkerLoadIndex,
-        policy: RoomWorkerPolicy,
-    ) -> Self {
+impl JoinAdmission {
+    pub(super) async fn plan(room: &Room, loads: WorkerLoadIndex) -> Self {
+        let snapshot = room.placement_usage_snapshot().await;
+        let policy = room.room_worker_policy();
+        let planner = RoomPlacementPlanner::new(policy);
+        let decision = match policy.spillover() {
+            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
+                room.observe_source_fanout_pressure().await;
+                let mut state = lock_unpoisoned(&room.load_triggered_placement);
+                planner.choose_with_load_state(&snapshot, &loads, &mut state)
+            }
+            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
+                planner.choose(&snapshot, &loads)
+            }
+        };
         Self {
             decision,
             loads,
@@ -211,26 +200,27 @@ impl PendingJoinPlacement {
         }
     }
 
-    pub(super) fn commit_join(
+    pub(super) fn commit(
         self,
         state: &mut RoomState,
         request: JoinUserRequest,
-        emit_joined_fanout: bool,
+        joined_fanout: UserJoinedFanout,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> Result<JoinCommit, RoomJoinError> {
-        let placement = self.resolve(&state.placement_usage_snapshot(), allocate_spillover_router);
+        let placement =
+            self.resolve_placement(&state.placement_usage_snapshot(), allocate_spillover_router);
         state.apply_join_on_placement(
             &request.user_id,
             request.permissions,
             request.sender,
-            emit_joined_fanout,
+            joined_fanout,
             placement,
         )
     }
 
-    fn resolve(
+    fn resolve_placement(
         self,
-        room: &RoutingPlacementSnapshot,
+        placement_usage: &RoutingPlacementSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> RouterPlacement {
         let Self {
@@ -238,17 +228,17 @@ impl PendingJoinPlacement {
             loads,
             policy,
         } = self;
-        let assigned_placements = room.assigned_placements();
+        let assigned_placements = placement_usage.assigned_placements();
         let score_policy = score_policy(policy);
         let Some(first_assigned) = assigned_placements.first().copied() else {
             return match decision {
                 RoomPlacementDecision::AssignPrimary { media_worker_id }
                 | RoomPlacementDecision::AllocateSpillover { media_worker_id } => RouterPlacement {
-                    router: room.primary_router(),
+                    router: placement_usage.primary_router(),
                     media_worker: media_worker_id,
                 },
                 RoomPlacementDecision::UseExisting(placement) => RouterPlacement {
-                    router: room.primary_router(),
+                    router: placement_usage.primary_router(),
                     media_worker: placement.media_worker,
                 },
             };

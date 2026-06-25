@@ -16,7 +16,7 @@ use crate::engine::{
         },
         outbound::MessageFanout,
         source_policy::{SourcePolicyCommit, SourcePolicyWakeups},
-        state::{ConnectionCloseCommit, DisconnectCommit, JoinCommit},
+        state::{ConnectionCloseCommit, DisconnectCommit, JoinCommit, UserJoinedFanout},
     },
 };
 
@@ -24,6 +24,7 @@ use crate::engine::{
 pub struct RoomEffectContext<'a> {
     media_transport: Option<&'a MediaTransport>,
     route_effects: bool,
+    joined_fanout: UserJoinedFanout,
 }
 
 impl<'a> RoomEffectContext<'a> {
@@ -31,6 +32,7 @@ impl<'a> RoomEffectContext<'a> {
         Self {
             media_transport: Some(media_transport),
             route_effects: true,
+            joined_fanout: UserJoinedFanout::Emit,
         }
     }
 
@@ -39,7 +41,12 @@ impl<'a> RoomEffectContext<'a> {
         Self {
             media_transport,
             route_effects: false,
+            joined_fanout: UserJoinedFanout::Suppress,
         }
+    }
+
+    pub(in crate::engine::room) const fn user_joined_fanout(self) -> UserJoinedFanout {
+        self.joined_fanout
     }
 
     fn media_transport(self) -> Option<&'a MediaTransport> {

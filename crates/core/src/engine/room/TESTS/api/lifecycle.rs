@@ -1,10 +1,12 @@
+use std::future::ready;
+
 use o_sfu_router::{
     RouterId, rtp::MediaCapabilities, test_support::rtp_samples::sample_client_rtp_capabilities,
 };
 
 use super::super::super::{
     JoinUserRequest, Room, RoomEffectContext, RoomJoinError, UserOutboundSender,
-    placement::{PendingJoinPlacement, WorkerLoadIndex},
+    placement::WorkerLoadIndex,
 };
 use crate::engine::{
     ConnectionId, UserId, UserPermissions,
@@ -27,19 +29,19 @@ impl RoomTestLifecycle<'_> {
         permissions: UserPermissions,
         sender: UserOutboundSender,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let (placement, router_id) = join_inputs(self.room, Vec::new()).await;
+        let (loads, spillover_router_id) = join_placement_inputs(self.room, Vec::new()).await;
         self.room
-            .join_session_with_cleanup(
+            .admit_session(
                 JoinUserRequest {
                     user_id,
                     label,
                     permissions,
                     sender,
                 },
-                false,
-                placement,
+                loads,
                 RoomEffectContext::state_only(None),
-                || router_id,
+                ready(()),
+                || spillover_router_id,
             )
             .await
             .map(|receipt| receipt.connection_id)
@@ -56,20 +58,20 @@ impl RoomTestLifecycle<'_> {
         sender: UserOutboundSender,
         media_transport: &MediaTransport,
     ) -> Result<ConnectionId, RoomJoinError> {
-        let (placement, router_id) =
-            join_inputs(self.room, media_transport.worker_pressure_snapshots()).await;
+        let (loads, spillover_router_id) =
+            join_placement_inputs(self.room, media_transport.worker_pressure_snapshots()).await;
         self.room
-            .join_session_with_cleanup(
+            .admit_session(
                 JoinUserRequest {
                     user_id,
                     label,
                     permissions,
                     sender,
                 },
-                false,
-                placement,
+                loads,
                 RoomEffectContext::state_only(Some(media_transport)),
-                || router_id,
+                ready(()),
+                || spillover_router_id,
             )
             .await
             .map(|receipt| receipt.connection_id)
@@ -134,13 +136,14 @@ impl RoomTestLifecycle<'_> {
     }
 }
 
-async fn join_inputs(
+async fn join_placement_inputs(
     room: &Room,
     pressure: Vec<TransportWorkerPressureSnapshot>,
-) -> (PendingJoinPlacement, RouterId) {
+) -> (WorkerLoadIndex, RouterId) {
     let mut loads = WorkerLoadIndex::new(room.room_worker_policy().max_local_routers(), pressure);
     room.record_worker_load(&mut loads).await;
-    let placement = room.plan_join_placement(loads).await;
-    let snapshot = room.placement_usage_snapshot().await;
-    (placement, snapshot.next_router_id())
+    (
+        loads,
+        room.placement_usage_snapshot().await.next_router_id(),
+    )
 }
