@@ -63,7 +63,6 @@ fn server_push_messages_round_trip() -> serde_json::Result<()> {
         user_id: UserId::Integer(5),
         stream_type: StreamType::Camera,
         active: true,
-        source: None,
     }])
     .into_envelope()?;
     assert_eq!(

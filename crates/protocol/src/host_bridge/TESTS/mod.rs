@@ -65,7 +65,6 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                         user_id: UserId::Integer(7),
                         stream_type: StreamType::Camera,
                         active: true,
-                        source: None,
                     }],
                 },
             },

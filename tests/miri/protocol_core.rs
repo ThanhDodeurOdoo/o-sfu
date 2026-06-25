@@ -5,8 +5,8 @@ use o_sfu_protocol::{
     wire::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates,
         RecordingOptions, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
-        SessionDescriptionPayload, StreamIntentPayload, StreamType, SubscribePayload, TrackBinding,
-        UserId, UserInfo, WebSocketCloseCode,
+        SessionDescriptionPayload, SourceDescriptor, StreamIntentPayload, StreamType,
+        SubscribePayload, TrackBinding, UserId, UserInfo, WebSocketCloseCode,
     },
 };
 use o_sfu_tests::miri_support::{
@@ -270,32 +270,46 @@ fn malformed_server_batches_close_the_socket_with_protocol_error() {
 }
 
 #[test]
-fn disconnect_clears_pending_requests_track_snapshots_and_runtime_obligations() {
+fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(empty_welcome_payload());
     let _ = core.on_transport_ready();
 
+    let binding = TrackBinding {
+        mid: "0".to_owned(),
+        user_id: UserId::String("peer-1".to_owned()),
+        stream_type: StreamType::Audio,
+        active: true,
+    };
     let track_frame = encode_server_batch(ServerEnvelope::Message(ServerMessage::Tracks(vec![
-        TrackBinding {
-            mid: "0".to_owned(),
-            user_id: UserId::String("peer-1".to_owned()),
-            stream_type: StreamType::Audio,
-            active: true,
-            source: None,
-        },
+        binding.clone(),
     ])));
     assert_eq!(
         core.on_ws_message(&track_frame),
         vec![Command::EmitEvent {
             event: ProtocolEvent::TrackSnapshot {
-                bindings: vec![TrackBinding {
-                    mid: "0".to_owned(),
-                    user_id: UserId::String("peer-1".to_owned()),
-                    stream_type: StreamType::Audio,
-                    active: true,
-                    source: None,
-                }],
+                bindings: vec![binding],
+            },
+        }]
+    );
+
+    let source = SourceDescriptor {
+        source_id: "source-1".to_owned(),
+        user_id: UserId::String("peer-1".to_owned()),
+        stream_type: StreamType::Audio,
+        active: true,
+        mid: Some("0".to_owned()),
+        encodings: Vec::new(),
+    };
+    let source_frame = encode_server_batch(ServerEnvelope::Message(ServerMessage::Sources(vec![
+        source.clone(),
+    ])));
+    assert_eq!(
+        core.on_ws_message(&source_frame),
+        vec![Command::EmitEvent {
+            event: ProtocolEvent::SourceSnapshot {
+                sources: vec![source],
             },
         }]
     );
@@ -326,6 +340,11 @@ fn disconnect_clears_pending_requests_track_snapshots_and_runtime_obligations() 
             Command::EmitEvent {
                 event: ProtocolEvent::TrackSnapshot {
                     bindings: Vec::new(),
+                },
+            },
+            Command::EmitEvent {
+                event: ProtocolEvent::SourceSnapshot {
+                    sources: Vec::new(),
                 },
             },
             Command::CloseWebSocket { code: 1000 },

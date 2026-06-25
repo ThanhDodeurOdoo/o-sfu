@@ -574,7 +574,6 @@ impl TrackBindingInput {
             user_id: self.user_id.into_protocol("peer-"),
             stream_type: self.stream_type.into_protocol(),
             active: self.active,
-            source: None,
         }
     }
 }

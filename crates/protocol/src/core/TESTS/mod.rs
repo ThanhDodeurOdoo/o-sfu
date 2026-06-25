@@ -14,8 +14,7 @@ pub(super) use crate::{
         ClientResponse, Envelope, EnvelopeBatch, PeerInfoPayload, PeerLeftPayload, PeerSnapshot,
         RecordingActionResult, RecordingOptions, RequestId, ServerBroadcastPayload, ServerEnvelope,
         ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload, SourceDescriptor,
-        SourceEncodingDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
-        UploadLayerPolicyRole, WebSocketCloseCode, WelcomePayload,
+        StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
     },
 };
 

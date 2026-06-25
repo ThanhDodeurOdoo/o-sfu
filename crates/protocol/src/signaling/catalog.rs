@@ -84,8 +84,6 @@ pub struct TrackBinding {
     #[serde(rename = "type")]
     pub stream_type: StreamType,
     pub active: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<SourceDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

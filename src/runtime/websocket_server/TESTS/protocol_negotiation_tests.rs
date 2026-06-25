@@ -207,7 +207,6 @@ fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {
         user_id: UserId::Integer(81),
         stream_type,
         active: true,
-        source: None,
     }
 }
 

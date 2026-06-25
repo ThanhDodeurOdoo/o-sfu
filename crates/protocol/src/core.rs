@@ -337,10 +337,8 @@ pub struct ProtocolCore {
     /// The map is replaced by track snapshots and trimmed when peers leave. It
     /// is runtime state only and is cleared on disconnect or socket loss.
     track_bindings: BTreeMap<String, TrackBinding>,
-    /// Current server-maintained source descriptor snapshot keyed by source id.
-    source_descriptors: BTreeMap<String, SourceDescriptor>,
-    /// Whether the current source snapshot was derived from legacy track data.
-    source_descriptors_from_legacy_tracks: bool,
+    /// Whether the host has a non-empty source descriptor snapshot to clear.
+    has_source_descriptors: bool,
     /// Latest client intent that must be replayed after a recovered socket is
     /// authenticated.
     ///
@@ -395,8 +393,7 @@ impl ProtocolCore {
             features: empty_features(),
             recording_state: RecordingState::default(),
             track_bindings: BTreeMap::new(),
-            source_descriptors: BTreeMap::new(),
-            source_descriptors_from_legacy_tracks: false,
+            has_source_descriptors: false,
             sticky_replay: StickyReplayState::new(),
             connect_context: None,
             recovery_delay_ms: INITIAL_RECOVERY_DELAY_MS,
@@ -689,8 +686,7 @@ impl ProtocolCore {
 
     fn clear_runtime_state(&mut self) {
         self.track_bindings.clear();
-        self.source_descriptors.clear();
-        self.source_descriptors_from_legacy_tracks = false;
+        self.has_source_descriptors = false;
         self.outbound_batch.clear();
         self.request_tracker.clear();
     }
@@ -711,9 +707,8 @@ impl ProtocolCore {
                 },
             });
         }
-        if !self.source_descriptors.is_empty() {
-            self.source_descriptors.clear();
-            self.source_descriptors_from_legacy_tracks = false;
+        if self.has_source_descriptors {
+            self.has_source_descriptors = false;
             commands.push(Command::EmitEvent {
                 event: ProtocolEvent::SourceSnapshot {
                     sources: Vec::new(),

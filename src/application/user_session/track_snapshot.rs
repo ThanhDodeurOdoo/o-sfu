@@ -35,7 +35,12 @@ impl TrackSnapshot {
             ServerMessage::Tracks(
                 self.by_mid
                     .iter()
-                    .map(|(mid, source)| track_binding(mid, source))
+                    .map(|(mid, source)| TrackBinding {
+                        mid: mid.to_owned(),
+                        user_id: source.user_id.clone(),
+                        stream_type: source.stream_type,
+                        active: source.active,
+                    })
                     .collect(),
             ),
             ServerMessage::Sources(self.by_mid.values().cloned().collect()),
@@ -96,16 +101,6 @@ impl TrackSnapshot {
             changed |= set_active(&mut source.active, active);
         }
         changed
-    }
-}
-
-fn track_binding(mid: &str, source: &SourceDescriptor) -> TrackBinding {
-    TrackBinding {
-        mid: mid.to_owned(),
-        user_id: source.user_id.clone(),
-        stream_type: source.stream_type,
-        active: source.active,
-        source: None,
     }
 }
 
