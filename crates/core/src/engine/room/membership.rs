@@ -9,7 +9,7 @@ use super::{
     BroadcastPayloadError, Room, RoomJoinError, UserOutboundSender,
     effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
     media_graph::CommittedTransportReceipt,
-    placement::PendingJoinPlacement,
+    placement::{JoinAdmission, WorkerLoadIndex},
     state::ConnectionCloseCommit,
 };
 use crate::engine::{
@@ -39,37 +39,23 @@ pub struct JoinUserRequest {
 }
 
 impl Room {
-    pub(super) async fn admit_session<Fut>(
+    pub(super) async fn admit_session(
         &self,
         request: JoinUserRequest,
-        worker_loads: super::placement::WorkerLoadIndex,
+        worker_loads: WorkerLoadIndex,
         context: RoomEffectContext<'_>,
-        after_planning: Fut,
-        allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> Result<CommittedTransportReceipt, RoomJoinError>
-    where
-        Fut: Future<Output = ()>,
-    {
-        let placement = self.plan_join_placement(worker_loads).await;
-        after_planning.await;
-        self.join_session_with_cleanup(request, true, placement, context, allocate_spillover_router)
-            .await
-    }
-
-    pub(super) async fn join_session_with_cleanup(
-        &self,
-        request: JoinUserRequest,
-        emit_joined_fanout: bool,
-        placement: PendingJoinPlacement,
-        context: RoomEffectContext<'_>,
+        after_planning: impl Future<Output = ()>,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> Result<CommittedTransportReceipt, RoomJoinError> {
+        let joined_fanout = context.user_joined_fanout();
+        let admission = JoinAdmission::plan(self, worker_loads).await;
+        after_planning.await;
         let commit = {
             let mut state = self.state.write().await;
-            placement.commit_join(
+            admission.commit(
                 &mut state,
                 request,
-                emit_joined_fanout,
+                joined_fanout,
                 allocate_spillover_router,
             )?
         };

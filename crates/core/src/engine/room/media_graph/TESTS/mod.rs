@@ -90,13 +90,12 @@ fn has_committed_consumer(topology: &super::RoomTopology, key: &ConsumerKey) -> 
     topology.committed_consumer_route_for_key(key).is_some()
 }
 
-fn join_test_user(state: &mut RoomState, user_id: &UserId) {
-    let sender = test_sender();
-    assert!(
-        state
-            .apply_join(user_id, UserPermissions::default(), sender, false,)
-            .is_ok()
-    );
+fn join_test_user(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
+    state
+        .apply_join(user_id, UserPermissions::default(), test_sender())
+        .expect("test user should join")
+        .receipt
+        .connection_id
 }
 
 fn set_test_user_ready(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
@@ -508,13 +507,7 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
 fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
-    let sender = test_sender();
-
-    let join = state.apply_join(&user_id, UserPermissions::default(), sender, false);
-    assert!(join.is_ok());
-    let connection_id = state
-        .user_connection_id(&user_id)
-        .unwrap_or(ConnectionId::from_raw(u64::MAX));
+    let connection_id = join_test_user(&mut state, &user_id);
 
     let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(777));
     let transport_media_id = TransportMediaId::default();
@@ -556,23 +549,13 @@ fn stale_replaced_connection_cannot_update_download_state() {
     let mut state = test_state();
     let producer_user_id = UserId::Integer(1);
     let consumer_user_id = UserId::Integer(2);
-    let replacement_sender = test_sender();
 
     join_test_user(&mut state, &producer_user_id);
     join_test_user(&mut state, &consumer_user_id);
     let (route_key, stale_connection_id) =
         install_test_consumer_route(&mut state, &producer_user_id, &consumer_user_id);
 
-    assert!(
-        state
-            .apply_join(
-                &consumer_user_id,
-                UserPermissions::default(),
-                replacement_sender,
-                false,
-            )
-            .is_ok()
-    );
+    join_test_user(&mut state, &consumer_user_id);
 
     let intents = subscription_intents_from_test_states(&scalable_video_states(false));
     let change = state.plan_receiver_route_work(
