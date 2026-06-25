@@ -1,6 +1,7 @@
 use o_sfu_protocol::{
     host::{
-        Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
+        Command, ConnectionState, NegotiationKind, PendingRequest, PendingRequestKind,
+        ProtocolCore, ProtocolEvent, ProtocolRequestResult,
     },
     wire::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates,
@@ -13,15 +14,17 @@ use o_sfu_tests::miri_support::{
     decode_sent_client_envelopes, empty_welcome_payload, encode_server_batch,
 };
 
-fn extract_registered_request(commands: &[Command]) -> Option<(RequestId, u32)> {
-    commands.iter().find_map(|command| match command {
-        Command::BeginPendingRequest {
-            request_id,
-            timeout_timer_id,
-            ..
-        } => Some((request_id.clone(), *timeout_timer_id)),
-        _ => None,
-    })
+fn extract_pending_request(
+    result: &ProtocolRequestResult,
+    kind: PendingRequestKind,
+) -> Option<&PendingRequest> {
+    assert!(
+        result.pending_request.is_some(),
+        "recording request result should carry a pending request"
+    );
+    let request = result.pending_request.as_ref()?;
+    assert_eq!(request.kind, kind);
+    Some(request)
 }
 
 #[test]
@@ -122,59 +125,46 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(empty_welcome_payload());
 
-    let start_commands = core.start_recording(RecordingOptions {
+    let start_result = core.start_recording(RecordingOptions {
         audio: Some(true),
         video: Some(true),
         transcription: None,
     });
-    let Some((start_request_id, start_timeout_timer_id)) =
-        extract_registered_request(&start_commands)
+    let Some(start_request) =
+        extract_pending_request(&start_result, PendingRequestKind::StartRecording)
     else {
         return;
     };
-    assert!(matches!(
-        start_commands.first(),
-        Some(Command::BeginPendingRequest {
-            kind: PendingRequestKind::StartRecording,
-            ..
-        })
-    ));
 
-    let stop_commands = core.stop_recording();
-    let Some((stop_request_id, stop_timeout_timer_id)) = extract_registered_request(&stop_commands)
+    let stop_result = core.stop_recording();
+    let Some(stop_request) =
+        extract_pending_request(&stop_result, PendingRequestKind::StopRecording)
     else {
         return;
     };
-    assert!(matches!(
-        stop_commands.first(),
-        Some(Command::BeginPendingRequest {
-            kind: PendingRequestKind::StopRecording,
-            ..
-        })
-    ));
 
     assert!(core.on_timer(99_999).is_empty());
     assert_eq!(
-        core.on_timer(stop_timeout_timer_id),
+        core.on_timer(stop_request.timeout_timer_id),
         vec![
             Command::CancelTimer {
-                id: stop_timeout_timer_id,
+                id: stop_request.timeout_timer_id,
             },
             Command::ResolvePendingRequest {
-                request_id: stop_request_id,
+                request_id: stop_request.request_id.clone(),
                 ok: false,
             },
         ]
     );
-    assert!(core.on_timer(stop_timeout_timer_id).is_empty());
+    assert!(core.on_timer(stop_request.timeout_timer_id).is_empty());
     assert_eq!(
-        core.on_timer(start_timeout_timer_id),
+        core.on_timer(start_request.timeout_timer_id),
         vec![
             Command::CancelTimer {
-                id: start_timeout_timer_id,
+                id: start_request.timeout_timer_id,
             },
             Command::ResolvePendingRequest {
-                request_id: start_request_id,
+                request_id: start_request.request_id.clone(),
                 ok: false,
             },
         ]
@@ -314,13 +304,13 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
         }]
     );
 
-    let request_commands = core.start_recording(RecordingOptions {
+    let request_result = core.start_recording(RecordingOptions {
         audio: Some(true),
         video: None,
         transcription: None,
     });
-    let Some((request_id, request_timeout_timer_id)) =
-        extract_registered_request(&request_commands)
+    let Some(request) =
+        extract_pending_request(&request_result, PendingRequestKind::StartRecording)
     else {
         return;
     };
@@ -331,10 +321,10 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
             Command::CancelTimer { id: 1 },
             Command::CancelTimer { id: 2 },
             Command::CancelTimer {
-                id: request_timeout_timer_id,
+                id: request.timeout_timer_id,
             },
             Command::ResolvePendingRequest {
-                request_id,
+                request_id: request.request_id.clone(),
                 ok: false,
             },
             Command::EmitEvent {

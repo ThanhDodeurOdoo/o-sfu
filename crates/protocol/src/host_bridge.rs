@@ -6,8 +6,8 @@ use crate::{
         BundleSessionInfoSnapshotById, BundleSourceUpdate, BundleUpdate, bundle_session_info_key,
     },
     core::{
-        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore,
-        ProtocolEvent,
+        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest, ProtocolCore,
+        ProtocolEvent, ProtocolRequestResult,
     },
     shared::{AvailableFeatures, RecordingState, StreamType, UserId},
     signaling::{NegotiationUploadSlot, RequestId, TrackBinding},
@@ -70,16 +70,6 @@ pub enum HostCommand {
     EmitUpdate {
         update: BundleUpdate,
     },
-    BeginPendingRequest {
-        #[serde(rename = "requestId")]
-        request_id: RequestId,
-        #[serde(rename = "requestKind")]
-        request_kind: PendingRequestKind,
-        #[serde(rename = "timeoutTimerId")]
-        timeout_timer_id: u32,
-        #[serde(rename = "timeoutMs")]
-        timeout_ms: u32,
-    },
     ResolvePendingRequest {
         #[serde(rename = "requestId")]
         request_id: RequestId,
@@ -95,6 +85,13 @@ pub enum HostCommand {
     Connect {
         url: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostRequestResult {
+    pub commands: Vec<HostCommand>,
+    pub pending_request: Option<PendingRequest>,
 }
 
 fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: ProtocolEvent) {
@@ -173,19 +170,6 @@ pub fn project_commands(core_commands: CommandBatch) -> Vec<HostCommand> {
             Command::EmitEvent { event } => {
                 push_host_commands_for_event(&mut host_commands, event);
             }
-            Command::BeginPendingRequest {
-                request_id,
-                kind,
-                timeout_timer_id,
-                timeout_ms,
-            } => {
-                host_commands.push(HostCommand::BeginPendingRequest {
-                    request_id,
-                    request_kind: kind,
-                    timeout_timer_id,
-                    timeout_ms,
-                });
-            }
             Command::ResolvePendingRequest { request_id, ok } => {
                 host_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
             }
@@ -197,6 +181,14 @@ pub fn project_commands(core_commands: CommandBatch) -> Vec<HostCommand> {
         }
     }
     host_commands
+}
+
+#[must_use]
+pub fn project_request_result(result: ProtocolRequestResult) -> HostRequestResult {
+    HostRequestResult {
+        commands: project_commands(result.commands),
+        pending_request: result.pending_request,
+    }
 }
 
 #[must_use]

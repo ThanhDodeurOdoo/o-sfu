@@ -3,7 +3,7 @@ use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 use crate::{
     core::{NegotiationKind, ProtocolCore},
-    host_bridge::{CoreSnapshot, connection_state_tag, project_commands},
+    host_bridge::{CoreSnapshot, connection_state_tag, project_commands, project_request_result},
     shared::StreamType,
 };
 
@@ -104,12 +104,12 @@ impl WasmProtocolCore {
     #[wasm_bindgen(js_name = startRecording)]
     pub fn start_recording(&mut self, options: Option<JsValue>) -> Result<JsValue, JsValue> {
         let options = from_optional_js(options)?;
-        to_js(&project_commands(self.inner.start_recording(options)))
+        to_js(&project_request_result(self.inner.start_recording(options)))
     }
 
     #[wasm_bindgen(js_name = stopRecording)]
     pub fn stop_recording(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.stop_recording()))
+        to_js(&project_request_result(self.inner.stop_recording()))
     }
 
     #[wasm_bindgen(js_name = submitNegotiationAnswer)]

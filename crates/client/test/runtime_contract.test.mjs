@@ -71,10 +71,10 @@ function validCore(overrides = {}) {
             return [];
         },
         startRecording() {
-            return [];
+            return requestResult();
         },
         stopRecording() {
-            return [];
+            return requestResult();
         },
         submitNegotiationAnswer() {
             return [];
@@ -91,13 +91,20 @@ function assertInjectedCoreThrows(overrides, read) {
     assertThrowsError(() => read(core));
 }
 
-function beginPendingRequest(overrides = {}) {
+function pendingRequest(overrides = {}) {
     return {
-        kind: "beginPendingRequest",
         requestId: "request-1",
-        requestKind: PENDING_REQUEST_KIND.START_RECORDING,
+        kind: PENDING_REQUEST_KIND.START_RECORDING,
         timeoutMs: 5000,
         timeoutTimerId: 10_000,
+        ...overrides
+    };
+}
+
+function requestResult(overrides = {}) {
+    return {
+        commands: [],
+        pendingRequest: null,
         ...overrides
     };
 }
@@ -216,18 +223,18 @@ test("injected protocol core validates host command ordering", () => {
     }
 });
 
-test("injected protocol core validates pending request lifecycle commands", () => {
-    for (const commands of [
-        [beginPendingRequest({ timeoutTimerId: 1 })],
-        [{ kind: "resolvePendingRequest", requestId: "missing", ok: false }],
-        [
-            beginPendingRequest({ requestId: "request-1" }),
-            { kind: "resolvePendingRequest", requestId: "request-2", ok: false }
-        ]
+test("injected protocol core validates recording request results", () => {
+    for (const result of [
+        [],
+        requestResult({ pendingRequest: pendingRequest({ timeoutTimerId: 1 }) }),
+        requestResult({ pendingRequest: pendingRequest({ kind: "unknown" }) }),
+        requestResult({
+            commands: [{ kind: "resolvePendingRequest", requestId: "missing", ok: false }]
+        })
     ]) {
         assertInjectedCoreThrows(
             {
-                startRecording: () => commands
+                startRecording: () => result
             },
             (core) => core.startRecording()
         );

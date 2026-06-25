@@ -140,7 +140,6 @@ export const COMMAND_KIND = {
     REMOVE_SESSION_TRACKS: "removeSessionTracks",
     EMIT_STATE_CHANGE: "emitStateChange",
     EMIT_UPDATE: "emitUpdate",
-    BEGIN_PENDING_REQUEST: "beginPendingRequest",
     RESOLVE_PENDING_REQUEST: "resolvePendingRequest",
     SCHEDULE_TIMER: "scheduleTimer",
     CANCEL_TIMER: "cancelTimer"

@@ -1,41 +1,15 @@
-import { COMMAND_KIND } from "../protocol_contract.js";
-import type { HostCommand } from "../runtime_contract.js";
+import type { PendingRequest } from "../runtime_contract.js";
 import type { PendingRequestCallbacks } from "./browser_types.js";
-
-type BeginPendingRequestCommand = Extract<
-    HostCommand,
-    { kind: typeof COMMAND_KIND.BEGIN_PENDING_REQUEST }
->;
 
 export class PendingRequests {
     private _pendingRequestResolvers = new Map<string, PendingRequestCallbacks>();
 
-    begin(
-        getCommands: () => HostCommand[],
-        enqueue: (commands: HostCommand[]) => void,
-        onRuntimeError: (error: unknown) => void
-    ): Promise<boolean> {
-        let commands: HostCommand[];
-        let request: BeginPendingRequestCommand | null;
-        try {
-            commands = getCommands();
-            request = this.findBeginRequestCommand(commands);
-        } catch (error) {
-            onRuntimeError(error);
-            return Promise.reject(error);
-        }
-        if (!request) {
-            enqueue(commands);
-            return Promise.resolve(false);
-        }
+    begin(request: PendingRequest): Promise<boolean> {
         if (this._pendingRequestResolvers.has(request.requestId)) {
-            const error = new Error(`pending request ${request.requestId} is already registered`);
-            onRuntimeError(error);
-            return Promise.reject(error);
+            throw new Error(`pending request ${request.requestId} is already registered`);
         }
         return new Promise<boolean>((resolve, reject) => {
             this._pendingRequestResolvers.set(request.requestId, { resolve, reject });
-            enqueue(commands);
         });
     }
 
@@ -57,19 +31,5 @@ export class PendingRequests {
 
     has(requestId: string): boolean {
         return this._pendingRequestResolvers.has(requestId);
-    }
-
-    private findBeginRequestCommand(commands: HostCommand[]): BeginPendingRequestCommand | null {
-        let request: BeginPendingRequestCommand | null = null;
-        for (const command of commands) {
-            if (command.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
-                continue;
-            }
-            if (request) {
-                throw new Error("pending request command batches must begin at most one request");
-            }
-            request = command;
-        }
-        return request;
     }
 }

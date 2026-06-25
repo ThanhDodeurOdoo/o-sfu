@@ -5,7 +5,10 @@ use std::{
 
 use futures_util::SinkExt;
 use o_sfu_protocol::{
-    host::{Command, CommandBatch, HostCommand, NegotiationKind, ProtocolCore, project_commands},
+    host::{
+        Command, CommandBatch, HostCommand, NegotiationKind, PendingRequest, ProtocolCore,
+        project_commands,
+    },
     wire::RecordingOptions,
 };
 use tokio_tungstenite::{connect_async, tungstenite};
@@ -28,7 +31,8 @@ pub(crate) struct PendingHarnessNegotiation {
 
 pub(crate) struct ProtocolHarnessPeer {
     pub(crate) core: ProtocolCore,
-    pub(crate) pending_request_commands: Vec<HostCommand>,
+    pub(crate) pending_request_starts: Vec<PendingRequest>,
+    pub(crate) pending_request_resolutions: Vec<(RequestId, bool)>,
     pub(crate) pending_negotiations: VecDeque<PendingHarnessNegotiation>,
     rtc_peer_factory: Option<ProtocolHarnessRtcPeerFactory>,
     rtc_peer: Option<ProtocolHarnessRtcPeer>,
@@ -47,7 +51,8 @@ impl Default for ProtocolHarnessPeer {
         );
         Self {
             core: ProtocolCore::default(),
-            pending_request_commands: Vec::new(),
+            pending_request_starts: Vec::new(),
+            pending_request_resolutions: Vec::new(),
             pending_negotiations: VecDeque::new(),
             rtc_peer_factory: Some(rtc_peer_factory),
             rtc_peer: rtc_peer_factory.build_peer(),
@@ -159,19 +164,29 @@ impl ProtocolHarnessPeer {
         video: Option<bool>,
         transcription: Option<bool>,
     ) -> Option<()> {
-        let commands = self.core.start_recording(RecordingOptions {
+        let result = self.core.start_recording(RecordingOptions {
             audio,
             video,
             transcription,
         });
-        self.run_commands(commands).await?;
+        self.register_pending_request(result.pending_request);
+        self.run_commands(result.commands).await?;
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
     pub(crate) async fn stop_recording(&mut self) -> Option<()> {
-        let commands = self.core.stop_recording();
-        self.run_commands(commands).await?;
+        let result = self.core.stop_recording();
+        self.register_pending_request(result.pending_request);
+        self.run_commands(result.commands).await?;
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
+    }
+
+    fn register_pending_request(&mut self, request: Option<PendingRequest>) {
+        if let Some(request) = request {
+            self.timers
+                .insert(request.timeout_timer_id, request.timeout_ms);
+            self.pending_request_starts.push(request);
+        }
     }
 
     pub(crate) async fn flush_timers_with_delay(&mut self, delay_ms: u32) -> Option<()> {
@@ -262,25 +277,8 @@ impl ProtocolHarnessPeer {
                     self.websocket.as_mut()?.close(None).await.ok()?;
                     Vec::new()
                 }
-                Command::BeginPendingRequest {
-                    request_id,
-                    kind,
-                    timeout_timer_id,
-                    timeout_ms,
-                } => {
-                    self.timers.insert(timeout_timer_id, timeout_ms);
-                    self.pending_request_commands
-                        .push(HostCommand::BeginPendingRequest {
-                            request_id,
-                            request_kind: kind,
-                            timeout_timer_id,
-                            timeout_ms,
-                        });
-                    Vec::new()
-                }
                 Command::ResolvePendingRequest { request_id, ok } => {
-                    self.pending_request_commands
-                        .push(HostCommand::ResolvePendingRequest { request_id, ok });
+                    self.pending_request_resolutions.push((request_id, ok));
                     Vec::new()
                 }
             };

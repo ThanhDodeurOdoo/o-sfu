@@ -14,7 +14,8 @@ import {
     createProtocolCore,
     wrapProtocolCoreBindings,
     type HostCommand,
-    type ProtocolCoreBindings
+    type ProtocolCoreBindings,
+    type ProtocolRequestResult
 } from "../runtime_contract.js";
 import { COMMAND_KIND } from "../protocol_contract.js";
 import type {
@@ -126,11 +127,11 @@ export class BrowserRuntime {
     }
 
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
-        return this.beginPendingRequest(() => this._core.startRecording(options));
+        return this.processRequestResult(() => this._core.startRecording(options));
     }
 
     stopRecording(): Promise<boolean> {
-        return this.beginPendingRequest(() => this._core.stopRecording());
+        return this.processRequestResult(() => this._core.stopRecording());
     }
 
     async getStats(): Promise<SfuStats> {
@@ -177,12 +178,33 @@ export class BrowserRuntime {
         this._socketSession.abort(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
-    private beginPendingRequest(getCommands: () => HostCommand[]): Promise<boolean> {
-        return this._pendingRequests.begin(
-            getCommands,
-            (commands) => this.enqueue(commands),
-            (error) => this.handleRuntimeError(error)
-        );
+    private processRequestResult(getResult: () => ProtocolRequestResult): Promise<boolean> {
+        let result: ProtocolRequestResult;
+        try {
+            result = getResult();
+        } catch (error) {
+            this.handleRuntimeError(error);
+            return Promise.reject(error);
+        }
+        const request = result.pendingRequest;
+        if (!request) {
+            this.enqueue(result.commands);
+            return Promise.resolve(false);
+        }
+        let promise: Promise<boolean>;
+        try {
+            promise = this._pendingRequests.begin(request);
+        } catch (error) {
+            this.handleRuntimeError(error);
+            return Promise.reject(error);
+        }
+        this.enqueueTask((epoch) => {
+            if (this._pendingRequests.has(request.requestId)) {
+                this.scheduleTimer(request.timeoutTimerId, request.timeoutMs);
+            }
+            return this.processCommands(result.commands, epoch);
+        });
+        return promise;
     }
 
     private enqueueProtocolCommands(getCommands: () => HostCommand[]): void {
@@ -284,11 +306,6 @@ export class BrowserRuntime {
                 return [];
             case COMMAND_KIND.EMIT_UPDATE:
                 this._context.onUpdate(command.update);
-                return [];
-            case COMMAND_KIND.BEGIN_PENDING_REQUEST:
-                if (this._pendingRequests.has(command.requestId)) {
-                    this.scheduleTimer(command.timeoutTimerId, command.timeoutMs);
-                }
                 return [];
             case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
                 this._pendingRequests.resolve(command.requestId, command.ok);

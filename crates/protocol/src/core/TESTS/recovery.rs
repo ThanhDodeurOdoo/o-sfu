@@ -81,30 +81,30 @@ fn protocol_core_terminal_close_resolves_request_before_recovery_cancel() -> Res
 }
 
 fn start_flushed_recording_request(core: &mut ProtocolCore) -> Result<(RequestId, u32), String> {
-    let start_commands = core.start_recording(RecordingOptions {
+    let result = core.start_recording(RecordingOptions {
         audio: Some(true),
         video: None,
         transcription: None,
     });
+    let Some(pending_request) = result.pending_request.as_ref() else {
+        return Err(format!("expected recording request start, got {result:?}"));
+    };
+    assert_eq!(pending_request.kind, PendingRequestKind::StartRecording);
+    assert_eq!(pending_request.timeout_ms, REQUEST_TIMEOUT_MS);
     let [
-        Command::BeginPendingRequest {
-            request_id,
-            kind: PendingRequestKind::StartRecording,
-            timeout_timer_id,
-            timeout_ms: REQUEST_TIMEOUT_MS,
-        },
         Command::ScheduleTimer {
             id: flush_timer_id,
             ms: 100,
         },
-    ] = start_commands.as_slice()
+    ] = result.commands.as_slice()
     else {
-        return Err(format!(
-            "expected recording request start, got {start_commands:?}"
-        ));
+        return Err(format!("expected flush timer, got {:?}", result.commands));
     };
     let _ = core.on_timer(*flush_timer_id);
-    Ok((request_id.clone(), *timeout_timer_id))
+    Ok((
+        pending_request.request_id.clone(),
+        pending_request.timeout_timer_id,
+    ))
 }
 
 #[test]

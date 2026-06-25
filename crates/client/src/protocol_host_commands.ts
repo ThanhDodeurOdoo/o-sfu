@@ -30,6 +30,18 @@ const REQUEST_TIMEOUT_TIMER_BASE = 10_000;
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
 const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
 
+export type PendingRequest = {
+    requestId: string;
+    kind: PendingRequestKind;
+    timeoutTimerId: number;
+    timeoutMs: number;
+};
+
+export type ProtocolRequestResult = {
+    commands: HostCommand[];
+    pendingRequest: PendingRequest | null;
+};
+
 export type HostCommand =
     | { kind: typeof COMMAND_KIND.SEND_WEB_SOCKET; frame: string }
     | {
@@ -51,13 +63,6 @@ export type HostCommand =
     | { kind: typeof COMMAND_KIND.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
     | { kind: typeof COMMAND_KIND.REMOVE_SESSION_TRACKS; sessionId: SessionId }
     | { kind: typeof COMMAND_KIND.EMIT_UPDATE; update: ClientUpdateDetail }
-    | {
-          kind: typeof COMMAND_KIND.BEGIN_PENDING_REQUEST;
-          requestId: string;
-          requestKind: PendingRequestKind;
-          timeoutTimerId: number;
-          timeoutMs: number;
-      }
     | { kind: typeof COMMAND_KIND.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
     | { kind: typeof COMMAND_KIND.SCHEDULE_TIMER; id: number; ms: number }
     | { kind: typeof COMMAND_KIND.CANCEL_TIMER; id: number }
@@ -83,13 +88,28 @@ export function validateHostCommandBatch(value: unknown, context: string): HostC
     return commands;
 }
 
+export function validateProtocolRequestResult(
+    value: unknown,
+    context: string,
+    validateCommands: (value: unknown, context: string) => HostCommand[]
+): ProtocolRequestResult {
+    const result = asRecord(value, context);
+    const pendingRequest = result.pendingRequest;
+    return {
+        commands: validateCommands(result.commands, `${context}.commands`),
+        pendingRequest:
+            pendingRequest == null
+                ? null
+                : validatePendingRequest(pendingRequest, `${context}.pendingRequest`)
+    };
+}
+
 function validateHostCommandOrder(commands: HostCommand[], context: string): void {
     let closeWebSocketIndex = -1;
     let closePeerConnectionIndex = -1;
     let recoveryTimerIndex = -1;
     let unknownResolvedRequestIndex = -1;
     let unknownResolvedRequestId = "";
-    const startedPendingRequestIds = new Set<string>();
     for (let index = 0; index < commands.length; index += 1) {
         const command = commands[index];
         const previous = commands[index - 1];
@@ -106,13 +126,9 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
         ) {
             recoveryTimerIndex = index;
         }
-        if (command.kind === COMMAND_KIND.BEGIN_PENDING_REQUEST) {
-            startedPendingRequestIds.add(command.requestId);
-        }
         if (
             command.kind === COMMAND_KIND.RESOLVE_PENDING_REQUEST &&
             unknownResolvedRequestIndex < 0 &&
-            !startedPendingRequestIds.has(command.requestId) &&
             !(
                 previous?.kind === COMMAND_KIND.CANCEL_TIMER &&
                 previous.id >= REQUEST_TIMEOUT_TIMER_BASE
@@ -155,7 +171,10 @@ function validateHostCommandOrder(commands: HostCommand[], context: string): voi
         throw new Error(`${context} must close the peer connection before scheduling recovery`);
     }
 
-    if (closePeerConnectionIndex < 0 && unknownResolvedRequestIndex >= 0) {
+    if (
+        unknownResolvedRequestIndex >= 0 &&
+        (closePeerConnectionIndex < 0 || closePeerConnectionIndex > unknownResolvedRequestIndex)
+    ) {
         throw new Error(
             `${context} command #${unknownResolvedRequestIndex} resolves unknown pending request ${unknownResolvedRequestId}`
         );
@@ -208,25 +227,6 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
                 kind,
                 update: validateClientUpdate(command.update, `${context}.update`)
             };
-        case COMMAND_KIND.BEGIN_PENDING_REQUEST: {
-            requireString(command.requestId, `${context}.requestId`);
-            validateStringEnum(
-                command.requestKind,
-                PENDING_REQUEST_KINDS,
-                `${context}.requestKind`
-            );
-            const timeoutTimerId = requireNonNegativeInteger(
-                command.timeoutTimerId,
-                `${context}.timeoutTimerId`
-            );
-            if (timeoutTimerId < REQUEST_TIMEOUT_TIMER_BASE) {
-                throw new Error(`${context}.timeoutTimerId must be a request timeout timer id`);
-            }
-            if (requireNonNegativeInteger(command.timeoutMs, `${context}.timeoutMs`) === 0) {
-                throw new Error(`${context}.timeoutMs must be a positive browser timer delay`);
-            }
-            break;
-        }
         case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
             requireBoolean(command.ok, `${context}.ok`);
@@ -245,6 +245,23 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             throw new Error(`${context}.kind is invalid: ${String(kind)}`);
     }
     return command as HostCommand;
+}
+
+function validatePendingRequest(value: unknown, context: string): PendingRequest {
+    const request = asRecord(value, context);
+    requireString(request.requestId, `${context}.requestId`);
+    validateStringEnum(request.kind, PENDING_REQUEST_KINDS, `${context}.kind`);
+    const timeoutTimerId = requireNonNegativeInteger(
+        request.timeoutTimerId,
+        `${context}.timeoutTimerId`
+    );
+    if (timeoutTimerId < REQUEST_TIMEOUT_TIMER_BASE) {
+        throw new Error(`${context}.timeoutTimerId must be a request timeout timer id`);
+    }
+    if (requireNonNegativeInteger(request.timeoutMs, `${context}.timeoutMs`) === 0) {
+        throw new Error(`${context}.timeoutMs must be a positive browser timer delay`);
+    }
+    return request as PendingRequest;
 }
 
 function validateTrackBinding(value: unknown, context: string): void {

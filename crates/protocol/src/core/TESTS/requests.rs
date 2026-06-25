@@ -6,30 +6,27 @@ fn protocol_core_tracks_recording_request_until_matching_response() -> Result<()
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
 
-    let commands = core.start_recording(RecordingOptions {
+    let result = core.start_recording(RecordingOptions {
         audio: Some(true),
         video: Some(true),
         transcription: None,
     });
 
+    let Some(pending_request) = result.pending_request.as_ref() else {
+        return Err(format!("expected recording request, got {result:?}"));
+    };
+    assert_eq!(pending_request.kind, PendingRequestKind::StartRecording);
+    assert_eq!(pending_request.timeout_ms, REQUEST_TIMEOUT_MS);
     let [
-        Command::BeginPendingRequest {
-            request_id,
-            kind: PendingRequestKind::StartRecording,
-            timeout_timer_id,
-            timeout_ms: REQUEST_TIMEOUT_MS,
-        },
         Command::ScheduleTimer {
             id: flush_timer_id,
             ms: 100,
         },
-    ] = commands.as_slice()
+    ] = result.commands.as_slice()
     else {
-        return Err(format!(
-            "expected recording request start, got {commands:?}"
-        ));
+        return Err(format!("expected flush timer, got {:?}", result.commands));
     };
-    let request_id = request_id.clone();
+    let request_id = pending_request.request_id.clone();
 
     let flush_commands = core.on_timer(*flush_timer_id);
     let mut batch = decode_sent_batch(&flush_commands).into_iter();
@@ -60,7 +57,7 @@ fn protocol_core_tracks_recording_request_until_matching_response() -> Result<()
         response_commands,
         vec![
             Command::CancelTimer {
-                id: *timeout_timer_id,
+                id: pending_request.timeout_timer_id,
             },
             Command::ResolvePendingRequest {
                 request_id,
@@ -77,24 +74,19 @@ fn protocol_core_request_timeout_resolves_pending_request_as_failed() -> Result<
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
 
-    let commands = core.stop_recording();
-    let Some(Command::BeginPendingRequest {
-        request_id,
-        timeout_timer_id,
-        ..
-    }) = commands.first()
-    else {
-        return Err(format!("expected pending request, got {commands:?}"));
+    let result = core.stop_recording();
+    let Some(pending_request) = result.pending_request.as_ref() else {
+        return Err(format!("expected pending request, got {result:?}"));
     };
-    let request_id = request_id.clone();
+    let request_id = pending_request.request_id.clone();
 
-    let timeout_commands = core.on_timer(*timeout_timer_id);
+    let timeout_commands = core.on_timer(pending_request.timeout_timer_id);
 
     assert_eq!(
         timeout_commands,
         vec![
             Command::CancelTimer {
-                id: *timeout_timer_id,
+                id: pending_request.timeout_timer_id,
             },
             Command::ResolvePendingRequest {
                 request_id,

@@ -1,4 +1,4 @@
-use o_sfu_protocol::{host::HostCommand, wire::UserPermissions};
+use o_sfu_protocol::{host::PendingRequest, wire::UserPermissions};
 
 use super::*;
 
@@ -11,14 +11,13 @@ fn recording_permissions() -> UserPermissions {
 }
 
 fn has_resolved_pending_request(
-    commands: &[HostCommand],
+    resolutions: &[(RequestId, bool)],
     request_id: &RequestId,
     ok: bool,
 ) -> bool {
-    commands.contains(&HostCommand::ResolvePendingRequest {
-        request_id: request_id.clone(),
-        ok,
-    })
+    resolutions
+        .iter()
+        .any(|(resolved_id, resolved_ok)| resolved_id == request_id && *resolved_ok == ok)
 }
 
 fn has_channel_info_update(updates: &[BundleUpdate]) -> bool {
@@ -34,14 +33,16 @@ async fn drain_peer_until_pending_request_resolution(
 ) -> Option<RequestId> {
     timeout(Duration::from_secs(1), async {
         loop {
-            let Some((request_id, ..)) =
-                pending_request_start(&peer.pending_request_commands, kind)
-            else {
+            let Some(request) = find_pending_request(&peer.pending_request_starts, kind) else {
                 peer.read_server_frame().await?;
                 continue;
             };
-            if has_resolved_pending_request(&peer.pending_request_commands, &request_id, ok) {
-                return Some(request_id);
+            if has_resolved_pending_request(
+                &peer.pending_request_resolutions,
+                &request.request_id,
+                ok,
+            ) {
+                return Some(request.request_id.clone());
             }
             peer.read_server_frame().await?;
         }
@@ -66,28 +67,19 @@ pub(crate) async fn connect_protocol_recording_peer(
     Some(peer)
 }
 
-fn pending_request_start(
-    commands: &[HostCommand],
+fn find_pending_request(
+    requests: &[PendingRequest],
     kind: PendingRequestKind,
-) -> Option<(RequestId, u32, u32)> {
-    commands.iter().find_map(|command| match command {
-        HostCommand::BeginPendingRequest {
-            request_id,
-            request_kind: pending_kind,
-            timeout_timer_id,
-            timeout_ms,
-            ..
-        } if *pending_kind == kind => Some((request_id.clone(), *timeout_timer_id, *timeout_ms)),
-        _ => None,
-    })
+) -> Option<&PendingRequest> {
+    requests.iter().find(|request| request.kind == kind)
 }
 
 pub(crate) async fn assert_recording_request_rejected(
     peer: &mut ProtocolHarnessPeer,
     kind: PendingRequestKind,
 ) -> Option<RequestId> {
-    let (_, timer_id, timeout_ms) = pending_request_start(&peer.pending_request_commands, kind)?;
-    if peer.timers.get(&timer_id) != Some(&timeout_ms) {
+    let request = find_pending_request(&peer.pending_request_starts, kind)?;
+    if peer.timers.get(&request.timeout_timer_id) != Some(&request.timeout_ms) {
         return None;
     }
     let request_id = drain_peer_until_pending_request_resolution(peer, kind, false).await?;
