@@ -41,12 +41,7 @@ async fn protocol_user_does_not_overlap_topology_renegotiations() {
             .is_some(),
         "second publish should succeed"
     );
-    assert!(
-        read_protocol_server_batch(&mut subscriber_socket)
-            .await
-            .is_none(),
-        "second publish should not send another subscriber offer while the first answer is pending"
-    );
+    assert_no_protocol_request_before_idle(&mut subscriber_socket).await;
 
     assert!(
         respond_to_protocol_negotiation_request_with_test_rtc(
@@ -60,6 +55,20 @@ async fn protocol_user_does_not_overlap_topology_renegotiations() {
     );
 
     let _ = publisher_socket.close(None).await;
+}
+
+async fn assert_no_protocol_request_before_idle(websocket: &mut TestWebSocket) {
+    while let Ok(Some(payload)) =
+        timeout(Duration::from_millis(50), read_text_message(websocket)).await
+    {
+        let Ok(batch) = serde_json::from_str::<EnvelopeBatch>(&payload) else {
+            panic!("server text frame should be a protocol envelope batch, payload: {payload}");
+        };
+        assert!(
+            first_protocol_server_request(&batch).is_none(),
+            "second publish should not send another subscriber offer while the first answer is pending"
+        );
+    }
 }
 
 async fn setup_negotiated_protocol_pair()

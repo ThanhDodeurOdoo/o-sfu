@@ -17,19 +17,10 @@ pub(crate) async fn no_server_frame(peer: &mut ProtocolHarnessPeer, wait: Durati
 pub(crate) async fn read_track_snapshot(
     peer: &mut ProtocolHarnessPeer,
 ) -> Option<Vec<TrackBinding>> {
-    let websocket = peer.websocket.as_mut()?;
-    let payload = read_next_server_payload(websocket).await?;
-    let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-    let messages = protocol_server_messages(&batch)?;
-    let ServerMessage::Tracks(track_bindings) = messages.into_iter().next()? else {
-        return None;
-    };
-    let commands = peer.core.on_ws_message(&payload);
-    peer.run_commands(commands).await?;
-    Some(track_bindings)
+    read_track_snapshot_until_pending_negotiations(peer, 0).await
 }
 
-pub(crate) async fn read_track_snapshot_with_pending_negotiation(
+pub(crate) async fn read_track_snapshot_until_pending_negotiations(
     peer: &mut ProtocolHarnessPeer,
     pending_negotiations: usize,
 ) -> Option<Vec<TrackBinding>> {

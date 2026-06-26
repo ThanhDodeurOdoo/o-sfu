@@ -1,4 +1,8 @@
 use super::support::*;
+use crate::{
+    UnpublishIntentOutcome,
+    engine::{UserInfo, source_model::SourceUnpublishIntent},
+};
 
 #[tokio::test]
 async fn production_change_pauses_producer_and_broadcasts_track_binding() {
@@ -521,24 +525,21 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
     drain_outbound(&mut rx1);
     drain_outbound(&mut rx2);
 
-    assert!(
-        room.test_api()
-            .media()
-            .set_publication_active(
-                &UserId::Integer(1),
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                false,
-                &adapter,
-            )
-            .await
+    let user_id = UserId::Integer(1);
+    let connection_id = user_connection_id(&room, &user_id).await;
+    let intent = SourceUnpublishIntent::new(stream_id_for_source(TestSourceKind::ScalableVideo))
+        .with_presence(Some(UserInfo {
+            is_camera_on: Some(false),
+            ..UserInfo::default()
+        }));
+    assert_ne!(
+        room.user_operation(&user_id, connection_id, &adapter)
+            .stop_publish(&intent)
+            .await,
+        UnpublishIntentOutcome::Noop
     );
 
-    let Some((_, info)) = room
-        .test_api()
-        .inspect()
-        .user_info_snapshot(&UserId::Integer(1))
-        .await
-    else {
+    let Some((_, info)) = room.test_api().inspect().user_info_snapshot(&user_id).await else {
         panic!("publisher user should still be present");
     };
     assert_eq!(info.is_camera_on, Some(false));

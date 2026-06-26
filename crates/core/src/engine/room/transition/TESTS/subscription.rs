@@ -296,17 +296,13 @@ async fn commit_scalable_video(
     publisher_connection_id: ConnectionId,
     transport_media_id: TransportMediaId,
 ) {
-    let committed = room
-        .user_operation(publisher_id, publisher_connection_id, media_transport)
+    room.user_operation(publisher_id, publisher_connection_id, media_transport)
         .commit_staged_publishes(&AppliedSessionAnswer::from_negotiated_producers([(
             transport_media_id,
             sample_simulcast_video_rtp_parameters(None),
         )]))
         .await;
-    assert_eq!(
-        committed,
-        vec![stream_id_for_source(TestSourceKind::ScalableVideo)]
-    );
+    assert_eq!(room.test_api().inspect().producer_count().await, 1);
 }
 
 async fn destination_state(

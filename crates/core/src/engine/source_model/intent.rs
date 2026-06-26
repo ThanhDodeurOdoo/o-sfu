@@ -1,14 +1,13 @@
 use o_sfu_router::MediaKind;
 
 use super::{SourcePolicy, UserStreamId};
-use crate::engine::VideoLayoutIntent;
+use crate::engine::{UserInfo, VideoLayoutIntent};
 
 /// Publish intent for one user stream.
 ///
 /// Application code passes this into core when a user starts publishing. It
-/// carries the stream identity, technical media kind and room policy as one
-/// immutable decision. Core captures these values when the staged publish
-/// commits.
+/// carries stream identity, media kind, room policy and optional publication
+/// presence. Core captures these values when the staged publish commits.
 ///
 /// Compatibility concepts such as "camera" or "screen" must be translated into
 /// this type before entering core. If a product stream needs different layout
@@ -19,6 +18,7 @@ pub struct SourcePublishIntent {
     stream_id: UserStreamId,
     media_kind: MediaKind,
     policy: SourcePolicy,
+    presence: Option<UserInfo>,
 }
 
 impl SourcePublishIntent {
@@ -28,7 +28,14 @@ impl SourcePublishIntent {
             stream_id,
             media_kind,
             policy,
+            presence: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_presence(mut self, presence: Option<UserInfo>) -> Self {
+        self.presence = presence;
+        self
     }
 
     #[must_use]
@@ -44,6 +51,44 @@ impl SourcePublishIntent {
     #[must_use]
     pub const fn policy(&self) -> SourcePolicy {
         self.policy
+    }
+
+    #[must_use]
+    pub const fn presence(&self) -> Option<&UserInfo> {
+        self.presence.as_ref()
+    }
+}
+
+/// Unpublish intent for one user stream, optionally carrying a presence patch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceUnpublishIntent {
+    stream_id: UserStreamId,
+    presence: Option<UserInfo>,
+}
+
+impl SourceUnpublishIntent {
+    #[must_use]
+    pub fn new(stream_id: UserStreamId) -> Self {
+        Self {
+            stream_id,
+            presence: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_presence(mut self, presence: Option<UserInfo>) -> Self {
+        self.presence = presence;
+        self
+    }
+
+    #[must_use]
+    pub const fn stream_id(&self) -> &UserStreamId {
+        &self.stream_id
+    }
+
+    #[must_use]
+    pub const fn presence(&self) -> Option<&UserInfo> {
+        self.presence.as_ref()
     }
 }
 

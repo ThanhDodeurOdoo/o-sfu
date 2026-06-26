@@ -8,38 +8,18 @@ use tracing::{Span, field, instrument, warn};
 
 use super::{User, UserError, UserOutput};
 use crate::{
-    application::stream_catalog::{
-        DiscussStream, source_publish_intent_for_stream_type, stream_id_for_stream_type,
-        stream_type_for_stream_id,
-    },
+    application::stream_catalog::{DiscussStream, source_publish_intent_for_stream_type},
     core::prelude::{
-        Bitrate, NegotiationOffer, SessionError, SessionEvent, SfuCoreError, UploadEncoding,
-        UploadSlot,
+        Bitrate, NegotiationOffer, SessionError, SfuCoreError, UploadEncoding, UploadSlot,
     },
     runtime::telemetry::schema::event as telemetry_event,
 };
 
 impl User {
-    async fn project_media_events(&mut self, events: Vec<SessionEvent>) -> UserOutput {
-        let mut output = UserOutput::new();
-        for event in events {
-            match event {
-                SessionEvent::Publication { stream_id, active } => {
-                    let Some(stream_type) = stream_type_for_stream_id(&stream_id) else {
-                        continue;
-                    };
-                    if let Some(info) =
-                        DiscussStream::for_type(stream_type).publication_info(active)
-                    {
-                        self.session.update_info(info).await;
-                    }
-                }
-                SessionEvent::Renegotiation(offer) => {
-                    output.push(self.requests.issue(NegotiationKind::Renegotiation, offer));
-                }
-            }
-        }
-        output
+    fn issue_renegotiation(&mut self, offer: Option<NegotiationOffer>) -> UserOutput {
+        offer.map_or_else(UserOutput::new, |offer| {
+            vec![self.requests.issue(NegotiationKind::Renegotiation, offer)]
+        })
     }
 }
 
@@ -54,12 +34,12 @@ impl User {
             self.log_unknown_answer(&response_to);
             return Err(UserError::ProtocolViolation);
         };
-        let events = self
+        let offer = self
             .session
             .answer(&answer.sdp)
             .await
             .map_err(|error| self.negotiation_error(kind, Some(&response_to), error))?;
-        Ok(self.project_media_events(events).await)
+        Ok(self.issue_renegotiation(offer))
     }
 
     #[instrument(
@@ -73,13 +53,11 @@ impl User {
     )]
     pub(super) async fn renegotiate(&mut self) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        match self.session.renegotiate().await {
-            Ok(Some(offer)) => Ok(vec![
-                self.requests.issue(NegotiationKind::Renegotiation, offer),
-            ]),
-            Ok(None) => Ok(UserOutput::new()),
-            Err(error) => Err(self.negotiation_error(NegotiationKind::Renegotiation, None, error)),
-        }
+        let offer =
+            self.session.renegotiate().await.map_err(|error| {
+                self.negotiation_error(NegotiationKind::Renegotiation, None, error)
+            })?;
+        Ok(self.issue_renegotiation(offer))
     }
 
     #[instrument(
@@ -102,11 +80,11 @@ impl User {
             let intent = source_publish_intent_for_stream_type(stream_type);
             self.session.publish(intent).await
         } else {
-            let stream_id = stream_id_for_stream_type(stream_type);
-            self.session.unpublish(&stream_id).await
+            let intent = DiscussStream::for_type(stream_type).unpublish_intent();
+            self.session.unpublish(intent).await
         };
-        let events = result.map_err(|error| self.publish_error(stream_type, error))?;
-        Ok(self.project_media_events(events).await)
+        let offer = result.map_err(|error| self.publish_error(stream_type, error))?;
+        Ok(self.issue_renegotiation(offer))
     }
 
     #[instrument(

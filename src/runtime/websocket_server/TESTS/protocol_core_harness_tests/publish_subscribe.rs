@@ -498,7 +498,7 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
 
     bob.auto_answer_negotiation = false;
     let Some(updated_track_bindings) =
-        read_track_snapshot_with_pending_negotiation(&mut bob, 1).await
+        read_track_snapshot_until_pending_negotiations(&mut bob, 1).await
     else {
         panic!("missing updated track snapshot");
     };
@@ -530,7 +530,7 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
         "publisher should answer the unpublish renegotiation while the subscriber still has the later addition offer pending"
     );
     let Some(removed_track_bindings) =
-        read_track_snapshot_with_pending_negotiation(&mut bob, 1).await
+        read_track_snapshot_until_pending_negotiations(&mut bob, 1).await
     else {
         panic!("missing removed track snapshot");
     };
