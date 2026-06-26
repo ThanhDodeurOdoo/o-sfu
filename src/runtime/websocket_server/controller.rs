@@ -25,7 +25,7 @@ use crate::{
     config::{AuthConfig, UserConfig},
     core::prelude::SfuCore,
     runtime::{
-        MediaTransport, RuntimeMetrics, RuntimeState,
+        RuntimeMetrics, RuntimeState,
         request_origin::RequestOrigin,
         room::RoomManager,
         telemetry::{
@@ -40,7 +40,6 @@ pub(crate) struct WebSocketServices {
     pub(super) auth: AuthConfig,
     pub(super) user: UserConfig,
     pub(super) room_manager: Arc<RoomManager>,
-    pub(super) media_transport: MediaTransport,
     pub(super) sfu_core: SfuCore,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pre_auth_websocket_admission: super::PreAuthWebSocketAdmission,
@@ -52,7 +51,6 @@ impl FromRef<RuntimeState> for WebSocketServices {
             auth: state.config.auth.clone(),
             user: state.config.user,
             room_manager: Arc::clone(&state.room_manager),
-            media_transport: state.media_transport.clone(),
             sfu_core: state.sfu_core.clone(),
             metrics: Arc::clone(&state.metrics),
             pre_auth_websocket_admission: state.pre_auth_websocket_admission.clone(),

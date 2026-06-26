@@ -1,11 +1,11 @@
-//! `SfuCore` turns a process media transport into [`MediaSession`] handles
+//! `SfuCore` admits room users into [`MediaSession`] handles
 //! each handle represent one admitted user connection in one room
 //! callers use it to drive the browser offer/answer lifecycle and then express
 //! publish, subscribe, recording and cleanup intent without improting room or
 //! transport internals
 //!
 //! ```text
-//! SfuCore -> MediaSession
+//! SfuCore::admit_user -> MediaSession
 //!
 //! establish -> send offer -> answer
 //! publish   -> maybe send renegotiation -> answer
@@ -23,26 +23,25 @@
 //! the server runtime follows this shape when a websocket user enter a room
 //!
 //! ```no_run
-//! use std::sync::Arc;
-//!
 //! use o_sfu_core::{
-//!     prelude::{
-//!         ConnectionId, NegotiationOffer, SessionEvent, SfuCore, SourcePublishIntent,
-//!     },
-//!     server::{room::Room, session::UserId},
+//!     prelude::{NegotiationOffer, SessionEvent, SfuCore, SourcePublishIntent},
+//!     server::room::{JoinUserRequest, RoomManager},
 //! };
 //!
 //! # async fn send_offer(_: NegotiationOffer) {}
 //! # async fn project_events(_: Vec<SessionEvent>) {}
 //! # async fn example(
 //! #     core: SfuCore,
-//! #     room: Arc<Room>,
-//! #     user_id: UserId,
-//! #     connection_id: ConnectionId,
+//! #     rooms: RoomManager,
+//! #     room_id: String,
+//! #     request: JoinUserRequest,
 //! #     publish_intent: SourcePublishIntent,
 //! #     initial_answer_sdp: String,
-//! # ) -> Result<(), Box<dyn std::error::Error>> {
-//! let mut session = core.session(&room, &user_id, connection_id).await;
+//! # ) -> Result<(), o_sfu_core::prelude::SessionError> {
+//! let mut session = core
+//!     .admit_user(&rooms, &room_id, request)
+//!     .await
+//!     .expect("room admission succeeds");
 //!
 //! if let Some(offer) = session.establish().await? {
 //!     send_offer(offer).await;
@@ -71,7 +70,10 @@ use crate::{
             MediaTransport, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
             TransportAdapterError, TransportSessionHealth, TransportSessionKey,
         },
-        room::{BroadcastPayloadError, Room, RoomManager, RoomUserOperation},
+        room::{
+            BroadcastPayloadError, JoinUserRequest, Room, RoomManager, RoomManagerJoinError,
+            RoomUserOperation,
+        },
         source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
     },
 };
@@ -347,8 +349,6 @@ pub struct SfuCore {
 pub struct MediaSession {
     core: SfuCore,
     room: Arc<Room>,
-    user_id: UserId,
-    connection_id: ConnectionId,
     transport_user_key: TransportSessionKey,
     phase: SessionPhase,
     closed: bool,
@@ -360,11 +360,29 @@ impl SfuCore {
         Self { media_transport }
     }
 
-    /// builds a media session for a room user after deriving its transport key
+    /// admits one room user and returns the media session that owns the
+    /// connection
     ///
-    /// use this when the caller only knows the room, user id and connection id
-    /// `session_with_transport_key` is cheaper when admission already returned
-    /// the key
+    /// # Errors
+    ///
+    /// returns [`RoomManagerJoinError`] when the room is missing or admission
+    /// rejects the user
+    pub async fn admit_user(
+        &self,
+        rooms: &RoomManager,
+        room_id: &str,
+        request: JoinUserRequest,
+    ) -> Result<MediaSession, RoomManagerJoinError> {
+        let admission = rooms
+            .join_user(room_id, request, &self.media_transport)
+            .await?;
+        Ok(self.session_with_transport_key(&admission.room, admission.transport_session_key))
+    }
+
+    /// builds a media session for an existing room user
+    ///
+    /// production websocket admission should use [`SfuCore::admit_user`]
+    /// instead, so the caller does not handle transport session keys
     #[must_use]
     pub async fn session(
         &self,
@@ -373,23 +391,19 @@ impl SfuCore {
         connection_id: ConnectionId,
     ) -> MediaSession {
         let transport_user_key = room.transport_user_key(user_id, connection_id).await;
-        self.session_with_transport_key(room, user_id, connection_id, transport_user_key)
+        self.session_with_transport_key(room, transport_user_key)
     }
 
-    /// builds a media session from the transport key returned by room admission
+    /// builds a media session from an already committed transport key
     #[must_use]
-    pub fn session_with_transport_key(
+    fn session_with_transport_key(
         &self,
         room: &Arc<Room>,
-        user_id: &UserId,
-        connection_id: ConnectionId,
         transport_user_key: TransportSessionKey,
     ) -> MediaSession {
         MediaSession {
             core: self.clone(),
             room: Arc::clone(room),
-            user_id: user_id.clone(),
-            connection_id,
             transport_user_key,
             phase: SessionPhase::default(),
             closed: false,
@@ -605,8 +619,8 @@ impl MediaSession {
         let did_close = rooms
             .close_session(
                 self.room_id(),
-                &self.user_id,
-                self.connection_id,
+                self.user_id(),
+                self.connection_id(),
                 &self.core.media_transport,
             )
             .await;
@@ -678,13 +692,23 @@ impl MediaSession {
     }
 
     #[must_use]
+    pub fn user_id(&self) -> &UserId {
+        self.transport_user_key.user_id()
+    }
+
+    #[must_use]
+    pub const fn connection_id(&self) -> ConnectionId {
+        self.transport_user_key.connection_id()
+    }
+
+    #[must_use]
     pub fn room_id(&self) -> &str {
         self.room.uuid()
     }
 
     pub async fn is_current_connection(&self) -> bool {
         self.room
-            .has_connection(&self.user_id, self.connection_id)
+            .has_connection(self.user_id(), self.connection_id())
             .await
     }
 
@@ -698,13 +722,13 @@ impl MediaSession {
     }
 
     pub async fn peer_snapshots(&self) -> Vec<PeerSnapshot> {
-        self.room.user_snapshots_except(&self.user_id).await
+        self.room.user_snapshots_except(self.user_id()).await
     }
 
     fn room_operation(&self) -> RoomUserOperation<'_> {
         self.room.user_operation(
-            &self.user_id,
-            self.connection_id,
+            self.user_id(),
+            self.connection_id(),
             &self.core.media_transport,
         )
     }
@@ -723,8 +747,8 @@ impl MediaSession {
     pub async fn update_info(&self, info: UserInfo) {
         self.room
             .update_user_info(
-                &self.user_id,
-                self.connection_id,
+                self.user_id(),
+                self.connection_id(),
                 &self.core.media_transport,
                 info,
             )
@@ -737,7 +761,7 @@ impl MediaSession {
     /// broadcast byte limit or cannot be measured as serialized JSON
     pub async fn broadcast(&self, message: JsonPayload) -> Result<(), BroadcastPayloadError> {
         self.room
-            .broadcast(&self.user_id, self.connection_id, message)
+            .broadcast(self.user_id(), self.connection_id(), message)
             .await
     }
 
@@ -753,7 +777,7 @@ impl MediaSession {
     )]
     pub async fn start_recording(&self, options: RecordingOptions) -> bool {
         self.room
-            .apply_recording_start(&self.user_id, self.connection_id, options)
+            .apply_recording_start(self.user_id(), self.connection_id(), options)
     }
 
     /// stops recording if recording is enabled and this connection may control it
@@ -767,7 +791,7 @@ impl MediaSession {
     )]
     pub async fn stop_recording(&self) -> bool {
         self.room
-            .apply_recording_stop(&self.user_id, self.connection_id)
+            .apply_recording_stop(self.user_id(), self.connection_id())
     }
 
     async fn renegotiation_event(&mut self) -> Result<Vec<SessionEvent>, SessionError> {

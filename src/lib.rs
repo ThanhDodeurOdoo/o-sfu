@@ -11,8 +11,8 @@
 //!   through [`http`]
 //! - browser bundle orchestration for Odoo through `SfuClient`,
 //!   `BrowserRuntime` and [`o_sfu_protocol::host::ProtocolCore`]
-//! - room membership through [`core::server::room::RoomManager`] and
-//!   user-session orchestration through [`core::prelude::MediaSession`]
+//! - room admission through [`core::prelude::SfuCore`] and user-session
+//!   orchestration through [`core::prelude::MediaSession`]
 //! - process lifecycle through [`run`], [`Runtime::serve_listener`],
 //!   [`core::server::metrics::RuntimeMetrics`] and
 //!   [`core::server::diagnostics::DiagnosticsStore`]
@@ -24,12 +24,13 @@
 //!     +---------------------+   +---------------------------+
 //!     | HTTP control API    |   |  WebSocket user sessions  |
 //!     +-----------+---------+   +---------+-----------------+
-//!                 |                      |
-//!                 v                      v
-//!            RoomManager          application::User
-//!                 |                      |
-//!                 |                      |
-//!                 +----------+-----------+
+//!                 |                       |
+//!                 v                       v
+//!            RoomManager          application::User / MediaSession
+//!                 |                       |
+//!                 |                       |
+//!                 |                       |
+//!                 +----------+------------+
 //!                            |
 //!                            v
 //!                       core::Room <--------> router::RoutingTopology
@@ -172,8 +173,9 @@
 //! receiver shadows
 //!
 //! [`o_sfu_router::topology::RoutingTopology`] composes routers into room-local placement,
-//! [`core::prelude::SfuCore`] and [`core::prelude::MediaSession`] own the
-//! bridge from room intent to transport effects,
+//! [`core::prelude::SfuCore`] owns admitted media-session construction and
+//! [`core::prelude::MediaSession`] owns the bridge from room intent to
+//! transport effects,
 //! they decide which [`core::prelude::SourcePublishIntent`] values exist, which
 //! receivers want them, which [`core::server::transport::SourcePacketGate`]
 //! should be installed and which cleanup work must be retried after transport

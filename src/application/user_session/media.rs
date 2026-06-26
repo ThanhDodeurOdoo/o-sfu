@@ -67,8 +67,8 @@ impl User {
         skip_all,
         fields(
             room_id = %self.room_id(),
-            user_id = ?self.id,
-            connection_id = ?self.connection_id
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id()
         )
     )]
     pub(super) async fn renegotiate(&mut self) -> Result<UserOutput, UserError> {
@@ -87,8 +87,8 @@ impl User {
         skip_all,
         fields(
             room_id = %self.room_id(),
-            user_id = ?self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             ?stream_type,
             active
         )
@@ -114,8 +114,8 @@ impl User {
         skip_all,
         fields(
             room_id = %self.room_id(),
-            user_id = ?self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             target_session_id = field::Empty,
             source_count = field::Empty
         )
@@ -144,8 +144,8 @@ impl User {
         skip_all,
         fields(
             room_id = %self.room_id(),
-            user_id = ?self.id,
-            connection_id = ?self.connection_id
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id()
         )
     )]
     pub(super) async fn run_initial_offer(&mut self) -> Result<UserOutput, UserError> {
@@ -264,8 +264,8 @@ impl User {
             event = telemetry_event::NEGOTIATION_FAILED,
             operation = media_negotiation_operation(kind),
             outcome,
-            user_id = ?&self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             remote_address = self.remote_address.as_ref(),
             response_to = ?response_to,
             ?error,
@@ -279,8 +279,8 @@ impl User {
             event = telemetry_event::PUBLISH_ABORTED,
             operation = "publish_intent",
             outcome = "publish_rejected",
-            user_id = ?&self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             remote_address = self.remote_address.as_ref(),
             ?stream_type,
             ?error,
@@ -298,8 +298,8 @@ impl User {
             event = telemetry_event::SUBSCRIBE_REJECTED,
             operation = "consume_prepare",
             outcome,
-            user_id = ?&self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             remote_address = self.remote_address.as_ref(),
             ?target_user_id,
             ?error,
@@ -315,8 +315,8 @@ impl User {
     ) -> Result<(), UserError> {
         if answer.sdp.is_empty() {
             warn!(
-                user_id = ?&self.id,
-                connection_id = ?self.connection_id,
+                user_id = ?self.user_id(),
+                connection_id = ?self.connection_id(),
                 remote_address = self.remote_address.as_ref(),
                 ?response_to,
                 "received empty SDP answer for negotiation request"
@@ -328,8 +328,8 @@ impl User {
 
     fn log_unknown_answer(&self, response_to: &RequestId) {
         warn!(
-            user_id = ?&self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             remote_address = self.remote_address.as_ref(),
             ?response_to,
             "received negotiation answer for an unknown or stale request"
