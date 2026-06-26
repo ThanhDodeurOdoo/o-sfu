@@ -1,8 +1,6 @@
 use str0m::rtp::Ssrc;
 
-use super::super::local_send_rewrite::{
-    ConsumerStreamStore, Vp8PayloadIdentity, next_projected_rtp_identity,
-};
+use super::super::local_send_rewrite::{ConsumerStreamStore, Vp8PayloadIdentity};
 
 const RTP_REWRITE_PACKETS: usize = 4096;
 
@@ -54,8 +52,7 @@ impl LocalRewriteBenchFixture {
     pub fn project_packets(&mut self) -> u64 {
         let mut checksum = 0_u64;
         for input in &self.inputs {
-            if let Some(identity) = next_projected_rtp_identity(
-                &mut self.streams,
+            if let Some(identity) = self.streams.project_identity(
                 self.stream_handle,
                 input.source_ssrc,
                 input.timestamp,

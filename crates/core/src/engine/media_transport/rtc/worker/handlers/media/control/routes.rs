@@ -9,7 +9,6 @@ use crate::engine::media_transport::{
     TransportSessionKey, TransportSourceKey,
     rtc::{
         commands::{ConsumerPacketGateCommand, RemoteSourceControl},
-        local_send_rewrite::forget_transport_media_stream,
         media_registry::RegisteredMediaHandle,
         relay_registry::{RelayPacketMailbox, RelayTargetId},
         route_control::PacketLayerGate,
@@ -248,7 +247,9 @@ pub fn remove_source_route(state: &mut PacketLoopState, src_media: TransportMedi
 
 fn release_dst_stream(state: &mut PacketLoopState, destination: &MediaRouteDestination) {
     if let Some(session_state) = state.users.get_mut(&destination.dest_session) {
-        forget_transport_media_stream(&mut session_state.consumer_streams, destination.dest_stream);
+        session_state
+            .consumer_streams
+            .release(destination.dest_stream);
     }
 }
 

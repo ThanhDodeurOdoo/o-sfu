@@ -86,7 +86,7 @@ impl PacketLoopInputReceivers {
     /// Build the production receiver bundle for a newly booted packet loop.
     ///
     /// The returned bundle has no probe receiver. Test-support construction
-    /// should attach one with [`Self::with_probe_receiver`] before passing the
+    /// should attach one with `Self::with_probe_receiver` before passing the
     /// bundle to the loop.
     pub fn new(
         command_rx: mpsc::Receiver<RtcWorkerCommand>,
