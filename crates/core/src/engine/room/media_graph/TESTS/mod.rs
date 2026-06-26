@@ -40,7 +40,7 @@ use crate::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
             PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
             SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            SourceSelector, UploadLayerPolicyRole, UserStreamId,
+            SourceSelector, SourceUnpublishIntent, UploadLayerPolicyRole, UserStreamId,
             test_support::{
                 TestSubscriptionStates, source_kind_for_stream_id,
                 source_publish_intent_for_source, stream_id_for_source,
@@ -966,7 +966,7 @@ fn unpublish_track_clears_transport_media_owner_index() {
             .unpublish_track(
                 &user_id,
                 connection_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
+                &SourceUnpublishIntent::new(stream_id_for_source(TestSourceKind::ScalableVideo)),
             )
             .is_some()
     );
@@ -1018,7 +1018,7 @@ fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
             .unpublish_track(
                 &user_id,
                 connection_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
+                &SourceUnpublishIntent::new(stream_id_for_source(TestSourceKind::ScalableVideo)),
             )
             .is_some()
     );

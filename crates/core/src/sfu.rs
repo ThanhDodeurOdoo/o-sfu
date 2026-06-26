@@ -24,12 +24,11 @@
 //!
 //! ```no_run
 //! use o_sfu_core::{
-//!     prelude::{NegotiationOffer, SessionEvent, SfuCore, SourcePublishIntent},
+//!     prelude::{NegotiationOffer, SfuCore, SourcePublishIntent},
 //!     server::room::{JoinUserRequest, RoomManager},
 //! };
 //!
 //! # async fn send_offer(_: NegotiationOffer) {}
-//! # async fn project_events(_: Vec<SessionEvent>) {}
 //! # async fn example(
 //! #     core: SfuCore,
 //! #     rooms: RoomManager,
@@ -47,18 +46,17 @@
 //!     send_offer(offer).await;
 //! }
 //!
-//! let events = session.answer(&initial_answer_sdp).await?;
-//! project_events(events).await;
+//! if let Some(offer) = session.answer(&initial_answer_sdp).await? {
+//!     send_offer(offer).await;
+//! }
 //!
-//! let events = session.publish(publish_intent).await?;
-//! project_events(events).await;
+//! if let Some(offer) = session.publish(publish_intent).await? {
+//!     send_offer(offer).await;
+//! }
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! [`SessionEvent::Renegotiation`] caries the follow-up offer that must be sent
-//! to the client before the matching answer is passed back to [`MediaSession::answer`]
-
 use std::{collections::BTreeMap, mem::take, sync::Arc};
 
 use crate::{
@@ -74,7 +72,9 @@ use crate::{
             BroadcastPayloadError, JoinUserRequest, Room, RoomManager, RoomManagerJoinError,
             RoomUserOperation,
         },
-        source_model::{SourcePublishIntent, SourceSubscriptionIntent, UserStreamId},
+        source_model::{
+            SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,
+        },
     },
 };
 
@@ -279,21 +279,6 @@ impl SessionError {
     }
 }
 
-/// event produced by a media-session mutation
-///
-/// callers must project these events before accepting the next client command
-/// a renegotiation event starts a new offer-answer round
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionEvent {
-    /// send the offer to the client and later call [`MediaSession::answer`]
-    Renegotiation(NegotiationOffer),
-    /// update user publication info after a publish state change committed
-    Publication {
-        stream_id: UserStreamId,
-        active: bool,
-    },
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SfuCoreError {
     /// media transport command failed
@@ -442,15 +427,15 @@ impl MediaSession {
     ///
     /// an invalid answer leaves the pending offer in place, so the caller may
     /// pass a later valid answer for the same request
-    /// when queued publish intent needs another SDP round the returned events
-    /// contain [`SessionEvent::Renegotiation`]
+    /// when queued publish intent needs another SDP round the returned offer
+    /// must be sent to the client before the next answer
     ///
     /// # Errors
     ///
     /// returns [`SessionError::NoPendingRequest`] when no offer is pending
     /// returns [`SessionError::Core`] when answer application fails, capability
     /// projection fails or room state rejects the accepted answer as stale
-    pub async fn answer(&mut self, sdp: &str) -> Result<Vec<SessionEvent>, SessionError> {
+    pub async fn answer(&mut self, sdp: &str) -> Result<Option<NegotiationOffer>, SessionError> {
         let Some(purpose) = self.phase.pending_offer_purpose() else {
             return Err(SessionError::NoPendingRequest);
         };
@@ -480,61 +465,22 @@ impl MediaSession {
         let Some(follow_up_renegotiation) = self.phase.complete_answer() else {
             return Err(SessionError::NoPendingRequest);
         };
-        let committed = self
-            .room_operation()
+        self.room_operation()
             .commit_staged_publishes(&applied_answer)
             .await;
-        let mut events = committed
-            .into_iter()
-            .map(|stream_id| SessionEvent::Publication {
-                stream_id,
-                active: true,
-            })
-            .collect::<Vec<_>>();
         let staged = self.stage_queued_publishes().await?;
         if staged || follow_up_renegotiation {
-            events.extend(self.renegotiate().await?.map(SessionEvent::Renegotiation));
+            return self.renegotiate().await;
         }
-        Ok(events)
+        Ok(None)
     }
 
     /// applies publish intent for one user stream
     ///
-    /// returns no events when the intent is already queued, already active or
+    /// returns no offer when the intent is already queued, already active or
     /// must wait for an in-flight answer
-    /// returns [`SessionEvent::Renegotiation`] when the browser must answer a
-    /// new offer before the publication can commit
-    ///
-    /// # Examples
-    ///
-    /// publish intent received before an in-flight offer is answered is queued
-    /// and replayed after the answer is accepted
-    ///
-    /// ```no_run
-    /// use o_sfu_core::prelude::{
-    ///     MediaSession, SessionError, SessionEvent, SourcePublishIntent,
-    /// };
-    ///
-    /// # async fn example(
-    /// #     mut session: MediaSession,
-    /// #     intent: SourcePublishIntent,
-    /// #     initial_answer_sdp: String,
-    /// # ) -> Result<(), SessionError> {
-    /// let Some(_initial_offer) = session.establish().await? else {
-    ///     return Ok(());
-    /// };
-    ///
-    /// let events = session.publish(intent).await?;
-    /// assert!(events.is_empty());
-    ///
-    /// let events = session.answer(&initial_answer_sdp).await?;
-    /// let _follow_up = events.into_iter().find_map(|event| match event {
-    ///     SessionEvent::Renegotiation(offer) => Some(offer),
-    ///     SessionEvent::Publication { .. } => None,
-    /// });
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// returns an offer when the browser must answer a new offer before the
+    /// publication can commit
     ///
     /// # Errors
     ///
@@ -543,35 +489,30 @@ impl MediaSession {
     pub async fn publish(
         &mut self,
         intent: SourcePublishIntent,
-    ) -> Result<Vec<SessionEvent>, SessionError> {
+    ) -> Result<Option<NegotiationOffer>, SessionError> {
         let stream_id = intent.stream_id().clone();
         if self.phase.has_queued_publish(&stream_id) {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         match self
             .start_publish(&intent, self.phase.can_stage_publish())
             .await?
         {
-            PublishIntentOutcome::Noop => Ok(Vec::new()),
+            PublishIntentOutcome::Noop | PublishIntentOutcome::Activated => Ok(None),
             PublishIntentOutcome::Queue => {
                 self.phase.queue_publish(stream_id, intent);
                 self.phase.mark_follow_up_renegotiation();
-                Ok(Vec::new())
+                Ok(None)
             }
-            PublishIntentOutcome::Activated => Ok(vec![SessionEvent::Publication {
-                stream_id,
-                active: true,
-            }]),
-            PublishIntentOutcome::Staged => self.renegotiation_event().await,
+            PublishIntentOutcome::Staged => self.renegotiate().await,
         }
     }
 
     /// removes queued, staged or live publish intent for one stream
     ///
     /// queued and staged publishes are cancelled without a client-visible
-    /// publication event
-    /// live publications emit `Publication { active: false }` and may require a
-    /// refresh offer for the browser
+    /// publication update
+    /// live publications may require a refresh offer for the browser
     ///
     /// # Errors
     ///
@@ -579,27 +520,18 @@ impl MediaSession {
     /// removing a live publication
     pub async fn unpublish(
         &mut self,
-        stream_id: &UserStreamId,
-    ) -> Result<Vec<SessionEvent>, SessionError> {
-        if self.phase.remove_queued_publish(stream_id) {
-            return Ok(Vec::new());
+        intent: SourceUnpublishIntent,
+    ) -> Result<Option<NegotiationOffer>, SessionError> {
+        if self.phase.remove_queued_publish(intent.stream_id()) {
+            return Ok(None);
         }
-        match self.room_operation().stop_publish(stream_id).await {
+        match self.room_operation().stop_publish(&intent).await {
             UnpublishIntentOutcome::RolledBack => {
                 self.phase.mark_follow_up_renegotiation();
-                Ok(Vec::new())
+                Ok(None)
             }
-            UnpublishIntentOutcome::Unpublished => {
-                let mut events = vec![SessionEvent::Publication {
-                    stream_id: stream_id.clone(),
-                    active: false,
-                }];
-                if let Some(offer) = self.renegotiate().await? {
-                    events.push(SessionEvent::Renegotiation(offer));
-                }
-                Ok(events)
-            }
-            UnpublishIntentOutcome::Noop => Ok(Vec::new()),
+            UnpublishIntentOutcome::Unpublished => self.renegotiate().await,
+            UnpublishIntentOutcome::Noop => Ok(None),
         }
     }
 
@@ -792,13 +724,6 @@ impl MediaSession {
     pub async fn stop_recording(&self) -> bool {
         self.room
             .apply_recording_stop(self.user_id(), self.connection_id())
-    }
-
-    async fn renegotiation_event(&mut self) -> Result<Vec<SessionEvent>, SessionError> {
-        Ok(self
-            .renegotiate()
-            .await?
-            .map_or_else(Vec::new, |offer| vec![SessionEvent::Renegotiation(offer)]))
     }
 
     async fn stage_queued_publishes(&mut self) -> Result<bool, SessionError> {

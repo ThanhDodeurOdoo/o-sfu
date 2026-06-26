@@ -13,7 +13,7 @@ use crate::{
         ConnectionId, TestSourceKind, UserId,
         media_transport::{MediaTransport, TransportMediaId},
         source_model::{
-            SourcePublishIntent, SourceSubscriptionIntent, UserStreamId,
+            SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,
             test_support::source_publish_intent_for_source,
         },
     },
@@ -148,7 +148,7 @@ impl RoomTestMedia<'_> {
         };
         self.room
             .user_operation(user_id, connection_id, media_transport)
-            .stop_publish(stream_id)
+            .stop_publish(&SourceUnpublishIntent::new(stream_id.clone()))
             .await
             != UnpublishIntentOutcome::Noop
     }

@@ -5,7 +5,11 @@ use o_sfu_router::{
 use tracing::{error, warn};
 
 use super::{
-    super::{RoomMediaCounts, TrackBindingUpdate, outbound::OutboundSender, state::RoomState},
+    super::{
+        RoomMediaCounts, TrackBindingUpdate,
+        outbound::{MessageFanout, OutboundSender},
+        state::RoomState,
+    },
     ProducerRouteTarget, ProducerRuntimeId, ReceiverRouteWork, SourceTransportMediaIndexEntry,
     subscription::ReceiverRouteScope,
     topology::MediaTopologyEffects,
@@ -13,7 +17,7 @@ use super::{
 use crate::{
     Bitrate,
     engine::{
-        ConnectionId, MediaWorkerId, UserId,
+        ConnectionId, MediaWorkerId, UserId, UserInfo,
         media_transport::{
             SessionUploadEncoding, TransportMediaId, TransportSessionKey, TransportSourceKey,
         },
@@ -21,7 +25,7 @@ use crate::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
             PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
             SourceEncodingId, SourceModelError, SourcePolicy, SourcePublishIntent,
-            UploadLayerPolicyRole, UserStreamId,
+            SourceUnpublishIntent, UploadLayerPolicyRole, UserStreamId,
         },
     },
 };
@@ -34,6 +38,7 @@ pub struct ValidatedPublish {
     pub stream_id: UserStreamId,
     pub media_kind: RouterMediaKind,
     pub policy: SourcePolicy,
+    pub presence: Option<UserInfo>,
 }
 
 #[derive(Debug)]
@@ -47,6 +52,7 @@ pub struct PublishCommit {
     pub setup_before: RoomMediaCounts,
     pub setup_after: RoomMediaCounts,
     pub receiver_route_work: ReceiverRouteWork,
+    pub presence: Option<MessageFanout>,
 }
 
 #[derive(Debug)]
@@ -63,6 +69,7 @@ pub struct ProducerActivityCommit {
     pub active: bool,
     pub recipients: Vec<OutboundSender>,
     pub update: TrackBindingUpdate,
+    pub presence: Option<MessageFanout>,
 }
 
 #[derive(Debug)]
@@ -78,6 +85,7 @@ pub struct UnpublishCommit {
     pub recipients: Vec<OutboundSender>,
     pub update: TrackBindingUpdate,
     pub media_effects: MediaTopologyEffects,
+    pub presence: Option<MessageFanout>,
 }
 
 impl RoomState {
@@ -117,6 +125,7 @@ impl RoomState {
                     publisher_connection_id,
                     intent.stream_id(),
                     true,
+                    intent.presence(),
                 )
                 .map_or_else(|_| PublishIntentPlan::Noop, PublishIntentPlan::Activate);
         }
@@ -168,6 +177,7 @@ impl RoomState {
             stream_id: intent.stream_id().clone(),
             media_kind: intent.media_kind(),
             policy: intent.policy(),
+            presence: intent.presence().cloned(),
         })
     }
 
@@ -183,6 +193,7 @@ impl RoomState {
         let owner_connection_id = publish.owner_connection_id;
         let stream_id = publish.stream_id.clone();
         let media_worker_id = publish.session_key.media_worker_id();
+        let presence = publish.presence.clone();
         let source_descriptor = self
             .source_descriptor_for_publish(&publish, &consumable_rtp_parameters, upload_encodings)
             .map_err(|error| {
@@ -220,6 +231,9 @@ impl RoomState {
         let receiver_route_work =
             self.plan_missing_receiver_routes(ReceiverRouteScope::Producer(producer_id));
         let setup_after = self.media_counts();
+        let presence = presence.and_then(|info| {
+            self.apply_presence_update(&owner_user_id, owner_connection_id, &info, false)
+        });
         Some(PublishCommit {
             user: owner_user_id,
             connection: owner_connection_id,
@@ -230,6 +244,7 @@ impl RoomState {
             setup_before,
             setup_after,
             receiver_route_work,
+            presence,
         })
     }
 
@@ -367,8 +382,9 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        stream_id: &UserStreamId,
+        intent: &SourceUnpublishIntent,
     ) -> Option<UnpublishCommit> {
+        let stream_id = intent.stream_id();
         let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
         let before = self.media_counts();
         let media_effects = self.topology.unpublish_source(user_id, &producer_target)?;
@@ -387,6 +403,9 @@ impl RoomState {
                 active: None,
             },
             media_effects,
+            presence: intent
+                .presence()
+                .and_then(|info| self.apply_presence_update(user_id, connection_id, info, false)),
         })
     }
 
@@ -430,6 +449,7 @@ impl RoomState {
         connection_id: ConnectionId,
         stream_id: &UserStreamId,
         active: bool,
+        presence: Option<&UserInfo>,
     ) -> Result<ProducerActivityCommit, ProducerActivityRejection> {
         let producer_target = self
             .producer_route_target(user_id, connection_id, stream_id)
@@ -454,6 +474,8 @@ impl RoomState {
                 .map(|user| user.sender.clone())
                 .collect(),
             update,
+            presence: presence
+                .and_then(|info| self.apply_presence_update(user_id, connection_id, info, false)),
         })
     }
 }

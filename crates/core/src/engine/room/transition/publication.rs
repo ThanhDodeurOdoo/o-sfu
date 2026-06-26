@@ -34,7 +34,7 @@ use crate::{
     PublishIntentOutcome, TransportEffectOutcome, UnpublishIntentOutcome,
     engine::{
         media_transport::{AppliedSessionAnswer, TransportAdapterError},
-        source_model::{SourcePublishIntent, UserStreamId},
+        source_model::{SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
     },
 };
 
@@ -190,34 +190,34 @@ impl RoomUserOperation<'_> {
         )
     }
 
-    pub(crate) async fn stop_publish(self, stream_id: &UserStreamId) -> UnpublishIntentOutcome {
-        if self.rollback_staged_publish(stream_id).await.is_some() {
+    pub(crate) async fn stop_publish(
+        self,
+        intent: &SourceUnpublishIntent,
+    ) -> UnpublishIntentOutcome {
+        if self
+            .rollback_staged_publish(intent.stream_id())
+            .await
+            .is_some()
+        {
             return UnpublishIntentOutcome::RolledBack;
         }
-        if self.unpublish(stream_id).await {
+        if self.unpublish(intent).await {
             UnpublishIntentOutcome::Unpublished
         } else {
             UnpublishIntentOutcome::Noop
         }
     }
 
-    pub(crate) async fn commit_staged_publishes(
-        self,
-        applied_answer: &AppliedSessionAnswer,
-    ) -> Vec<UserStreamId> {
+    pub(crate) async fn commit_staged_publishes(self, applied_answer: &AppliedSessionAnswer) {
         let staged = {
             let mut state = self.room.state.write().await;
             state
                 .staged_publishes
                 .take_for_connection(self.user_id, self.connection_id)
         };
-        let mut committed = Vec::new();
         for publish in staged {
-            if let Some(stream_id) = publish.commit_from_answer(self, applied_answer).await {
-                committed.push(stream_id);
-            }
+            publish.commit_from_answer(self, applied_answer).await;
         }
-        committed
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -229,7 +229,13 @@ impl RoomUserOperation<'_> {
         let room = self.room;
         let commit = {
             let mut state = room.state.write().await;
-            state.apply_publication_activity(self.user_id, self.connection_id, stream_id, active)
+            state.apply_publication_activity(
+                self.user_id,
+                self.connection_id,
+                stream_id,
+                active,
+                None,
+            )
         };
         let commit = commit.ok()?;
         self.execute_publication_activity(commit).await;
@@ -242,14 +248,14 @@ impl RoomUserOperation<'_> {
             .await;
     }
 
-    async fn unpublish(self, stream_id: &UserStreamId) -> bool {
+    async fn unpublish(self, intent: &SourceUnpublishIntent) -> bool {
         let room = self.room;
         let user_id = self.user_id;
         let connection_id = self.connection_id;
         let media_port = self.media_transport;
         let commit = {
             let mut state = room.state.write().await;
-            let commit = state.unpublish_track(user_id, connection_id, stream_id);
+            let commit = state.unpublish_track(user_id, connection_id, intent);
             drop(state);
             commit
         };

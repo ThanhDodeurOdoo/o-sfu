@@ -143,12 +143,10 @@ async fn missing_answered_producer_parameters_release_reserved_publish() {
     let (room, media_transport, user_id, connection_id) = staged_room().await;
     let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
 
-    let committed = room
-        .user_operation(&user_id, connection_id, &media_transport)
+    room.user_operation(&user_id, connection_id, &media_transport)
         .commit_staged_publishes(&AppliedSessionAnswer::default())
         .await;
 
-    assert!(committed.is_empty());
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
     assert_eq!(room.staged_count(&user_id, connection_id).await, 0);
     assert!(
@@ -170,12 +168,10 @@ async fn stale_connection_commit_rejects_and_releases_reserved_publish() {
         sample_simulcast_video_rtp_parameters(None),
     )]);
 
-    let committed = room
-        .user_operation(&user_id, stale_connection_id, &media_transport)
+    room.user_operation(&user_id, stale_connection_id, &media_transport)
         .commit_staged_publishes(&applied_answer)
         .await;
 
-    assert!(committed.is_empty());
     assert_eq!(room.test_api().inspect().producer_count().await, 0);
     assert!(
         media_transport

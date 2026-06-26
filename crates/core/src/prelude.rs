@@ -6,7 +6,7 @@ pub use crate::{
             ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole,
             SourceAdaptationPolicy, SourceLayoutPolicy, SourcePolicy, SourcePublishIntent,
             SourceRoomPolicySelector, SourceRoutePriority, SourceSubscriptionIntent,
-            UploadLayerPolicyRole, UserStreamId,
+            SourceUnpublishIntent, UploadLayerPolicyRole, UserStreamId,
         },
     },
     options::{
@@ -17,7 +17,7 @@ pub use crate::{
         SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
     },
     sfu::{
-        MediaSession, NegotiationOffer, SessionError, SessionEvent, SfuCore, SfuCoreError,
-        UploadEncoding, UploadSlot,
+        MediaSession, NegotiationOffer, SessionError, SfuCore, SfuCoreError, UploadEncoding,
+        UploadSlot,
     },
 };

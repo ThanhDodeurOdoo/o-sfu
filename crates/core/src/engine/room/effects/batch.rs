@@ -127,6 +127,7 @@ impl RoomEffects {
                 batch
                     .output
                     .push_track_binding(commit.recipients, commit.update);
+                batch.push_presence(commit.presence);
                 batch.source_policy.route_graph_changed();
                 batch
             }
@@ -272,6 +273,7 @@ impl RoomEffects {
             commit.receiver_route_work,
             ConsumerSetupOrigin::Publish,
         );
+        batch.push_presence(commit.presence);
         batch.source_policy.route_graph_changed();
         batch.observability.record(diagnostics);
         batch
@@ -283,6 +285,7 @@ impl RoomEffects {
             active,
             recipients,
             update,
+            presence,
         } = commit;
         let session = source.session_key();
         let diagnostics = RoomDiagnosticsContext::new(
@@ -297,8 +300,16 @@ impl RoomEffects {
         let mut batch = Self::default();
         batch.transport.push_producer(source, active, diagnostics);
         batch.output.push_track_binding(recipients, update);
+        batch.push_presence(presence);
         batch.source_policy.fanout_pressure_changed();
         batch
+    }
+
+    fn push_presence(&mut self, presence: Option<MessageFanout>) {
+        if let Some(presence) = presence {
+            self.output.push_user_info(presence);
+            self.source_policy.receiver_intent_changed();
+        }
     }
 
     fn from_receiver_route(

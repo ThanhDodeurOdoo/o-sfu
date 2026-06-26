@@ -39,7 +39,7 @@ pub use ids::{
     PublishedSourceId, PublishedSourceOwner, SourceEncodingId, SourceOperatingPoint,
     SourceTemporalLayerId, UserStreamId,
 };
-pub use intent::{SourcePublishIntent, SourceSubscriptionIntent};
+pub use intent::{SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent};
 pub use policy::{
     ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, PolicyPauseReason,
     SourceAdaptationPolicy, SourceLayoutPolicy, SourcePolicy, SourceRoomPolicySelector,
