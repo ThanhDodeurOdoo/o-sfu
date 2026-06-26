@@ -25,7 +25,6 @@ import type {
     SfuClientDependencies,
     TimerHandle
 } from "./browser_types.js";
-import { LocalUploads } from "./local_uploads.js";
 import { PendingRequests } from "./pending_requests.js";
 import { PeerSession } from "./peer_session.js";
 import { RemoteTracks } from "./remote_tracks.js";
@@ -49,7 +48,6 @@ export class BrowserRuntime {
     private readonly _core: ProtocolCoreBindings;
     private readonly _pendingRequests = new PendingRequests();
     private readonly _remoteTracks = new RemoteTracks();
-    private readonly _uploads = new LocalUploads();
     private readonly _peerSession: PeerSession;
     private readonly _setTimer: (callback: () => void, ms: number) => TimerHandle;
     private readonly _socketSession: SocketSession;
@@ -77,7 +75,6 @@ export class BrowserRuntime {
         this._peerSession = new PeerSession(
             dependencies.createPeerConnection ??
                 ((config) => new RTCPeerConnection(config) as ClientPeerConnection),
-            this._uploads,
             this._remoteTracks,
             this._context.onUpdate,
             () => this.enqueueProtocolCommands(() => this._core.onTransportReady()),
@@ -139,33 +136,13 @@ export class BrowserRuntime {
     }
 
     publish(type: StreamType, track: MediaStreamTrack | null): void {
-        const transition = this._uploads.setTrack(type, track);
-        if (!transition.hadTrack && !transition.hasTrack) {
-            return;
+        const { publishActive, peerTask } = this._peerSession.updateLocalTrack(type, track);
+        if (peerTask) {
+            this.enqueueTask(peerTask);
         }
-        const replacing = transition.hadTrack && transition.hasTrack;
-        const action = replacing ? "replacing" : transition.hadTrack ? "removing" : "publishing";
-        this.log(
-            replacing ? CLIENT_LOG_LEVEL.DEBUG : CLIENT_LOG_LEVEL.INFO,
-            `${action} ${type} track${transition.boundMid ? ` on mid ${transition.boundMid}` : ""}`
-        );
-        if (replacing) {
-            if (transition.boundMid) {
-                const mid = transition.boundMid;
-                this.enqueueTask(async () => {
-                    this.log(CLIENT_LOG_LEVEL.INFO, `attaching ${type} track to mid ${mid}`);
-                    await this._peerSession.attachTrack(mid, type);
-                });
-            }
-            return;
+        if (publishActive !== undefined) {
+            this.enqueueProtocolCommands(() => this._core.publish(type, publishActive));
         }
-        if (transition.hadTrack) {
-            this.enqueueTask(async () => {
-                this.log(CLIENT_LOG_LEVEL.INFO, `detaching ${type} track from the peer connection`);
-                await this._peerSession.detachTrack(type);
-            });
-        }
-        this.enqueueProtocolCommands(() => this._core.publish(type, transition.hasTrack));
     }
 
     private abort(): void {
@@ -256,7 +233,7 @@ export class BrowserRuntime {
                 this._socketSession.send(command.frame);
                 return [];
             case COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT:
-                this._uploads.setUploadIntent(command.streamType, command.active);
+                this._peerSession.setLocalUploadIntent(command.streamType, command.active);
                 return [];
             case COMMAND_KIND.APPLY_NEGOTIATION: {
                 const result = await this._peerSession.negotiate(

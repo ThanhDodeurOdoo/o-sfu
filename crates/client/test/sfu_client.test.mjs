@@ -1109,12 +1109,21 @@ test("publish replaces an already attached local sender track without re-publish
 });
 
 test("publish detaches the local sender before signaling unpublish", async () => {
-    const { client, core, emitMessage, peerConnections, connectWithWelcome } =
-        createSfuClientHarness();
-
     const track = createCameraTrack("camera-track-1");
+    const { client, core, emitMessage, open, peerConnections, sockets, connect } =
+        createSfuClientHarness();
+    const originalPublish = core.publish.bind(core);
+    core.publish = (type, active) => {
+        const commands = originalPublish(type, active);
+        if (!active) {
+            commands.push({ frame: `unpublish:${type}`, kind: "sendWebSocket" });
+        }
+        return commands;
+    };
 
-    await connectWithWelcome();
+    await connect();
+    await open();
+    await emitMessage("welcome");
 
     client.publish("camera", track);
     await tick();
@@ -1123,9 +1132,25 @@ test("publish detaches the local sender before signaling unpublish", async () =>
     assert.equal(peerConnections[0].transceivers[1].sender.track, track);
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
 
+    const unpublishOrder = [];
+    const socket = sockets[0];
+    const originalSend = socket.send.bind(socket);
+    socket.send = (frame) => {
+        unpublishOrder.push(`send:${frame}`);
+        originalSend(frame);
+    };
+    const sender = peerConnections[0].transceivers[1].sender;
+    const originalReplaceTrack = sender.replaceTrack.bind(sender);
+    sender.replaceTrack = async (replacementTrack) => {
+        assert.equal(replacementTrack, null);
+        await originalReplaceTrack(replacementTrack);
+        unpublishOrder.push("detach");
+    };
+
     client.publish("camera", null);
     await tick();
 
+    assert.deepEqual(unpublishOrder, ["detach", "send:unpublish:camera"]);
     assert.equal(peerConnections[0].transceivers[1].sender.track, null);
     assert.deepEqual(core.publicationUpdates, [
         { active: true, type: "camera" },
