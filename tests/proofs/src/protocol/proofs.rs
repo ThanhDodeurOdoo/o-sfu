@@ -4,6 +4,11 @@ use o_sfu_protocol::{
 };
 
 const NON_TERMINAL_CLOSE_CODE: u16 = 1011;
+const TERMINAL_CLOSE_CODES: [WebSocketCloseCode; 3] = [
+    WebSocketCloseCode::AuthFailed,
+    WebSocketCloseCode::Kicked,
+    WebSocketCloseCode::RoomFull,
+];
 
 // Proves terminal close codes cut off recovery completely: they move the client
 // to `Closed`, clear reconnect context and never leave a recovery timer path
@@ -12,22 +17,24 @@ const NON_TERMINAL_CLOSE_CODE: u16 = 1011;
 #[kani::proof]
 #[kani::unwind(9)]
 fn protocol_core_terminal_close_codes_never_schedule_recovery() {
-    let stage = kani::any::<u8>() % 3;
-    let close_code = terminal_close_code(kani::any::<u8>() % 3);
-    let mut core = lifecycle_at_stage(stage);
+    for stage in 0..3 {
+        for close_code in TERMINAL_CLOSE_CODES {
+            let mut core = lifecycle_at_stage(stage);
 
-    let commands = core.on_ws_close(close_code);
-    assert_eq!(core.state(), ConnectionState::Closed);
-    assert_eq!(commands.recovery_timer_count(), 0);
-    assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
-    assert!(!core.has_connect_context());
+            let commands = core.on_ws_close(u16::from(close_code));
+            assert_eq!(core.state(), ConnectionState::Closed);
+            assert_eq!(commands.recovery_timer_count(), 0);
+            assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
+            assert!(!core.has_connect_context());
 
-    let reconnect_commands = core.connect();
-    assert_eq!(reconnect_commands.connect_count(), 1);
+            let reconnect_commands = core.connect();
+            assert_eq!(reconnect_commands.connect_count(), 1);
 
-    std::mem::forget(commands);
-    std::mem::forget(reconnect_commands);
-    std::mem::forget(core);
+            std::mem::forget(commands);
+            std::mem::forget(reconnect_commands);
+            std::mem::forget(core);
+        }
+    }
 }
 
 // Proves a non-terminal close with saved connect context always enters exactly
@@ -37,17 +44,18 @@ fn protocol_core_terminal_close_codes_never_schedule_recovery() {
 #[kani::proof]
 #[kani::unwind(9)]
 fn protocol_core_non_terminal_close_with_context_recovers_once() {
-    let stage = kani::any::<u8>() % 3;
-    let mut core = lifecycle_at_stage(stage);
+    for stage in 0..3 {
+        let mut core = lifecycle_at_stage(stage);
 
-    let commands = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
-    assert_eq!(core.state(), ConnectionState::Recovering);
-    assert_eq!(commands.recovery_timer_count(), 1);
-    assert_eq!(commands.close_peer_connection_count(), 1);
-    assert!(core.has_connect_context());
+        let commands = core.on_ws_close(NON_TERMINAL_CLOSE_CODE);
+        assert_eq!(core.state(), ConnectionState::Recovering);
+        assert_eq!(commands.recovery_timer_count(), 1);
+        assert_eq!(commands.close_peer_connection_count(), 1);
+        assert!(core.has_connect_context());
 
-    std::mem::forget(commands);
-    std::mem::forget(core);
+        std::mem::forget(commands);
+        std::mem::forget(core);
+    }
 }
 
 // Proves the recovery timer is only live in the recovering state. Any other
@@ -57,18 +65,19 @@ fn protocol_core_non_terminal_close_with_context_recovers_once() {
 #[kani::proof]
 #[kani::unwind(9)]
 fn protocol_core_recovery_timer_reconnects_only_from_recovering() {
-    let selector = kani::any::<u8>() % 6;
-    let mut core = lifecycle_at_state_selector(selector);
-    let expect_reconnect = core.state() == ConnectionState::Recovering;
+    for selector in 0..6 {
+        let mut core = lifecycle_at_state_selector(selector);
+        let expect_reconnect = core.state() == ConnectionState::Recovering;
 
-    let commands = core.on_timer(RECOVERY_TIMER_ID);
-    assert_eq!(commands.connect_count(), usize::from(expect_reconnect));
-    if expect_reconnect {
-        assert_eq!(core.state(), ConnectionState::Connecting);
+        let commands = core.on_timer(RECOVERY_TIMER_ID);
+        assert_eq!(commands.connect_count(), usize::from(expect_reconnect));
+        if expect_reconnect {
+            assert_eq!(core.state(), ConnectionState::Connecting);
+        }
+
+        std::mem::forget(commands);
+        std::mem::forget(core);
     }
-
-    std::mem::forget(commands);
-    std::mem::forget(core);
 }
 
 // Proves a successful welcome resets recovery backoff so the next disconnect
@@ -168,13 +177,5 @@ fn lifecycle_at_state_selector(selector: u8) -> VerificationConnectionLifecycle 
             let _ = core.on_ws_close(u16::from(WebSocketCloseCode::RoomFull));
             core
         }
-    }
-}
-
-fn terminal_close_code(selector: u8) -> u16 {
-    match selector {
-        0 => u16::from(WebSocketCloseCode::AuthFailed),
-        1 => u16::from(WebSocketCloseCode::Kicked),
-        _ => u16::from(WebSocketCloseCode::RoomFull),
     }
 }
