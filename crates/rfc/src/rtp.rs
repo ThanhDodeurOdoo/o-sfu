@@ -278,6 +278,9 @@ pub mod vp8 {
     /// Value mask for the 15-bit VP8 long `PictureID` field.
     pub const LONG_PICTURE_ID_MASK: u16 = 0x7fff;
 
+    /// Modulus for the 15-bit VP8 long `PictureID` field.
+    pub const LONG_PICTURE_ID_MODULUS: u16 = 1 << 15;
+
     /// Value mask for the two-bit VP8 temporal-layer identity.
     pub const TEMPORAL_LAYER_ID_MASK: u8 = 0b0000_0011;
 
