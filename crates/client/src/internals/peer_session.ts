@@ -8,7 +8,7 @@ import {
 } from "../public_api.js";
 import type { NegotiationKind } from "../protocol_contract.js";
 import type { ClientPeerConnection } from "./browser_types.js";
-import type { LocalUploads, UploadSlot } from "./local_uploads.js";
+import { LocalUploads, type UploadSlot } from "./local_uploads.js";
 import type { RemoteTracks } from "./remote_tracks.js";
 import { localDescriptionHasOnlyInactiveMedia } from "./sdp_media_direction.js";
 
@@ -19,13 +19,15 @@ type NegotiationAnswer = {
     shouldSignalTransportReady: boolean;
 };
 
+type LocalTrackEffect = { publishActive?: boolean; peerTask?: () => Promise<void> };
+
 export class PeerSession {
     private _iceServers?: RTCIceServer[];
     private _activePeer: ClientPeerConnection | null = null;
+    private readonly _uploads = new LocalUploads();
 
     constructor(
         private readonly _create: (config: RTCConfiguration) => ClientPeerConnection,
-        private readonly _uploads: LocalUploads,
         private readonly _tracks: RemoteTracks,
         private readonly _onUpdate: (update: ClientUpdateDetail) => void,
         private readonly _onTransportReady: () => void,
@@ -35,6 +37,39 @@ export class PeerSession {
 
     setIceServers(iceServers?: RTCIceServer[]): void {
         this._iceServers = iceServers;
+    }
+
+    setLocalUploadIntent(type: StreamType, active: boolean): void {
+        this._uploads.setUploadIntent(type, active);
+    }
+
+    updateLocalTrack(type: StreamType, track: MediaStreamTrack | null): LocalTrackEffect {
+        const transition = this._uploads.setTrack(type, track);
+        if (!transition.hadTrack && !transition.hasTrack) {
+            return {};
+        }
+        const replacing = transition.hadTrack && transition.hasTrack;
+        const action = replacing ? "replacing" : transition.hadTrack ? "removing" : "publishing";
+        this._log(
+            replacing ? CLIENT_LOG_LEVEL.DEBUG : CLIENT_LOG_LEVEL.INFO,
+            `${action} ${type} track${transition.boundMid ? ` on mid ${transition.boundMid}` : ""}`
+        );
+        if (replacing) {
+            if (!transition.boundMid) {
+                return {};
+            }
+            const mid = transition.boundMid;
+            return {
+                peerTask: () => this._uploads.attachTrack(this._activePeer, mid, type)
+            };
+        }
+        if (transition.hadTrack) {
+            return {
+                peerTask: () => this._uploads.detachTrack(this._activePeer, type),
+                publishActive: false
+            };
+        }
+        return { publishActive: true };
     }
 
     create(): void {
@@ -66,14 +101,6 @@ export class PeerSession {
         }
         this._tracks.clearPeerConnectionState();
         this._activePeer = null;
-    }
-
-    async attachTrack(mid: string, streamType: StreamType): Promise<void> {
-        await this._uploads.attachTrack(this._activePeer, mid, streamType);
-    }
-
-    async detachTrack(streamType: StreamType): Promise<void> {
-        await this._uploads.detachTrack(this._activePeer, streamType);
     }
 
     async getStats(): Promise<SfuStats> {
