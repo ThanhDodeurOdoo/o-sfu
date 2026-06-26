@@ -5,14 +5,12 @@
 
 use serde_json::json;
 
-use super::{
-    CoreSnapshot, HostCommand, connection_state_tag, project_commands, project_request_result,
-};
+use super::{HostCommand, connection_state_tag, project_commands, project_request_result};
 use crate::{
     bundle_api::BundleConnectionState,
     core::{
-        Command, CommandBatch, NegotiationKind, PendingRequest, PendingRequestKind, ProtocolCore,
-        ProtocolEvent, ProtocolRequestResult, test_support::command_batch,
+        Command, CommandBatch, NegotiationKind, PendingRequest, PendingRequestKind, ProtocolEvent,
+        ProtocolRequestResult, test_support::command_batch,
     },
     shared::{StreamType, UserId},
     signaling::{RequestId, SourceDescriptor, TrackBinding},
@@ -28,17 +26,6 @@ fn connection_state_tag_matches_public_client_surface() {
         connection_state_tag(BundleConnectionState::Closed),
         "closed"
     );
-}
-
-#[test]
-fn core_snapshot_uses_public_state_labels() {
-    let core = ProtocolCore::new();
-
-    let snapshot = CoreSnapshot::from(&core);
-
-    assert_eq!(snapshot.state, "disconnected");
-    assert!(!snapshot.features.rtc);
-    assert_eq!(snapshot.recording_state.recording, None);
 }
 
 #[test]

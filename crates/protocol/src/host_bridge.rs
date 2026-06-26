@@ -6,30 +6,12 @@ use crate::{
         BundleSessionInfoSnapshotById, BundleSourceUpdate, BundleUpdate, bundle_session_info_key,
     },
     core::{
-        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest, ProtocolCore,
-        ProtocolEvent, ProtocolRequestResult,
+        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest, ProtocolEvent,
+        ProtocolRequestResult,
     },
-    shared::{AvailableFeatures, RecordingState, StreamType, UserId},
+    shared::{StreamType, UserId},
     signaling::{NegotiationUploadSlot, RequestId, TrackBinding},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CoreSnapshot {
-    pub state: String,
-    pub features: AvailableFeatures,
-    pub recording_state: RecordingState,
-}
-
-impl From<&ProtocolCore> for CoreSnapshot {
-    fn from(core: &ProtocolCore) -> Self {
-        Self {
-            state: connection_state_tag(core.state()).to_owned(),
-            features: core.features().clone(),
-            recording_state: core.recording_state().clone(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
