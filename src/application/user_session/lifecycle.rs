@@ -5,29 +5,14 @@ use tracing::{debug, error};
 
 use super::{User, UserError, UserOutput};
 use crate::{
-    core::prelude::{SfuCore, TransportSessionHealth},
-    runtime::{ConnectionId, media_transport::TransportSessionKey, room},
+    core::prelude::{MediaSession, TransportSessionHealth},
+    runtime::{ConnectionId, room},
 };
 
 impl User {
     #[must_use]
-    pub fn new(
-        user_id: UserId,
-        connection_id: ConnectionId,
-        transport_session_key: TransportSessionKey,
-        remote_address: Arc<str>,
-        room: &Arc<room::Room>,
-        sfu_core: &SfuCore,
-    ) -> Self {
-        let session = sfu_core.session_with_transport_key(
-            room,
-            &user_id,
-            connection_id,
-            transport_session_key,
-        );
+    pub fn new(session: MediaSession, remote_address: Arc<str>) -> Self {
         Self {
-            id: user_id,
-            connection_id,
             remote_address,
             session,
             requests: super::NegotiationRequests::default(),
@@ -41,11 +26,11 @@ impl User {
     }
 
     pub(crate) const fn connection_id(&self) -> ConnectionId {
-        self.connection_id
+        self.session.connection_id()
     }
 
-    pub(crate) const fn id(&self) -> &UserId {
-        &self.id
+    pub(crate) fn user_id(&self) -> &UserId {
+        self.session.user_id()
     }
 
     pub(crate) fn remote_address(&self) -> &str {
@@ -93,8 +78,8 @@ impl User {
             return Ok(());
         }
         debug!(
-            user_id = ?&self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             "rejecting intent from a stale user connection"
         );
         Err(UserError::Kicked)
@@ -107,8 +92,8 @@ impl Drop for User {
             return;
         }
         error!(
-            user_id = ?self.id,
-            connection_id = ?self.connection_id,
+            user_id = ?self.user_id(),
+            connection_id = ?self.connection_id(),
             "dropped websocket user without completing explicit cleanup"
         );
         debug_assert!(

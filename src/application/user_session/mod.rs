@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use o_sfu_protocol::wire::{ServerEnvelope, UserId};
+use o_sfu_protocol::wire::ServerEnvelope;
 
-use crate::{core::prelude::MediaSession, runtime::ConnectionId};
+use crate::core::prelude::MediaSession;
 
 mod client_input;
 mod lifecycle;
@@ -24,8 +24,6 @@ pub enum UserError {
 
 #[derive(Debug)]
 pub struct User {
-    id: UserId,
-    connection_id: ConnectionId,
     remote_address: Arc<str>,
     session: MediaSession,
     requests: NegotiationRequests,

@@ -314,17 +314,8 @@ async fn build_publisher_fixture(port: u16) -> PublisherFixture {
     let core = SfuCore::new(media_transport.clone());
     let publisher_user_id = UserId::Integer(1);
     let admission = admit_user(&manager, &room, publisher_user_id.clone(), &media_transport).await;
-    let RoomUserAdmission {
-        connection_id,
-        transport_session_key,
-        ..
-    } = admission;
-    let session = core.session_with_transport_key(
-        &room,
-        &publisher_user_id,
-        connection_id,
-        transport_session_key,
-    );
+    let connection_id = admission.connection_id;
+    let session = core.session(&room, &publisher_user_id, connection_id).await;
     PublisherFixture {
         manager,
         room,

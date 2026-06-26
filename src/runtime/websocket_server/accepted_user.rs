@@ -60,8 +60,6 @@ impl AcceptedUser {
     ) -> Option<Self> {
         let AuthenticatedJoin { room, claims } = auth;
         let user_id = claims.user_id;
-        let label = claims.label;
-        let permissions = claims.permissions.unwrap_or_default();
         let (outbound_tx, outbound_rx) = UserOutboundSender::channel_with_limits(
             UserOutboundQueueLimits::new(
                 state.user.outbound_queue_capacity,
@@ -69,32 +67,24 @@ impl AcceptedUser {
             ),
             Arc::clone(&state.metrics),
         );
-        let join_result = state
-            .room_manager
-            .join_user(
+        match state
+            .sfu_core
+            .admit_user(
+                &state.room_manager,
                 room.uuid(),
                 JoinUserRequest {
                     user_id: user_id.clone(),
-                    label,
-                    permissions,
+                    label: claims.label,
+                    permissions: claims.permissions.unwrap_or_default(),
                     sender: outbound_tx,
                 },
-                &state.media_transport,
             )
-            .await;
-        match join_result {
-            Ok(admission) => {
-                let connection_id = admission.connection_id;
-                let user = User::new(
-                    user_id.clone(),
-                    connection_id,
-                    admission.transport_session_key,
-                    Arc::clone(&remote_address),
-                    &admission.room,
-                    &state.sfu_core,
-                );
-                Some(Self { outbound_rx, user })
-            }
+            .await
+        {
+            Ok(session) => Some(Self {
+                outbound_rx,
+                user: User::new(session, remote_address),
+            }),
             Err(error) => {
                 let close_code = match error {
                     RoomManagerJoinError::RoomFull => WebSocketCloseCode::RoomFull,
@@ -125,7 +115,7 @@ impl AcceptedUser {
     pub(super) fn record_current_span(&self) {
         let span = Span::current();
         span.record("room_id", field::display(self.user.room_id()));
-        span.record("user_id", field::debug(self.user.id()));
+        span.record("user_id", field::debug(self.user.user_id()));
         span.record("connection_id", field::debug(self.user.connection_id()));
         span.record(
             telemetry_field::REMOTE_ADDRESS,
@@ -137,7 +127,7 @@ impl AcceptedUser {
         let span = telemetry::activated_span(info_span!(
             "user.initialize",
             room_id = %self.user.room_id(),
-            user_id = ?self.user.id(),
+            user_id = ?self.user.user_id(),
             connection_id = ?self.user.connection_id(),
             remote_address = %self.user.remote_address()
         ));
@@ -156,7 +146,7 @@ impl AcceptedUser {
         let Ok(output) = self.user.start().await else {
             warn!(
                 event = telemetry_event::WS_JOIN_FAILED,
-                user_id = ?self.user.id(),
+                user_id = ?self.user.user_id(),
                 connection_id = ?self.user.connection_id(),
                 remote_address = self.user.remote_address(),
                 outcome = "user_initialize_failed",
@@ -168,14 +158,14 @@ impl AcceptedUser {
         };
         if send_user_output_bounded(writer, output).await.is_err() {
             tracing::debug!(
-                user_id = ?self.user.id(),
+                user_id = ?self.user.user_id(),
                 connection_id = ?self.user.connection_id(),
                 "failed to send user startup payload"
             );
             state.metrics.record_ws_startup_send_failure();
             warn!(
                 event = telemetry_event::WS_JOIN_FAILED,
-                user_id = ?self.user.id(),
+                user_id = ?self.user.user_id(),
                 connection_id = ?self.user.connection_id(),
                 remote_address = self.user.remote_address(),
                 outcome = "startup_send_failed",
