@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    mem,
     time::{Duration, Instant},
 };
 
@@ -101,14 +102,28 @@ pub(super) struct RemovedRoute {
 #[derive(Debug, Default)]
 pub(super) struct RouteSource {
     local_route: Option<MediaRouteEntry>,
-    remote: Option<RemoteSourceRegistration>,
-    remote_gate_queued: bool,
+    remote: RemoteSourceState,
     relay: Option<RelaySourceRegistration>,
-    audio: Option<SourceAudioPolicyState>,
-    local_gate: Option<PacketLayerGate>,
-    relay_gates: BTreeMap<RelayTargetId, PacketLayerGate>,
-    gate: Option<PacketLayerGate>,
+    packet: SourcePacketState,
     pub(super) producer: ProducerSourceState,
+}
+
+#[derive(Debug, Default)]
+enum RemoteSourceState {
+    #[default]
+    None,
+    Registered {
+        registration: RemoteSourceRegistration,
+        queued: bool,
+    },
+}
+
+#[derive(Debug, Default)]
+struct SourcePacketState {
+    local: Option<PacketLayerGate>,
+    relays: BTreeMap<RelayTargetId, PacketLayerGate>,
+    audio: Option<SourceAudioPolicyState>,
+    effective: Option<PacketLayerGate>,
 }
 
 impl RouteSource {
@@ -117,7 +132,7 @@ impl RouteSource {
     }
 
     pub(super) fn remote(&self) -> Option<&RemoteSourceRegistration> {
-        self.remote.as_ref()
+        self.remote.registration()
     }
 
     pub(super) fn active_relay_targets(&self) -> Option<&[ActiveRelayTarget]> {
@@ -275,9 +290,9 @@ impl RouteSource {
     }
 
     pub(super) fn refresh_route_pkt_gate(&mut self) -> PacketLayerGate {
-        let local_packet_gate = self.local_route.as_ref().and_then(local_src_pkt_gate);
-        let remote_packet_gate =
-            remote_pkt_gate_for_route(self.local_route.as_ref(), local_packet_gate);
+        let route = self.local_route.as_ref();
+        let local_packet_gate = route.and_then(local_src_pkt_gate);
+        let remote_packet_gate = remote_pkt_gate_for_route(route, local_packet_gate);
         self.set_local_pkt_gate(local_packet_gate);
         remote_packet_gate
     }
@@ -302,52 +317,27 @@ impl RouteSource {
         source: &TransportSourceKey,
         registration: RemoteSourceRegistration,
     ) -> Result<Option<RemoteSourceRegistration>, TransportAdapterError> {
-        match self.remote.as_ref() {
-            Some(current) if current.source() == source => Ok(self.remote.replace(registration)),
-            Some(_current) => Err(TransportAdapterError::InvalidInput),
-            None => {
-                self.remote = Some(registration);
-                Ok(None)
-            }
-        }
+        self.remote.register(source, registration)
     }
 
     pub(super) fn restore_remote_source(&mut self, registration: RemoteSourceRegistration) {
-        self.remote = Some(registration);
+        self.remote.restore(registration);
     }
 
     pub(super) fn remove_remote_source(&mut self) {
-        self.remote = None;
-        self.remote_gate_queued = false;
+        self.remote.remove();
     }
 
     pub(super) fn publish_remote_pkt_gate(&mut self, packet_gate: PacketLayerGate) -> bool {
-        let needs_retry = self
-            .remote
-            .as_mut()
-            .is_some_and(|registration| registration.publish_packet_gate_needs_retry(packet_gate));
-        if needs_retry && !self.remote_gate_queued {
-            self.remote_gate_queued = true;
-            return true;
-        }
-        false
+        self.remote.publish_gate(packet_gate)
     }
 
     pub(super) fn flush_remote_pkt_gate(&mut self) -> bool {
-        let needs_retry = self
-            .remote
-            .as_mut()
-            .is_some_and(RemoteSourceRegistration::flush_pending_gate);
-        self.remote_gate_queued = needs_retry;
-        needs_retry
+        self.remote.flush_gate()
     }
 
     pub(super) fn queue_remote_gate(&mut self) -> bool {
-        if self.remote_gate_queued {
-            return false;
-        }
-        self.remote_gate_queued = true;
-        true
+        self.remote.queue_gate()
     }
 
     pub(super) fn diagnostic(
@@ -382,7 +372,8 @@ impl RouteSource {
         source_id: TransportMediaId,
         now: Instant,
     ) -> Option<ActiveSpeakerSource> {
-        self.audio
+        self.packet
+            .audio
             .as_ref()
             .and_then(|audio| audio.active_speaker_source(source_id, now))
     }
@@ -392,7 +383,8 @@ impl RouteSource {
         source_id: TransportMediaId,
         now: Instant,
     ) -> Option<ActiveSpeakerSourceDiagnostic> {
-        self.audio
+        self.packet
+            .audio
             .as_ref()
             .map(|audio| audio.diagnostic(source_id, now))
     }
@@ -403,48 +395,35 @@ impl RouteSource {
         audio_level_dbov: Option<i8>,
         now: Instant,
     ) -> bool {
-        let previous = self.audio.clone();
-        let Some(mut audio) = self.audio.take().or_else(|| {
-            (voice_activity.is_some() || audio_level_dbov.is_some())
-                .then(SourceAudioPolicyState::default)
-        }) else {
-            return false;
-        };
-        audio.observe_packet(voice_activity, audio_level_dbov, now);
-        self.audio = Some(audio);
-        let changed = self.audio != previous;
-        if changed {
-            self.refresh_gate();
-        }
-        changed
+        self.packet
+            .observe_audio_activity(voice_activity, audio_level_dbov, now)
     }
 
     pub(super) fn set_local_pkt_gate(&mut self, gate: Option<PacketLayerGate>) {
-        self.local_gate = gate;
-        self.refresh_gate();
+        self.packet.set_local_gate(gate);
     }
 
     pub(super) fn set_relay_pkt_gate(&mut self, target_id: RelayTargetId, gate: PacketLayerGate) {
-        self.relay_gates.insert(target_id, gate);
-        self.refresh_gate();
+        self.packet.set_relay_gate(target_id, gate);
     }
 
     pub(super) fn relay_packet_gate(&self, target_id: RelayTargetId) -> Option<&PacketLayerGate> {
-        self.relay_gates.get(&target_id)
+        self.packet.relays.get(&target_id)
     }
 
     pub(super) fn next_active_speaker_deadline(&self, now: Instant) -> Option<Instant> {
-        self.audio
+        self.packet
+            .audio
             .as_ref()
             .and_then(|audio| audio.active_deadline_after(now))
     }
 
     pub(super) const fn effective_packet_gate(&self) -> Option<PacketLayerGate> {
-        self.gate
+        self.packet.effective
     }
 
     pub(super) const fn packet_filter_gate(&self) -> Option<PacketLayerGate> {
-        match self.gate {
+        match self.packet.effective {
             Some(PacketLayerGate::Open) | None => None,
             gate => gate,
         }
@@ -470,12 +449,13 @@ impl RouteSource {
         if registration.remove_target(target_id)? {
             self.relay = None;
         }
-        self.forget_relay_packet_gate(target_id);
-        Some(if self.relay.is_none() && self.local_route.is_none() {
+        let change = if self.relay.is_none() && self.local_route.is_none() {
             ForwardingChange::StoppedForwarding
         } else {
             ForwardingChange::StillForwarding
-        })
+        };
+        self.packet.forget_relay_gate(target_id);
+        Some(change)
     }
 
     pub(super) fn set_relay_target_active(&mut self, target_id: RelayTargetId, active: bool) {
@@ -505,31 +485,166 @@ impl RouteSource {
     }
 
     pub(super) fn forget_packet_state(&mut self) {
-        self.audio = None;
-        self.local_gate = None;
-        self.relay_gates.clear();
-        self.gate = None;
+        self.packet.clear();
         self.producer = ProducerSourceState::default();
     }
 
     pub(super) fn is_empty(&self) -> bool {
         self.local_route.is_none()
-            && self.remote.is_none()
             && self.relay.is_none()
-            && self.audio.is_none()
-            && self.local_gate.is_none()
-            && self.relay_gates.is_empty()
+            && self.remote.is_empty()
+            && self.packet.is_empty()
             && self.producer.is_empty()
     }
+}
 
-    fn forget_relay_packet_gate(&mut self, target_id: RelayTargetId) {
-        self.relay_gates.remove(&target_id);
-        self.refresh_gate();
+impl RemoteSourceState {
+    fn registration(&self) -> Option<&RemoteSourceRegistration> {
+        match self {
+            Self::None => None,
+            Self::Registered { registration, .. } => Some(registration),
+        }
     }
 
-    fn refresh_gate(&mut self) {
-        self.gate = intersect_packet_gates(
-            aggregate_packet_gates(self.local_gate.iter().chain(self.relay_gates.values())),
+    fn register(
+        &mut self,
+        source: &TransportSourceKey,
+        registration: RemoteSourceRegistration,
+    ) -> Result<Option<RemoteSourceRegistration>, TransportAdapterError> {
+        match self {
+            Self::None => {
+                *self = Self::Registered {
+                    registration,
+                    queued: false,
+                };
+                Ok(None)
+            }
+            Self::Registered {
+                registration: current,
+                ..
+            } if current.source() == source => Ok(Some(mem::replace(current, registration))),
+            Self::Registered { .. } => Err(TransportAdapterError::InvalidInput),
+        }
+    }
+
+    fn restore(&mut self, registration: RemoteSourceRegistration) {
+        // rollback restore keeps retry membership with the temporary registration
+        let queued = match self {
+            Self::Registered { queued, .. } => *queued,
+            Self::None => false,
+        };
+        *self = Self::Registered {
+            registration,
+            queued,
+        };
+    }
+
+    fn remove(&mut self) {
+        *self = Self::None;
+    }
+
+    fn publish_gate(&mut self, packet_gate: PacketLayerGate) -> bool {
+        let Self::Registered {
+            registration,
+            queued,
+        } = self
+        else {
+            return false;
+        };
+        if !registration.publish_packet_gate_needs_retry(packet_gate) {
+            return false;
+        }
+        if *queued {
+            return false;
+        }
+        *queued = true;
+        true
+    }
+
+    fn flush_gate(&mut self) -> bool {
+        let Self::Registered {
+            registration,
+            queued,
+        } = self
+        else {
+            return false;
+        };
+        let needs_retry = registration.flush_pending_gate();
+        *queued = needs_retry;
+        needs_retry
+    }
+
+    fn queue_gate(&mut self) -> bool {
+        let Self::Registered { queued, .. } = self else {
+            return false;
+        };
+        if *queued {
+            return false;
+        }
+        *queued = true;
+        true
+    }
+
+    const fn is_empty(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+impl SourcePacketState {
+    fn observe_audio_activity(
+        &mut self,
+        voice_activity: Option<bool>,
+        audio_level_dbov: Option<i8>,
+        now: Instant,
+    ) -> bool {
+        let previous = self.audio.clone();
+        let Some(mut audio) = self.audio.take().or_else(|| {
+            (voice_activity.is_some() || audio_level_dbov.is_some())
+                .then(SourceAudioPolicyState::default)
+        }) else {
+            return false;
+        };
+        audio.observe_packet(voice_activity, audio_level_dbov, now);
+        self.audio = Some(audio);
+        let changed = self.audio != previous;
+        if changed {
+            self.refresh_effective();
+        }
+        changed
+    }
+
+    fn set_local_gate(&mut self, gate: Option<PacketLayerGate>) {
+        self.local = gate;
+        self.refresh_effective();
+    }
+
+    fn set_relay_gate(&mut self, target_id: RelayTargetId, gate: PacketLayerGate) {
+        self.relays.insert(target_id, gate);
+        self.refresh_effective();
+    }
+
+    fn clear(&mut self) {
+        self.audio = None;
+        self.local = None;
+        self.relays.clear();
+        self.effective = None;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.audio.is_none()
+            && self.local.is_none()
+            && self.relays.is_empty()
+            && self.effective.is_none()
+    }
+
+    fn forget_relay_gate(&mut self, target_id: RelayTargetId) {
+        self.relays.remove(&target_id);
+        self.refresh_effective();
+    }
+
+    fn refresh_effective(&mut self) {
+        self.effective = intersect_packet_gates(
+            aggregate_packet_gates(self.local.iter().chain(self.relays.values())),
             self.audio.as_ref().map(SourceAudioPolicyState::packet_gate),
         );
     }
@@ -775,12 +890,6 @@ fn local_src_pkt_gate(route_entry: &MediaRouteEntry) -> Option<PacketLayerGate> 
     )
 }
 
-/// computes the packet gate sent back to a remote source worker
-///
-/// selected-rid bootstrap keeps the remote relay open while local destinations
-/// remain blocked
-/// explicit `Block` crosses workers only when no pending selected rid still
-/// needs relay traffic
 fn remote_pkt_gate_for_route(
     route_entry: Option<&MediaRouteEntry>,
     local_packet_gate: Option<PacketLayerGate>,
