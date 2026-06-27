@@ -8,7 +8,7 @@ import {
     type PendingRequestKind,
     type TrackBinding
 } from "./protocol_contract.js";
-import type { ClientUpdateDetail, ConnectionState, SessionId, StreamType } from "./public_api.js";
+import type { ClientUpdateDetail, ConnectionState, StreamType } from "./public_api.js";
 import {
     asRecord,
     requireBoolean,
@@ -19,16 +19,24 @@ import {
     requireString,
     validateArray,
     validateClientUpdate,
+    validateConnectionState,
     validateOptionalArray,
     validateSessionId,
     validateStreamType,
-    validateStringEnum,
-    validateConnectionState
+    validateStringEnum
 } from "./public_api_validation.js";
 
 const REQUEST_TIMEOUT_TIMER_BASE = 10_000;
+export const REMOTE_MEDIA_UPDATE = "remote_media";
 const NEGOTIATION_KINDS = Object.values(NEGOTIATION_KIND);
 const PENDING_REQUEST_KINDS = Object.values(PENDING_REQUEST_KIND);
+
+type RemoteMediaUpdate = {
+    name: typeof REMOTE_MEDIA_UPDATE;
+    payload: { bindings: TrackBinding[] };
+};
+
+type HostUpdate = ClientUpdateDetail | RemoteMediaUpdate;
 
 export type PendingRequest = {
     requestId: string;
@@ -60,9 +68,7 @@ export type HostCommand =
     | { kind: typeof COMMAND_KIND.CLOSE_PEER_CONNECTION }
     | { kind: typeof COMMAND_KIND.CLOSE_WEB_SOCKET; code: number }
     | { kind: typeof COMMAND_KIND.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
-    | { kind: typeof COMMAND_KIND.REPLACE_TRACK_BINDINGS; bindings: TrackBinding[] }
-    | { kind: typeof COMMAND_KIND.REMOVE_SESSION_TRACKS; sessionId: SessionId }
-    | { kind: typeof COMMAND_KIND.EMIT_UPDATE; update: ClientUpdateDetail }
+    | { kind: typeof COMMAND_KIND.EMIT_UPDATE; update: HostUpdate }
     | { kind: typeof COMMAND_KIND.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
     | { kind: typeof COMMAND_KIND.SCHEDULE_TIMER; id: number; ms: number }
     | { kind: typeof COMMAND_KIND.CANCEL_TIMER; id: number }
@@ -216,16 +222,10 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             validateConnectionState(command.state, `${context}.state`);
             requireOptionalString(command.cause, `${context}.cause`);
             break;
-        case COMMAND_KIND.REPLACE_TRACK_BINDINGS:
-            validateArray(command.bindings, `${context}.bindings`, validateTrackBinding);
-            break;
-        case COMMAND_KIND.REMOVE_SESSION_TRACKS:
-            validateSessionId(command.sessionId, `${context}.sessionId`);
-            break;
         case COMMAND_KIND.EMIT_UPDATE:
             return {
                 kind,
-                update: validateClientUpdate(command.update, `${context}.update`)
+                update: validateHostUpdate(command.update, `${context}.update`)
             };
         case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);
@@ -245,6 +245,16 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             throw new Error(`${context}.kind is invalid: ${String(kind)}`);
     }
     return command as HostCommand;
+}
+
+function validateHostUpdate(value: unknown, context: string): HostUpdate {
+    const update = asRecord(value, context);
+    if (update.name !== REMOTE_MEDIA_UPDATE) {
+        return validateClientUpdate(value, context);
+    }
+    const payload = asRecord(update.payload, `${context}.payload`);
+    validateArray(payload.bindings, `${context}.payload.bindings`, validateTrackBinding);
+    return update as RemoteMediaUpdate;
 }
 
 function validatePendingRequest(value: unknown, context: string): PendingRequest {

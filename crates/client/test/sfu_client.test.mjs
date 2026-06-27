@@ -1155,7 +1155,7 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
     assert.equal(client._consumers.get(84).screen.track, reboundTrack);
 });
 
-test("peer departure clears remote-track state through the host cleanup command", async () => {
+test("peer departure clears remote-track state before disconnect update", async () => {
     const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
         createSfuClientHarness();
 
