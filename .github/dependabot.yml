@@ -11,6 +11,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] root:"
+      prefix-development: "[IMP] root (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -24,6 +27,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] router:"
+      prefix-development: "[IMP] router (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -37,6 +43,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] core:"
+      prefix-development: "[IMP] core (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -50,6 +59,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] telemetry:"
+      prefix-development: "[IMP] telemetry (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -63,6 +75,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] protocol:"
+      prefix-development: "[IMP] protocol (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -76,6 +91,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] tests:"
+      prefix-development: "[IMP] tests (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -89,6 +107,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] fuzz:"
+      prefix-development: "[IMP] fuzz (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -102,6 +123,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] client:"
+      prefix-development: "[IMP] client (dev):"
     labels:
       - "dependencies"
       - "npm"
@@ -115,6 +139,9 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "[IMP] github-actions:"
+      prefix-development: "[IMP] github-actions (dev):"
     labels:
       - "dependencies"
       - "github-actions"
