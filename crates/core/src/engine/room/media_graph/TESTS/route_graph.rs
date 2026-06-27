@@ -69,6 +69,7 @@ fn consumer_state(id: u64) -> ConsumerState {
         source_connection_id: ConnectionId::from_raw(10),
         source_media: TransportMediaId::new(50),
         consumer_media: TransportMediaId::new(100 + id),
+        consumer_mid: format!("mid-{id}"),
     }
 }
 
@@ -116,6 +117,19 @@ fn subscription_count_tracks_route_state_transitions() {
         ConsumerSourceSelection::open(true),
     ));
     assert_eq!(graph.subscription_count(), 2);
+    assert_eq!(
+        graph
+            .committed_entries_for_user(&UserId::Integer(3))
+            .map(|(key, state)| (key, state.consumer_mid.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(&committed, "mid-1")]
+    );
+    assert_eq!(
+        graph
+            .committed_entries_for_user(&UserId::Integer(2))
+            .count(),
+        0
+    );
 
     let released_route = graph
         .reserve_consumer_setup(released, ConsumerSourceSelection::open(true))

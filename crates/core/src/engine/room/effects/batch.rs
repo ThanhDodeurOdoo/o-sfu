@@ -14,9 +14,10 @@ use crate::engine::{
             ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, ProducerActivityCommit,
             PublishCommit, ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
         },
-        outbound::MessageFanout,
         source_policy::{SourcePolicyCommit, SourcePolicyWakeups},
-        state::{ConnectionCloseCommit, DisconnectCommit, JoinCommit, UserJoinedFanout},
+        state::{
+            ConnectionCloseCommit, DisconnectCommit, JoinCommit, PresenceCommit, UserJoinedFanout,
+        },
     },
 };
 
@@ -94,7 +95,7 @@ pub(in crate::engine::room) enum RoomCommit {
     Join(JoinCommit),
     ConnectionClose(ConnectionCloseCommit),
     Disconnect(DisconnectCommit),
-    UserInfo(MessageFanout),
+    UserInfo(PresenceCommit),
     Publish(PublishCommit),
     PublicationActivity(ProducerActivityCommit),
     Unpublish(UnpublishCommit),
@@ -110,8 +111,7 @@ impl RoomEffects {
             RoomCommit::Disconnect(commit) => Self::from_disconnect(room, commit),
             RoomCommit::UserInfo(commit) => {
                 let mut batch = Self::default();
-                batch.source_policy.receiver_intent_changed();
-                batch.output.push_user_info(commit);
+                batch.push_presence(Some(commit));
                 batch
             }
             RoomCommit::Publish(commit) => Self::from_publish(room, commit),
@@ -124,9 +124,7 @@ impl RoomEffects {
                     .observability
                     .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
                 batch.extend_media_topology_effects(commit.media_effects);
-                batch
-                    .output
-                    .push_track_binding(commit.recipients, commit.update);
+                batch.output.push_source_snapshots(commit.source_snapshots);
                 batch.push_presence(commit.presence);
                 batch.source_policy.route_graph_changed();
                 batch
@@ -282,32 +280,33 @@ impl RoomEffects {
     fn from_publication_activity(room: &Room, commit: ProducerActivityCommit) -> Self {
         let ProducerActivityCommit {
             source,
+            stream_id,
             active,
-            recipients,
-            update,
+            source_snapshots,
             presence,
         } = commit;
         let session = source.session_key();
         let diagnostics = RoomDiagnosticsContext::new(
-            &update.user_id,
+            session.user_id(),
             session.connection_id(),
             session.media_worker_id(),
         )
         .event_data(room, telemetry_event::PUBLICATION_ACTIVITY_CHANGED)
         .with_transport_media_id(source.transport_media_id().as_u64())
         .insert_field("active", active)
-        .insert_field("stream_id", update.stream_id.to_string());
+        .insert_field("stream_id", stream_id.to_string());
         let mut batch = Self::default();
         batch.transport.push_producer(source, active, diagnostics);
-        batch.output.push_track_binding(recipients, update);
+        batch.output.push_source_snapshots(source_snapshots);
         batch.push_presence(presence);
         batch.source_policy.fanout_pressure_changed();
         batch
     }
 
-    fn push_presence(&mut self, presence: Option<MessageFanout>) {
+    fn push_presence(&mut self, presence: Option<PresenceCommit>) {
         if let Some(presence) = presence {
-            self.output.push_user_info(presence);
+            self.output.push_source_snapshots(presence.source_snapshots);
+            self.output.push_user_info(presence.fanout);
             self.source_policy.receiver_intent_changed();
         }
     }

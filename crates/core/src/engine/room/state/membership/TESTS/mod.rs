@@ -330,6 +330,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
             source_connection_id: producer_connection_id,
             source_media: TransportMediaId::new(11),
             consumer_media: TransportMediaId::new(21),
+            consumer_mid: "camera-down".to_owned(),
         },
         ConsumerSourceSelection::open(true),
     ));
@@ -365,7 +366,7 @@ fn presence_update_returns_none_for_stale_connection() {
         &UserId::Integer(1),
         ConnectionId::from_raw(999),
         &UserInfo::default(),
-        false,
+        RemoteSourceRefresh::OwnerConsumers,
     );
 
     assert!(outcome.is_none());

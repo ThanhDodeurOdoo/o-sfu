@@ -173,13 +173,18 @@ pub(crate) async fn assert_peer_info_update(
     user_id: UserId,
     expected_info: UserInfo,
 ) {
-    let ServerMessage::PeerInfo(peer_info) =
-        next_server_message(subscriber, "protocol peer info update").await
-    else {
-        panic!("expected protocol peer info update");
-    };
-    assert_eq!(peer_info.user_id, user_id);
-    assert_eq!(peer_info.info, expected_info);
+    for _ in 0..4 {
+        match next_server_message(subscriber, "protocol peer info update").await {
+            ServerMessage::PeerInfo(peer_info) => {
+                assert_eq!(peer_info.user_id, user_id);
+                assert_eq!(peer_info.info, expected_info);
+                return;
+            }
+            ServerMessage::Tracks(_) | ServerMessage::Sources(_) => {}
+            message => panic!("expected protocol peer info update, got {message:?}"),
+        }
+    }
+    panic!("expected protocol peer info update");
 }
 
 pub(crate) async fn assert_no_server_message_protocol(subscriber: &mut ProtocolFakePeer) {
@@ -222,6 +227,6 @@ async fn assert_source_snapshot(
     assert_eq!(source.user_id, track_binding.user_id);
     assert_eq!(source.stream_type, track_binding.stream_type);
     assert_eq!(source.active, track_binding.active);
-    assert!(source.mid.as_deref().is_some_and(|mid| !mid.is_empty()));
+    assert_eq!(source.mid.as_deref(), Some(track_binding.mid.as_str()));
     assert!(!source.source_id.is_empty());
 }

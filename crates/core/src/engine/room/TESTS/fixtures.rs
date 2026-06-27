@@ -5,8 +5,7 @@ pub(super) use std::{
 
 use o_sfu_router::test_support::rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
-    sample_client_rtp_capabilities_without_video_rtx, sample_simulcast_video_rtp_parameters,
-    sample_video_rtp_parameters,
+    sample_simulcast_video_rtp_parameters, sample_video_rtp_parameters,
 };
 pub(super) use o_sfu_router::{
     MediaKind,
@@ -63,10 +62,6 @@ pub(super) fn test_client_rtp_capabilities() -> MediaCapabilities {
 
 pub(super) fn test_audio_rtp_parameters() -> MediaStream {
     sample_audio_rtp_parameters(11_111)
-}
-
-pub(super) fn test_client_rtp_capabilities_without_video_rtx() -> MediaCapabilities {
-    sample_client_rtp_capabilities_without_video_rtx()
 }
 
 pub(super) fn test_video_rtp_parameters() -> MediaStream {

@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, mem};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem,
+};
 
 use o_sfu_router::rtp::MediaCapabilities;
 use tracing::{debug, error, warn};
@@ -13,7 +16,7 @@ use super::{
             CommittedTransportReceipt, MediaTopologyEffects, SessionPlacementCommit,
             SessionPlacementRejection,
         },
-        outbound::{MessageFanout, OutboundSender, fanout_all},
+        outbound::{MessageFanout, OutboundSender, RemoteSourceSnapshot, fanout_all},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     UserJoinedFanout,
@@ -31,6 +34,7 @@ mod TESTS;
 pub struct LifecycleEffects {
     pub close_requests: Vec<UserCloseRequest>,
     pub fanouts: Vec<MessageFanout>,
+    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
 }
 
 impl LifecycleEffects {
@@ -54,6 +58,18 @@ pub struct UserCloseRequest {
 }
 
 type RuntimeUserRemoval = (ActiveUser, MediaTopologyEffects);
+
+#[derive(Debug)]
+pub struct PresenceCommit {
+    pub fanout: MessageFanout,
+    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSourceRefresh {
+    Skip,
+    OwnerConsumers,
+}
 
 #[derive(Debug)]
 pub struct JoinCommit {
@@ -237,6 +253,13 @@ impl RoomState {
         let users_before = self.users.len();
         let media_before = self.media_counts();
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
+        let mut source_recipients = if previous_connection.is_some() {
+            self.topology
+                .committed_consumer_user_ids_for_owner_sources(user_id)
+        } else {
+            BTreeSet::new()
+        };
+        source_recipients.remove(user_id);
         let placement = self.apply_join_routing(user_id, connection_id, is_new, home_placement)?;
         let routing_receipt = placement.receipt;
         let mut media_effects = placement.replacement_effects;
@@ -256,6 +279,9 @@ impl RoomState {
             sender,
             reason: UserCloseReason::Replaced,
         }));
+        effects
+            .source_snapshots
+            .extend(self.remote_source_snapshots_for_users(source_recipients, true));
         effects.push_fanout(had_previous_sender.then(|| {
             self.fanout_all_except(
                 &RoomEventMessage::UserDeparted {
@@ -319,6 +345,10 @@ impl RoomState {
         let cleanup = self
             .committed_transport_user_key(user_id, connection_id)
             .map(|session_key| TransportCleanupOperation::CloseUser { session_key });
+        let mut source_recipients = self
+            .topology
+            .committed_consumer_user_ids_for_owner_sources(user_id);
+        source_recipients.remove(user_id);
         let (user, media_effects) = self.remove_runtime_user(user_id)?;
         Some(ConnectionCloseCommit::Current {
             counts: self.membership_delta(users_before, media_before),
@@ -333,6 +363,7 @@ impl RoomState {
                 fanouts: vec![self.fanout_all(&RoomEventMessage::UserDeparted {
                     user_id: user_id.clone(),
                 })],
+                source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
             },
             media_effects,
         })
@@ -343,14 +374,14 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         info: &UserInfo,
-        need_refresh: bool,
-    ) -> Option<MessageFanout> {
+        refresh_sources: RemoteSourceRefresh,
+    ) -> Option<PresenceCommit> {
         let Some(current_user) = self.users.get(user_id) else {
             warn!(
                 ?user_id,
                 connection_id = ?connection_id,
                 ?info,
-                need_refresh,
+                ?refresh_sources,
                 "discarding user presence update because the user is missing"
             );
             return None;
@@ -361,7 +392,7 @@ impl RoomState {
                 connection_id = ?connection_id,
                 current_connection_id = ?current_user.connection_id,
                 ?info,
-                need_refresh,
+                ?refresh_sources,
                 "discarding user presence update because the connection is stale"
             );
             return None;
@@ -370,20 +401,27 @@ impl RoomState {
             let user = self.user_mut_for_connection(user_id, connection_id)?;
             user.apply_info_update(info);
         }
-        let snapshot = if need_refresh {
-            self.user_info_snapshot_all()
-        } else {
-            BTreeMap::from([self.user_info_snapshot(user_id)?])
-        };
+        let source_recipients = (refresh_sources == RemoteSourceRefresh::OwnerConsumers
+            && (info.is_camera_on.is_some() || info.is_screen_sharing_on.is_some()))
+        .then(|| {
+            self.topology
+                .committed_consumer_user_ids_for_owner_sources(user_id)
+        });
+        let snapshot = BTreeMap::from([self.user_info_snapshot(user_id)?]);
         debug!(
             ?user_id,
             connection_id = ?connection_id,
             ?info,
-            need_refresh,
+            ?refresh_sources,
             snapshot_len = snapshot.len(),
             "applied user presence update and staged user info fanout"
         );
-        Some(self.fanout_all(&RoomEventMessage::UserInfoChanged(snapshot)))
+        Some(PresenceCommit {
+            fanout: self.fanout_all(&RoomEventMessage::UserInfoChanged(snapshot)),
+            source_snapshots: source_recipients.map_or_else(Vec::new, |recipients| {
+                self.remote_source_snapshots_for_users(recipients, false)
+            }),
+        })
     }
 
     pub fn set_user_negotiated(
@@ -400,6 +438,16 @@ impl RoomState {
     pub fn apply_disconnect_users(&mut self, user_ids: &[UserId]) -> DisconnectCommit {
         let users_before = self.users.len();
         let media_before = self.media_counts();
+        let mut source_recipients = BTreeSet::new();
+        for user_id in user_ids {
+            source_recipients.extend(
+                self.topology
+                    .committed_consumer_user_ids_for_owner_sources(user_id),
+            );
+        }
+        for user_id in user_ids {
+            source_recipients.remove(user_id);
+        }
         let mut close_requests = Vec::new();
         let mut close_operations = Vec::new();
         let mut fanouts = Vec::new();
@@ -430,6 +478,7 @@ impl RoomState {
             effects: LifecycleEffects {
                 close_requests,
                 fanouts,
+                source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
             },
             media_effects,
         }

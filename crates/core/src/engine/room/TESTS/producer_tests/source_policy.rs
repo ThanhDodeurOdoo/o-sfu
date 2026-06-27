@@ -12,7 +12,7 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
     publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
 
     assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert_remote_track_setup_for_stream(
+    assert_remote_source_snapshot_for_stream(
         &drain_outbound(&mut subscriber_rx),
         TestSourceKind::ScalableVideo,
     );

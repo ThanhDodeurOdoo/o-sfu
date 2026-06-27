@@ -34,12 +34,11 @@ pub use manager::{
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use media_graph::ConsumerRouteState;
-pub use media_graph::RemoteTrackSetup;
 pub use membership::{JoinUserRequest, RoomUserPermissions, UserCloseReason};
 pub use outbound::{
     BroadcastPayload, BroadcastPayloadError, DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
-    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, MAX_BROADCAST_PAYLOAD_BYTES, RoomEventMessage,
-    TrackBindingUpdate, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
+    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, MAX_BROADCAST_PAYLOAD_BYTES, RemoteSourceProjection,
+    RemoteSourceSnapshot, RoomEventMessage, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
     UserOutboundOverflowKind, UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
     UserOutboundSender,
 };

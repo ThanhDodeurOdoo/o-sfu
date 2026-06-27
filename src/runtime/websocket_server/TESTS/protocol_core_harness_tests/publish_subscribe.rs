@@ -1,6 +1,7 @@
 use o_sfu_protocol::host::test_support::track_binding as protocol_track_binding;
 
 use super::support::*;
+use crate::core::prelude::{SourcePolicy, SourcePublishIntent};
 
 #[tokio::test]
 async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish_removal()
@@ -26,8 +27,8 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         "protocol publisher should be ready",
     )?;
 
-    let track_bindings = require_some(
-        read_track_snapshot(&mut bob).await,
+    let (track_bindings, sources) = require_some(
+        read_media_snapshot(&mut bob).await,
         "subscriber should receive the translated track snapshot",
     )?;
     let track_binding = require_some(
@@ -39,7 +40,15 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
     )?;
     assert!(!track_binding.mid.is_empty());
     assert!(track_binding.active);
-    let track_mid = track_binding.mid.clone();
+    let source = require_some(
+        sources.iter().find(|source| {
+            source.user_id == ProtocolSessionId::Integer(51)
+                && source.stream_type == ProtocolStreamType::Camera
+        }),
+        "subscriber should receive the camera source descriptor",
+    )?;
+    assert_eq!(source.mid.as_deref(), Some(track_binding.mid.as_str()));
+    assert!(source.active);
     require_some(
         bob.read_server_frame().await,
         "bob should consume the serialized renegotiation request after track setup",
@@ -58,11 +67,64 @@ async fn protocol_core_receives_translated_track_snapshot_and_explicit_unpublish
         "bob should consume the translated track-removal snapshot",
     )?;
     assert!(removed_tracks.is_empty());
-    assert_eq!(protocol_track_binding(&bob.core, &track_mid), None);
+    assert_eq!(protocol_track_binding(&bob.core, &track_binding.mid), None);
     require_some(
         bob.read_server_frame().await,
         "subscriber should receive the removal renegotiation request",
     )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn protocol_core_projects_camera_publish_without_presence_as_active() -> TestResult {
+    let (server, room, _alice, mut bob) = Box::pin(setup_protocol_peers(
+        "issuer-protocol-no-presence-camera",
+        UserId::Integer(53),
+        UserId::Integer(54),
+    ))
+    .await?;
+    let intent = SourcePublishIntent::new(
+        stream_id_for_stream_type(StreamType::Camera),
+        MediaKind::Video,
+        SourcePolicy::hidden(),
+    );
+
+    require_some(
+        room.test_api()
+            .media()
+            .publish_intent(
+                &UserId::Integer(53),
+                &intent,
+                MediaKind::Video,
+                sample_video_rtp_parameters("cam-0"),
+                &server.media_transport,
+            )
+            .await,
+        "protocol publisher should be ready",
+    )?;
+
+    let (track_bindings, sources) = require_some(
+        read_media_snapshot(&mut bob).await,
+        "subscriber should receive the translated track snapshot",
+    )?;
+    let track_binding = require_some(
+        track_bindings.iter().find(|binding| {
+            binding.user_id == ProtocolSessionId::Integer(53)
+                && binding.stream_type == ProtocolStreamType::Camera
+        }),
+        "subscriber should keep the camera track binding",
+    )?;
+    let source = require_some(
+        sources.iter().find(|source| {
+            source.user_id == ProtocolSessionId::Integer(53)
+                && source.stream_type == ProtocolStreamType::Camera
+        }),
+        "subscriber should receive the camera source descriptor",
+    )?;
+
+    assert!(track_binding.active);
+    assert!(source.active);
+    assert_eq!(source.mid.as_deref(), Some(track_binding.mid.as_str()));
     Ok(())
 }
 
@@ -89,8 +151,8 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
         "publisher should consume the rtc-backed renegotiation request and answer it",
     )?;
 
-    let track_bindings = require_some(
-        read_track_snapshot(&mut bob).await,
+    let (track_bindings, sources) = require_some(
+        read_media_snapshot(&mut bob).await,
         "subscriber should receive the rtc-backed translated track snapshot",
     )?;
     assert_eq!(track_bindings.len(), 1);
@@ -101,6 +163,14 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
     assert_eq!(published_track.user_id, ProtocolSessionId::Integer(71));
     assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
     assert!(published_track.active);
+    let source = require_some(
+        sources.iter().find(|source| {
+            source.user_id == ProtocolSessionId::Integer(71)
+                && source.stream_type == ProtocolStreamType::Camera
+        }),
+        "subscriber should receive the rtc-backed source descriptor",
+    )?;
+    assert_eq!(source.mid.as_deref(), Some(published_track.mid.as_str()));
     assert_eq!(
         protocol_track_binding(&bob.core, &published_track.mid),
         Some(published_track)
@@ -415,19 +485,17 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
         "subscriber should answer the rtc-backed renegotiation that removes the remote track"
     );
     assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should also receive the translated peer-info update for the committed unpublish"
-    );
-    assert_eq!(
-        bob.updates.last(),
-        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
-            bundle_session_info_key(&ProtocolSessionId::Integer(77)),
+        consume_peer_info_update(
+            &mut bob,
+            ProtocolSessionId::Integer(77),
             ProtocolSessionInfo {
                 is_camera_on: Some(false),
                 ..ProtocolSessionInfo::default().snapshot_complete()
             },
-        )]))),
-        "committed unpublish should clear the publisher camera flag in the observable peer info"
+        )
+        .await
+        .is_some(),
+        "subscriber should also receive the translated peer-info update for the committed unpublish"
     );
     assert!(
         no_server_frame(&mut bob, Duration::from_millis(150)).await,
@@ -477,13 +545,19 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
         bob.read_server_frame().await.is_some(),
         "subscriber should answer the first rtc renegotiation so the initial consumer is committed"
     );
-    let Some(ServerMessage::PeerInfo(first_publish_info)) =
-        read_single_protocol_server_message(&mut bob).await
-    else {
-        panic!("subscriber should receive the camera publish peer-info update");
-    };
-    assert_eq!(first_publish_info.user_id, ProtocolSessionId::Integer(79));
-    assert_eq!(first_publish_info.info.is_camera_on, Some(true));
+    assert!(
+        consume_peer_info_update(
+            &mut bob,
+            ProtocolSessionId::Integer(79),
+            ProtocolSessionInfo {
+                is_camera_on: Some(true),
+                ..ProtocolSessionInfo::default().snapshot_complete()
+            },
+        )
+        .await
+        .is_some(),
+        "subscriber should receive the camera publish peer-info update"
+    );
 
     assert!(
         alice
@@ -517,6 +591,20 @@ async fn protocol_core_unpublish_queues_subscriber_removal_until_in_flight_rtc_a
         &updated_track_bindings,
         &ProtocolSessionId::Integer(79),
         ProtocolStreamType::Screen,
+    );
+    assert!(
+        consume_peer_info_update(
+            &mut bob,
+            ProtocolSessionId::Integer(79),
+            ProtocolSessionInfo {
+                is_camera_on: Some(true),
+                is_screen_sharing_on: Some(true),
+                ..ProtocolSessionInfo::default().snapshot_complete()
+            },
+        )
+        .await
+        .is_some(),
+        "subscriber should receive the screen publish peer-info update"
     );
 
     assert!(

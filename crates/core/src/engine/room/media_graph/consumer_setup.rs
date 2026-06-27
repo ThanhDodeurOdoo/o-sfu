@@ -5,8 +5,12 @@ use o_sfu_router::{
 };
 
 use super::{
-    super::{RoomMediaCounts, outbound::OutboundSender, state::RoomState},
-    ConsumerKey, ConsumerRuntimeId, ConsumerState, ProducerRuntimeId, PublishedProducer,
+    super::{
+        RoomMediaCounts,
+        outbound::{OutboundSender, RemoteSourceSnapshot},
+        state::RoomState,
+    },
+    ConsumerKey, ConsumerState, ProducerRuntimeId, PublishedProducer,
     route_graph::{ConsumerRouteReservation, RelayRouteKey, ResolvedRelayRouteEffect},
 };
 use crate::engine::{
@@ -14,7 +18,7 @@ use crate::engine::{
     media_transport::{
         TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
     },
-    source_model::{PublishedSourceDescriptor, PublishedSourceId, UserStreamId},
+    source_model::{PublishedSourceId, UserStreamId},
 };
 
 #[derive(Debug, Clone)]
@@ -45,7 +49,8 @@ pub struct PendingConsumerSetup {
     pub target: ConsumerSetupTarget,
     pub reservation: ConsumerRouteReservation,
     pub sender: OutboundSender,
-    pub track: RemoteTrackSetup,
+    pub fallback_mid: String,
+    pub rtp: RouterRtpParameters,
     pub relays: Vec<ResolvedRelayRouteEffect>,
 }
 
@@ -57,23 +62,10 @@ pub struct PendingConsumerSetup {
 pub enum ConsumerSetupOutcome {
     Committed {
         sender: OutboundSender,
-        track: RemoteTrackSetup,
+        snapshot: RemoteSourceSnapshot,
         transport_activity_update: Option<bool>,
     },
     Released(Vec<ResolvedRelayRouteEffect>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteTrackSetup {
-    pub(super) consumer: ConsumerRuntimeId,
-    pub(super) kind: RouterMediaKind,
-    pub mid: String,
-    pub(super) producer: ProducerRuntimeId,
-    pub rtp: RouterRtpParameters,
-    pub source: PublishedSourceDescriptor,
-    pub user: UserId,
-    pub active: bool,
-    pub stream: UserStreamId,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -125,10 +117,19 @@ impl RoomState {
         if !target.matches_identity(producer) {
             return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
         }
-        let active = producer.active;
-        let selection = self.setup_selection(target, active);
-        self.topology
-            .commit_consumer_setup(setup, selection, media, mid, active)
+        let target_user = target.user.clone();
+        let selection = self.setup_selection(target, producer.active);
+        match self
+            .topology
+            .commit_consumer_setup(setup, selection, media, mid)
+        {
+            Ok((sender, transport_activity_update)) => ConsumerSetupOutcome::Committed {
+                sender,
+                snapshot: self.remote_source_snapshot_for_user(&target_user, true),
+                transport_activity_update,
+            },
+            Err(relays) => ConsumerSetupOutcome::Released(relays),
+        }
     }
 
     pub fn release_pending_consumer_setup(
@@ -180,6 +181,7 @@ impl ConsumerSetupTarget {
         &self,
         routed_consumer_id: RoutedConsumerId,
         consumer_media: TransportMediaId,
+        consumer_mid: String,
     ) -> ConsumerState {
         ConsumerState {
             routed_consumer_id,
@@ -187,6 +189,7 @@ impl ConsumerSetupTarget {
             source_connection_id: self.producer_connection,
             source_media: self.media,
             consumer_media,
+            consumer_mid,
         }
     }
 

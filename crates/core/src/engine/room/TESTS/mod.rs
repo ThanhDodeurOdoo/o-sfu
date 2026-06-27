@@ -18,6 +18,9 @@ mod manager_tests;
 #[path = "membership_tests.rs"]
 mod membership_tests;
 #[cfg(test)]
+#[path = "outbound_tests.rs"]
+mod outbound_tests;
+#[cfg(test)]
 #[path = "producer_tests.rs"]
 mod producer_tests;
 #[cfg(test)]
