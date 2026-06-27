@@ -73,7 +73,9 @@ export class PeerSession {
     }
 
     create(): void {
-        this.close();
+        if (this._activePeer) {
+            this.close();
+        }
         const peer = this._create({
             iceServers: this._iceServers
         });

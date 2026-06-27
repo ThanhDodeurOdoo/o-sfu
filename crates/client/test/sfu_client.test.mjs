@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { CLIENT_UPDATE } from "../dist/index.js";
-import { PENDING_REQUEST_KIND, WS_CLOSE_CODE } from "../dist/protocol_contract.js";
+import { COMMAND_KIND, PENDING_REQUEST_KIND, WS_CLOSE_CODE } from "../dist/protocol_contract.js";
 import { createProtocolCore } from "../dist/runtime_contract.js";
 import { PendingRequests } from "../dist/internals/pending_requests.js";
 import { FakeMediaTrack, FakePeerConnection, FakeSender } from "./support/browser_fakes.mjs";
@@ -677,7 +677,7 @@ test("track metadata updates re-emit track state for existing remote tracks", as
     peerConnections[0].emitTrack(track, "0");
     await tick();
 
-    await emitMessage("track-inactive");
+    await emitMessage("inactive-track-binding");
 
     assert.deepEqual(updates, [
         {
@@ -689,6 +689,107 @@ test("track metadata updates re-emit track state for existing remote tracks", as
                 type: "camera"
             }
         },
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: false,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.get(42).camera.track, track);
+});
+
+test("track events wait for later binding snapshots before publishing", async () => {
+    const { client, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
+
+    await connectWithWelcome();
+    await emitMessage("offer");
+
+    const track = createCameraTrack("track-1");
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    assert.deepEqual(updates, []);
+    assert.equal(client._consumers.size, 0);
+
+    await emitMessage("inactive-track-binding");
+
+    assert.deepEqual(updates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: false,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.get(42).camera.track, track);
+});
+
+test("initial peer creation keeps earlier binding snapshots", async () => {
+    const core = new FakeProtocolCore();
+    const onWsMessage = core.onWsMessage.bind(core);
+    core.onWsMessage = (frame) => {
+        if (frame === "offer-without-track-bindings") {
+            return core._withPendingNegotiationKind([
+                { kind: COMMAND_KIND.CREATE_PEER_CONNECTION },
+                {
+                    kind: COMMAND_KIND.APPLY_NEGOTIATION,
+                    negotiationKind: "offer",
+                    requestId: "7",
+                    sdp: sdp(audioMedia("0"), videoMedia("1")),
+                    uploadSlots: [audioUploadSlot("0"), videoUploadSlot("1")]
+                }
+            ]);
+        }
+        return onWsMessage(frame);
+    };
+    const { client, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness({ protocolCore: core });
+
+    await connectWithWelcome();
+    await emitMessage("inactive-track-binding");
+    await emitMessage("offer-without-track-bindings");
+
+    const track = createCameraTrack("track-1");
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    assert.deepEqual(updates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: false,
+                sessionId: 42,
+                track,
+                type: "camera"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.get(42).camera.track, track);
+});
+
+test("track-only slots survive empty binding snapshots before publishing", async () => {
+    const { client, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
+
+    await connectWithWelcome();
+    await emitMessage("offer");
+
+    const track = createCameraTrack("track-1");
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    await emitMessage("clear-track-bindings");
+    await emitMessage("inactive-track-binding");
+
+    assert.deepEqual(updates, [
         {
             name: CLIENT_UPDATE.TRACK,
             payload: {
@@ -951,6 +1052,54 @@ test("stale peer connection callbacks cannot affect the active session", async (
     assert.equal(client._consumers.size, 0);
 });
 
+test("peer teardown clears bindings before the next peer can emit tracks", async () => {
+    const core = new FakeProtocolCore();
+    const earlyTrack = new FakeMediaTrack({
+        id: "fresh-before-binding",
+        kind: "video"
+    });
+    const { client, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness({
+            protocolCore: core,
+            createPeerConnection(config, index) {
+                const peerConnection = new FakePeerConnection(config);
+                if (index === 1) {
+                    const setRemoteDescription =
+                        peerConnection.setRemoteDescription.bind(peerConnection);
+                    peerConnection.setRemoteDescription = async (description) => {
+                        await setRemoteDescription(description);
+                        peerConnection.emitTrack(earlyTrack, "0");
+                    };
+                }
+                return peerConnection;
+            }
+        });
+
+    await connectWithWelcome();
+
+    await emitOfferWithBinding({ core, emitMessage });
+
+    peerConnections[0].emitTrack(createCameraTrack("track-1"), "0");
+    await tick();
+    updates.length = 0;
+
+    await emitOfferWithBinding({ core, emitMessage }, { sessionId: 84, type: "screen" });
+
+    assert.deepEqual(updates, [
+        {
+            name: CLIENT_UPDATE.TRACK,
+            payload: {
+                active: true,
+                sessionId: 84,
+                track: earlyTrack,
+                type: "screen"
+            }
+        }
+    ]);
+    assert.equal(client._consumers.has(42), false);
+    assert.equal(client._consumers.get(84).screen.track, earlyTrack);
+});
+
 test("track rebinding waits for a fresh track event before re-emitting state", async () => {
     const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
         createSfuClientHarness();
@@ -1077,6 +1226,33 @@ test("remote track lifecycle updates re-emit when the browser unmutes the track"
         }
     });
     assert.equal(client._consumers.get(42).camera.track, track);
+    assert.equal(client._consumers.get(42).camera.track.muted, false);
+});
+
+test("duplicate remote track events keep one lifecycle listener", async () => {
+    const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
+        createSfuClientHarness();
+
+    await connectWithWelcome();
+
+    await emitOfferWithBinding({ core, emitMessage });
+
+    const track = new FakeMediaTrack({
+        id: "track-1",
+        kind: "video",
+        muted: true
+    });
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+    peerConnections[0].emitTrack(track, "0");
+    await tick();
+
+    assert.equal(updates.length, 1);
+
+    track.setMuted(false);
+    await tick();
+
+    assert.equal(updates.length, 2);
     assert.equal(client._consumers.get(42).camera.track.muted, false);
 });
 
