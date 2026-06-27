@@ -29,7 +29,6 @@ mod TESTS;
 #[path = "TESTS/route_graph.rs"]
 mod route_graph_tests;
 
-pub use self::consumer_setup::RemoteTrackSetup;
 #[cfg(any(test, feature = "testing-transport"))]
 pub use self::subscription::ConsumerRouteState;
 pub(super) use self::{
@@ -123,19 +122,20 @@ pub(super) struct TransportMediaRemoval {
     pub transport_media: TransportMediaId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ConsumerState {
     pub routed_consumer_id: RoutedConsumerId,
     pub consumer_connection_id: ConnectionId,
     pub source_connection_id: ConnectionId,
     pub source_media: TransportMediaId,
     pub consumer_media: TransportMediaId,
+    pub consumer_mid: String,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct ConsumerRouteView<'a> {
     pub consumer_user_id: UserId,
-    pub state: ConsumerState,
+    pub state: &'a ConsumerState,
     pub source: &'a PublishedSourceDescriptor,
     pub producer: &'a PublishedProducer,
     pub selection: Option<ConsumerSourceSelection>,
@@ -328,7 +328,7 @@ impl RoomMediaGraph {
     }
 
     #[cfg(test)]
-    pub fn consumer_state(&self, key: &ConsumerKey) -> Option<ConsumerState> {
+    pub fn consumer_state(&self, key: &ConsumerKey) -> Option<&ConsumerState> {
         self.routes.consumer_state(key)
     }
 

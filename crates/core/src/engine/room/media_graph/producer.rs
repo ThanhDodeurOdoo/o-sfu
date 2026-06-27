@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{MediaFormat, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc},
@@ -6,9 +8,9 @@ use tracing::{error, warn};
 
 use super::{
     super::{
-        RoomMediaCounts, TrackBindingUpdate,
-        outbound::{MessageFanout, OutboundSender},
-        state::RoomState,
+        RoomMediaCounts,
+        outbound::{OutboundSender, RemoteSourceSnapshot},
+        state::{PresenceCommit, RemoteSourceRefresh, RoomState},
     },
     ProducerRouteTarget, ProducerRuntimeId, ReceiverRouteWork, SourceTransportMediaIndexEntry,
     subscription::ReceiverRouteScope,
@@ -52,7 +54,7 @@ pub struct PublishCommit {
     pub setup_before: RoomMediaCounts,
     pub setup_after: RoomMediaCounts,
     pub receiver_route_work: ReceiverRouteWork,
-    pub presence: Option<MessageFanout>,
+    pub presence: Option<PresenceCommit>,
 }
 
 #[derive(Debug)]
@@ -66,10 +68,10 @@ pub enum PublishIntentPlan {
 #[derive(Debug)]
 pub struct ProducerActivityCommit {
     pub source: TransportSourceKey,
+    pub stream_id: UserStreamId,
     pub active: bool,
-    pub recipients: Vec<OutboundSender>,
-    pub update: TrackBindingUpdate,
-    pub presence: Option<MessageFanout>,
+    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
+    pub presence: Option<PresenceCommit>,
 }
 
 #[derive(Debug)]
@@ -82,10 +84,9 @@ pub enum ProducerActivityRejection {
 pub struct UnpublishCommit {
     pub before: RoomMediaCounts,
     pub after: RoomMediaCounts,
-    pub recipients: Vec<OutboundSender>,
-    pub update: TrackBindingUpdate,
+    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
     pub media_effects: MediaTopologyEffects,
-    pub presence: Option<MessageFanout>,
+    pub presence: Option<PresenceCommit>,
 }
 
 impl RoomState {
@@ -232,7 +233,12 @@ impl RoomState {
             self.plan_missing_receiver_routes(ReceiverRouteScope::Producer(producer_id));
         let setup_after = self.media_counts();
         let presence = presence.and_then(|info| {
-            self.apply_presence_update(&owner_user_id, owner_connection_id, &info, false)
+            self.apply_presence_update(
+                &owner_user_id,
+                owner_connection_id,
+                &info,
+                RemoteSourceRefresh::Skip,
+            )
         });
         Some(PublishCommit {
             user: owner_user_id,
@@ -384,28 +390,22 @@ impl RoomState {
         connection_id: ConnectionId,
         intent: &SourceUnpublishIntent,
     ) -> Option<UnpublishCommit> {
-        let stream_id = intent.stream_id();
-        let producer_target = self.producer_route_target(user_id, connection_id, stream_id)?;
+        let producer_target =
+            self.producer_route_target(user_id, connection_id, intent.stream_id())?;
+        let source_recipients = self
+            .topology
+            .committed_consumer_user_ids_for_source(producer_target.source_id);
         let before = self.media_counts();
         let media_effects = self.topology.unpublish_source(user_id, &producer_target)?;
         let after = self.media_counts();
         Some(UnpublishCommit {
             before,
             after,
-            recipients: self
-                .users
-                .values()
-                .map(|user| user.sender.clone())
-                .collect(),
-            update: TrackBindingUpdate {
-                user_id: user_id.clone(),
-                stream_id: stream_id.clone(),
-                active: None,
-            },
+            source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
             media_effects,
-            presence: intent
-                .presence()
-                .and_then(|info| self.apply_presence_update(user_id, connection_id, info, false)),
+            presence: intent.presence().and_then(|info| {
+                self.apply_presence_update(user_id, connection_id, info, RemoteSourceRefresh::Skip)
+            }),
         })
     }
 
@@ -415,7 +415,7 @@ impl RoomState {
         producer_target: &ProducerRouteTarget,
         stream_id: &UserStreamId,
         active: bool,
-    ) -> Option<TrackBindingUpdate> {
+    ) -> Option<BTreeSet<UserId>> {
         let current_connection_id = self.user_connection_id(user_id);
         let changed = match self.topology.set_published_source_activity(
             producer_target,
@@ -436,11 +436,10 @@ impl RoomState {
         if !changed {
             return None;
         }
-        Some(TrackBindingUpdate {
-            user_id: user_id.clone(),
-            stream_id: stream_id.clone(),
-            active: Some(active),
-        })
+        Some(
+            self.topology
+                .committed_consumer_user_ids_for_source(producer_target.source_id),
+        )
     }
 
     pub fn apply_publication_activity(
@@ -460,22 +459,21 @@ impl RoomState {
         else {
             return Err(ProducerActivityRejection::MissingPublication);
         };
-        let Some(update) =
+        let Some(source_recipients) =
             self.apply_producer_activity(user_id, &producer_target, stream_id, active)
         else {
             return Err(ProducerActivityRejection::StalePublication);
         };
+        let presence = presence.and_then(|info| {
+            self.apply_presence_update(user_id, connection_id, info, RemoteSourceRefresh::Skip)
+        });
+        let source_snapshots = self.remote_source_snapshots_for_users(source_recipients, false);
         Ok(ProducerActivityCommit {
             source: TransportSourceKey::new(transport_user_key, transport_media_id),
+            stream_id: stream_id.clone(),
             active,
-            recipients: self
-                .users
-                .values()
-                .map(|user| user.sender.clone())
-                .collect(),
-            update,
-            presence: presence
-                .and_then(|info| self.apply_presence_update(user_id, connection_id, info, false)),
+            source_snapshots,
+            presence,
         })
     }
 }

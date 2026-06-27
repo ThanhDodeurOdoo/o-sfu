@@ -11,11 +11,10 @@ use tracing::{error, warn};
 
 use super::{
     ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerRouteView,
-    ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerRouteView, PendingConsumerSetup,
-    ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
-    ReceiverRouteActivity, RemoteTrackSetup, ResolvedRelayRouteEffect, RoomMediaGraph,
-    SourceTransportMediaIndexEntry, SourceView, TransportMediaRemoval, ValidatedPublish,
-    route_graph::RelayRouteEffect,
+    ConsumerSetupTarget, PendingConsumerRouteView, PendingConsumerSetup, ProducerRouteTarget,
+    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall, ReceiverRouteActivity,
+    ResolvedRelayRouteEffect, RoomMediaGraph, SourceTransportMediaIndexEntry, SourceView,
+    TransportMediaRemoval, ValidatedPublish, route_graph::RelayRouteEffect,
 };
 use crate::{
     RoomSpilloverMode,
@@ -316,6 +315,16 @@ impl RoomTopology {
             .filter_map(|(key, state)| self.consumer_route_for_key(key, state))
     }
 
+    pub(in crate::engine::room) fn committed_consumer_routes_for_user(
+        &self,
+        user_id: &UserId,
+    ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
+        self.media
+            .routes
+            .committed_entries_for_user(user_id)
+            .filter_map(|(key, state)| self.consumer_route_for_key(key, state))
+    }
+
     pub(in crate::engine::room) fn pending_consumer_routes_for_user(
         &self,
         user_id: &UserId,
@@ -339,6 +348,31 @@ impl RoomTopology {
         key: &ConsumerKey,
     ) -> Option<ConsumerSourceSelection> {
         self.media.routes.selection(key)
+    }
+
+    pub(in crate::engine::room) fn committed_consumer_user_ids_for_source(
+        &self,
+        source_id: PublishedSourceId,
+    ) -> BTreeSet<UserId> {
+        self.media
+            .routes
+            .keys_for_source(source_id)
+            .filter(|key| self.media.routes.consumer_state(key).is_some())
+            .map(|key| key.consumer_user_id.clone())
+            .collect()
+    }
+
+    pub(in crate::engine::room) fn committed_consumer_user_ids_for_owner_sources(
+        &self,
+        user_id: &UserId,
+    ) -> BTreeSet<UserId> {
+        self.media
+            .sources
+            .ids_for_owner(user_id)
+            .flat_map(|source_id| self.media.routes.keys_for_source(source_id))
+            .filter(|key| self.media.routes.consumer_state(key).is_some())
+            .map(|key| key.consumer_user_id.clone())
+            .collect()
     }
 
     #[must_use]
@@ -550,11 +584,11 @@ impl RoomTopology {
         self.media.sources.install_source(install);
     }
 
-    fn consumer_route_for_key(
-        &self,
+    fn consumer_route_for_key<'a>(
+        &'a self,
         key: &ConsumerKey,
-        state: super::ConsumerState,
-    ) -> Option<ConsumerRouteView<'_>> {
+        state: &'a super::ConsumerState,
+    ) -> Option<ConsumerRouteView<'a>> {
         let view = self.media.sources.source_view(key.source_id)?;
         Some(ConsumerRouteView {
             consumer_user_id: key.consumer_user_id.clone(),
@@ -811,38 +845,33 @@ impl RoomTopology {
 
     pub(super) fn commit_consumer_setup(
         &mut self,
-        mut setup: PendingConsumerSetup,
+        setup: PendingConsumerSetup,
         selection: ConsumerSourceSelection,
         media: TransportMediaId,
         mid: Option<String>,
-        producer_active: bool,
-    ) -> ConsumerSetupOutcome {
+    ) -> Result<(OutboundSender, Option<bool>), Vec<ResolvedRelayRouteEffect>> {
         if self.media.routes.contains(setup.reservation.key()) {
-            return ConsumerSetupOutcome::Released(self.release_consumer_setup(setup));
+            return Err(self.release_consumer_setup(setup));
         }
         let active = selection.delivery_active();
         let Some(routed_consumer_id) = self.add_consumer_route(&setup.target, active) else {
-            return ConsumerSetupOutcome::Released(self.release_consumer_setup(setup));
+            return Err(self.release_consumer_setup(setup));
         };
+        let committed_mid = mid.unwrap_or_else(|| setup.fallback_mid.clone());
         if self.media.routes.commit(
             &setup.reservation,
-            setup.target.consumer_state(routed_consumer_id, media),
+            setup
+                .target
+                .consumer_state(routed_consumer_id, media, committed_mid),
             selection,
         ) {
-            if let Some(mid) = mid {
-                setup.track.mid = mid;
-            }
-            setup.track.active = producer_active;
-            return ConsumerSetupOutcome::Committed {
-                sender: setup.sender,
-                track: setup.track,
-                transport_activity_update: (active
-                    != setup.reservation.selection().delivery_active())
-                .then_some(active),
-            };
+            return Ok((
+                setup.sender,
+                (active != setup.reservation.selection().delivery_active()).then_some(active),
+            ));
         }
         self.rollback_consumer_route(&setup.target, routed_consumer_id);
-        ConsumerSetupOutcome::Released(self.release_consumer_setup(setup))
+        Err(self.release_consumer_setup(setup))
     }
 
     fn add_consumer_route(
@@ -900,7 +929,8 @@ impl RoomTopology {
         target: ConsumerSetupTarget,
         selection: ConsumerSourceSelection,
         sender: OutboundSender,
-        track: RemoteTrackSetup,
+        fallback_mid: String,
+        rtp: RouterRtpParameters,
     ) -> Option<PendingConsumerSetup> {
         let key = target.consumer_key();
         let active = selection.delivery_active();
@@ -920,7 +950,8 @@ impl RoomTopology {
             target,
             reservation,
             sender,
-            track,
+            fallback_mid,
+            rtp,
             relays,
         })
     }

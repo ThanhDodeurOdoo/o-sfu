@@ -1,11 +1,14 @@
 use super::support::*;
 use crate::{
     UnpublishIntentOutcome,
-    engine::{UserInfo, source_model::SourceUnpublishIntent},
+    engine::{
+        UserInfo,
+        source_model::{SourcePolicy, SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
+    },
 };
 
 #[tokio::test]
-async fn production_change_pauses_producer_and_broadcasts_track_binding() {
+async fn production_change_pauses_producer_and_updates_remote_source_snapshot() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -18,7 +21,10 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
     )
     .await;
 
-    assert_remote_track_setup_for_stream(&drain_outbound(&mut rx2), TestSourceKind::ScalableVideo);
+    assert_remote_source_snapshot_for_stream(
+        &drain_outbound(&mut rx2),
+        TestSourceKind::ScalableVideo,
+    );
     assert!(drain_outbound(&mut rx1).is_empty());
 
     let publisher_id = UserId::Integer(1);
@@ -36,19 +42,17 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
 
     let msgs1 = drain_outbound(&mut rx1);
     let msgs2 = drain_outbound(&mut rx2);
-    assert_eq!(msgs1.len(), 1, "user 1 should get track binding update");
-    assert_eq!(msgs2.len(), 1, "user 2 should get track binding update");
-    assert_track_binding_activity_update(
-        &msgs1[0],
-        &UserId::Integer(1),
-        TestSourceKind::ScalableVideo,
-        Some(false),
+    assert!(
+        msgs1.is_empty(),
+        "publisher should not get a remote source snapshot"
     );
-    assert_track_binding_activity_update(
+    assert_eq!(msgs2.len(), 1, "subscriber should get a source snapshot");
+    assert_remote_source_activity_snapshot(
         &msgs2[0],
         &UserId::Integer(1),
         TestSourceKind::ScalableVideo,
-        Some(false),
+        false,
+        false,
     );
 
     assert!(
@@ -63,12 +67,13 @@ async fn production_change_pauses_producer_and_broadcasts_track_binding() {
             .await
     );
 
-    let msgs1 = drain_outbound(&mut rx1);
-    assert_track_binding_activity_update(
-        &msgs1[0],
+    let msgs2 = drain_outbound(&mut rx2);
+    assert_remote_source_activity_snapshot(
+        &msgs2[0],
         &UserId::Integer(1),
         TestSourceKind::ScalableVideo,
-        Some(true),
+        true,
+        false,
     );
 }
 
@@ -124,12 +129,83 @@ async fn duplicate_publish_intent_reactivates_committed_stream() {
             .has_staged_publish(&publisher_id, connection_id, &stream_id)
             .await
     );
-    assert_track_binding_activity_update(
-        &drain_outbound(&mut rx1)[0],
+    assert_remote_source_activity_snapshot(
+        &drain_outbound(&mut rx2)[0],
         &publisher_id,
         TestSourceKind::ScalableVideo,
-        Some(true),
+        true,
+        false,
     );
+}
+
+#[tokio::test]
+async fn duplicate_camera_publish_intent_applies_presence_before_remote_snapshot() {
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
+    let publisher_id = UserId::Integer(1);
+    let camera_stream = UserStreamId::new("camera");
+    let camera_off_intent = SourcePublishIntent::new(
+        camera_stream.clone(),
+        MediaKind::Video,
+        SourcePolicy::hidden(),
+    )
+    .with_presence(Some(UserInfo {
+        is_camera_on: Some(false),
+        ..UserInfo::default()
+    }));
+
+    assert!(
+        room.test_api()
+            .media()
+            .publish_intent(
+                &publisher_id,
+                &camera_off_intent,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    drain_outbound(&mut rx1);
+    drain_outbound(&mut rx2);
+
+    assert!(
+        room.test_api()
+            .media()
+            .set_publication_active(&publisher_id, &camera_stream, false, &adapter)
+            .await
+    );
+    drain_outbound(&mut rx2);
+
+    let connection_id = user_connection_id(&room, &publisher_id).await;
+    let camera_on_intent = SourcePublishIntent::new(
+        camera_stream.clone(),
+        MediaKind::Video,
+        SourcePolicy::hidden(),
+    )
+    .with_presence(Some(UserInfo {
+        is_camera_on: Some(true),
+        ..UserInfo::default()
+    }));
+    assert!(matches!(
+        room.user_operation(&publisher_id, connection_id, &adapter)
+            .start_publish(&camera_on_intent, true)
+            .await,
+        Ok(PublishIntentOutcome::Activated)
+    ));
+
+    let source_snapshots = drain_remote_source_snapshots(&mut rx2);
+    assert_eq!(
+        source_snapshots.len(),
+        1,
+        "duplicate publish should emit one final source snapshot"
+    );
+    let [projection] = source_snapshots[0].sources.as_slice() else {
+        panic!("subscriber should receive the camera source");
+    };
+    assert_eq!(projection.source.stream_id(), &camera_stream);
+    assert_eq!(projection.owner_info.is_camera_on, Some(true));
+    assert!(projection.producer_active);
 }
 
 #[tokio::test]
@@ -149,7 +225,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
     assert!(
         drain_outbound(&mut subscriber_rx)
             .iter()
-            .any(|message| matches!(message, UserOutbound::SetupRemoteTrack(_)))
+            .any(|message| remote_source_snapshot(message).is_some())
     );
     let Some(transport_media_id) = room
         .test_api()
@@ -193,20 +269,16 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 
     let publisher_messages = drain_outbound(&mut publisher_rx);
     let subscriber_messages = drain_outbound(&mut subscriber_rx);
-    assert!(publisher_messages.iter().any(|message| matches!(
-        message,
-        UserOutbound::TrackBindingUpdate(update)
-            if update.user_id == UserId::Integer(1)
-                && update.stream_id == stream_id_for_source(TestSourceKind::ScalableVideo)
-                && update.active.is_none()
-    )));
-    assert!(subscriber_messages.iter().any(|message| matches!(
-        message,
-        UserOutbound::TrackBindingUpdate(update)
-            if update.user_id == UserId::Integer(1)
-                && update.stream_id == stream_id_for_source(TestSourceKind::ScalableVideo)
-                && update.active.is_none()
-    )));
+    let removal_message = subscriber_messages
+        .iter()
+        .find(|message| remote_source_snapshot(message).is_some())
+        .expect("subscriber should receive a removal snapshot");
+    assert_remote_source_removed_snapshot(
+        removal_message,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+    );
+    assert!(publisher_messages.is_empty());
     assert!(
         adapter
             .test_api()
@@ -217,19 +289,49 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
 }
 
 #[tokio::test]
-async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
-    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
+async fn late_join_receives_remote_source_snapshot_from_route_state() {
+    let manager = RoomManager::for_test();
+    let room = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await;
+    let adapter = real_adapter();
+    let publisher_id = UserId::Integer(1);
     let subscriber_id = UserId::Integer(2);
-    assert!(
-        room.test_api()
-            .lifecycle()
-            .mark_session_ready(
-                &subscriber_id,
-                test_client_rtp_capabilities_without_video_rtx(),
-                &adapter,
-            )
-            .await
+    let (publisher_tx, mut publisher_rx) = test_sender();
+    let (subscriber_tx, mut subscriber_rx) = test_sender();
+
+    join_user_with_sender(&room, publisher_id.clone(), publisher_tx).await;
+    make_session_ready_with_transport(&room, &publisher_id, &adapter).await;
+    publish_track(
+        &room,
+        &publisher_id,
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
+    assert!(drain_outbound(&mut publisher_rx).is_empty());
+
+    join_user_with_sender(&room, subscriber_id, subscriber_tx).await;
+    make_session_ready_with_transport(&room, &UserId::Integer(2), &adapter).await;
+
+    let snapshot = drain_remote_source_snapshots(&mut subscriber_rx)
+        .into_iter()
+        .next()
+        .expect("late subscriber should receive a source snapshot");
+    assert!(snapshot.requires_negotiation);
+    assert_eq!(snapshot.sources.len(), 1);
+    assert_eq!(snapshot.sources[0].source.owner().user_id(), &publisher_id);
+    assert_eq!(
+        snapshot.sources[0].source.stream_id(),
+        &stream_id_for_source(TestSourceKind::ScalableVideo)
     );
+}
+
+#[tokio::test]
+async fn publish_track_emits_remote_source_snapshot_with_committed_mid() {
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
         &room,
@@ -242,19 +344,68 @@ async fn publish_track_uses_negotiated_consumer_rtp_parameters() {
     .await;
 
     assert!(drain_outbound(&mut rx1).is_empty());
-    let track = drain_outbound(&mut rx2)
+    let snapshot = drain_remote_source_snapshots(&mut rx2)
         .into_iter()
-        .find_map(|message| match message {
-            UserOutbound::SetupRemoteTrack(track) => Some(*track),
-            UserOutbound::Message(_)
-            | UserOutbound::TrackBindingUpdate(_)
-            | UserOutbound::Close(_) => None,
-        })
-        .expect("subscriber should receive INIT_CONSUMER");
-    let formats = track.rtp.formats().collect::<Vec<_>>();
-    assert_eq!(formats.len(), 1);
-    assert_eq!(formats[0].codec_name(), "VP8");
-    assert_eq!(formats[0].payload_type(), 96);
+        .next()
+        .expect("subscriber should receive a remote source snapshot");
+    let [projection] = snapshot.sources.as_slice() else {
+        panic!("subscriber should receive one remote source");
+    };
+    assert!(!projection.consumer_mid.is_empty());
+    assert_eq!(
+        projection.source.stream_id(),
+        &stream_id_for_source(TestSourceKind::ScalableVideo)
+    );
+}
+
+#[tokio::test]
+async fn camera_user_info_update_refreshes_remote_source_owner_info() {
+    let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
+    let publisher_id = UserId::Integer(1);
+    let camera_stream = UserStreamId::new("camera");
+    let camera_intent = SourcePublishIntent::new(
+        camera_stream.clone(),
+        MediaKind::Video,
+        SourcePolicy::hidden(),
+    );
+
+    assert!(
+        room.test_api()
+            .media()
+            .publish_intent(
+                &publisher_id,
+                &camera_intent,
+                MediaKind::Video,
+                test_video_rtp_parameters(),
+                &adapter,
+            )
+            .await
+            .is_some()
+    );
+    drain_outbound(&mut rx1);
+    drain_outbound(&mut rx2);
+
+    let connection_id = user_connection_id(&room, &publisher_id).await;
+    room.update_user_info(
+        &publisher_id,
+        connection_id,
+        &adapter,
+        UserInfo {
+            is_camera_on: Some(false),
+            ..UserInfo::default()
+        },
+    )
+    .await;
+
+    let snapshot = drain_remote_source_snapshots(&mut rx2)
+        .into_iter()
+        .next()
+        .expect("subscriber should receive a refreshed camera source snapshot");
+    assert!(!snapshot.requires_negotiation);
+    assert!(snapshot.sources.iter().any(|projection| {
+        projection.source.stream_id() == &camera_stream
+            && projection.owner_info.is_camera_on == Some(false)
+    }));
 }
 
 #[tokio::test]
@@ -274,7 +425,7 @@ async fn user_replacement_purges_stale_published_media_state() {
     assert!(
         drain_outbound(&mut subscriber_rx)
             .iter()
-            .any(|message| matches!(message, UserOutbound::SetupRemoteTrack(_)))
+            .any(|message| remote_source_snapshot(message).is_some())
     );
     let published_transport_media_id = room
         .test_api()
@@ -355,7 +506,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
     assert_eq!(
         drain_outbound(&mut subscriber_rx)
             .into_iter()
-            .filter(|message| matches!(message, UserOutbound::SetupRemoteTrack(_)))
+            .filter(|message| remote_source_snapshot(message).is_some())
             .count(),
         2,
         "subscriber should receive one setup request per published stream"
@@ -425,7 +576,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
 }
 
 #[tokio::test]
-async fn production_change_updates_screen_track_binding_activity() {
+async fn production_change_updates_screen_remote_source_activity() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -454,12 +605,13 @@ async fn production_change_updates_screen_track_binding_activity() {
             .await
     );
 
-    let msgs = drain_outbound(&mut rx1);
-    assert_track_binding_activity_update(
+    let msgs = drain_outbound(&mut rx2);
+    assert_remote_source_activity_snapshot(
         &msgs[0],
         &UserId::Integer(1),
         TestSourceKind::ReadableVideo,
-        Some(false),
+        false,
+        false,
     );
 }
 

@@ -14,7 +14,7 @@ async fn explicit_unpublish_removes_state_and_transport_media() {
     )
     .await;
     drain_outbound(&mut publisher_rx);
-    assert_remote_track_setup_for_stream(
+    assert_remote_source_snapshot_for_stream(
         &drain_outbound(&mut subscriber_rx),
         TestSourceKind::AudioDetector,
     );

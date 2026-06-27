@@ -223,6 +223,7 @@ fn install_test_consumer_route(
         source_connection_id: producer_connection_id,
         source_media: TransportMediaId::new(1),
         consumer_media: TransportMediaId::new(2),
+        consumer_mid: "camera-down".to_owned(),
     };
     assert!(state.topology.media_mut_for_test().commit_consumer(
         route_key.clone(),
@@ -378,6 +379,7 @@ fn install_test_consumer_state(
             source_connection_id,
             source_media,
             consumer_media,
+            consumer_mid: format!("mid-{}", consumer_media.as_u64()),
         },
         ConsumerSourceSelection::open(true),
     ));
@@ -655,14 +657,19 @@ fn consumer_setup_commit_uses_latest_room_state() {
     assert!(change.setups.is_empty());
 
     let ConsumerSetupOutcome::Committed {
-        track,
+        snapshot,
         transport_activity_update,
         ..
     } = commit_pending_setup(&mut state, setup)
     else {
         panic!("current room state should still accept the setup");
     };
-    assert!(!track.active);
+    assert!(
+        snapshot
+            .sources
+            .iter()
+            .any(|source| !source.producer_active)
+    );
     let transport_activity_update =
         transport_activity_update.expect("transport declaration should be corrected");
     assert!(!transport_activity_update);

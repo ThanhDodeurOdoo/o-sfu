@@ -8,7 +8,7 @@ use super::ConsumerKey;
 use super::{
     super::{effects::RoomGaugeDelta, state::RoomState},
     ConsumerRouteTarget, ConsumerRuntimeId, ProducerRuntimeId,
-    consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup, RemoteTrackSetup},
+    consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
     route_graph::ResolvedRelayRouteEffect,
 };
 use crate::engine::{
@@ -336,35 +336,21 @@ impl RoomState {
                 user.parsed_client_rtp_capabilities.as_ref()?,
             )
         };
-        let (producer_rtp, producer_active, descriptor) = {
+        let (producer_rtp, producer_active) = {
             let producer = self.topology.producer(target.producer_id)?;
             if !target.matches_identity(producer) {
                 return None;
             }
-            (
-                &producer.consumable_rtp_parameters,
-                producer.active,
-                self.topology.source(target.source_id)?.clone(),
-            )
+            (&producer.consumable_rtp_parameters, producer.active)
         };
         let selection = self.setup_selection(&target, producer_active);
         let rtp = negotiate_consumer_rtp_parameters(producer_rtp, client_caps).ok()?;
         let consumer = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
-        let track = RemoteTrackSetup {
-            consumer,
-            kind: target.kind,
-            mid: rtp
-                .mid()
-                .map_or_else(|| consumer.into_wire_id(), ToOwned::to_owned),
-            producer: target.producer_id,
-            rtp,
-            source: descriptor,
-            user: target.producer_user.clone(),
-            active: producer_active,
-            stream: target.stream.clone(),
-        };
+        let fallback_mid = rtp
+            .mid()
+            .map_or_else(|| consumer.into_wire_id(), ToOwned::to_owned);
         self.topology
-            .reserve_consumer_setup(target, selection, sender, track)
+            .reserve_consumer_setup(target, selection, sender, fallback_mid, rtp)
     }
 
     pub(super) fn setup_selection(

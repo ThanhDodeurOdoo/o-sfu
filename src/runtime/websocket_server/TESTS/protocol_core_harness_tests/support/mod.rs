@@ -8,7 +8,7 @@ pub(super) use o_sfu_protocol::{
     host::PendingRequestKind,
     wire::{
         AvailableFeatures, DownloadStates as ProtocolDownloadStates, EnvelopeBatch, RecordingState,
-        RequestId, ServerMessage, StreamType as ProtocolStreamType, TrackBinding,
+        RequestId, ServerMessage, SourceDescriptor, StreamType as ProtocolStreamType, TrackBinding,
         UserId as ProtocolSessionId, UserInfo as ProtocolSessionInfo,
     },
 };
@@ -33,7 +33,7 @@ pub(super) use assertions::{
     peer_reached_state,
 };
 pub(super) use frames::{
-    no_server_frame, read_single_protocol_server_message, read_track_snapshot,
+    no_server_frame, read_media_snapshot, read_single_protocol_server_message, read_track_snapshot,
     read_track_snapshot_until_pending_negotiations, read_until_server_request,
 };
 pub(super) use routes::{

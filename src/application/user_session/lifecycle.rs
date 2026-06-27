@@ -16,7 +16,6 @@ impl User {
             remote_address,
             session,
             requests: super::NegotiationRequests::default(),
-            tracks: super::TrackSnapshot::default(),
             cleanup_finished: false,
         }
     }

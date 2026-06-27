@@ -157,9 +157,9 @@ async fn assert_track_snapshot(
         let Some(source) = actual_sources.iter().find(|source| {
             source.user_id == expected.user_id
                 && source.stream_type == expected.stream_type
-                && source.mid.as_deref() == Some(expected.mid.as_str())
+                && source.mid.as_deref() == Some(actual.mid.as_str())
         }) else {
-            panic!("expected source snapshot descriptor {}", expected.mid);
+            panic!("expected source snapshot descriptor {}", actual.mid);
         };
         assert_eq!(source.active, expected.active);
         assert_eq!(

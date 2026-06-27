@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::rtp::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities};
 
 use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
     media_graph::{ConsumerRouteView, RoomTopology},
-    outbound::OutboundSender,
+    outbound::{OutboundSender, RemoteSourceProjection, RemoteSourceSnapshot},
     transition::StagedPublishes,
     user_negotiation::UserNegotiation,
 };
@@ -215,10 +215,44 @@ impl RoomState {
         Some((user_id.clone(), user.project_info()))
     }
 
-    pub fn user_info_snapshot_all(&self) -> BTreeMap<UserId, UserInfo> {
-        self.users
-            .iter()
-            .map(|(user_id, user)| (user_id.clone(), user.project_info()))
+    pub(in crate::engine::room) fn remote_source_snapshot_for_user(
+        &self,
+        user_id: &UserId,
+        requires_negotiation: bool,
+    ) -> RemoteSourceSnapshot {
+        let connection_id = self.user_connection_id(user_id);
+        RemoteSourceSnapshot {
+            sources: self
+                .topology
+                .committed_consumer_routes_for_user(user_id)
+                .filter(|route| connection_id == Some(route.state.consumer_connection_id))
+                .filter_map(|route| {
+                    let owner = self.users.get(route.source.owner().user_id())?;
+                    Some(RemoteSourceProjection {
+                        consumer_mid: route.state.consumer_mid.clone(),
+                        source: route.source.clone(),
+                        owner_info: owner.info.clone().with_featured(owner.server_featured),
+                        producer_active: route.producer.active,
+                    })
+                })
+                .collect(),
+            requires_negotiation,
+        }
+    }
+
+    pub(in crate::engine::room) fn remote_source_snapshots_for_users(
+        &self,
+        user_ids: BTreeSet<UserId>,
+        requires_negotiation: bool,
+    ) -> Vec<(OutboundSender, RemoteSourceSnapshot)> {
+        user_ids
+            .into_iter()
+            .filter_map(|user_id| {
+                Some((
+                    self.users.get(&user_id)?.sender.clone(),
+                    self.remote_source_snapshot_for_user(&user_id, requires_negotiation),
+                ))
+            })
             .collect()
     }
 

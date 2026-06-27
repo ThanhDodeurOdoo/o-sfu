@@ -174,7 +174,7 @@ impl RouteGraph {
         self.entries.get(key).map(RouteSlot::selection_value)
     }
 
-    pub(super) fn consumer_state(&self, key: &ConsumerKey) -> Option<ConsumerState> {
+    pub(super) fn consumer_state(&self, key: &ConsumerKey) -> Option<&ConsumerState> {
         self.entries.get(key)?.consumer()
     }
 
@@ -191,7 +191,7 @@ impl RouteGraph {
             .filter_map(|(key, entry)| entry.is_pending().then_some(&key.consumer_user_id))
     }
 
-    pub(super) fn committed_entries(&self) -> impl Iterator<Item = (&ConsumerKey, ConsumerState)> {
+    pub(super) fn committed_entries(&self) -> impl Iterator<Item = (&ConsumerKey, &ConsumerState)> {
         self.entries
             .iter()
             .filter_map(|(key, entry)| entry.consumer().map(|state| (key, state)))
@@ -206,6 +206,17 @@ impl RouteGraph {
             .into_iter()
             .flat_map(BTreeSet::iter)
             .filter(|key| self.entries.get(*key).is_some_and(RouteSlot::is_pending))
+    }
+
+    pub(super) fn committed_entries_for_user(
+        &self,
+        user_id: &UserId,
+    ) -> impl Iterator<Item = (&ConsumerKey, &ConsumerState)> {
+        self.by_user
+            .get(user_id)
+            .into_iter()
+            .flat_map(BTreeSet::iter)
+            .filter_map(|key| self.entries.get(key)?.consumer().map(|state| (key, state)))
     }
 
     pub(super) fn remove_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
@@ -474,9 +485,9 @@ impl RouteSlot {
         matches!(self, Self::Pending(..) | Self::Committed(..))
     }
 
-    const fn consumer(&self) -> Option<ConsumerState> {
+    const fn consumer(&self) -> Option<&ConsumerState> {
         match self {
-            Self::Committed(_, state, _) => Some(*state),
+            Self::Committed(_, state, _) => Some(state),
             Self::Intent(_) | Self::Pending(_, _, _) => None,
         }
     }

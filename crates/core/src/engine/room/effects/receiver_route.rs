@@ -44,7 +44,7 @@ impl ReceiverRouteSetup {
             ConsumerActivity::from_active(self.setup.reservation.selection().delivery_active());
         let Some((route, transport_mid)) = declare_consumer(
             &target,
-            &self.setup.track.rtp,
+            &self.setup.rtp,
             activity,
             self.origin,
             media_transport,
@@ -68,7 +68,7 @@ impl ReceiverRouteSetup {
         match setup_outcome {
             ConsumerSetupOutcome::Committed {
                 sender,
-                track,
+                snapshot,
                 transport_activity_update,
             } => {
                 outcome.diagnostics.push(setup_diagnostics(
@@ -82,7 +82,7 @@ impl ReceiverRouteSetup {
                     routes.push_setup_activity(route, target.kind, active);
                     routes.execute(media_transport).await;
                 }
-                let _ = sender.send(UserOutbound::SetupRemoteTrack(Box::new(track)));
+                let _ = sender.send(UserOutbound::RemoteSources(snapshot));
             }
             ConsumerSetupOutcome::Released(relays) => {
                 execute_relay_route_effects(room, media_transport, &relays).await;

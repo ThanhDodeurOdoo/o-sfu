@@ -6,7 +6,10 @@ mod shared;
 mod test_support;
 
 pub use self::{
-    membership::{ConnectionCloseCommit, DisconnectCommit, JoinCommit, LifecycleEffects},
+    membership::{
+        ConnectionCloseCommit, DisconnectCommit, JoinCommit, LifecycleEffects, PresenceCommit,
+        RemoteSourceRefresh,
+    },
     shared::RoomState,
 };
 

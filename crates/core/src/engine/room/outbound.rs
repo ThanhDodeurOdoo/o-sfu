@@ -13,16 +13,18 @@ use tokio::sync::{
     watch,
 };
 
-use super::{UserCloseReason, media_graph::RemoteTrackSetup};
+use super::UserCloseReason;
 use crate::engine::{
     JsonPayload, RecordingStateUpdate, UserId, UserInfo, metrics::RuntimeMetrics,
-    source_model::UserStreamId,
+    source_model::PublishedSourceDescriptor,
 };
 
 pub const MAX_BROADCAST_PAYLOAD_BYTES: usize = 16 * 1024;
 
 const ROOM_EVENT_QUEUE_BYTES: usize = 1024;
 const BROADCAST_QUEUE_OVERHEAD_BYTES: usize = 256;
+const SOURCE_PROJECTION_QUEUE_BYTES: usize = 256;
+const SOURCE_ENCODING_QUEUE_BYTES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BroadcastPayload {
@@ -129,20 +131,38 @@ pub const DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY: usize =
 
 pub(super) type OutboundSender = UserOutboundSender;
 
-/// outbound track state change queued for websocket delivery
-#[derive(Debug, Clone)]
-pub struct TrackBindingUpdate {
-    pub user_id: UserId,
-    pub stream_id: UserStreamId,
-    pub active: Option<bool>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSourceProjection {
+    pub consumer_mid: String,
+    pub source: PublishedSourceDescriptor,
+    pub owner_info: UserInfo,
+    pub producer_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSourceSnapshot {
+    pub sources: Vec<RemoteSourceProjection>,
+    pub requires_negotiation: bool,
+}
+
+impl RemoteSourceSnapshot {
+    fn queued_bytes(&self) -> usize {
+        self.sources
+            .iter()
+            .fold(ROOM_EVENT_QUEUE_BYTES, |bytes, projection| {
+                let encodings = projection.source.encodings().count();
+                bytes
+                    .saturating_add(SOURCE_PROJECTION_QUEUE_BYTES)
+                    .saturating_add(encodings.saturating_mul(SOURCE_ENCODING_QUEUE_BYTES))
+            })
+    }
 }
 
 /// room output that belongs to one connected user
 #[derive(Debug, Clone)]
 pub enum UserOutbound {
     Message(RoomEventMessage),
-    SetupRemoteTrack(Box<RemoteTrackSetup>),
-    TrackBindingUpdate(TrackBindingUpdate),
+    RemoteSources(RemoteSourceSnapshot),
     Close(UserCloseReason),
 }
 
@@ -151,7 +171,8 @@ impl UserOutbound {
     pub(super) fn queued_bytes(&self) -> usize {
         match self {
             Self::Message(message) => message.queued_bytes(),
-            Self::SetupRemoteTrack(_) | Self::TrackBindingUpdate(_) | Self::Close(_) => 1024,
+            Self::RemoteSources(snapshot) => snapshot.queued_bytes(),
+            Self::Close(_) => ROOM_EVENT_QUEUE_BYTES,
         }
     }
 }

@@ -18,25 +18,65 @@ pub(super) use crate::{
             SessionOffer, TransportMediaId, TransportSessionKey,
             test_support::{test_media_transport_builder, test_media_transport_deps},
         },
-        room::Room,
+        room::{RemoteSourceSnapshot, Room},
     },
 };
 
-pub(super) fn assert_track_binding_activity_update(
+pub(super) fn assert_remote_source_activity_snapshot(
     message: &UserOutbound,
     user_id: &UserId,
     stream_type: TestSourceKind,
-    active: Option<bool>,
+    active: bool,
+    requires_negotiation: bool,
 ) {
+    let snapshot = expect_remote_source_snapshot(message);
+    assert_eq!(snapshot.requires_negotiation, requires_negotiation);
+    assert!(snapshot.sources.iter().any(|projection| {
+        projection.source.owner().user_id() == user_id
+            && projection.source.stream_id() == &stream_id_for_source(stream_type)
+            && projection.producer_active == active
+    }));
+}
+
+pub(super) fn assert_remote_source_removed_snapshot(
+    message: &UserOutbound,
+    user_id: &UserId,
+    stream_type: TestSourceKind,
+) {
+    let snapshot = expect_remote_source_snapshot(message);
+    assert!(snapshot.requires_negotiation);
+    assert!(!snapshot.sources.iter().any(|projection| {
+        projection.source.owner().user_id() == user_id
+            && projection.source.stream_id() == &stream_id_for_source(stream_type)
+    }));
+}
+
+pub(super) fn remote_source_snapshot(message: &UserOutbound) -> Option<&RemoteSourceSnapshot> {
     match message {
-        UserOutbound::TrackBindingUpdate(update) => {
-            assert_eq!(&update.user_id, user_id);
-            assert_eq!(update.stream_id, stream_id_for_source(stream_type));
-            assert_eq!(update.active, active);
-        }
-        other => panic!("expected TrackBindingUpdate, got {other:?}"),
+        UserOutbound::RemoteSources(snapshot) => Some(snapshot),
+        UserOutbound::Message(_) | UserOutbound::Close(_) => None,
     }
 }
+
+pub(super) fn expect_remote_source_snapshot(message: &UserOutbound) -> &RemoteSourceSnapshot {
+    let Some(snapshot) = remote_source_snapshot(message) else {
+        panic!("expected RemoteSources, got {message:?}");
+    };
+    snapshot
+}
+
+pub(super) fn drain_remote_source_snapshots(
+    receiver: &mut UserOutboundReceiver,
+) -> Vec<RemoteSourceSnapshot> {
+    drain_outbound(receiver)
+        .into_iter()
+        .filter_map(|message| match message {
+            UserOutbound::RemoteSources(snapshot) => Some(snapshot),
+            UserOutbound::Message(_) | UserOutbound::Close(_) => None,
+        })
+        .collect()
+}
+
 pub(super) async fn assert_transport_media_mapping_is_missing(
     room: &Arc<Room>,
     transport_media_id: TransportMediaId,
@@ -364,17 +404,20 @@ pub(super) async fn bootstrap_real_rtc_user(
         .expect("rtc user should produce an initial offer")
 }
 
-pub(super) fn assert_remote_track_setup_for_stream(
+pub(super) fn assert_remote_source_snapshot_for_stream(
     messages: &[UserOutbound],
     stream_type: TestSourceKind,
 ) {
     assert!(
-        messages.iter().any(|message| matches!(
-            message,
-            UserOutbound::SetupRemoteTrack(payload)
-                if payload.stream == stream_id_for_source(stream_type)
-        )),
-        "expected a remote track setup request for {stream_type:?}"
+        messages.iter().any(|message| {
+            remote_source_snapshot(message).is_some_and(|snapshot| {
+                snapshot.requires_negotiation
+                    && snapshot.sources.iter().any(|projection| {
+                        projection.source.stream_id() == &stream_id_for_source(stream_type)
+                    })
+            })
+        }),
+        "expected a remote source snapshot for {stream_type:?}"
     );
 }
 
