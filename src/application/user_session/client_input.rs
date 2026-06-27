@@ -1,7 +1,6 @@
 use o_sfu_protocol::wire::{
-    ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, ClientResponse,
-    JsonPayload, RecordingActionResult, RecordingOptions, RequestId, ServerEnvelope,
-    ServerResponse, UserInfo,
+    ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest, JsonPayload,
+    RecordingActionResult, RecordingOptions, RequestId, ServerEnvelope, ServerResponse, UserInfo,
 };
 
 use super::{User, UserError, UserOutput};
@@ -31,8 +30,8 @@ impl User {
             }
             ClientEnvelope::Response {
                 response_to,
-                response: ClientResponse::Offer(answer) | ClientResponse::Renegotiate(answer),
-            } => self.complete_negotiation(response_to, answer).await,
+                response,
+            } => self.complete_negotiation(response_to, response).await,
             ClientEnvelope::Request {
                 request_id,
                 request: ClientRequest::StartRecording(payload),

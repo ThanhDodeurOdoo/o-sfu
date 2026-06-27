@@ -162,6 +162,51 @@ async fn websocket_rejects_batches_over_protocol_envelope_limit() {
 }
 
 #[tokio::test]
+async fn websocket_rejects_mismatched_negotiation_response_kind() {
+    let (_server, _room, mut websocket) =
+        authenticated_protocol_websocket("issuer-mismatched-negotiation", UserId::Integer(21))
+            .await;
+    let (request_id, request) = require_some(
+        wait_for_protocol_server_request(&mut websocket).await,
+        "initial offer should be sent",
+    );
+    assert!(matches!(request, ServerRequest::Offer(_)));
+    let sdp = require_some(
+        test_rtc_answer_sdp(&request),
+        "test rtc answer should be valid for the offer",
+    );
+    let envelope = require_ok(
+        ClientEnvelope::Response {
+            response_to: request_id,
+            response: ClientResponse::Renegotiate(SessionDescriptionPayload {
+                sdp,
+                upload_slots: Vec::new(),
+            }),
+        }
+        .into_envelope(),
+        "mismatched response should encode",
+    );
+    let frame = require_ok(
+        serde_json::to_string(&[envelope]),
+        "mismatched response frame should serialize",
+    );
+    send_text_frame(
+        &mut websocket,
+        frame,
+        "mismatched negotiation response should still send",
+    )
+    .await;
+
+    assert_eq!(
+        timeout(Duration::from_secs(1), read_close_code(&mut websocket))
+            .await
+            .ok()
+            .flatten(),
+        Some(CloseCode::Protocol),
+    );
+}
+
+#[tokio::test]
 async fn invalid_protocol_initial_answer_closes_before_user_negotiates() {
     let (_server, room, mut websocket) =
         authenticated_protocol_websocket("issuer-invalid-publish-answer", UserId::Integer(91))

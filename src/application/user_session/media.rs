@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 
-use o_sfu_protocol::wire::{
-    DownloadStates, NegotiationUploadEncoding, NegotiationUploadSlot, RequestId, ServerEnvelope,
-    ServerRequest, SessionDescriptionPayload, StreamType, UserId,
+use o_sfu_protocol::{
+    host::NegotiationKind,
+    wire::{
+        ClientResponse, DownloadStates, NegotiationUploadEncoding, NegotiationUploadSlot,
+        RequestId, ServerEnvelope, ServerRequest, SessionDescriptionPayload, StreamType, UserId,
+    },
 };
 use tracing::{Span, field, instrument, warn};
 
@@ -16,30 +19,27 @@ use crate::{
 };
 
 impl User {
-    fn issue_renegotiation(&mut self, offer: Option<NegotiationOffer>) -> UserOutput {
-        offer.map_or_else(UserOutput::new, |offer| {
-            vec![self.requests.issue(NegotiationKind::Renegotiation, offer)]
-        })
-    }
-}
-
-impl User {
     pub(super) async fn complete_negotiation(
         &mut self,
         response_to: RequestId,
-        answer: SessionDescriptionPayload,
+        response: ClientResponse,
     ) -> Result<UserOutput, UserError> {
+        let (response_kind, answer) = match response {
+            ClientResponse::Offer(answer) => (NegotiationKind::Offer, answer),
+            ClientResponse::Renegotiate(answer) => (NegotiationKind::Renegotiate, answer),
+        };
         self.validate_negotiation_answer(&response_to, &answer)?;
-        let Some(kind) = self.requests.resolve(&response_to) else {
+        if !self.negotiation.expects_answer(&response_to, response_kind) {
             self.log_unknown_answer(&response_to);
             return Err(UserError::ProtocolViolation);
-        };
+        }
         let offer = self
             .session
             .answer(&answer.sdp)
             .await
-            .map_err(|error| self.negotiation_error(kind, Some(&response_to), error))?;
-        Ok(self.issue_renegotiation(offer))
+            .map_err(|e| self.negotiation_error(response_kind, Some(&response_to), e))?;
+        self.negotiation.clear_pending();
+        Ok(self.issue_offer(NegotiationKind::Renegotiate, offer))
     }
 
     #[instrument(
@@ -53,11 +53,12 @@ impl User {
     )]
     pub(super) async fn renegotiate(&mut self) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        let offer =
-            self.session.renegotiate().await.map_err(|error| {
-                self.negotiation_error(NegotiationKind::Renegotiation, None, error)
-            })?;
-        Ok(self.issue_renegotiation(offer))
+        let offer = self
+            .session
+            .renegotiate()
+            .await
+            .map_err(|e| self.negotiation_error(NegotiationKind::Renegotiate, None, e))?;
+        Ok(self.issue_offer(NegotiationKind::Renegotiate, offer))
     }
 
     #[instrument(
@@ -84,7 +85,7 @@ impl User {
             self.session.unpublish(intent).await
         };
         let offer = result.map_err(|error| self.publish_error(stream_type, error))?;
-        Ok(self.issue_renegotiation(offer))
+        Ok(self.issue_offer(NegotiationKind::Renegotiate, offer))
     }
 
     #[instrument(
@@ -127,68 +128,61 @@ impl User {
         )
     )]
     pub(super) async fn run_initial_offer(&mut self) -> Result<UserOutput, UserError> {
-        let offer =
-            self.session.establish().await.map_err(|error| {
-                self.negotiation_error(NegotiationKind::InitialOffer, None, error)
-            })?;
-        Ok(offer.map_or_else(UserOutput::new, |offer| {
-            vec![self.requests.issue(NegotiationKind::InitialOffer, offer)]
-        }))
+        let offer = self
+            .session
+            .establish()
+            .await
+            .map_err(|e| self.negotiation_error(NegotiationKind::Offer, None, e))?;
+        Ok(self.issue_offer(NegotiationKind::Offer, offer))
+    }
+
+    fn issue_offer(
+        &mut self,
+        kind: NegotiationKind,
+        offer: Option<NegotiationOffer>,
+    ) -> UserOutput {
+        offer.map_or_else(UserOutput::new, |offer| {
+            vec![self.negotiation.issue(kind, offer)]
+        })
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NegotiationKind {
-    InitialOffer,
-    Renegotiation,
-}
-
-const fn media_negotiation_operation(kind: NegotiationKind) -> &'static str {
-    match kind {
-        NegotiationKind::InitialOffer => "initial_offer_create",
-        NegotiationKind::Renegotiation => "renegotiation_offer_create",
-    }
-}
-
-/// tracks the one server negotiation request that the client may answer
-///
-/// a new request id replaces the pending answer slot, so caller code must not
-/// issue concurrent server offers for the same user session
-#[derive(Debug, Default)]
-pub(super) struct NegotiationRequests {
+#[derive(Default)]
+pub(super) struct ServerNegotiation {
     next: u64,
-    pending: Option<(RequestId, NegotiationKind)>,
+    pending: Option<PendingServerOffer>,
 }
 
-impl NegotiationRequests {
+struct PendingServerOffer {
+    request_id: RequestId,
+    kind: NegotiationKind,
+}
+
+impl ServerNegotiation {
     fn issue(&mut self, kind: NegotiationKind, offer: NegotiationOffer) -> ServerEnvelope {
-        let request_id = RequestId::new(format!("server-{}", self.next));
+        let req_id = RequestId::new(format!("server-{}", self.next));
         self.next = self.next.saturating_add(1);
+        let payload = session_description_payload(offer);
         let request = match kind {
-            NegotiationKind::InitialOffer => {
-                ServerRequest::Offer(session_description_payload(offer))
-            }
-            NegotiationKind::Renegotiation => {
-                ServerRequest::Renegotiate(session_description_payload(offer))
-            }
+            NegotiationKind::Offer => ServerRequest::Offer(payload),
+            NegotiationKind::Renegotiate => ServerRequest::Renegotiate(payload),
         };
-        self.pending = Some((request_id.clone(), kind));
+        let pending = PendingServerOffer {
+            request_id: req_id.clone(),
+            kind,
+        };
+        self.pending = Some(pending);
         ServerEnvelope::Request {
-            request_id,
+            request_id: req_id,
             request,
         }
     }
 
-    fn resolve(&mut self, response_to: &RequestId) -> Option<NegotiationKind> {
-        let (request_id, kind) = self.pending.take()?;
-        if request_id == *response_to {
-            return Some(kind);
-        }
-        self.pending = Some((request_id, kind));
-        None
+    fn expects_answer(&self, id: &RequestId, kind: NegotiationKind) -> bool {
+        matches!(self.pending.as_ref(), Some(slot) if slot.request_id == *id && slot.kind == kind)
     }
 
-    pub(super) fn clear(&mut self) {
+    pub(super) fn clear_pending(&mut self) {
         self.pending = None;
     }
 }
@@ -233,6 +227,10 @@ impl User {
         response_to: Option<&RequestId>,
         error: SessionError,
     ) -> UserError {
+        let operation = match kind {
+            NegotiationKind::Offer => "initial_offer_create",
+            NegotiationKind::Renegotiate => "renegotiation_offer_create",
+        };
         let outcome = match error {
             SessionError::NoPendingRequest => "no_pending_media_request",
             SessionError::Core(error) if error.is_client_error() => "client_negotiation_error",
@@ -240,7 +238,7 @@ impl User {
         };
         warn!(
             event = telemetry_event::NEGOTIATION_FAILED,
-            operation = media_negotiation_operation(kind),
+            operation,
             outcome,
             user_id = ?self.user_id(),
             connection_id = ?self.connection_id(),
