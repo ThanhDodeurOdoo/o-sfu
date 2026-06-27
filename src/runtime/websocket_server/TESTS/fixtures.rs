@@ -608,7 +608,7 @@ pub(super) async fn respond_to_protocol_negotiation_request_with_test_rtc(
     respond_to_protocol_negotiation_request(websocket, response_to, request, &sdp).await
 }
 
-fn test_rtc_answer_sdp(request: &ServerRequest) -> Option<String> {
+pub(super) fn test_rtc_answer_sdp(request: &ServerRequest) -> Option<String> {
     let offer_sdp = match request {
         ServerRequest::Offer(payload) | ServerRequest::Renegotiate(payload) => &payload.sdp,
     };

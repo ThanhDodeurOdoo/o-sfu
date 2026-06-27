@@ -15,7 +15,7 @@ impl User {
         Self {
             remote_address,
             session,
-            requests: super::NegotiationRequests::default(),
+            negotiation: super::ServerNegotiation::default(),
             cleanup_finished: false,
         }
     }
@@ -66,7 +66,7 @@ impl User {
     /// plus transport user state are rolled back
     pub async fn close(&mut self, rooms: &room::RoomManager) {
         if !self.cleanup_finished {
-            self.requests.clear();
+            self.negotiation.clear_pending();
             self.session.close(rooms).await;
             self.cleanup_finished = true;
         }

@@ -10,7 +10,7 @@ mod media;
 mod remote_sources;
 mod room_events;
 
-use media::NegotiationRequests;
+use media::ServerNegotiation;
 
 pub type UserOutput = Vec<ServerEnvelope>;
 
@@ -21,10 +21,9 @@ pub enum UserError {
     InternalError,
 }
 
-#[derive(Debug)]
 pub struct User {
     remote_address: Arc<str>,
     session: MediaSession,
-    requests: NegotiationRequests,
+    negotiation: ServerNegotiation,
     cleanup_finished: bool,
 }
