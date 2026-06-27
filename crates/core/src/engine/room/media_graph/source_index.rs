@@ -34,11 +34,6 @@ impl SourceIndex {
         self.records.len()
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn producer_count(&self) -> usize {
-        self.records.len()
-    }
-
     pub(super) fn source_views(&self) -> impl Iterator<Item = SourceView<'_>> {
         self.records.values().map(|record| SourceView {
             source: &record.descriptor,

@@ -25,11 +25,11 @@ impl RoomState {
     }
 
     pub fn producer_count(&self) -> usize {
-        self.topology.media().producer_count()
+        self.media_counts().publications
     }
 
     pub fn consumer_count(&self) -> usize {
-        self.topology.media().consumer_count()
+        self.topology.consumer_count()
     }
 
     pub fn has_session(&self, user_id: &UserId) -> bool {
@@ -46,7 +46,7 @@ impl RoomState {
     }
 
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
-        self.topology.media().first_published_transport_media_id()
+        self.topology.first_published_transport_media_id()
     }
 
     pub fn producer_transport_media_id(
@@ -55,7 +55,7 @@ impl RoomState {
         connection_id: ConnectionId,
         stream_type: TestSourceKind,
     ) -> Option<TransportMediaId> {
-        self.topology.media().producer_transport_media_id(
+        self.topology.producer_transport_media_id(
             user_id,
             connection_id,
             &stream_id_for_source(stream_type),

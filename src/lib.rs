@@ -161,9 +161,9 @@
 //! room state lock held                  lock released
 //! +--------------------------------+    +------------------------------+
 //! | validate user and connection   |    | MediaTransport commands      |
-//! | commit RoomMediaGraph          |    | diagnostics and metrics      |
-//! | commit RoutingTopology         |--->| websocket output             |
-//! | capture RoomEffects            |    | cleanup retry reconciliation |
+//! | commit room topology           |    | diagnostics and metrics      |
+//! | capture RoomEffects            |--->| websocket output             |
+//! |                                |    | cleanup retry reconciliation |
 //! +--------------------------------+    +------------------------------+
 //! ```
 //!

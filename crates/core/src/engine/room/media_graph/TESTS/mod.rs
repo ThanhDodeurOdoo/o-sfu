@@ -225,7 +225,7 @@ fn install_test_consumer_route(
         consumer_media: TransportMediaId::new(2),
         consumer_mid: "camera-down".to_owned(),
     };
-    assert!(state.topology.media_mut_for_test().commit_consumer(
+    assert!(state.topology.commit_consumer_route_for_test(
         route_key.clone(),
         consumer,
         ConsumerSourceSelection::open(true),
@@ -368,7 +368,7 @@ fn install_test_consumer_state(
         .user_connection_id(consumer_user_id)
         .expect("consumer user should have a connection id");
     let key = ConsumerKey::new(consumer_user_id, source_id);
-    assert!(state.topology.media_mut_for_test().commit_consumer(
+    assert!(state.topology.commit_consumer_route_for_test(
         key.clone(),
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(
@@ -576,9 +576,8 @@ fn stale_replaced_connection_cannot_update_download_state() {
         ),
         "stale subscription updates must not overwrite the replacement user's stored preferences"
     );
-    assert_eq!(
-        state.topology.media().consumer_state(&route_key),
-        None,
+    assert!(
+        !state.topology.has_consumer_setup_or_route(&route_key),
         "replacement join should clear stale consumer routes before the new connection reboots them"
     );
 }
@@ -720,11 +719,7 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
         .topology
         .source_id_for_owner_stream(&publisher_user_id, &stream_id)
         .expect("publisher source should exist");
-    state
-        .topology
-        .media_mut_for_test()
-        .remove_source(source_id)
-        .expect("publisher source should be removable");
+    assert!(state.topology.remove_source_for_test(source_id));
     let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
         panic!("stale producer setup should be released");
     };
@@ -734,7 +729,7 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
 }
 
 #[test]
-fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
+fn consumer_setup_commit_rolls_back_routed_consumer_after_route_graph_rejection() {
     let (
         mut state,
         publisher_user_id,
@@ -751,17 +746,11 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
         .expect("publisher source should exist");
     let key = ConsumerKey::new(&subscriber_user_id, source_id);
     assert!(state.topology.has_consumer_setup_or_route(&key));
-    assert!(
-        state
-            .topology
-            .media_mut_for_test()
-            .remove_consumer_key_state(&key)
-            .is_empty()
-    );
+    state.topology.remove_route_graph_entry_for_test(&key);
     assert!(!state.topology.has_consumer_setup_or_route(&key));
 
     let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
-        panic!("setup with rejected graph commit should be released");
+        panic!("setup with rejected route graph commit should be released");
     };
 
     assert!(relays.is_empty());
@@ -773,7 +762,7 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_graph_rejection() {
             .routing_mut_for_test()
             .remove_consumer(RoutedConsumerId::new(RouterId(1), ConsumerId(1)))
             .is_err(),
-        "routed consumer created before graph rejection must be rolled back"
+        "routed consumer created before route graph rejection must be rolled back"
     );
 }
 
@@ -802,13 +791,10 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
         33_333,
     );
     for source_id in [scalable_source_id, readable_source_id] {
-        state
-            .topology
-            .media_mut_for_test()
-            .ensure_consumer_source_selection(
-                &ConsumerKey::new(&subscriber_user_id, source_id),
-                ConsumerSourceSelection::open(true),
-            );
+        state.topology.ensure_selection_for_test(
+            &ConsumerKey::new(&subscriber_user_id, source_id),
+            ConsumerSourceSelection::open(true),
+        );
     }
 
     let planned_setups = state
@@ -1076,20 +1062,10 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
         TransportMediaId::new(20),
     );
     let pending_removed_key = ConsumerKey::new(&publisher_id, other_source_id);
-    {
-        let media = state.topology.media_mut_for_test();
-        media.ensure_consumer_source_selection(
-            &removed_consumer_key,
-            ConsumerSourceSelection::open(true),
-        );
-        media
-            .routes
-            .reserve_consumer_setup(
-                pending_removed_key.clone(),
-                ConsumerSourceSelection::open(true),
-            )
-            .expect("pending route should be reserved");
-    }
+    assert!(state.topology.reserve_consumer_setup_for_test(
+        pending_removed_key.clone(),
+        ConsumerSourceSelection::open(true)
+    ));
 
     let surviving_consumer_key = install_test_consumer_state(
         &mut state,
@@ -1099,14 +1075,7 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
         TransportMediaId::new(30),
         TransportMediaId::new(40),
     );
-    {
-        let media = state.topology.media_mut_for_test();
-        media.ensure_consumer_source_selection(
-            &surviving_consumer_key,
-            ConsumerSourceSelection::open(false),
-        );
-        media.remove_user_media(&publisher_id);
-    }
+    state.topology.remove_user_media_for_test(&publisher_id);
 
     let topology = &state.topology;
     assert!(topology.source(publisher_source_id).is_none());
@@ -1125,17 +1094,12 @@ fn purge_user_media_removes_only_indexed_user_and_source_entries() {
             .is_some()
     );
     assert_eq!(
-        topology
-            .media()
-            .consumer_keys_for_source(other_source_id)
-            .cloned()
-            .collect::<Vec<_>>(),
-        vec![surviving_consumer_key.clone()]
+        topology.committed_consumer_user_ids_for_source(other_source_id),
+        BTreeSet::from([subscriber_id])
     );
     state
         .topology
-        .media_mut_for_test()
-        .remove_user_media(&other_publisher_id);
+        .remove_user_media_for_test(&other_publisher_id);
     let topology = &state.topology;
     assert!(topology.source(other_source_id).is_none());
     assert!(!has_committed_consumer(topology, &surviving_consumer_key));
@@ -1172,29 +1136,21 @@ fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_route
 
     let transport_removals = state
         .topology
-        .media()
-        .transport_removals_for_users(&BTreeSet::from([
+        .transport_removals_for_users_for_test(&BTreeSet::from([
             publisher_id.clone(),
             subscriber_id.clone(),
         ]));
 
-    assert_eq!(transport_removals.len(), 2);
+    let mut removed_media = transport_removals
+        .iter()
+        .map(|removal| (removal.user.clone(), removal.transport_media))
+        .collect::<Vec<_>>();
+    removed_media.sort_unstable();
     assert_eq!(
-        transport_removals
-            .iter()
-            .filter(|removal| {
-                removal.user == publisher_id && removal.transport_media == source_media
-            })
-            .count(),
-        1
-    );
-    assert_eq!(
-        transport_removals
-            .iter()
-            .filter(|removal| {
-                removal.user == subscriber_id && removal.transport_media == consumer_media
-            })
-            .count(),
-        1
+        removed_media,
+        vec![
+            (publisher_id, source_media),
+            (subscriber_id, consumer_media)
+        ]
     );
 }

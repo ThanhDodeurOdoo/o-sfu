@@ -5,7 +5,6 @@ use o_sfu_router::{
     topology::{RoutedConsumerId, RoutedProducerId},
 };
 
-use self::{route_graph::RouteGraph, source_index::SourceIndex};
 use crate::engine::{
     ConnectionId, UserId,
     media_transport::{TransportConsumerRoute, TransportMediaId},
@@ -39,19 +38,13 @@ pub(super) use self::{
     producer::{
         ProducerActivityCommit, PublishCommit, PublishIntentPlan, UnpublishCommit, ValidatedPublish,
     },
-    route_graph::{RelayRouteEffect, RelayRouteKey, ResolvedRelayRouteEffect},
+    route_graph::{RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{ReceiverRouteActivity, ReceiverRouteCommit, ReceiverRouteWork},
     topology::{
         CommittedTransportReceipt, MediaTopologyEffects, RoomTopology, SessionPlacementCommit,
         SessionPlacementRejection,
     },
 };
-
-#[derive(Debug, Default)]
-pub(super) struct RoomMediaGraph {
-    sources: SourceIndex,
-    routes: RouteGraph,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ConsumerKey {
@@ -275,152 +268,6 @@ impl SourceKey {
             owner_user_id: owner_user_id.clone(),
             stream_id: stream_id.clone(),
         }
-    }
-}
-
-impl RoomMediaGraph {
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn producer_count(&self) -> usize {
-        self.sources.producer_count()
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn consumer_count(&self) -> usize {
-        self.routes.count()
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {
-        self.sources.first_published_transport_media_id()
-    }
-
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub fn producer_transport_media_id(
-        &self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        stream_id: &UserStreamId,
-    ) -> Option<TransportMediaId> {
-        self.sources
-            .producer_transport_media_id(user_id, connection_id, stream_id)
-    }
-
-    #[cfg(test)]
-    pub fn ensure_consumer_source_selection(
-        &mut self,
-        key: &ConsumerKey,
-        selection: ConsumerSourceSelection,
-    ) {
-        self.routes.ensure_selection(key, selection);
-    }
-
-    #[cfg(test)]
-    pub fn commit_consumer(
-        &mut self,
-        key: ConsumerKey,
-        state: ConsumerState,
-        selection: ConsumerSourceSelection,
-    ) -> bool {
-        let Some(reservation) = self.routes.reserve_consumer_setup(key, selection) else {
-            return false;
-        };
-        self.routes.commit(&reservation, state, selection)
-    }
-
-    #[cfg(test)]
-    pub fn consumer_state(&self, key: &ConsumerKey) -> Option<&ConsumerState> {
-        self.routes.consumer_state(key)
-    }
-
-    pub fn remove_consumer_key_state(&mut self, key: &ConsumerKey) -> Vec<RelayRouteEffect> {
-        self.routes.remove_key_state(key)
-    }
-
-    pub fn remove_user_media(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
-        let mut relay_effects = Vec::new();
-        let source_ids = self.sources.ids_for_owner(user_id).collect::<Vec<_>>();
-        for source_id in source_ids {
-            if let Some((_producer, effects)) = self.remove_source(source_id) {
-                relay_effects.extend(effects);
-            }
-        }
-        for key in self.routes.keys_for_user(user_id) {
-            relay_effects.extend(self.remove_consumer_key_state(&key));
-        }
-        relay_effects
-    }
-
-    pub fn consumer_keys_for_source(
-        &self,
-        source_id: PublishedSourceId,
-    ) -> impl Iterator<Item = &ConsumerKey> {
-        self.routes.keys_for_source(source_id)
-    }
-
-    fn consumer_keys_affected_by_user(&self, user_id: &UserId) -> BTreeSet<ConsumerKey> {
-        self.routes
-            .affected_keys_for_user(user_id, self.sources.ids_for_owner(user_id))
-    }
-
-    pub fn remove_source(
-        &mut self,
-        source_id: PublishedSourceId,
-    ) -> Option<(PublishedProducer, Vec<RelayRouteEffect>)> {
-        self.sources.source(source_id)?;
-        let consumer_keys = self
-            .consumer_keys_for_source(source_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut relay_effects = Vec::new();
-        for key in consumer_keys {
-            relay_effects.extend(self.remove_consumer_key_state(&key));
-        }
-        let producer = self.sources.remove_source(source_id)?;
-        Some((producer, relay_effects))
-    }
-
-    pub fn transport_removals_for_users(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        let mut removals = self
-            .sources
-            .producer_transport_removals_for_users(departing_user_ids);
-        removals.extend(self.consumer_transport_removals_for_users(departing_user_ids));
-        removals
-    }
-
-    pub fn transport_removals_for_user(&self, user_id: &UserId) -> Vec<TransportMediaRemoval> {
-        self.transport_removals_for_users(&BTreeSet::from([user_id.clone()]))
-    }
-
-    pub fn transport_removals_for_producer_target(
-        &self,
-        user_id: &UserId,
-        producer_target: &ProducerRouteTarget,
-    ) -> Vec<TransportMediaRemoval> {
-        let mut removals = vec![TransportMediaRemoval::new(
-            user_id.clone(),
-            producer_target.owner_connection_id,
-            producer_target.transport_media_id,
-        )];
-        removals.extend(
-            self.routes
-                .transport_removals_for_source(producer_target.source_id),
-        );
-        removals
-    }
-
-    fn consumer_transport_removals_for_users(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        let keys = departing_user_ids
-            .iter()
-            .flat_map(|user_id| self.consumer_keys_affected_by_user(user_id))
-            .collect::<BTreeSet<_>>();
-
-        self.routes.transport_removals_for_keys(keys)
     }
 }
 
