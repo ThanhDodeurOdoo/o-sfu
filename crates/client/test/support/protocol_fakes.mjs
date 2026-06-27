@@ -141,13 +141,16 @@ export class FakeProtocolCore {
                     type: "camera"
                 });
                 return [sourceUpdate([...this.sourceDescriptors.values()])];
-            case "track-inactive":
+            case "inactive-track-binding":
                 this.trackBindings.set("0", {
                     active: false,
                     mid: "0",
                     sessionId: 42,
                     type: "camera"
                 });
+                return this._replaceTrackBindings();
+            case "clear-track-bindings":
+                this.trackBindings.clear();
                 return this._replaceTrackBindings();
             case "track-rebind":
                 this.trackBindings.set("0", {

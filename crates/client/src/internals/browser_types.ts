@@ -1,4 +1,3 @@
-import type { TrackBinding } from "../protocol_contract.js";
 import type { StreamType } from "../public_api.js";
 import type { ProtocolCoreProvider } from "../runtime_contract.js";
 
@@ -20,8 +19,6 @@ export type ConsumersCompat = {
     camera: ConsumerCompat | null;
     screen: ConsumerCompat | null;
 };
-
-export type AppliedTrackBinding = Pick<TrackBinding, "active" | "sessionId" | "type">;
 
 export interface ClientWebSocket {
     close(code?: number): void;
