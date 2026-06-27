@@ -322,7 +322,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
         MediaStream::new(vec![], vec![], vec![]),
     );
     let consumer_key = ConsumerKey::new(&UserId::Integer(2), source_id);
-    assert!(state.topology.media_mut_for_test().commit_consumer(
+    assert!(state.topology.commit_consumer_route_for_test(
         consumer_key,
         ConsumerState {
             routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),

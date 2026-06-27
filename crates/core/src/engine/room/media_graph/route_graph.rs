@@ -280,7 +280,7 @@ impl RouteGraph {
     pub(super) fn transport_removals_for_source(
         &self,
         source_id: PublishedSourceId,
-    ) -> Vec<TransportMediaRemoval> {
+    ) -> impl Iterator<Item = TransportMediaRemoval> + '_ {
         self.by_source
             .get(&source_id)
             .into_iter()
@@ -293,7 +293,6 @@ impl RouteGraph {
                     state.consumer_media,
                 ))
             })
-            .collect()
     }
 
     pub(super) fn has_consumer_setup_or_route(&self, key: &ConsumerKey) -> bool {
@@ -302,7 +301,7 @@ impl RouteGraph {
             .is_some_and(RouteSlot::has_consumer_setup_or_route)
     }
 
-    pub(super) fn contains(&self, key: &ConsumerKey) -> bool {
+    pub(super) fn has_committed_consumer_route(&self, key: &ConsumerKey) -> bool {
         self.entries.get(key).is_some_and(RouteSlot::is_committed)
     }
 
