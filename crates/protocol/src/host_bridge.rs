@@ -3,14 +3,15 @@ use serde::Serialize;
 use crate::{
     bundle_api::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate,
-        BundleSessionInfoSnapshotById, BundleSourceUpdate, BundleUpdate, bundle_session_info_key,
+        BundleRemoteMediaUpdate, BundleSessionInfoSnapshotById, BundleSourceUpdate, BundleUpdate,
+        bundle_session_info_key,
     },
     core::{
         Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest, ProtocolEvent,
         ProtocolRequestResult,
     },
-    shared::{StreamType, UserId},
-    signaling::{NegotiationUploadSlot, RequestId, TrackBinding},
+    shared::StreamType,
+    signaling::{NegotiationUploadSlot, RequestId},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -42,13 +43,6 @@ pub enum HostCommand {
         state: String,
         cause: Option<String>,
     },
-    ReplaceTrackBindings {
-        bindings: Vec<TrackBinding>,
-    },
-    RemoveSessionTracks {
-        #[serde(rename = "sessionId")]
-        user_id: UserId,
-    },
     EmitUpdate {
         update: BundleUpdate,
     },
@@ -79,8 +73,7 @@ pub struct HostRequestResult {
 fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: ProtocolEvent) {
     let update = match event {
         ProtocolEvent::TrackSnapshot { bindings } => {
-            host_commands.push(HostCommand::ReplaceTrackBindings { bindings });
-            return;
+            BundleUpdate::RemoteMedia(BundleRemoteMediaUpdate { bindings })
         }
         ProtocolEvent::SourceSnapshot { sources } => {
             BundleUpdate::Source(BundleSourceUpdate { sources })
@@ -95,9 +88,6 @@ fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: Pro
             BundleSessionInfoSnapshotById::from([(bundle_session_info_key(&user_id), info)]),
         ),
         ProtocolEvent::PeerLeft { user_id } => {
-            host_commands.push(HostCommand::RemoveSessionTracks {
-                user_id: user_id.clone(),
-            });
             BundleUpdate::Disconnect(BundleDisconnectUpdate { user_id })
         }
         ProtocolEvent::Broadcast { sender_id, message } => {

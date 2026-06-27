@@ -145,6 +145,11 @@ function sourceUpdate(sources) {
     };
 }
 
+const remoteMediaUpdate = (bindings) => ({
+    kind: "emitUpdate",
+    update: { name: "remote_media", payload: { bindings } }
+});
+
 test("source tree does not own generated protocol manifest", () => {
     const sourceManifestPath = fileURLToPath(
         new URL("../src/generated/protocol_manifest.json", import.meta.url)
@@ -185,10 +190,12 @@ test("injected protocol core rejects malformed host commands", () => {
     assert.deepEqual(core.onWsOpen(), [{ kind: "sendWebSocket", frame: "auth" }]);
 });
 
-test("injected protocol core rejects obsolete attach and detach host commands", () => {
+test("injected protocol core rejects obsolete direct media host commands", () => {
     for (const command of [
         { kind: "attachTrack", mid: "0", streamType: "camera" },
-        { kind: "detachTrack", streamType: "camera" }
+        { kind: "detachTrack", streamType: "camera" },
+        { kind: "replaceTrackBindings", bindings: [] },
+        { kind: "removeSessionTracks", sessionId: 7 }
     ]) {
         assertInjectedCoreThrows(
             {
@@ -241,14 +248,11 @@ test("injected protocol core validates recording request results", () => {
     }
 });
 
-test("injected protocol core validates replaceTrackBindings host commands", () => {
+test("injected protocol core validates remote media host updates", () => {
     assertInjectedCoreThrows(
         {
             connect: () => [
-                {
-                    bindings: [{ active: "yes", mid: "0", sessionId: 7, type: "camera" }],
-                    kind: "replaceTrackBindings"
-                }
+                remoteMediaUpdate([{ active: "yes", mid: "0", sessionId: 7, type: "camera" }])
             ]
         },
         (core) => core.connect("ws://example.test", "jwt", null)
@@ -294,7 +298,9 @@ test("injected protocol core rejects NaN and infinite numeric session IDs", () =
     for (const sessionId of [Number.NaN, Number.POSITIVE_INFINITY]) {
         assertInjectedCoreThrows(
             {
-                connect: () => [{ kind: "removeSessionTracks", sessionId }]
+                connect: () => [
+                    remoteMediaUpdate([{ active: true, mid: "0", sessionId, type: "camera" }])
+                ]
             },
             (core) => core.connect("ws://example.test", "jwt", null)
         );

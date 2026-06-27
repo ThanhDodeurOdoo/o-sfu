@@ -1,5 +1,6 @@
 import {
     CLIENT_LOG_LEVEL,
+    CLIENT_UPDATE,
     type ClientLogDetail,
     type ClientUpdateDetail,
     type ConnectionState,
@@ -17,6 +18,7 @@ import {
     type ProtocolCoreBindings,
     type ProtocolRequestResult
 } from "../runtime_contract.js";
+import { REMOTE_MEDIA_UPDATE } from "../protocol_host_commands.js";
 import { COMMAND_KIND } from "../protocol_contract.js";
 import type {
     ClientPeerConnection,
@@ -267,22 +269,18 @@ export class BrowserRuntime {
             case COMMAND_KIND.EMIT_STATE_CHANGE:
                 this._context.onStateChange(command.state, command.cause);
                 return [];
-            case COMMAND_KIND.REPLACE_TRACK_BINDINGS:
-                this.log(
-                    CLIENT_LOG_LEVEL.DEBUG,
-                    `received ${command.bindings.length} remote track bindings`
-                );
-                this._remoteTracks.replaceTrackBindings(command.bindings, this._context.onUpdate);
-                return [];
-            case COMMAND_KIND.REMOVE_SESSION_TRACKS:
-                this.log(
-                    CLIENT_LOG_LEVEL.INFO,
-                    `removing remote tracks for session ${command.sessionId}`
-                );
-                this._remoteTracks.removeSessionTracks(command.sessionId);
-                return [];
             case COMMAND_KIND.EMIT_UPDATE:
-                this._context.onUpdate(command.update);
+                if (command.update.name === REMOTE_MEDIA_UPDATE) {
+                    this._remoteTracks.replaceTrackBindings(
+                        command.update.payload.bindings,
+                        this._context.onUpdate
+                    );
+                } else {
+                    if (command.update.name === CLIENT_UPDATE.DISCONNECT) {
+                        this._remoteTracks.removeSessionTracks(command.update.payload.sessionId);
+                    }
+                    this._context.onUpdate(command.update);
+                }
                 return [];
             case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
                 this._pendingRequests.resolve(command.requestId, command.ok);

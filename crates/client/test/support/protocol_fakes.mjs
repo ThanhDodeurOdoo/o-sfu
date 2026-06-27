@@ -32,6 +32,11 @@ const sourceUpdate = (sources) => ({
     }
 });
 
+const remoteMediaUpdate = (bindings) => ({
+    kind: "emitUpdate",
+    update: { name: "remote_media", payload: { bindings } }
+});
+
 export class FakeProtocolCore {
     constructor() {
         this.features = { ...EMPTY_FEATURES };
@@ -106,7 +111,7 @@ export class FakeProtocolCore {
                 return this._withPendingNegotiationKind([
                     { kind: "createPeerConnection" },
                     initialOfferCommand("7"),
-                    ...this._replaceTrackBindings()
+                    ...this._remoteMediaSnapshot()
                 ]);
             case "info-change-map":
                 return [
@@ -148,10 +153,10 @@ export class FakeProtocolCore {
                     sessionId: 42,
                     type: "camera"
                 });
-                return this._replaceTrackBindings();
+                return this._remoteMediaSnapshot();
             case "clear-track-bindings":
                 this.trackBindings.clear();
-                return this._replaceTrackBindings();
+                return this._remoteMediaSnapshot();
             case "track-rebind":
                 this.trackBindings.set("0", {
                     active: true,
@@ -159,11 +164,10 @@ export class FakeProtocolCore {
                     sessionId: 84,
                     type: "screen"
                 });
-                return this._replaceTrackBindings();
+                return this._remoteMediaSnapshot();
             case "peer-left":
                 this.trackBindings.delete("0");
                 return [
-                    { kind: "removeSessionTracks", sessionId: 42 },
                     {
                         kind: "emitUpdate",
                         update: {
@@ -227,13 +231,8 @@ export class FakeProtocolCore {
         return commands;
     }
 
-    _replaceTrackBindings() {
-        return [
-            {
-                bindings: [...this.trackBindings.values()],
-                kind: "replaceTrackBindings"
-            }
-        ];
+    _remoteMediaSnapshot() {
+        return [remoteMediaUpdate([...this.trackBindings.values()])];
     }
 }
 

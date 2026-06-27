@@ -4,12 +4,12 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use super::{
-    BundleBroadcastUpdate, BundleConnectionState, BundleSourceUpdate, BundleStateChange,
-    BundleTrackUpdate, BundleUpdate, bundle_session_info_key,
+    BundleBroadcastUpdate, BundleConnectionState, BundleRemoteMediaUpdate, BundleSourceUpdate,
+    BundleStateChange, BundleTrackUpdate, BundleUpdate, bundle_session_info_key,
 };
 use crate::{
     shared::{RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId, UserInfo},
-    signaling::SourceDescriptor,
+    signaling::{SourceDescriptor, TrackBinding},
 };
 
 fn assert_round_trip<T>(value: &T, expected_json: Value) -> serde_json::Result<()>
@@ -163,6 +163,32 @@ fn bundle_source_update_round_trips() -> serde_json::Result<()> {
                     "type": "camera",
                     "active": true,
                     "encodings": []
+                }]
+            }
+        }),
+    )
+}
+
+#[test]
+fn bundle_remote_media_update_round_trips() -> serde_json::Result<()> {
+    let remote_media = BundleUpdate::RemoteMedia(BundleRemoteMediaUpdate {
+        bindings: vec![TrackBinding {
+            mid: String::from("0"),
+            user_id: UserId::Integer(7),
+            stream_type: StreamType::Camera,
+            active: true,
+        }],
+    });
+    assert_round_trip(
+        &remote_media,
+        json!({
+            "name": "remote_media",
+            "payload": {
+                "bindings": [{
+                    "mid": "0",
+                    "sessionId": 7,
+                    "type": "camera",
+                    "active": true
                 }]
             }
         }),

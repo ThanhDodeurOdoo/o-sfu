@@ -29,7 +29,7 @@ fn connection_state_tag_matches_public_client_surface() {
 }
 
 #[test]
-fn host_command_bridge_converts_commands_to_camel_case_payloads() {
+fn host_command_bridge_projects_commands_to_browser_payloads() {
     let host_commands = project_commands(
         command_batch(vec![
             Command::ApplyNegotiation {
@@ -78,15 +78,18 @@ fn host_command_bridge_converts_commands_to_camel_case_payloads() {
                 "cause": "recovered"
             },
             {
-                "kind": "replaceTrackBindings",
-                "bindings": [
-                    {
-                        "mid": "0",
-                        "sessionId": 7,
-                        "type": "camera",
-                        "active": true
-                    }
-                ]
+                "kind": "emitUpdate",
+                "update": {
+                    "name": "remote_media",
+                    "payload": {
+                        "bindings": [{
+                            "mid": "0",
+                            "sessionId": 7,
+                            "type": "camera",
+                            "active": true
+                        }]
+                    },
+                }
             },
             {
                 "kind": "setLocalUploadIntent",
@@ -162,7 +165,7 @@ fn host_command_bridge_emits_source_update_for_source_snapshot() {
 }
 
 #[test]
-fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
+fn host_command_bridge_emits_disconnect_update_for_peer_departure() {
     let host_commands = project_commands(
         command_batch(vec![Command::EmitEvent {
             event: ProtocolEvent::PeerLeft {
@@ -176,21 +179,15 @@ fn host_command_bridge_expands_peer_departure_into_track_cleanup_and_update() {
 
     assert_eq!(
         encoded,
-        json!([
-            {
-                "kind": "removeSessionTracks",
-                "sessionId": 9
-            },
-            {
-                "kind": "emitUpdate",
-                "update": {
-                    "name": "disconnect",
-                    "payload": {
-                        "sessionId": 9
-                    }
+        json!([{
+            "kind": "emitUpdate",
+            "update": {
+                "name": "disconnect",
+                "payload": {
+                    "sessionId": 9
                 }
             }
-        ])
+        }])
     );
 }
 
