@@ -22,6 +22,8 @@ If you want to make a PR that does substantial changes to the codebase, before w
 - [The Rustonomicon (unsafe/advanced)](https://doc.rust-lang.org/nomicon/)
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
 - [Rust Cookbook](https://github.com/rust-lang-nursery/rust-cookbook/)
+- [Rust Atomics and Locks](https://mara.nl/atomics/)
+- [The Tokio doc](https://docs.rs/tokio/latest/tokio/)
 - [Idiomatic Rust snippets](https://idiomatic-rust-snippets.org/)
 - ["The Rust Programming Language" by Aaron Turon (video)](https://youtu.be/O5vzLKg7y-k)
 - ["Living with Rust Long-Term" by Jon Gjengset (video)](https://youtu.be/r35cBkPRNMI)
@@ -58,6 +60,15 @@ Verification commands and the `tests/` layout are at [tests/README.md](https://g
 
 ## Running the server
 
+### Building:
+- cargo ( https://rust-lang.org/tools/install/ )
+
+```bash
+rustup toolchain install nightly
+cargo install wasm-pack #if working on the client
+```
+
+### Deploying:
 TODO: will write a dedicated md doc later
 
 Same general idea than odoo/sfu
@@ -98,7 +109,6 @@ RTC_MEDIA_WORKER_COUNT=4
 ROOM_MAX_LOCAL_ROUTERS=4
 ROOM_SPILLOVER_MODE=bounded
 ```
-
 
 the command above do: the HTTP and WebSocket listener on `BIND_ADDRESS` and uses the
 configured UDP range for RTC traffic. 
@@ -150,3 +160,7 @@ docker run --rm \
   -e PUBLIC_IP=203.0.113.10 \
   o-sfu:local
 ```
+
+## Verification
+
+see the [test readme](https://github.com/ThanhDodeurOdoo/o-sfu/tree/master/tests).
