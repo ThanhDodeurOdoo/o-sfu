@@ -60,12 +60,7 @@ export interface PeerConnectionTrackEvent {
 export type ClientIceGatheringState = "new" | "gathering" | "complete";
 
 export type ClientPeerConnectionState =
-    | "new"
-    | "connecting"
-    | "connected"
-    | "disconnected"
-    | "failed"
-    | "closed";
+    "new" | "connecting" | "connected" | "disconnected" | "failed" | "closed";
 
 export interface ClientPeerConnection {
     close(): void;
