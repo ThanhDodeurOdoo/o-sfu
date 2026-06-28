@@ -21,17 +21,6 @@ export default defineConfig([
         },
         // Rules based on what is found in other odoo JS/TS codebases
         rules: {
-            "prettier/prettier": [
-                "error",
-                {
-                    tabWidth: 4,
-                    semi: true,
-                    singleQuote: false,
-                    printWidth: 100,
-                    endOfLine: "auto",
-                    trailingComma: "none"
-                }
-            ],
             "n/no-unsupported-features/es-syntax": "off",
             "n/no-missing-import": "off",
             "comma-dangle": "off",
