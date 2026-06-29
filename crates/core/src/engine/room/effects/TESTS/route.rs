@@ -7,11 +7,12 @@ use o_sfu_router::{
 
 use super::*;
 use crate::{
-    Bitrate, MediaWorkerId,
+    MediaWorkerId,
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, SourcePacketGate, SourcePacketOperatingPoint, TransportSessionKey,
+            ConsumerActivity, ProducerActivity, RouteControlPlan, SourcePacketGate,
+            SourcePacketOperatingPoint, TransportSessionKey,
             test_support::{
                 DebugPacketGate, DebugRouteEntry, test_media_transport_config,
                 test_media_transport_deps, test_rtc_port_range,
@@ -26,11 +27,12 @@ use crate::{
 };
 
 #[tokio::test]
-async fn room_route_batch_applies_transport_route_work() -> Result<(), Box<dyn Error>> {
+async fn route_control_executor_applies_room_finish_work() -> Result<(), Box<dyn Error>> {
     let fixture = RouteFixture::new().await?;
     fixture.request_standalone_keyframe().await;
-    fixture.pause_route_activity().await?;
     fixture.apply_source_selection().await?;
+    fixture.apply_setup_activity_correction().await?;
+    fixture.pause_route_activity().await?;
     Ok(())
 }
 
@@ -105,27 +107,34 @@ impl RouteFixture {
     }
 
     async fn request_standalone_keyframe(&self) {
-        let mut effects = RoomRouteBatch::default();
-        effects
-            .consumers
-            .push(ConsumerEffect::Keyframe(self.target.clone()));
-        effects.execute(&self.media_transport).await;
+        let mut route_control = RouteControlPlan::new();
+        route_control.push_consumer(keyframe_control(&self.target));
+        execute_route_control(
+            route_control,
+            Vec::new(),
+            vec![ConsumerRouteFinish::Keyframe(self.target.clone())],
+            &self.media_transport,
+        )
+        .await;
         assert_eq!(self.metrics.snapshot().rtc_keyframe_requests_forwarded(), 1);
     }
 
     async fn pause_route_activity(&self) -> Result<(), io::Error> {
-        let mut effects = RoomRouteBatch::default();
-        effects.producers.push(ProducerEffect {
-            source: self.route.source().clone(),
-            active: false,
-            diagnostics: diagnostics(self.route.source_session_key(), "producer.activity"),
-        });
-        effects.consumers.push(ConsumerEffect::Activity(
-            ReceiverRouteActivity::new(self.target.clone(), false),
-            diagnostics(self.route.consumer_session_key(), "consumer.activity"),
-        ));
+        let activity = ReceiverRouteActivity::new(self.target.clone(), false);
+        let mut route_control = RouteControlPlan::new();
+        route_control.push_producer(self.route.source().clone(), ProducerActivity::Inactive);
+        route_control.push_consumer(activity_control(&activity));
 
-        let outcome = effects.execute(&self.media_transport).await;
+        let outcome = execute_route_control(
+            route_control,
+            vec![self.producer_finish(ProducerActivity::Inactive)],
+            vec![ConsumerRouteFinish::Activity(
+                activity,
+                diagnostics(self.route.consumer_session_key(), "consumer.activity"),
+            )],
+            &self.media_transport,
+        )
+        .await;
 
         assert_eq!(outcome.diagnostics.len(), 2);
         assert!(
@@ -140,31 +149,12 @@ impl RouteFixture {
                 .iter()
                 .any(|event| event.event == "consumer.activity")
         );
-        let route = self.route_entry().await?;
-        assert!(!route.source_active);
-        assert_eq!(route.active_destination_count, 0);
-        assert!(route.destinations.iter().any(|destination| {
-            destination.dest_transport_media_id == self.route.consumer_transport_media_id()
-                && !destination.active
-        }));
+        self.assert_route_state(false, 0, false).await?;
         Ok(())
     }
 
-    async fn reactivate_source(&self) {
-        let mut effects = RoomRouteBatch::default();
-        effects.producers.push(ProducerEffect {
-            source: self.route.source().clone(),
-            active: true,
-            diagnostics: diagnostics(self.route.source_session_key(), "producer.activity"),
-        });
-        effects.execute(&self.media_transport).await;
-    }
-
     async fn apply_source_selection(&self) -> Result<(), io::Error> {
-        self.reactivate_source().await;
-        let snapshot = self.metrics.snapshot();
-        let keyframes_before =
-            snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed();
+        let keyframes_before = self.keyframe_requests();
         let mut current_selection = ConsumerSourceSelection::open(true);
         current_selection.set_policy_pause_reason(Some(PolicyPauseReason::BudgetPressure));
         let mut update = ConsumerPacketSelectionUpdate::route_activity(
@@ -178,38 +168,24 @@ impl RouteFixture {
             SourcePacketOperatingPoint::new(None, 0),
         ));
         update.request_keyframe = true;
-        let effects = RoomRouteBatch {
-            producers: Vec::new(),
-            consumers: vec![ConsumerEffect::SourceSelection(
-                TransportPacketSelectionUpdate {
-                    update: update.clone(),
-                    target: self.target.clone(),
-                },
-            )],
-            receiver_bwe_targets: vec![ReceiverBweTargetUpdate::new(
-                self.route.consumer_session_key().clone(),
-                Bitrate::from_kbps(600),
-            )],
+        let selection = TransportPacketSelectionUpdate {
+            update: update.clone(),
+            target: self.target.clone(),
         };
+        let mut route_control = RouteControlPlan::new();
+        route_control.push_consumer(source_selection_control(&selection));
 
-        let outcome = effects.execute(&self.media_transport).await;
+        let outcome = execute_route_control(
+            route_control,
+            Vec::new(),
+            vec![ConsumerRouteFinish::SourceSelection(selection)],
+            &self.media_transport,
+        )
+        .await;
 
         assert_eq!(outcome.packet_updates, vec![update]);
-        let snapshot = self.metrics.snapshot();
-        assert_eq!(
-            snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed(),
-            keyframes_before + 1
-        );
-        assert_eq!(
-            self.media_transport
-                .test_api()
-                .session_receiver_bwe_target(self.route.consumer_session_key())
-                .await,
-            Some(Bitrate::from_kbps(600))
-        );
-        let route = self.route_entry().await?;
-        assert!(route.source_active);
-        assert_eq!(route.active_destination_count, 1);
+        assert_eq!(self.keyframe_requests(), keyframes_before + 1);
+        let route = self.assert_route_state(true, 1, true).await?;
         assert_eq!(
             route.effective_packet_gate,
             DebugPacketGate::OperatingPoint {
@@ -217,11 +193,49 @@ impl RouteFixture {
                 max_temporal_layer_id: 0,
             }
         );
+        Ok(())
+    }
+
+    async fn apply_setup_activity_correction(&self) -> Result<(), io::Error> {
+        let keyframes_before = self.keyframe_requests();
+        execute_setup_activity_correction(
+            self.route.clone(),
+            MediaKind::Video,
+            false,
+            &self.media_transport,
+        )
+        .await;
+
+        assert_eq!(self.keyframe_requests(), keyframes_before);
+        self.assert_route_state(true, 0, false).await?;
+
+        execute_setup_activity_correction(
+            self.route.clone(),
+            MediaKind::Video,
+            true,
+            &self.media_transport,
+        )
+        .await;
+
+        assert_eq!(self.keyframe_requests(), keyframes_before + 1);
+        self.assert_route_state(true, 1, true).await?;
+        Ok(())
+    }
+
+    async fn assert_route_state(
+        &self,
+        source_active: bool,
+        active_destination_count: usize,
+        destination_active: bool,
+    ) -> Result<DebugRouteEntry, io::Error> {
+        let route = self.route_entry().await?;
+        assert_eq!(route.source_active, source_active);
+        assert_eq!(route.active_destination_count, active_destination_count);
         assert!(route.destinations.iter().any(|destination| {
             destination.dest_transport_media_id == self.route.consumer_transport_media_id()
-                && destination.active
+                && destination.active == destination_active
         }));
-        Ok(())
+        Ok(route)
     }
 
     async fn route_entry(&self) -> Result<DebugRouteEntry, io::Error> {
@@ -230,6 +244,19 @@ impl RouteFixture {
             .route_entry_by_media_id(self.route.source_transport_media_id())
             .await
             .ok_or_else(|| io::Error::other("video route should exist"))
+    }
+
+    fn keyframe_requests(&self) -> u64 {
+        let snapshot = self.metrics.snapshot();
+        snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed()
+    }
+
+    fn producer_finish(&self, activity: ProducerActivity) -> ProducerRouteFinish {
+        ProducerRouteFinish {
+            source: self.route.source().clone(),
+            activity,
+            diagnostics: diagnostics(self.route.source_session_key(), "producer.activity"),
+        }
     }
 }
 
