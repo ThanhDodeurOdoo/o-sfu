@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    mem,
+};
 
 use o_sfu_router::{
     rtp::{MediaCapabilities, MediaStream as RouterRtpParameters},
@@ -10,11 +13,11 @@ use o_sfu_router::{
 use tracing::{error, warn};
 
 use super::{
-    ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerRouteView,
-    ConsumerSetupTarget, PendingConsumerRouteView, PendingConsumerSetup, ProducerRouteTarget,
-    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall, ReceiverRouteActivity,
-    ResolvedRelayRouteEffect, SourceTransportMediaIndexEntry, SourceView, TransportMediaRemoval,
-    ValidatedPublish,
+    CommittedConsumerSetup, ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef,
+    ConsumerRouteView, ConsumerSetupTarget, DeclaredConsumerSetup, PendingConsumerRouteView,
+    PendingConsumerSetup, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer,
+    PublishedSourceInstall, ReceiverRouteActivity, ResolvedRelayRouteEffect,
+    SourceTransportMediaIndexEntry, SourceView, TransportMediaRemoval, ValidatedPublish,
     route_graph::{RelayRouteEffect, RouteGraph},
     source_index::SourceIndex,
 };
@@ -917,36 +920,46 @@ impl RoomTopology {
 
     pub(super) fn commit_consumer_setup(
         &mut self,
-        setup: PendingConsumerSetup,
+        setup: DeclaredConsumerSetup,
         selection: ConsumerSourceSelection,
-        media: TransportMediaId,
-        mid: Option<String>,
-    ) -> Result<(OutboundSender, Option<bool>), Vec<ResolvedRelayRouteEffect>> {
+    ) -> Result<CommittedConsumerSetup, (TransportConsumerRoute, Vec<ResolvedRelayRouteEffect>)>
+    {
+        let DeclaredConsumerSetup {
+            mut pending,
+            route,
+            mid,
+        } = setup;
         if self
             .route_graph
-            .has_committed_consumer_route(setup.reservation.key())
+            .has_committed_consumer_route(pending.reservation.key())
         {
-            return Err(self.release_consumer_setup(setup));
+            return Err((route, self.release_consumer_setup(pending)));
         }
         let active = selection.delivery_active();
-        let Some(routed_consumer_id) = self.add_consumer_route(&setup.target, active) else {
-            return Err(self.release_consumer_setup(setup));
+        let Some(routed_consumer_id) = self.add_consumer_route(&pending.target, active) else {
+            return Err((route, self.release_consumer_setup(pending)));
         };
-        let committed_mid = mid.unwrap_or_else(|| setup.fallback_mid.clone());
+        let committed_mid = mid.unwrap_or_else(|| mem::take(&mut pending.fallback_mid));
         if self.route_graph.commit(
-            &setup.reservation,
-            setup
-                .target
-                .consumer_state(routed_consumer_id, media, committed_mid),
+            &pending.reservation,
+            pending.target.consumer_state(
+                routed_consumer_id,
+                route.consumer_transport_media_id(),
+                committed_mid,
+            ),
             selection,
         ) {
-            return Ok((
-                setup.sender,
-                (active != setup.reservation.selection().delivery_active()).then_some(active),
-            ));
+            let transport_activity_update =
+                (active != pending.reservation.selection().delivery_active()).then_some(active);
+            return Ok(CommittedConsumerSetup {
+                target: pending.target,
+                route,
+                sender: pending.sender,
+                transport_activity_update,
+            });
         }
-        self.rollback_consumer_route(&setup.target, routed_consumer_id);
-        Err(self.release_consumer_setup(setup))
+        self.rollback_consumer_route(&pending.target, routed_consumer_id);
+        Err((route, self.release_consumer_setup(pending)))
     }
 
     fn add_consumer_route(

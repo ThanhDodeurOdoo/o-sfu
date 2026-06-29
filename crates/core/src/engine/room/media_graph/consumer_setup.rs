@@ -3,6 +3,7 @@ use o_sfu_router::{
     rtp::MediaStream as RouterRtpParameters,
     topology::{RoutedConsumerId, RoutedProducerId},
 };
+use tracing::warn;
 
 use super::{
     super::{
@@ -16,12 +17,13 @@ use super::{
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
     media_transport::{
-        TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
+        ConsumerActivity, MediaTransport, TransportConsumerRoute, TransportMediaId,
+        TransportSessionKey, TransportSourceKey,
     },
     source_model::{PublishedSourceId, UserStreamId},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConsumerSetupTarget {
     pub user: UserId,
     pub connection: ConnectionId,
@@ -37,21 +39,29 @@ pub struct ConsumerSetupTarget {
     pub routed: RoutedProducerId,
 }
 
-/// reserved consumer route waiting for media transport declaration
-///
-/// commit only after [`crate::engine::media_transport::MediaTransport::consume_media`]
-/// returns a consumer media id
-/// release the setup to unwind relay reservations when declaration or identity
-/// validation fails
+/// pending consumer route transaction between room reservation and transport declaration
 #[derive(Debug)]
 #[must_use = "pending consumer setups reserve route graph state and must be committed or released"]
 pub struct PendingConsumerSetup {
-    pub target: ConsumerSetupTarget,
-    pub reservation: ConsumerRouteReservation,
-    pub sender: OutboundSender,
-    pub fallback_mid: String,
-    pub rtp: RouterRtpParameters,
-    pub relays: Vec<ResolvedRelayRouteEffect>,
+    pub(super) target: ConsumerSetupTarget,
+    pub(super) reservation: ConsumerRouteReservation,
+    pub(super) sender: OutboundSender,
+    pub(super) fallback_mid: String,
+    pub(super) rtp: RouterRtpParameters,
+    pub(super) relays: Vec<ResolvedRelayRouteEffect>,
+}
+
+pub struct DeclaredConsumerSetup {
+    pub(super) pending: PendingConsumerSetup,
+    pub(super) route: TransportConsumerRoute,
+    pub(super) mid: Option<String>,
+}
+
+pub struct CommittedConsumerSetup {
+    pub(super) target: ConsumerSetupTarget,
+    pub(super) route: TransportConsumerRoute,
+    pub(super) sender: OutboundSender,
+    pub(super) transport_activity_update: Option<bool>,
 }
 
 #[allow(
@@ -61,11 +71,13 @@ pub struct PendingConsumerSetup {
 #[derive(Debug)]
 pub enum ConsumerSetupOutcome {
     Committed {
+        target: ConsumerSetupTarget,
+        route: TransportConsumerRoute,
         sender: OutboundSender,
         snapshot: RemoteSourceSnapshot,
         transport_activity_update: Option<bool>,
     },
-    Released(Vec<ResolvedRelayRouteEffect>),
+    Released(TransportConsumerRoute, Vec<ResolvedRelayRouteEffect>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,50 +98,40 @@ impl ConsumerSetupOrigin {
 }
 
 impl RoomState {
-    pub fn commit_pending_consumer_setup(
+    pub fn commit_declared_consumer_setup(
         &mut self,
-        setup: PendingConsumerSetup,
-        media: TransportMediaId,
-        mid: Option<String>,
+        setup: DeclaredConsumerSetup,
     ) -> (RoomMediaCounts, RoomMediaCounts, ConsumerSetupOutcome) {
         let before = self.media_counts();
-        let outcome = self.finish_pending_consumer_setup(setup, media, mid);
+        let target = &setup.pending.target;
+        let outcome = if self.users.get(&target.user).is_some_and(|user| {
+            user.connection_id == target.connection && user.negotiation.can_consume()
+        }) && let Some(producer_active) = self
+            .topology
+            .producer(target.producer_id)
+            .filter(|producer| target.matches_identity(producer))
+            .map(|producer| producer.active)
+        {
+            let selection = self.setup_selection(target, producer_active);
+            match self.topology.commit_consumer_setup(setup, selection) {
+                Ok(commit) => {
+                    let snapshot = self.remote_source_snapshot_for_user(&commit.target.user, true);
+                    ConsumerSetupOutcome::Committed {
+                        target: commit.target,
+                        route: commit.route,
+                        sender: commit.sender,
+                        snapshot,
+                        transport_activity_update: commit.transport_activity_update,
+                    }
+                }
+                Err((route, relays)) => ConsumerSetupOutcome::Released(route, relays),
+            }
+        } else {
+            let DeclaredConsumerSetup { pending, route, .. } = setup;
+            ConsumerSetupOutcome::Released(route, self.topology.release_consumer_setup(pending))
+        };
         let after = self.media_counts();
         (before, after, outcome)
-    }
-
-    fn finish_pending_consumer_setup(
-        &mut self,
-        setup: PendingConsumerSetup,
-        media: TransportMediaId,
-        mid: Option<String>,
-    ) -> ConsumerSetupOutcome {
-        let target = &setup.target;
-        let Some(user) = self.users.get(&target.user) else {
-            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
-        };
-        if user.connection_id != target.connection || !user.negotiation.can_consume() {
-            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
-        }
-        let Some(producer) = self.topology.producer(target.producer_id) else {
-            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
-        };
-        if !target.matches_identity(producer) {
-            return ConsumerSetupOutcome::Released(self.topology.release_consumer_setup(setup));
-        }
-        let target_user = target.user.clone();
-        let selection = self.setup_selection(target, producer.active);
-        match self
-            .topology
-            .commit_consumer_setup(setup, selection, media, mid)
-        {
-            Ok((sender, transport_activity_update)) => ConsumerSetupOutcome::Committed {
-                sender,
-                snapshot: self.remote_source_snapshot_for_user(&target_user, true),
-                transport_activity_update,
-            },
-            Err(relays) => ConsumerSetupOutcome::Released(relays),
-        }
     }
 
     pub fn release_pending_consumer_setup(
@@ -144,6 +146,57 @@ impl RoomState {
         let relays = self.topology.release_consumer_setup(setup);
         let after = self.media_counts();
         (before, after, relays)
+    }
+}
+
+impl PendingConsumerSetup {
+    pub(in crate::engine::room) fn relays(&self) -> &[ResolvedRelayRouteEffect] {
+        &self.relays
+    }
+
+    pub(in crate::engine::room) async fn declare(
+        self,
+        media_transport: &MediaTransport,
+        origin: ConsumerSetupOrigin,
+    ) -> Result<DeclaredConsumerSetup, Self> {
+        let activity =
+            ConsumerActivity::from_active(self.reservation.selection().delivery_active());
+        match media_transport
+            .consume_media(
+                &self.target.user_session,
+                self.target.kind,
+                &self.target.producer_session,
+                self.target.media,
+                &self.rtp,
+                activity,
+            )
+            .await
+        {
+            Ok(media) => {
+                let mid = media_transport
+                    .transport_media_mid(&self.target.user_session, media)
+                    .await;
+                Ok(DeclaredConsumerSetup {
+                    route: self.target.transport_consumer_route(media),
+                    pending: self,
+                    mid,
+                })
+            }
+            Err(error) => {
+                warn!(
+                    consumer_user_id = ?self.target.user,
+                    consumer_connection_id = ?self.target.connection,
+                    producer_user_id = ?self.target.producer_user,
+                    producer_connection_id = ?self.target.producer_connection,
+                    source_transport_media_id = ?self.target.media,
+                    error = ?error,
+                    consumer_mid = self.rtp.mid(),
+                    ?origin,
+                    "media transport rejected consume media declaration"
+                );
+                Err(self)
+            }
+        }
     }
 }
 
@@ -193,7 +246,7 @@ impl ConsumerSetupTarget {
         }
     }
 
-    pub fn transport_consumer_route(
+    pub(super) fn transport_consumer_route(
         &self,
         consumer_media: TransportMediaId,
     ) -> TransportConsumerRoute {

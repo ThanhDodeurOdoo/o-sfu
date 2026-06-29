@@ -191,11 +191,12 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     assert!(setups.is_empty());
     assert!(
         setup
-            .relays
+            .relays()
             .iter()
             .any(|effect| effect.action == TransportRelayRouteAction::Install)
     );
-    let (_, _, setup_outcome) = state.commit_pending_consumer_setup(setup, consumer_media, None);
+    let setup = setup.declared(consumer_media, None);
+    let (_, _, setup_outcome) = state.commit_declared_consumer_setup(setup);
     assert!(matches!(
         setup_outcome,
         ConsumerSetupOutcome::Committed { .. }
