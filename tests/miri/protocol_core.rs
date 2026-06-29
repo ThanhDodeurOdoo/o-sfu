@@ -1,7 +1,7 @@
 use o_sfu_protocol::{
     host::{
-        Command, ConnectionState, NegotiationKind, PendingRequest, PendingRequestKind,
-        ProtocolCore, ProtocolEvent, ProtocolRequestResult,
+        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest,
+        PendingRequestKind, ProtocolCore, ProtocolEvent,
     },
     wire::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates,
@@ -15,14 +15,12 @@ use o_sfu_tests::miri_support::{
 };
 
 fn extract_pending_request(
-    result: &ProtocolRequestResult,
+    commands: &CommandBatch,
     kind: PendingRequestKind,
 ) -> Option<&PendingRequest> {
-    assert!(
-        result.pending_request.is_some(),
-        "recording request result should carry a pending request"
-    );
-    let request = result.pending_request.as_ref()?;
+    let Some(Command::BeginPendingRequest { request }) = commands.as_slice().first() else {
+        return None;
+    };
     assert_eq!(request.kind, kind);
     Some(request)
 }

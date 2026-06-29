@@ -48,6 +48,7 @@ export const COMMAND_KIND = {
     CLOSE_PEER_CONNECTION: "closePeerConnection",
     EMIT_STATE_CHANGE: "emitStateChange",
     EMIT_UPDATE: "emitUpdate",
+    BEGIN_PENDING_REQUEST: "beginPendingRequest",
     RESOLVE_PENDING_REQUEST: "resolvePendingRequest",
     SCHEDULE_TIMER: "scheduleTimer",
     CANCEL_TIMER: "cancelTimer"

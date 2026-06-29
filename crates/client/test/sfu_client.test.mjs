@@ -137,8 +137,8 @@ for (const [name, startRequest, ok, expected] of [
 
 test("recording requests without protocol registration resolve false", async () => {
     const core = new FakeProtocolCore();
-    core.startRecording = () => requestResult();
-    core.stopRecording = () => requestResult();
+    core.startRecording = () => [];
+    core.stopRecording = () => [];
     const { client } = createSfuClientHarness({ protocolCore: core });
 
     assert.equal(await client.startRecording({ audio: true }), false);
@@ -148,7 +148,9 @@ test("recording requests without protocol registration resolve false", async () 
 test("duplicate recording request id is handled as a runtime error", async () => {
     const core = new FakeProtocolCore();
     core.startRecording = () =>
-        requestResult(pendingRequest("record-1", PENDING_REQUEST_KIND.START_RECORDING, 10000));
+        beginPendingRequest(
+            pendingRequest("record-1", PENDING_REQUEST_KIND.START_RECORDING, 10000)
+        );
     const { client, handledErrors } = createSfuClientHarness({ protocolCore: core });
 
     const registeredPromise = client.startRecording({ audio: true });
@@ -182,6 +184,30 @@ test("runtime errors reject registered recording requests", async () => {
 
     await emitMessage("recording-runtime-failure");
     await recordingRejection;
+});
+
+test("recording request timer setup failures reject through the public promise", async (t) => {
+    const core = new FakeProtocolCore();
+    const unhandledRejections = [];
+    const trackUnhandledRejection = (reason) => {
+        unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", trackUnhandledRejection);
+    t.after(() => process.off("unhandledRejection", trackUnhandledRejection));
+    const { client, handledErrors } = createSfuClientHarness({
+        protocolCore: core,
+        setTimer: () => {
+            throw new Error("timer setup failed");
+        }
+    });
+
+    await assert.rejects(client.startRecording({ audio: true }), /timer setup failed/);
+    await tick();
+    await tick();
+
+    assert.equal(handledErrors.length, 1);
+    assert.match(handledErrors[0].message, /timer setup failed/);
+    assert.deepEqual(unhandledRejections, []);
 });
 
 test("pending request rejection includes registered recordings", async () => {
@@ -239,8 +265,8 @@ function pendingRequest(requestId, kind, timeoutTimerId) {
     };
 }
 
-function requestResult(pendingRequest = null, commands = []) {
-    return { commands, pendingRequest };
+function beginPendingRequest(request) {
+    return [{ kind: "beginPendingRequest", request }];
 }
 
 async function resolveRealRecordingRequest(startRequest, ok) {

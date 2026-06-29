@@ -6,26 +6,26 @@ fn protocol_core_tracks_recording_request_until_matching_response() -> Result<()
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
 
-    let result = core.start_recording(RecordingOptions {
+    let commands = core.start_recording(RecordingOptions {
         audio: Some(true),
         video: Some(true),
         transcription: None,
     });
 
-    let Some(pending_request) = result.pending_request.as_ref() else {
-        return Err(format!("expected recording request, got {result:?}"));
-    };
-    assert_eq!(pending_request.kind, PendingRequestKind::StartRecording);
-    assert_eq!(pending_request.timeout_ms, REQUEST_TIMEOUT_MS);
     let [
+        Command::BeginPendingRequest {
+            request: pending_request,
+        },
         Command::ScheduleTimer {
             id: flush_timer_id,
             ms: 100,
         },
-    ] = result.commands.as_slice()
+    ] = commands.as_slice()
     else {
-        return Err(format!("expected flush timer, got {:?}", result.commands));
+        return Err(format!("expected recording request, got {commands:?}"));
     };
+    assert_eq!(pending_request.kind, PendingRequestKind::StartRecording);
+    assert_eq!(pending_request.timeout_ms, REQUEST_TIMEOUT_MS);
     let request_id = pending_request.request_id.clone();
 
     let flush_commands = core.on_timer(*flush_timer_id);
@@ -74,9 +74,15 @@ fn protocol_core_request_timeout_resolves_pending_request_as_failed() -> Result<
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.on_welcome(sample_welcome_payload());
 
-    let result = core.stop_recording();
-    let Some(pending_request) = result.pending_request.as_ref() else {
-        return Err(format!("expected pending request, got {result:?}"));
+    let commands = core.stop_recording();
+    let [
+        Command::BeginPendingRequest {
+            request: pending_request,
+        },
+        ..,
+    ] = commands.as_slice()
+    else {
+        return Err(format!("expected pending request, got {commands:?}"));
     };
     let request_id = pending_request.request_id.clone();
 

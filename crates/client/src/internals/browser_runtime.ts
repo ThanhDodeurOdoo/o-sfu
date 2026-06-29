@@ -15,8 +15,7 @@ import {
     createProtocolCore,
     wrapProtocolCoreBindings,
     type HostCommand,
-    type ProtocolCoreBindings,
-    type ProtocolRequestResult
+    type ProtocolCoreBindings
 } from "../runtime_contract.js";
 import { REMOTE_MEDIA_UPDATE } from "../protocol_host_commands.js";
 import { COMMAND_KIND } from "../protocol_contract.js";
@@ -126,11 +125,11 @@ export class BrowserRuntime {
     }
 
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
-        return this.processRequestResult(() => this._core.startRecording(options));
+        return this.processRequestCommands(() => this._core.startRecording(options));
     }
 
     stopRecording(): Promise<boolean> {
-        return this.processRequestResult(() => this._core.stopRecording());
+        return this.processRequestCommands(() => this._core.stopRecording());
     }
 
     async getStats(): Promise<SfuStats> {
@@ -157,33 +156,30 @@ export class BrowserRuntime {
         this._socketSession.abort(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
-    private processRequestResult(getResult: () => ProtocolRequestResult): Promise<boolean> {
-        let result: ProtocolRequestResult;
+    private processRequestCommands(getCommands: () => HostCommand[]): Promise<boolean> {
+        let commands: HostCommand[];
         try {
-            result = getResult();
+            commands = getCommands();
         } catch (error) {
             this.handleRuntimeError(error);
             return Promise.reject(error);
         }
-        const request = result.pendingRequest;
-        if (!request) {
-            this.enqueue(result.commands);
+        const [first, ...pending] = commands;
+        if (first?.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
+            this.enqueue(commands);
             return Promise.resolve(false);
         }
-        let promise: Promise<boolean>;
-        try {
-            promise = this._pendingRequests.begin(request);
-        } catch (error) {
-            this.handleRuntimeError(error);
-            return Promise.reject(error);
-        }
-        this.enqueueTask((epoch) => {
-            if (this._pendingRequests.has(request.requestId)) {
-                this.scheduleTimer(request.timeoutTimerId, request.timeoutMs);
-            }
-            return this.processCommands(result.commands, epoch);
+        let request: Promise<boolean> | undefined;
+        const task = this.enqueueTask((epoch) => {
+            request = this._pendingRequests.begin(first.request);
+            request.catch(() => undefined);
+            this.scheduleTimer(first.request.timeoutTimerId, first.request.timeoutMs);
+            return pending.length > 0 ? this.processCommands(pending, epoch) : undefined;
         });
-        return promise;
+        return task.then(
+            () => request ?? false,
+            (error) => request ?? Promise.reject(error)
+        );
     }
 
     private enqueueProtocolCommands(getCommands: () => HostCommand[]): void {
@@ -198,15 +194,17 @@ export class BrowserRuntime {
         this.enqueueTask((epoch) => this.processCommands(commands, epoch));
     }
 
-    private enqueueTask(operation: (epoch: number) => void | Promise<void>): void {
+    private enqueueTask(operation: (epoch: number) => void | Promise<void>): Promise<void> {
         const epoch = this._epoch;
-        this._commandQueue = this._commandQueue
-            .then(() => (this.isCurrent(epoch) ? operation(epoch) : undefined))
-            .catch((error: unknown) => {
-                if (this.isCurrent(epoch)) {
-                    this.handleRuntimeError(error);
-                }
-            });
+        const task = this._commandQueue.then(() =>
+            this.isCurrent(epoch) ? operation(epoch) : undefined
+        );
+        this._commandQueue = task.catch((error: unknown) => {
+            if (this.isCurrent(epoch)) {
+                this.handleRuntimeError(error);
+            }
+        });
+        return task;
     }
 
     private async processCommands(commands: HostCommand[], epoch: number): Promise<void> {
@@ -282,6 +280,8 @@ export class BrowserRuntime {
                     this._context.onUpdate(command.update);
                 }
                 return [];
+            case COMMAND_KIND.BEGIN_PENDING_REQUEST:
+                throw new Error("beginPendingRequest is only valid for request command drains");
             case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
                 this._pendingRequests.resolve(command.requestId, command.ok);
                 return [];

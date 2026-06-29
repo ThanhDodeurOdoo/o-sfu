@@ -5,12 +5,12 @@
 
 use serde_json::json;
 
-use super::{HostCommand, connection_state_tag, project_commands, project_request_result};
+use super::{HostCommand, connection_state_tag, project_commands};
 use crate::{
     bundle_api::BundleConnectionState,
     core::{
-        Command, CommandBatch, NegotiationKind, PendingRequest, PendingRequestKind, ProtocolEvent,
-        ProtocolRequestResult, test_support::command_batch,
+        Command, NegotiationKind, PendingRequest, PendingRequestKind, ProtocolEvent,
+        test_support::command_batch,
     },
     shared::{StreamType, UserId},
     signaling::{RequestId, SourceDescriptor, TrackBinding},
@@ -101,28 +101,30 @@ fn host_command_bridge_projects_commands_to_browser_payloads() {
 }
 
 #[test]
-fn host_request_result_serializes_pending_request_fields() {
-    let result = project_request_result(ProtocolRequestResult {
-        commands: CommandBatch::default(),
-        pending_request: Some(PendingRequest {
-            request_id: RequestId::new("11"),
-            kind: PendingRequestKind::StartRecording,
-            timeout_timer_id: 10_000,
-            timeout_ms: 5_000,
-        }),
-    });
+fn host_command_bridge_serializes_pending_request_start() {
+    let commands = project_commands(
+        command_batch(vec![Command::BeginPendingRequest {
+            request: PendingRequest {
+                request_id: RequestId::new("11"),
+                kind: PendingRequestKind::StartRecording,
+                timeout_timer_id: 10_000,
+                timeout_ms: 5_000,
+            },
+        }])
+        .expect("valid test command batch"),
+    );
 
     assert_eq!(
-        serde_json::to_value(result).unwrap_or_default(),
-        json!({
-            "commands": [],
-            "pendingRequest": {
+        serde_json::to_value(commands).unwrap_or_default(),
+        json!([{
+            "kind": "beginPendingRequest",
+            "request": {
                 "requestId": "11",
                 "kind": "startRecording",
                 "timeoutTimerId": 10_000,
                 "timeoutMs": 5_000
             }
-        })
+        }])
     );
 }
 

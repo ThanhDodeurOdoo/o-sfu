@@ -164,29 +164,19 @@ impl ProtocolHarnessPeer {
         video: Option<bool>,
         transcription: Option<bool>,
     ) -> Option<()> {
-        let result = self.core.start_recording(RecordingOptions {
+        let commands = self.core.start_recording(RecordingOptions {
             audio,
             video,
             transcription,
         });
-        self.register_pending_request(result.pending_request);
-        self.run_commands(result.commands).await?;
+        self.run_commands(commands).await?;
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
     }
 
     pub(crate) async fn stop_recording(&mut self) -> Option<()> {
-        let result = self.core.stop_recording();
-        self.register_pending_request(result.pending_request);
-        self.run_commands(result.commands).await?;
+        let commands = self.core.stop_recording();
+        self.run_commands(commands).await?;
         self.flush_timers_with_delay(BATCH_FLUSH_DELAY_MS).await
-    }
-
-    fn register_pending_request(&mut self, request: Option<PendingRequest>) {
-        if let Some(request) = request {
-            self.timers
-                .insert(request.timeout_timer_id, request.timeout_ms);
-            self.pending_request_starts.push(request);
-        }
     }
 
     pub(crate) async fn flush_timers_with_delay(&mut self, delay_ms: u32) -> Option<()> {
@@ -244,6 +234,12 @@ impl ProtocolHarnessPeer {
                             self.updates.push(update);
                         }
                     }
+                    Vec::new()
+                }
+                Command::BeginPendingRequest { request } => {
+                    self.timers
+                        .insert(request.timeout_timer_id, request.timeout_ms);
+                    self.pending_request_starts.push(request);
                     Vec::new()
                 }
                 Command::CreatePeerConnection => {

@@ -16,17 +16,11 @@ import {
 import type { NegotiationKind } from "./protocol_contract.js";
 import {
     type HostCommand,
-    type ProtocolRequestResult,
     validateHostCommandBatch,
-    validateHostCommandShapes,
-    validateProtocolRequestResult
+    validateHostCommandShapes
 } from "./protocol_host_commands.js";
 
-export type {
-    HostCommand,
-    PendingRequest,
-    ProtocolRequestResult
-} from "./protocol_host_commands.js";
+export type { HostCommand, PendingRequest } from "./protocol_host_commands.js";
 
 export interface ProtocolCoreBindings {
     readonly state: ConnectionState;
@@ -43,8 +37,8 @@ export interface ProtocolCoreBindings {
     subscribe(sessionId: SessionId, states: DownloadStates): HostCommand[];
     updateInfo(info: SessionInfo): HostCommand[];
     broadcast(message: unknown): HostCommand[];
-    startRecording(options?: RecordingOptions): ProtocolRequestResult;
-    stopRecording(): ProtocolRequestResult;
+    startRecording(options?: RecordingOptions): HostCommand[];
+    stopRecording(): HostCommand[];
     submitNegotiationAnswer(
         requestId: string,
         negotiationKind: NegotiationKind,
@@ -74,7 +68,7 @@ export function createProtocolCore(): ProtocolCoreBindings {
 
 function wrapProtocolCoreBindingsWith(
     bindings: ProtocolCoreBindings,
-    validateCommands: (value: unknown, context: string) => HostCommand[]
+    validateCommands: (value: unknown, context: string, requestMethod?: boolean) => HostCommand[]
 ): ProtocolCoreBindings {
     return {
         get state(): ConnectionState {
@@ -106,17 +100,13 @@ function wrapProtocolCoreBindingsWith(
         broadcast: (message) =>
             validateCommands(bindings.broadcast(message), "protocol core broadcast()"),
         startRecording: (options) =>
-            validateProtocolRequestResult(
+            validateCommands(
                 bindings.startRecording(options),
                 "protocol core startRecording()",
-                validateCommands
+                true
             ),
         stopRecording: () =>
-            validateProtocolRequestResult(
-                bindings.stopRecording(),
-                "protocol core stopRecording()",
-                validateCommands
-            ),
+            validateCommands(bindings.stopRecording(), "protocol core stopRecording()", true),
         submitNegotiationAnswer: (requestId, negotiationKind, sdp) =>
             validateCommands(
                 bindings.submitNegotiationAnswer(requestId, negotiationKind, sdp),

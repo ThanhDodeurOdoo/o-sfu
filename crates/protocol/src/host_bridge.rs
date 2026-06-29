@@ -8,7 +8,6 @@ use crate::{
     },
     core::{
         Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest, ProtocolEvent,
-        ProtocolRequestResult,
     },
     shared::StreamType,
     signaling::{NegotiationUploadSlot, RequestId},
@@ -46,6 +45,9 @@ pub enum HostCommand {
     EmitUpdate {
         update: BundleUpdate,
     },
+    BeginPendingRequest {
+        request: PendingRequest,
+    },
     ResolvePendingRequest {
         #[serde(rename = "requestId")]
         request_id: RequestId,
@@ -61,13 +63,6 @@ pub enum HostCommand {
     Connect {
         url: String,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HostRequestResult {
-    pub commands: Vec<HostCommand>,
-    pub pending_request: Option<PendingRequest>,
 }
 
 fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: ProtocolEvent) {
@@ -142,6 +137,9 @@ pub fn project_commands(core_commands: CommandBatch) -> Vec<HostCommand> {
             Command::EmitEvent { event } => {
                 push_host_commands_for_event(&mut host_commands, event);
             }
+            Command::BeginPendingRequest { request } => {
+                host_commands.push(HostCommand::BeginPendingRequest { request });
+            }
             Command::ResolvePendingRequest { request_id, ok } => {
                 host_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
             }
@@ -153,14 +151,6 @@ pub fn project_commands(core_commands: CommandBatch) -> Vec<HostCommand> {
         }
     }
     host_commands
-}
-
-#[must_use]
-pub fn project_request_result(result: ProtocolRequestResult) -> HostRequestResult {
-    HostRequestResult {
-        commands: project_commands(result.commands),
-        pending_request: result.pending_request,
-    }
 }
 
 #[must_use]

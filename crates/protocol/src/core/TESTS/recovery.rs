@@ -86,20 +86,20 @@ fn start_flushed_recording_request(core: &mut ProtocolCore) -> Result<(RequestId
         video: None,
         transcription: None,
     });
-    let Some(pending_request) = result.pending_request.as_ref() else {
-        return Err(format!("expected recording request start, got {result:?}"));
-    };
-    assert_eq!(pending_request.kind, PendingRequestKind::StartRecording);
-    assert_eq!(pending_request.timeout_ms, REQUEST_TIMEOUT_MS);
     let [
+        Command::BeginPendingRequest {
+            request: pending_request,
+        },
         Command::ScheduleTimer {
             id: flush_timer_id,
             ms: 100,
         },
-    ] = result.commands.as_slice()
+    ] = result.as_slice()
     else {
-        return Err(format!("expected flush timer, got {:?}", result.commands));
+        return Err(format!("expected recording request start, got {result:?}"));
     };
+    assert_eq!(pending_request.kind, PendingRequestKind::StartRecording);
+    assert_eq!(pending_request.timeout_ms, REQUEST_TIMEOUT_MS);
     let _ = core.on_timer(*flush_timer_id);
     Ok((
         pending_request.request_id.clone(),
