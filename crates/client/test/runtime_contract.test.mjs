@@ -118,7 +118,7 @@ function negotiationCommand(negotiationKind) {
     };
 }
 
-function sparseHostCommandBatch() {
+function sparseHostCommands() {
     const commands = [];
     commands.length = 1;
     return commands;
@@ -162,7 +162,7 @@ test("default WASM protocol core validates host command shape only", () => {
     configureDefaultWasmProtocolCoreProvider(() =>
         validCore({
             connect: () => [{ kind: "emitStateChange", state: "broken" }],
-            onTimer: () => sparseHostCommandBatch(),
+            onTimer: () => sparseHostCommands(),
             onWsMessage: () => misorderedHostCommands
         })
     );
@@ -173,19 +173,22 @@ test("default WASM protocol core validates host command shape only", () => {
     assertThrowsError(() => core.onTimer(1));
 });
 
-test("injected protocol core rejects malformed host commands", () => {
+test("injected protocol core validates host command shape only", () => {
     const commandsWithHostileMap = [{ kind: "sendWebSocket", frame: "auth" }];
     commandsWithHostileMap.map = () => [{ kind: "closeWebSocket", code: "bad" }];
+    const misorderedHostCommands = [negotiationCommand(NEGOTIATION_KIND.OFFER)];
     const core = wrapProtocolCoreBindings(
         validCore({
             connect: () => [{ kind: "emitStateChange", state: "broken" }],
-            onTimer: () => sparseHostCommandBatch(),
+            onWsMessage: () => misorderedHostCommands,
+            onTimer: () => sparseHostCommands(),
             onWsOpen: () => commandsWithHostileMap
         })
     );
 
     assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
     assertThrowsError(() => core.onTimer(1));
+    assert.deepEqual(core.onWsMessage("offer"), misorderedHostCommands);
     assert.deepEqual(core.onWsOpen(), [{ kind: "sendWebSocket", frame: "auth" }]);
 });
 
@@ -205,35 +208,10 @@ test("injected protocol core rejects obsolete direct media host commands", () =>
     }
 });
 
-test("injected protocol core validates host command ordering", () => {
-    for (const [method, commands, args = []] of [
-        ["onWsMessage", [negotiationCommand(NEGOTIATION_KIND.OFFER)], ["offer"]],
-        [
-            "onWsMessage",
-            [{ kind: "createPeerConnection" }, negotiationCommand(NEGOTIATION_KIND.RENEGOTIATE)],
-            ["renegotiate"]
-        ],
-        ["disconnect", [{ kind: "closePeerConnection" }, { kind: "closeWebSocket", code: 1000 }]],
-        [
-            "onWsClose",
-            [{ kind: "scheduleTimer", id: 1, ms: 1000 }, { kind: "closePeerConnection" }],
-            [1011]
-        ]
-    ]) {
-        assertInjectedCoreThrows(
-            {
-                [method]: () => commands
-            },
-            (core) => core[method](...args)
-        );
-    }
-});
-
-test("injected protocol core validates pending request commands", () => {
+test("injected protocol core validates pending request start commands", () => {
     for (const [method, commands, args = []] of [
         ["startRecording", [beginPendingRequest({ timeoutTimerId: 1 })]],
         ["startRecording", [beginPendingRequest({ kind: "unknown" })]],
-        ["startRecording", [{ kind: "resolvePendingRequest", requestId: "missing", ok: false }]],
         ["connect", [beginPendingRequest()], ["ws://example.test", "jwt", null]],
         [
             "startRecording",
