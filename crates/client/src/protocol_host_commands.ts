@@ -45,11 +45,6 @@ export type PendingRequest = {
     timeoutMs: number;
 };
 
-export type ProtocolRequestResult = {
-    commands: HostCommand[];
-    pendingRequest: PendingRequest | null;
-};
-
 export type HostCommand =
     | { kind: typeof COMMAND_KIND.SEND_WEB_SOCKET; frame: string }
     | {
@@ -69,12 +64,17 @@ export type HostCommand =
     | { kind: typeof COMMAND_KIND.CLOSE_WEB_SOCKET; code: number }
     | { kind: typeof COMMAND_KIND.EMIT_STATE_CHANGE; state: ConnectionState; cause?: string }
     | { kind: typeof COMMAND_KIND.EMIT_UPDATE; update: HostUpdate }
+    | { kind: typeof COMMAND_KIND.BEGIN_PENDING_REQUEST; request: PendingRequest }
     | { kind: typeof COMMAND_KIND.RESOLVE_PENDING_REQUEST; requestId: string; ok: boolean }
     | { kind: typeof COMMAND_KIND.SCHEDULE_TIMER; id: number; ms: number }
     | { kind: typeof COMMAND_KIND.CANCEL_TIMER; id: number }
     | { kind: typeof COMMAND_KIND.CONNECT; url: string };
 
-export function validateHostCommandShapes(value: unknown, context: string): HostCommand[] {
+export function validateHostCommandShapes(
+    value: unknown,
+    context: string,
+    requestMethod = false
+): HostCommand[] {
     if (!Array.isArray(value)) {
         throw new Error(`${context} must return an array of host commands`);
     }
@@ -83,31 +83,25 @@ export function validateHostCommandShapes(value: unknown, context: string): Host
         if (!Object.hasOwn(value, index)) {
             throw new Error(`${context} command #${index} must be a host command`);
         }
-        commands.push(validateHostCommand(value[index], `${context} command #${index}`));
+        const command = validateHostCommand(value[index], `${context} command #${index}`);
+        if (command.kind === COMMAND_KIND.BEGIN_PENDING_REQUEST) {
+            if (!requestMethod || index !== 0) {
+                throw new Error(`${context} command #${index} cannot begin a pending request here`);
+            }
+        }
+        commands.push(command);
     }
     return commands;
 }
 
-export function validateHostCommandBatch(value: unknown, context: string): HostCommand[] {
-    const commands = validateHostCommandShapes(value, context);
-    validateHostCommandOrder(commands, context);
-    return commands;
-}
-
-export function validateProtocolRequestResult(
+export function validateHostCommandBatch(
     value: unknown,
     context: string,
-    validateCommands: (value: unknown, context: string) => HostCommand[]
-): ProtocolRequestResult {
-    const result = asRecord(value, context);
-    const pendingRequest = result.pendingRequest;
-    return {
-        commands: validateCommands(result.commands, `${context}.commands`),
-        pendingRequest:
-            pendingRequest == null
-                ? null
-                : validatePendingRequest(pendingRequest, `${context}.pendingRequest`)
-    };
+    requestMethod = false
+): HostCommand[] {
+    const commands = validateHostCommandShapes(value, context, requestMethod);
+    validateHostCommandOrder(commands, context);
+    return commands;
 }
 
 function validateHostCommandOrder(commands: HostCommand[], context: string): void {
@@ -226,6 +220,11 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
             return {
                 kind,
                 update: validateHostUpdate(command.update, `${context}.update`)
+            };
+        case COMMAND_KIND.BEGIN_PENDING_REQUEST:
+            return {
+                kind,
+                request: validatePendingRequest(command.request, `${context}.request`)
             };
         case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
             requireString(command.requestId, `${context}.requestId`);

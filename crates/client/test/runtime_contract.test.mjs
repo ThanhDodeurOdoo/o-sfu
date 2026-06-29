@@ -71,10 +71,10 @@ function validCore(overrides = {}) {
             return [];
         },
         startRecording() {
-            return requestResult();
+            return [];
         },
         stopRecording() {
-            return requestResult();
+            return [];
         },
         submitNegotiationAnswer() {
             return [];
@@ -101,11 +101,10 @@ function pendingRequest(overrides = {}) {
     };
 }
 
-function requestResult(overrides = {}) {
+function beginPendingRequest(overrides = {}) {
     return {
-        commands: [],
-        pendingRequest: null,
-        ...overrides
+        kind: "beginPendingRequest",
+        request: pendingRequest(overrides)
     };
 }
 
@@ -230,20 +229,23 @@ test("injected protocol core validates host command ordering", () => {
     }
 });
 
-test("injected protocol core validates recording request results", () => {
-    for (const result of [
-        [],
-        requestResult({ pendingRequest: pendingRequest({ timeoutTimerId: 1 }) }),
-        requestResult({ pendingRequest: pendingRequest({ kind: "unknown" }) }),
-        requestResult({
-            commands: [{ kind: "resolvePendingRequest", requestId: "missing", ok: false }]
-        })
+test("injected protocol core validates pending request commands", () => {
+    for (const [method, commands, args = []] of [
+        ["startRecording", [beginPendingRequest({ timeoutTimerId: 1 })]],
+        ["startRecording", [beginPendingRequest({ kind: "unknown" })]],
+        ["startRecording", [{ kind: "resolvePendingRequest", requestId: "missing", ok: false }]],
+        ["connect", [beginPendingRequest()], ["ws://example.test", "jwt", null]],
+        [
+            "startRecording",
+            [{ kind: "sendWebSocket", frame: "before-request" }, beginPendingRequest()]
+        ],
+        ["startRecording", [beginPendingRequest(), beginPendingRequest({ requestId: "request-2" })]]
     ]) {
         assertInjectedCoreThrows(
             {
-                startRecording: () => result
+                [method]: () => commands
             },
-            (core) => core.startRecording()
+            (core) => core[method](...args)
         );
     }
 });

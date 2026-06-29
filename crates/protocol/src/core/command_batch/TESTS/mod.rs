@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::{PendingRequest, PendingRequestKind};
 
 macro_rules! assert_invalid {
     ($commands:expr, $error:pat) => {
@@ -71,6 +72,14 @@ fn validation_rejects_invalid_command_order() {
             index: 0
         }
     );
+    assert_invalid!(
+        &[close_websocket(), begin_pending_request()],
+        CommandBatchError::InvalidPendingRequestStart { index: 1 }
+    );
+    assert_invalid!(
+        &[begin_pending_request(), begin_pending_request()],
+        CommandBatchError::InvalidPendingRequestStart { index: 1 }
+    );
 }
 
 #[test]
@@ -90,6 +99,17 @@ const fn recovery_timer() -> Command {
     Command::ScheduleTimer {
         id: RECOVERY_TIMER_ID,
         ms: 1_000,
+    }
+}
+
+fn begin_pending_request() -> Command {
+    Command::BeginPendingRequest {
+        request: PendingRequest {
+            request_id: RequestId::new("record-1"),
+            kind: PendingRequestKind::StartRecording,
+            timeout_timer_id: 10_000,
+            timeout_ms: 5_000,
+        },
     }
 }
 

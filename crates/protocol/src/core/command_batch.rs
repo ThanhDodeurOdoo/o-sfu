@@ -68,6 +68,9 @@ impl CommandBatch {
         let mut recovery_index = None;
         for (index, command) in commands.iter().enumerate() {
             match command {
+                Command::BeginPendingRequest { .. } if index != 0 => {
+                    return Err(CommandBatchError::InvalidPendingRequestStart { index });
+                }
                 Command::ApplyNegotiation { kind, .. } => {
                     let previous = index
                         .checked_sub(1)
@@ -173,6 +176,9 @@ enum CommandBatchError {
         request_id: RequestId,
         index: usize,
     },
+    InvalidPendingRequestStart {
+        index: usize,
+    },
 }
 
 impl fmt::Display for CommandBatchError {
@@ -204,6 +210,9 @@ impl fmt::Display for CommandBatchError {
                 formatter,
                 "request resolution at index {index} references unknown pending request {request_id:?}"
             ),
+            Self::InvalidPendingRequestStart { index } => {
+                write!(formatter, "invalid pending request start at index {index}")
+            }
         }
     }
 }

@@ -22,8 +22,7 @@ use libfuzzer_sys::{
 };
 use o_sfu_protocol::{
     host::{
-        Command, ConnectionState, PendingRequest, PendingRequestKind, ProtocolCore,
-        RECOVERY_TIMER_ID,
+        Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID,
     },
     wire::{
         AvailableFeatures, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
@@ -361,20 +360,12 @@ fuzz_target!(|scenario: Scenario| {
                 let _ = core.disconnect();
             }
             Step::StartRecording { options, followup } => {
-                let result = core.start_recording(options.into_protocol());
-                process_pending_request_followup(
-                    &mut core,
-                    result.pending_request.as_ref(),
-                    followup,
-                );
+                let commands = core.start_recording(options.into_protocol());
+                process_pending_request_followup(&mut core, commands.as_slice(), followup);
             }
             Step::StopRecording { followup } => {
-                let result = core.stop_recording();
-                process_pending_request_followup(
-                    &mut core,
-                    result.pending_request.as_ref(),
-                    followup,
-                );
+                let commands = core.stop_recording();
+                process_pending_request_followup(&mut core, commands.as_slice(), followup);
             }
             Step::Connect(connect) => {
                 connect_core(&mut core, &connect);
@@ -763,10 +754,10 @@ fn process_negotiation_followup(
 
 fn process_pending_request_followup(
     core: &mut ProtocolCore,
-    request: Option<&PendingRequest>,
+    commands: &[Command],
     followup: PendingRequestFollowup,
 ) {
-    let Some(request) = request else {
+    let Some(Command::BeginPendingRequest { request }) = commands.first() else {
         return;
     };
     if let Some(frame) = pending_request_response_frame(&request.request_id, request.kind, followup)

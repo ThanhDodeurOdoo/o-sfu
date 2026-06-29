@@ -236,15 +236,17 @@ export class FakeProtocolCore {
     }
 }
 
-const beginRecordingRequest = (kind) => ({
-    commands: [],
-    pendingRequest: {
-        requestId: "record-1",
-        kind,
-        timeoutMs: 5000,
-        timeoutTimerId: 10000
+const beginRecordingRequest = (kind) => [
+    {
+        kind: "beginPendingRequest",
+        request: {
+            requestId: "record-1",
+            kind,
+            timeoutMs: 5000,
+            timeoutTimerId: 10000
+        }
     }
-});
+];
 
 export const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
