@@ -23,8 +23,8 @@ use o_sfu_router::{
 
 use super::{
     ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerRouteTransportRef,
-    ConsumerSetupOutcome, ConsumerState, PendingConsumerSetup, ProducerRuntimeId,
-    PublishedProducer, PublishedSourceInstall,
+    ConsumerSetupOutcome, ConsumerState, DeclaredConsumerSetup, PendingConsumerSetup,
+    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -49,6 +49,21 @@ use crate::{
         },
     },
 };
+
+impl PendingConsumerSetup {
+    pub(crate) fn declared(
+        self,
+        media: TransportMediaId,
+        mid: Option<String>,
+    ) -> DeclaredConsumerSetup {
+        let route = self.target.transport_consumer_route(media);
+        DeclaredConsumerSetup {
+            pending: self,
+            route,
+            mid,
+        }
+    }
+}
 
 impl ConsumerRouteTarget {
     pub(in crate::engine::room) fn for_test(
@@ -460,15 +475,9 @@ fn pending_consumer_setup() -> (
     )
 }
 
-fn commit_pending_setup(
-    state: &mut RoomState,
-    setup: PendingConsumerSetup,
-) -> ConsumerSetupOutcome {
-    let (_, _, outcome) = state.commit_pending_consumer_setup(
-        setup,
-        TransportMediaId::new(20),
-        Some(String::from("m0")),
-    );
+fn commit_setup(state: &mut RoomState, setup: PendingConsumerSetup) -> ConsumerSetupOutcome {
+    let setup = setup.declared(TransportMediaId::new(20), Some(String::from("m0")));
+    let (_, _, outcome) = state.commit_declared_consumer_setup(setup);
     outcome
 }
 
@@ -659,7 +668,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
         snapshot,
         transport_activity_update,
         ..
-    } = commit_pending_setup(&mut state, setup)
+    } = commit_setup(&mut state, setup)
     else {
         panic!("current room state should still accept the setup");
     };
@@ -695,11 +704,10 @@ fn consumer_setup_commit_releases_stale_receiver_plan() {
         .get_mut(&subscriber_user_id)
         .expect("subscriber should exist")
         .connection_id = ConnectionId::from_raw(900);
-    let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
+    let ConsumerSetupOutcome::Released(..) = commit_setup(&mut state, setup) else {
         panic!("stale receiver setup should be released");
     };
 
-    assert!(relays.is_empty());
     assert_eq!(state.media_counts().subscriptions, 0);
 }
 
@@ -720,11 +728,10 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
         .source_id_for_owner_stream(&publisher_user_id, &stream_id)
         .expect("publisher source should exist");
     assert!(state.topology.remove_source_for_test(source_id));
-    let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
+    let ConsumerSetupOutcome::Released(..) = commit_setup(&mut state, setup) else {
         panic!("stale producer setup should be released");
     };
 
-    assert!(relays.is_empty());
     assert_eq!(state.media_counts().subscriptions, 0);
 }
 
@@ -749,11 +756,10 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_route_graph_rejection(
     state.topology.remove_route_graph_entry_for_test(&key);
     assert!(!state.topology.has_consumer_setup_or_route(&key));
 
-    let ConsumerSetupOutcome::Released(relays) = commit_pending_setup(&mut state, setup) else {
+    let ConsumerSetupOutcome::Released(..) = commit_setup(&mut state, setup) else {
         panic!("setup with rejected route graph commit should be released");
     };
 
-    assert!(relays.is_empty());
     assert_eq!(state.consumer_count(), 0);
     assert_eq!(state.media_counts().subscriptions, 0);
     assert!(

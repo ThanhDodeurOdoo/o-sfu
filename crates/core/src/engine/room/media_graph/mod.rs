@@ -32,7 +32,8 @@ mod route_graph_tests;
 pub use self::subscription::ConsumerRouteState;
 pub(super) use self::{
     consumer_setup::{
-        ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
+        CommittedConsumerSetup, ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget,
+        DeclaredConsumerSetup, PendingConsumerSetup,
     },
     ids::{ConsumerRuntimeId, ProducerRuntimeId},
     producer::{

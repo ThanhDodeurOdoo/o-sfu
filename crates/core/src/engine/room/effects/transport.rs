@@ -3,7 +3,7 @@ use std::mem;
 use o_sfu_router::MediaKind;
 use tracing::warn;
 
-use super::{RoomGaugeDelta, receiver_route::ReceiverRouteSetup};
+use super::{RoomGaugeDelta, receiver_route::execute_receiver_route_setup};
 use crate::{
     TransportEffectOutcome,
     engine::{
@@ -18,7 +18,8 @@ use crate::{
             cleanup::TransportCleanupOperation,
             media_graph::{
                 ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects,
-                ReceiverRouteActivity, ReceiverRouteWork, ResolvedRelayRouteEffect,
+                PendingConsumerSetup, ReceiverRouteActivity, ReceiverRouteWork,
+                ResolvedRelayRouteEffect,
             },
             source_policy::{
                 ConsumerPacketSelectionUpdate, SourcePolicyCommit, SourcePolicyWakeups,
@@ -33,7 +34,7 @@ pub(super) struct RoomTransportPlan {
     topology: MediaTopologyEffects,
     receiver_route_relays: Vec<ResolvedRelayRouteEffect>,
     routes: RoomRouteBatch,
-    setups: Vec<ReceiverRouteSetup>,
+    setups: Vec<(PendingConsumerSetup, ConsumerSetupOrigin)>,
 }
 
 impl RoomTransportPlan {
@@ -71,11 +72,8 @@ impl RoomTransportPlan {
                 .consumers
                 .push(ConsumerEffect::Activity(activity, event));
         }
-        self.setups.extend(
-            work.setups
-                .into_iter()
-                .map(|setup| ReceiverRouteSetup::new(setup, origin)),
-        );
+        self.setups
+            .extend(work.setups.into_iter().map(|setup| (setup, origin)));
     }
 
     pub(super) fn push_keyframes(&mut self, targets: Vec<ConsumerRouteTarget>) {
@@ -102,8 +100,8 @@ impl RoomTransportPlan {
             room.execute_transport_cleanup_operations(media_transport, &cleanup)
                 .await;
         }
-        for setup in self.setups {
-            setup.execute(room, media_transport, &mut outcome).await;
+        for (setup, origin) in self.setups {
+            execute_receiver_route_setup(setup, origin, room, media_transport, &mut outcome).await;
         }
         outcome
     }
