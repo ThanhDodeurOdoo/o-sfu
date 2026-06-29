@@ -14,11 +14,7 @@ import {
     validateRecordingState
 } from "./public_api_validation.js";
 import type { NegotiationKind } from "./protocol_contract.js";
-import {
-    type HostCommand,
-    validateHostCommandBatch,
-    validateHostCommandShapes
-} from "./protocol_host_commands.js";
+import { type HostCommand, validateHostCommandShapes } from "./protocol_host_commands.js";
 
 export type { HostCommand, PendingRequest } from "./protocol_host_commands.js";
 
@@ -56,20 +52,6 @@ export function configureDefaultWasmProtocolCoreProvider(provider: ProtocolCoreP
 }
 
 export function wrapProtocolCoreBindings(bindings: ProtocolCoreBindings): ProtocolCoreBindings {
-    return wrapProtocolCoreBindingsWith(bindings, validateHostCommandBatch);
-}
-
-export function createProtocolCore(): ProtocolCoreBindings {
-    return wrapProtocolCoreBindingsWith(
-        requireDefaultWasmProtocolCoreProvider()(),
-        validateHostCommandShapes
-    );
-}
-
-function wrapProtocolCoreBindingsWith(
-    bindings: ProtocolCoreBindings,
-    validateCommands: (value: unknown, context: string, requestMethod?: boolean) => HostCommand[]
-): ProtocolCoreBindings {
     return {
         get state(): ConnectionState {
             return validateConnectionState(bindings.state, "protocol core state");
@@ -81,39 +63,54 @@ function wrapProtocolCoreBindingsWith(
             return validateRecordingState(bindings.recordingState, "protocol core recordingState");
         },
         connect: (url, jwt, room) =>
-            validateCommands(bindings.connect(url, jwt, room), "protocol core connect()"),
-        onWsOpen: () => validateCommands(bindings.onWsOpen(), "protocol core onWsOpen()"),
+            validateHostCommandShapes(bindings.connect(url, jwt, room), "protocol core connect()"),
+        onWsOpen: () => validateHostCommandShapes(bindings.onWsOpen(), "protocol core onWsOpen()"),
         onWsMessage: (frame) =>
-            validateCommands(bindings.onWsMessage(frame), "protocol core onWsMessage()"),
+            validateHostCommandShapes(bindings.onWsMessage(frame), "protocol core onWsMessage()"),
         onTransportReady: () =>
-            validateCommands(bindings.onTransportReady(), "protocol core onTransportReady()"),
+            validateHostCommandShapes(
+                bindings.onTransportReady(),
+                "protocol core onTransportReady()"
+            ),
         onWsClose: (code) =>
-            validateCommands(bindings.onWsClose(code), "protocol core onWsClose()"),
+            validateHostCommandShapes(bindings.onWsClose(code), "protocol core onWsClose()"),
         onTimer: (timerId) =>
-            validateCommands(bindings.onTimer(timerId), "protocol core onTimer()"),
+            validateHostCommandShapes(bindings.onTimer(timerId), "protocol core onTimer()"),
         publish: (type, active) =>
-            validateCommands(bindings.publish(type, active), "protocol core publish()"),
+            validateHostCommandShapes(bindings.publish(type, active), "protocol core publish()"),
         subscribe: (sessionId, states) =>
-            validateCommands(bindings.subscribe(sessionId, states), "protocol core subscribe()"),
+            validateHostCommandShapes(
+                bindings.subscribe(sessionId, states),
+                "protocol core subscribe()"
+            ),
         updateInfo: (info) =>
-            validateCommands(bindings.updateInfo(info), "protocol core updateInfo()"),
+            validateHostCommandShapes(bindings.updateInfo(info), "protocol core updateInfo()"),
         broadcast: (message) =>
-            validateCommands(bindings.broadcast(message), "protocol core broadcast()"),
+            validateHostCommandShapes(bindings.broadcast(message), "protocol core broadcast()"),
         startRecording: (options) =>
-            validateCommands(
+            validateHostCommandShapes(
                 bindings.startRecording(options),
                 "protocol core startRecording()",
                 true
             ),
         stopRecording: () =>
-            validateCommands(bindings.stopRecording(), "protocol core stopRecording()", true),
+            validateHostCommandShapes(
+                bindings.stopRecording(),
+                "protocol core stopRecording()",
+                true
+            ),
         submitNegotiationAnswer: (requestId, negotiationKind, sdp) =>
-            validateCommands(
+            validateHostCommandShapes(
                 bindings.submitNegotiationAnswer(requestId, negotiationKind, sdp),
                 "protocol core submitNegotiationAnswer()"
             ),
-        disconnect: () => validateCommands(bindings.disconnect(), "protocol core disconnect()")
+        disconnect: () =>
+            validateHostCommandShapes(bindings.disconnect(), "protocol core disconnect()")
     };
+}
+
+export function createProtocolCore(): ProtocolCoreBindings {
+    return wrapProtocolCoreBindings(requireDefaultWasmProtocolCoreProvider()());
 }
 
 function requireDefaultWasmProtocolCoreProvider(): ProtocolCoreProvider {
