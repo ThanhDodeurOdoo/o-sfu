@@ -108,33 +108,31 @@ impl RouteFixture {
 
     async fn request_standalone_keyframe(&self) {
         let mut route_control = RouteControlPlan::new();
-        route_control.push_consumer(keyframe_control(&self.target));
-        execute_route_control(
-            route_control,
-            Vec::new(),
-            vec![ConsumerRouteFinish::Keyframe(self.target.clone())],
-            &self.media_transport,
-        )
-        .await;
+        route_control.push_consumer(
+            keyframe_control(&self.target),
+            ConsumerRouteFinish::Keyframe(self.target.clone()),
+        );
+        execute_route_control(route_control, &self.media_transport).await;
         assert_eq!(self.metrics.snapshot().rtc_keyframe_requests_forwarded(), 1);
     }
 
     async fn pause_route_activity(&self) -> Result<(), io::Error> {
         let activity = ReceiverRouteActivity::new(self.target.clone(), false);
         let mut route_control = RouteControlPlan::new();
-        route_control.push_producer(self.route.source().clone(), ProducerActivity::Inactive);
-        route_control.push_consumer(activity_control(&activity));
-
-        let outcome = execute_route_control(
-            route_control,
-            vec![self.producer_finish(ProducerActivity::Inactive)],
-            vec![ConsumerRouteFinish::Activity(
+        route_control.push_producer(
+            self.route.source().clone(),
+            ProducerActivity::Inactive,
+            self.producer_finish(ProducerActivity::Inactive),
+        );
+        route_control.push_consumer(
+            activity_control(&activity),
+            ConsumerRouteFinish::Activity(
                 activity,
                 diagnostics(self.route.consumer_session_key(), "consumer.activity"),
-            )],
-            &self.media_transport,
-        )
-        .await;
+            ),
+        );
+
+        let outcome = execute_route_control(route_control, &self.media_transport).await;
 
         assert_eq!(outcome.diagnostics.len(), 2);
         assert!(
@@ -173,15 +171,12 @@ impl RouteFixture {
             target: self.target.clone(),
         };
         let mut route_control = RouteControlPlan::new();
-        route_control.push_consumer(source_selection_control(&selection));
+        route_control.push_consumer(
+            source_selection_control(&selection),
+            ConsumerRouteFinish::SourceSelection(selection),
+        );
 
-        let outcome = execute_route_control(
-            route_control,
-            Vec::new(),
-            vec![ConsumerRouteFinish::SourceSelection(selection)],
-            &self.media_transport,
-        )
-        .await;
+        let outcome = execute_route_control(route_control, &self.media_transport).await;
 
         assert_eq!(outcome.packet_updates, vec![update]);
         assert_eq!(self.keyframe_requests(), keyframes_before + 1);
