@@ -7,15 +7,15 @@ use super::{
     rtc::{RouteControlRequest, RtcWorkerCommand},
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[must_use = "route-control plans must be executed or intentionally dropped"]
-pub(crate) struct RouteControlPlan {
-    producers: Vec<ProducerRouteControl>,
-    consumers: Vec<ConsumerRouteControl>,
+pub(crate) struct RouteControlPlan<P = (), C = ()> {
+    producers: Vec<(ProducerRouteControl, P)>,
+    consumers: Vec<(ConsumerRouteControl, C)>,
     receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
 }
 
-impl RouteControlPlan {
+impl<P, C> RouteControlPlan<P, C> {
     pub(crate) const fn new() -> Self {
         Self {
             producers: Vec::new(),
@@ -24,17 +24,28 @@ impl RouteControlPlan {
         }
     }
 
-    pub(crate) fn push_producer(&mut self, source: TransportSourceKey, activity: ProducerActivity) {
+    pub(crate) fn push_producer(
+        &mut self,
+        source: TransportSourceKey,
+        activity: ProducerActivity,
+        finish: P,
+    ) {
         self.producers
-            .push(ProducerRouteControl { source, activity });
+            .push((ProducerRouteControl { source, activity }, finish));
     }
 
-    pub(crate) fn push_consumer(&mut self, control: ConsumerRouteControl) {
-        self.consumers.push(control);
+    pub(crate) fn push_consumer(&mut self, control: ConsumerRouteControl, finish: C) {
+        self.consumers.push((control, finish));
     }
 
     pub(crate) fn set_receiver_bwe_targets(&mut self, updates: Vec<ReceiverBweTargetUpdate>) {
         self.receiver_bwe_targets = updates;
+    }
+}
+
+impl<P, C> Default for RouteControlPlan<P, C> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -78,10 +89,10 @@ impl ConsumerRouteControl {
     }
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct RouteControlOutcome {
-    pub(crate) producers: Vec<TransportResult<()>>,
-    pub(crate) consumers: Vec<ConsumerRouteControlOutcome>,
+#[derive(Debug)]
+pub(crate) struct RouteControlOutcome<P, C> {
+    pub(crate) producers: Vec<(P, TransportResult<()>)>,
+    pub(crate) consumers: Vec<(C, ConsumerRouteControlOutcome)>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -241,7 +252,10 @@ impl MediaTransport {
     /// consumer packet gates run before activity and keyframes for the same route
     /// a packet-gate failure suppresses later route work so transport state does not
     /// advertise activity for a packet policy that was not installed
-    pub(crate) async fn apply_route_control(&self, plan: RouteControlPlan) -> RouteControlOutcome {
+    pub(crate) async fn apply_route_control<P, C>(
+        &self,
+        plan: RouteControlPlan<P, C>,
+    ) -> RouteControlOutcome<P, C> {
         let RouteControlPlan {
             producers,
             consumers,
@@ -254,33 +268,33 @@ impl MediaTransport {
             producers: Vec::with_capacity(producers.len()),
             consumers: Vec::with_capacity(consumers.len()),
         };
-        for control in producers {
-            outcome.producers.push(
-                self.set_producer_active(&control.source, control.activity)
-                    .await,
-            );
+        for (control, finish) in producers {
+            let result = self
+                .set_producer_active(&control.source, control.activity)
+                .await;
+            outcome.producers.push((finish, result));
         }
-        let packet_gates: Vec<_> = consumers
+        let packet_gate_updates: Vec<_> = consumers
             .iter()
-            .filter_map(|control| {
-                control.packet_gate.clone().map(|packet_gate| {
-                    ConsumerPacketGateUpdate::new(control.route.clone(), packet_gate)
+            .filter_map(|(control, _)| {
+                control.packet_gate.as_ref().map(|packet_gate| {
+                    ConsumerPacketGateUpdate::new(control.route.clone(), packet_gate.clone())
                 })
             })
             .collect();
-        let mut packet_gate_results = if packet_gates.is_empty() {
+        let mut packet_gate_results = if packet_gate_updates.is_empty() {
             Vec::new()
         } else {
-            self.set_consumer_packet_gates(&packet_gates).await
+            self.set_consumer_packet_gates(&packet_gate_updates).await
         }
         .into_iter();
-        for control in consumers {
+        for (control, finish) in consumers {
             let packet_gate_failed = control.packet_gate.is_some()
                 && !matches!(packet_gate_results.next(), Some(Ok(())));
-            outcome.consumers.push(
-                self.apply_consumer_route_control(control, packet_gate_failed)
-                    .await,
-            );
+            let result = self
+                .apply_consumer_route_control(control, packet_gate_failed)
+                .await;
+            outcome.consumers.push((finish, result));
         }
         outcome
     }

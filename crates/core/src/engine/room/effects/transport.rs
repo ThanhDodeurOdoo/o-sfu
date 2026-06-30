@@ -33,9 +33,7 @@ use crate::{
 pub(super) struct RoomTransportPlan {
     topology: MediaTopologyEffects,
     receiver_route_relays: Vec<ResolvedRelayRouteEffect>,
-    route_control: RouteControlPlan,
-    producer_finishes: Vec<ProducerRouteFinish>,
-    consumer_finishes: Vec<ConsumerRouteFinish>,
+    route_control: RoomRouteControlPlan,
     setups: Vec<(PendingConsumerSetup, ConsumerSetupOrigin)>,
 }
 
@@ -55,12 +53,15 @@ impl RoomTransportPlan {
         diagnostics: DiagnosticsEventData,
     ) {
         let activity = ProducerActivity::from_active(active);
-        self.route_control.push_producer(source.clone(), activity);
-        self.producer_finishes.push(ProducerRouteFinish {
-            source,
+        self.route_control.push_producer(
+            source.clone(),
             activity,
-            diagnostics,
-        });
+            ProducerRouteFinish {
+                source,
+                activity,
+                diagnostics,
+            },
+        );
     }
 
     pub(super) fn push_receiver_work(
@@ -72,10 +73,10 @@ impl RoomTransportPlan {
         self.receiver_route_relays.extend(work.relays);
         for activity in work.activities {
             let event = diagnostics(&activity);
-            self.route_control
-                .push_consumer(activity_control(&activity));
-            self.consumer_finishes
-                .push(ConsumerRouteFinish::Activity(activity, event));
+            self.route_control.push_consumer(
+                activity_control(&activity),
+                ConsumerRouteFinish::Activity(activity, event),
+            );
         }
         self.setups
             .extend(work.setups.into_iter().map(|setup| (setup, origin)));
@@ -83,9 +84,10 @@ impl RoomTransportPlan {
 
     pub(super) fn push_keyframes(&mut self, targets: Vec<ConsumerRouteTarget>) {
         for target in targets {
-            self.route_control.push_consumer(keyframe_control(&target));
-            self.consumer_finishes
-                .push(ConsumerRouteFinish::Keyframe(target));
+            self.route_control.push_consumer(
+                keyframe_control(&target),
+                ConsumerRouteFinish::Keyframe(target),
+            );
         }
     }
 
@@ -101,13 +103,7 @@ impl RoomTransportPlan {
         let (topology_relays, cleanup) = self.topology.into_parts();
         execute_relay_route_effects(room, media_transport, &topology_relays).await;
         execute_relay_route_effects(room, media_transport, &self.receiver_route_relays).await;
-        let route_outcome = execute_route_control(
-            self.route_control,
-            self.producer_finishes,
-            self.consumer_finishes,
-            media_transport,
-        )
-        .await;
+        let route_outcome = execute_route_control(self.route_control, media_transport).await;
         outcome.diagnostics.extend(route_outcome.diagnostics);
         if !cleanup.is_empty() {
             room.execute_transport_cleanup_operations(media_transport, &cleanup)
@@ -124,21 +120,15 @@ impl RoomTransportPlan {
         media_transport: &MediaTransport,
     ) -> SourcePolicyCommit {
         let SourcePolicyCommit(mut plan) = commit;
-        let packet_updates = mem::take(&mut plan.route_packet_updates);
         let mut route_control = RouteControlPlan::new();
         route_control.set_receiver_bwe_targets(mem::take(&mut plan.receiver_bwe_targets));
-        let mut consumer_finishes = Vec::with_capacity(packet_updates.len());
-        for update in packet_updates {
-            route_control.push_consumer(source_selection_control(&update));
-            consumer_finishes.push(ConsumerRouteFinish::SourceSelection(update));
+        for update in mem::take(&mut plan.route_packet_updates) {
+            route_control.push_consumer(
+                source_selection_control(&update),
+                ConsumerRouteFinish::SourceSelection(update),
+            );
         }
-        let route_outcome = execute_route_control(
-            route_control,
-            Vec::new(),
-            consumer_finishes,
-            media_transport,
-        )
-        .await;
+        let route_outcome = execute_route_control(route_control, media_transport).await;
         plan.state_packet_updates
             .extend(route_outcome.packet_updates);
         SourcePolicyCommit(plan)
@@ -164,6 +154,8 @@ struct ProducerRouteFinish {
     activity: ProducerActivity,
     diagnostics: DiagnosticsEventData,
 }
+
+type RoomRouteControlPlan = RouteControlPlan<ProducerRouteFinish, ConsumerRouteFinish>;
 
 #[derive(Debug)]
 enum ConsumerRouteFinish {
@@ -204,45 +196,30 @@ pub(super) async fn execute_setup_activity_correction(
         ConsumerRouteControl::new(route.clone())
             .activity(ConsumerActivity::from_active(active))
             .request_keyframe(active && kind == MediaKind::Video),
+        ConsumerRouteFinish::SetupActivity { route, active },
     );
-    execute_route_control(
-        route_control,
-        Vec::new(),
-        vec![ConsumerRouteFinish::SetupActivity { route, active }],
-        media_transport,
-    )
-    .await;
+    execute_route_control(route_control, media_transport).await;
 }
 
 async fn execute_route_control(
-    route_control: RouteControlPlan,
-    producer_finishes: Vec<ProducerRouteFinish>,
-    consumer_finishes: Vec<ConsumerRouteFinish>,
+    route_control: RoomRouteControlPlan,
     media_transport: &MediaTransport,
 ) -> RoomRouteOutcome {
     let transport_outcome = media_transport.apply_route_control(route_control).await;
-    debug_assert_eq!(producer_finishes.len(), transport_outcome.producers.len());
-    debug_assert_eq!(consumer_finishes.len(), transport_outcome.consumers.len());
 
     let mut outcome = RoomRouteOutcome::default();
-    for (producer, result) in producer_finishes
-        .into_iter()
-        .zip(transport_outcome.producers)
-    {
+    for (completion, result) in transport_outcome.producers {
         if result.is_err() {
             warn!(
-                source = ?producer.source,
-                active = producer.activity.is_active(),
+                source = ?completion.source,
+                active = completion.activity.is_active(),
                 "media transport failed to update producer route activity"
             );
         }
-        outcome.diagnostics.push(producer.diagnostics);
+        outcome.diagnostics.push(completion.diagnostics);
     }
-    for (consumer, result) in consumer_finishes
-        .into_iter()
-        .zip(transport_outcome.consumers)
-    {
-        consumer.finish(result, &mut outcome);
+    for (completion, result) in transport_outcome.consumers {
+        completion.finish(result, &mut outcome);
     }
     outcome
 }

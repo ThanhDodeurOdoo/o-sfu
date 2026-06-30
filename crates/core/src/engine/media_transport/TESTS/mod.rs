@@ -151,12 +151,13 @@ async fn set_remote_relay_and_consumer_active(
         remote_consumer_media_id,
         TransportSourceKey::new(source_session.clone(), source_media_id),
     );
-    let mut plan = RouteControlPlan::new();
+    let mut plan: RouteControlPlan<(), ()> = RouteControlPlan::new();
     plan.push_consumer(
         ConsumerRouteControl::new(route).activity(ConsumerActivity::from_active(active)),
+        (),
     );
     let outcome = adapter.apply_route_control(plan).await;
-    let [consumer_outcome] = outcome.consumers.as_slice() else {
+    let [((), consumer_outcome)] = outcome.consumers.as_slice() else {
         panic!("one consumer route-control outcome should be returned");
     };
     assert!(!consumer_outcome.activity_failed());
@@ -285,6 +286,14 @@ async fn media_transport_close_session_without_packet_loop_does_not_start_worker
 
 #[tokio::test]
 async fn media_transport_route_control_plan_updates_source_route() {
+    #[derive(Debug, PartialEq, Eq)]
+    enum Finish {
+        Producer,
+        MissingProducer,
+        Consumer,
+        MissingConsumer,
+    }
+
     let adapter = test_media_transport(1, test_rtc_range(1));
     let source_session = test_session_key(60, 0, 1, UserId::Integer(1));
     let consumer_session = test_session_key(60, 0, 2, UserId::Integer(2));
@@ -321,25 +330,41 @@ async fn media_transport_route_control_plan_updates_source_route() {
         ReceiverBweTargetUpdate::new(consumer_session, Bitrate::from_kbps(600)),
         ReceiverBweTargetUpdate::new(missing_session, Bitrate::from_kbps(700)),
     ]);
-    plan.push_producer(source, ProducerActivity::Active);
-    plan.push_producer(missing_source, ProducerActivity::Inactive);
+    plan.push_producer(source, ProducerActivity::Active, Finish::Producer);
+    plan.push_producer(
+        missing_source,
+        ProducerActivity::Inactive,
+        Finish::MissingProducer,
+    );
     plan.push_consumer(
         ConsumerRouteControl::new(route.clone())
             .packet_gate(SourcePacketGate::Rid("lo".into()))
             .activity(ConsumerActivity::Active)
             .request_keyframe(true),
+        Finish::Consumer,
     );
     plan.push_consumer(
         ConsumerRouteControl::new(missing_route).activity(ConsumerActivity::Inactive),
+        Finish::MissingConsumer,
     );
 
     let outcome = adapter.apply_route_control(plan).await;
 
     assert_eq!(
-        outcome.producers,
-        &[Ok(()), Err(TransportAdapterError::TransportUnavailable)]
+        outcome.producers.as_slice(),
+        &[
+            (Finish::Producer, Ok(())),
+            (
+                Finish::MissingProducer,
+                Err(TransportAdapterError::TransportUnavailable),
+            )
+        ]
     );
-    let [valid_consumer, missing_consumer] = outcome.consumers.as_slice() else {
+    let [
+        (Finish::Consumer, valid_consumer),
+        (Finish::MissingConsumer, missing_consumer),
+    ] = outcome.consumers.as_slice()
+    else {
         panic!("route-control plan should return two consumer outcomes");
     };
     assert!(!valid_consumer.packet_gate_failed());
