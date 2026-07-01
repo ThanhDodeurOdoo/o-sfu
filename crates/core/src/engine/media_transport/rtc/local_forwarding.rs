@@ -13,8 +13,10 @@ use str0m::{
 use tracing::debug;
 
 use super::{
-    forwarded_packet::PacketVp8Payload, local_send_rewrite::ProjectedIdentity,
-    slots::ConsumerStreamHandle, state::RtcSessionState,
+    forwarded_packet::PacketVp8Payload,
+    local_send_rewrite::{ProjectedIdentity, SourceTransition},
+    slots::ConsumerStreamHandle,
+    state::RtcSessionState,
 };
 use crate::engine::media_transport::TransportMediaId;
 
@@ -121,11 +123,11 @@ impl LocalPacketDestination {
                 header.timestamp,
                 vp8_identity,
             )?;
-            if identity.source_switched {
+            if let SourceTransition::Switched { previous_ssrc } = identity.transition {
                 debug!(
                     ?self.transport_media_id,
                     mid = ?self.mid,
-                    previous_source_ssrc = ?identity.previous_source_ssrc,
+                    previous_source_ssrc = ?previous_ssrc,
                     source_ssrc = ?header.ssrc,
                     source_rtp_timestamp = header.timestamp,
                     outbound_rtp_timestamp = identity.rtp_timestamp,

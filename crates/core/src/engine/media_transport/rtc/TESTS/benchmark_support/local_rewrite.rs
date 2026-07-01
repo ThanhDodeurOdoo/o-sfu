@@ -1,6 +1,6 @@
 use str0m::rtp::Ssrc;
 
-use super::super::local_send_rewrite::{ConsumerStreamStore, Vp8PayloadIdentity};
+use super::super::local_send_rewrite::{ConsumerStreamStore, SourceTransition, Vp8PayloadIdentity};
 
 const RTP_REWRITE_PACKETS: usize = 4096;
 
@@ -63,7 +63,10 @@ impl LocalRewriteBenchFixture {
                     .wrapping_add(u64::from(identity.rtp_timestamp))
                     .wrapping_add(u64::from(vp8_payload.picture_id.unwrap_or_default()))
                     .wrapping_add(u64::from(vp8_payload.tl0_pic_idx.unwrap_or_default()))
-                    .wrapping_add(u64::from(u8::from(identity.source_switched)));
+                    .wrapping_add(u64::from(u8::from(matches!(
+                        identity.transition,
+                        SourceTransition::Switched { .. }
+                    ))));
             }
         }
         checksum

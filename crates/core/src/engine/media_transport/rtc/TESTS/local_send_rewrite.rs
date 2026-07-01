@@ -183,8 +183,8 @@ fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
 
     assert_eq!(first.rtp_timestamp, 10_000);
     assert_eq!(second.rtp_timestamp, 13_000);
-    assert!(!first.source_switched);
-    assert!(!second.source_switched);
+    assert_eq!(first.transition, SourceTransition::Unchanged);
+    assert_eq!(second.transition, SourceTransition::Unchanged);
 }
 
 #[test]
@@ -217,10 +217,14 @@ fn projected_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
     assert_eq!(low.rtp_timestamp, 90_000);
     assert_eq!(high.rtp_timestamp, 90_001);
     assert_eq!(high_next.rtp_timestamp, 93_001);
-    assert!(!low.source_switched);
-    assert_eq!(high.previous_source_ssrc, Some(Ssrc::from(111)));
-    assert!(high.source_switched);
-    assert!(!high_next.source_switched);
+    assert_eq!(low.transition, SourceTransition::Unchanged);
+    assert_eq!(
+        high.transition,
+        SourceTransition::Switched {
+            previous_ssrc: Ssrc::from(111)
+        }
+    );
+    assert_eq!(high_next.transition, SourceTransition::Unchanged);
 }
 
 #[test]
