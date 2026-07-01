@@ -1,17 +1,26 @@
 //! source-policy apply ownership without transport awaits under the room lock
 
+use std::mem;
+
+use tracing::warn;
+
 use super::{
-    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, TransportPacketSelectionUpdate},
+    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
     audio,
-    input::SourcePolicyInput,
+    input::SourcePolicySnapshot,
     video,
 };
 use crate::engine::{
     media_transport::{
-        ActiveSpeakerSource, MediaTransport, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
+        ActiveSpeakerSource, ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome,
+        MediaTransport, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate, RouteControlPlan,
+        TransportConsumerRoute,
     },
     metrics::{self, BudgetSolverOutcome},
-    room::{Room, RoomEventMessage, outbound::MessageFanout, state::RoomState},
+    room::{
+        Room, RoomEventMessage, media_graph::ConsumerRouteTarget, outbound::MessageFanout,
+        state::RoomState,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +78,7 @@ impl SourcePolicyWakeups {
         self,
         room: &Room,
         media_transport: Option<&MediaTransport>,
-    ) -> Option<SourcePolicyCommit> {
+    ) -> Option<SourcePolicyTransaction> {
         plan(room, self.trigger?, media_transport, None).await
     }
 
@@ -86,7 +95,7 @@ pub async fn plan(
     trigger: SourcePolicyTrigger,
     media_transport: Option<&MediaTransport>,
     active_speakers: Option<&[ActiveSpeakerSource]>,
-) -> Option<SourcePolicyCommit> {
+) -> Option<SourcePolicyTransaction> {
     if matches!(
         trigger,
         SourcePolicyTrigger::RouteGraph | SourcePolicyTrigger::FanoutPressure
@@ -109,7 +118,7 @@ async fn run_packet_selection(
     room: &Room,
     active_speakers: &[ActiveSpeakerSource],
     media_transport: &MediaTransport,
-) -> Option<SourcePolicyCommit> {
+) -> Option<SourcePolicyTransaction> {
     let sessions = {
         let state = room.state.read().await;
         state
@@ -120,7 +129,7 @@ async fn run_packet_selection(
     };
     let bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
     let state = room.state.read().await;
-    SourcePolicyPlan::from_state(&state, active_speakers, &bandwidth).into_commit()
+    SourcePolicyTransaction::plan_from_state(&state, active_speakers, &bandwidth)
 }
 
 #[cfg(test)]
@@ -128,66 +137,133 @@ async fn run_packet_selection(
 mod test_support;
 
 #[derive(Debug)]
-pub(in crate::engine::room) struct SourcePolicyPlan {
-    pub(in crate::engine::room) state_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
-    pub(in crate::engine::room) route_packet_updates: Vec<TransportPacketSelectionUpdate>,
-    pub(in crate::engine::room) receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
-    pub(in crate::engine::room) featured_users: Vec<FeaturedUserUpdate>,
+struct RouteFinish {
+    selection: ConsumerPacketSelectionUpdate,
+    route: TransportConsumerRoute,
 }
 
-#[derive(Debug)]
-pub(in crate::engine::room) struct SourcePolicyCommit(pub(in crate::engine::room) SourcePolicyPlan);
+#[derive(Debug, Default)]
+pub(in crate::engine::room) struct SourcePolicyTransaction {
+    route_control: RouteControlPlan<(), RouteFinish>,
+    state_updates: Vec<ConsumerPacketSelectionUpdate>,
+    featured_users: Vec<FeaturedUserUpdate>,
+}
 
-impl SourcePolicyPlan {
-    pub(in crate::engine::room) fn from_state(
+impl SourcePolicyTransaction {
+    pub(in crate::engine::room) fn plan_from_state(
         state: &RoomState,
         active_speakers: &[ActiveSpeakerSource],
         bandwidth: &ReceiverBandwidthSnapshot,
-    ) -> Self {
-        let input = SourcePolicyInput::from_state(state, active_speakers, bandwidth);
-        let mut packet_updates = audio::audio_route_activity_updates(&state.topology, &input);
-        let video_plan = video::receiver_video_policy_plan(state, &input);
-        packet_updates.extend(video_plan.transport_packet_updates);
-        Self {
-            state_packet_updates: video_plan.state_packet_updates,
-            route_packet_updates: packet_updates,
-            receiver_bwe_targets: video_plan.receiver_bwe_targets,
-            featured_users: input.featured_user_updates,
-        }
+    ) -> Option<Self> {
+        let mut input = SourcePolicySnapshot::from_state(state, active_speakers, bandwidth);
+        let mut tx = Self::default();
+        audio::append_audio_route_activity(&mut tx, state, &input);
+        let receiver_bwe_targets = mem::take(&mut input.receiver_bwe_targets);
+        video::append_receiver_video_policy(&mut tx, state, &input, receiver_bwe_targets);
+        tx.featured_users = input.featured_user_updates;
+        (!tx.is_empty()).then_some(tx)
     }
 
-    #[must_use]
-    pub(in crate::engine::room) fn into_commit(self) -> Option<SourcePolicyCommit> {
-        (!self.is_empty()).then_some(SourcePolicyCommit(self))
+    pub(super) fn push_state_update(&mut self, update: ConsumerPacketSelectionUpdate) {
+        self.state_updates.push(update);
+    }
+
+    pub(super) fn push_route_update(
+        &mut self,
+        selection: ConsumerPacketSelectionUpdate,
+        target: &ConsumerRouteTarget,
+    ) {
+        let finish = RouteFinish {
+            selection,
+            route: target.transport_route().clone(),
+        };
+        let control = finish.control();
+        self.route_control.push_consumer(control, finish);
+    }
+
+    pub(super) fn set_receiver_bwe_targets(&mut self, targets: Vec<ReceiverBweTargetUpdate>) {
+        self.route_control.set_receiver_bwe_targets(targets);
+    }
+
+    pub(in crate::engine::room) async fn execute(
+        self,
+        room: &Room,
+        media_transport: &MediaTransport,
+    ) {
+        let Self {
+            route_control,
+            mut state_updates,
+            featured_users,
+        } = self;
+        if !route_control.is_empty() {
+            let outcome = media_transport.apply_route_control(route_control).await;
+            for (update, result) in outcome.consumers {
+                update.finish(result, &mut state_updates);
+            }
+        }
+        commit_accepted_updates(room, &state_updates, &featured_users).await;
     }
 
     fn is_empty(&self) -> bool {
-        self.state_packet_updates.is_empty()
-            && self.route_packet_updates.is_empty()
-            && self.receiver_bwe_targets.is_empty()
+        self.state_updates.is_empty()
+            && self.route_control.is_empty()
             && self.featured_users.is_empty()
     }
 }
 
-impl SourcePolicyCommit {
-    pub(in crate::engine::room) async fn commit(self, room: &Room) {
-        let Self(SourcePolicyPlan {
-            state_packet_updates,
-            featured_users,
-            ..
-        }) = self;
-        if state_packet_updates.is_empty() && featured_users.is_empty() {
+impl RouteFinish {
+    fn control(&self) -> ConsumerRouteControl {
+        let mut control = ConsumerRouteControl::new(self.route.clone())
+            .request_keyframe(self.selection.request_keyframe);
+        if self.selection.route_activity_changed {
+            let active = self.selection.policy_pause_reason.is_none();
+            control = control.activity(ConsumerActivity::from_active(active));
+        }
+        if let Some(packet_gate) = &self.selection.packet_gate {
+            control = control.packet_gate(packet_gate.clone());
+        }
+        control
+    }
+
+    fn finish(
+        self,
+        result: ConsumerRouteControlOutcome,
+        updates: &mut Vec<ConsumerPacketSelectionUpdate>,
+    ) {
+        if result.packet_gate_failed() || result.activity_failed() {
+            warn!(
+                route = ?self.route,
+                route_active = self.selection.policy_pause_reason.is_none(),
+                "media transport rejected the receiver-driven packet selection update"
+            );
             return;
         }
-        record_source_selection_metrics(room, &state_packet_updates);
-        let info_fanout = {
-            let mut state = room.state.write().await;
-            commit_packet_updates(&mut state, &state_packet_updates);
-            commit_featured_user_updates(&mut state, &featured_users)
-        };
-        if let Some(info_fanout) = info_fanout {
-            info_fanout.emit();
+        if result.keyframe_failed() {
+            warn!(
+                route = ?self.route,
+                "media transport failed to request an adaptation keyframe refresh"
+            );
         }
+        updates.push(self.selection);
+    }
+}
+
+async fn commit_accepted_updates(
+    room: &Room,
+    state_updates: &[ConsumerPacketSelectionUpdate],
+    featured_users: &[FeaturedUserUpdate],
+) {
+    if state_updates.is_empty() && featured_users.is_empty() {
+        return;
+    }
+    record_source_selection_metrics(room, state_updates);
+    let info_fanout = {
+        let mut state = room.state.write().await;
+        commit_packet_updates(&mut state, state_updates);
+        commit_featured_user_updates(&mut state, featured_users)
+    };
+    if let Some(info_fanout) = info_fanout {
+        info_fanout.emit();
     }
 }
 

@@ -10,4 +10,4 @@ mod receiver;
 mod selection;
 
 pub use layout::VideoAdmissionRank;
-pub(super) use planner::receiver_video_policy_plan;
+pub(super) use planner::append_receiver_video_policy;

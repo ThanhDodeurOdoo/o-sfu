@@ -1,16 +1,16 @@
 use o_sfu_router::MediaKind;
 
 use super::{
-    action::{ConsumerPacketSelectionUpdate, TransportPacketSelectionUpdate},
-    input::SourcePolicyInput,
+    action::ConsumerPacketSelectionUpdate, input::SourcePolicySnapshot,
+    turn::SourcePolicyTransaction,
 };
-use crate::engine::{room::media_graph::RoomTopology, source_model::PolicyPauseReason};
+use crate::engine::{room::state::RoomState, source_model::PolicyPauseReason};
 
-pub(super) fn audio_route_activity_updates(
-    topology: &RoomTopology,
-    input: &SourcePolicyInput<'_>,
-) -> Vec<TransportPacketSelectionUpdate> {
-    let mut updates = Vec::with_capacity(input.routes.len());
+pub(super) fn append_audio_route_activity(
+    tx: &mut SourcePolicyTransaction,
+    state: &RoomState,
+    input: &SourcePolicySnapshot<'_>,
+) {
     for route in &input.routes {
         if route.source.media_kind() != MediaKind::Audio {
             continue;
@@ -35,10 +35,10 @@ pub(super) fn audio_route_activity_updates(
             route.current_selection,
             next_reason,
         ) {
-            let target = topology
+            let target = state
+                .topology
                 .consumer_route_target_for_source(update.transport_ref.clone(), route.source);
-            updates.push(TransportPacketSelectionUpdate { update, target });
+            tx.push_route_update(update, &target);
         }
     }
-    updates
 }

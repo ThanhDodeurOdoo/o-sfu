@@ -1,14 +1,11 @@
 use super::{
-    super::action::{ConsumerPacketSelectionUpdate, TransportPacketSelectionUpdate},
-    adaptation, admission, budget, hysteresis,
-    input::ReceiverVideoRouteInput,
-    projection,
-    selection::ReceiverRouteSelection,
+    super::turn::SourcePolicyTransaction, adaptation, admission, budget, hysteresis,
+    input::ReceiverVideoRouteInput, projection, selection::ReceiverRouteSelection,
 };
 use crate::{
     Bitrate,
     engine::{
-        room::media_graph::RoomTopology,
+        room::state::RoomState,
         source_model::{PolicyPauseReason, SourceSelector},
     },
 };
@@ -72,18 +69,12 @@ impl<'a> PlannedReceiverRoute<'a> {
     }
 }
 
-#[derive(Debug)]
-pub(super) struct ReceiverRoutesPlan {
-    pub(super) state_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
-    pub(super) transport_packet_updates: Vec<TransportPacketSelectionUpdate>,
-    pub(super) receiver_bwe_target: Bitrate,
-}
-
-pub(super) fn plan<'a>(
-    topology: &RoomTopology,
+pub(super) fn append_policy_updates<'a>(
+    tx: &mut SourcePolicyTransaction,
+    state: &RoomState,
     routes: &'a [ReceiverVideoRouteInput<'a>],
     max_video_downloads_per_receiver: usize,
-) -> ReceiverRoutesPlan {
+) -> Bitrate {
     let receiver_bandwidth = routes.iter().find_map(|route| route.receiver_bandwidth);
     let mut planned_routes = routes
         .iter()
@@ -97,9 +88,6 @@ pub(super) fn plan<'a>(
         budget::apply_overload_policy(&mut planned_routes, receiver_bandwidth);
     }
     let diagnostics = budget::diagnostics(&planned_routes, receiver_bandwidth);
-    let receiver_bwe_target = diagnostics.selected_video_bitrate();
-    let mut state_packet_updates = Vec::new();
-    let mut transport_packet_updates = Vec::new();
     for planned in planned_routes {
         let selection = hysteresis::resolve(&planned);
         let Some(update) =
@@ -108,18 +96,14 @@ pub(super) fn plan<'a>(
             continue;
         };
         if update.requires_media_transport_effect() {
-            let target = topology.consumer_route_target_for_source(
+            let target = state.topology.consumer_route_target_for_source(
                 update.transport_ref.clone(),
                 planned.input.source,
             );
-            transport_packet_updates.push(TransportPacketSelectionUpdate { update, target });
+            tx.push_route_update(update, &target);
         } else {
-            state_packet_updates.push(update);
+            tx.push_state_update(update);
         }
     }
-    ReceiverRoutesPlan {
-        state_packet_updates,
-        transport_packet_updates,
-        receiver_bwe_target,
-    }
+    diagnostics.selected_video_bitrate()
 }

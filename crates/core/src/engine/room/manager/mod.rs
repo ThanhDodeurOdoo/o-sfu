@@ -280,7 +280,7 @@ impl RoomManager {
         }
         let active_speaker_sources = media_transport.active_speaker_source_snapshot().await;
         for room in rooms {
-            if let Some(commit) = source_policy::plan(
+            if let Some(transaction) = source_policy::plan(
                 &room,
                 SourcePolicyTrigger::PacketSelection,
                 Some(media_transport),
@@ -288,7 +288,8 @@ impl RoomManager {
             )
             .await
             {
-                RoomEffects::execute_source_policy_commit(&room, media_transport, commit).await;
+                RoomEffects::execute_source_policy_transaction(&room, media_transport, transaction)
+                    .await;
             }
         }
     }

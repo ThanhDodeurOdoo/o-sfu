@@ -1,5 +1,3 @@
-use std::mem;
-
 use o_sfu_router::MediaKind;
 use tracing::warn;
 
@@ -18,10 +16,7 @@ use crate::engine::{
             ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, PendingConsumerSetup,
             ReceiverRouteActivity, ReceiverRouteWork, ResolvedRelayRouteEffect,
         },
-        source_policy::{
-            ConsumerPacketSelectionUpdate, SourcePolicyCommit, SourcePolicyWakeups,
-            TransportPacketSelectionUpdate,
-        },
+        source_policy::SourcePolicyWakeups,
     },
 };
 
@@ -110,25 +105,6 @@ impl RoomTransportPlan {
         }
         outcome
     }
-
-    pub(super) async fn execute_source_policy_route_control(
-        commit: SourcePolicyCommit,
-        media_transport: &MediaTransport,
-    ) -> SourcePolicyCommit {
-        let SourcePolicyCommit(mut plan) = commit;
-        let mut route_control = RouteControlPlan::new();
-        route_control.set_receiver_bwe_targets(mem::take(&mut plan.receiver_bwe_targets));
-        for update in mem::take(&mut plan.route_packet_updates) {
-            route_control.push_consumer(
-                source_selection_control(&update),
-                ConsumerRouteFinish::SourceSelection(update),
-            );
-        }
-        let route_outcome = execute_route_control(route_control, media_transport).await;
-        plan.state_packet_updates
-            .extend(route_outcome.packet_updates);
-        SourcePolicyCommit(plan)
-    }
 }
 
 #[derive(Debug, Default)]
@@ -141,7 +117,6 @@ pub(super) struct RoomTransportOutcome {
 #[derive(Debug, Default)]
 pub(super) struct RoomRouteOutcome {
     diagnostics: Vec<DiagnosticsEventData>,
-    packet_updates: Vec<ConsumerPacketSelectionUpdate>,
 }
 
 #[derive(Debug)]
@@ -161,7 +136,6 @@ enum ConsumerRouteFinish {
         route: TransportConsumerRoute,
         active: bool,
     },
-    SourceSelection(TransportPacketSelectionUpdate),
 }
 
 impl ConsumerRouteFinish {
@@ -173,9 +147,6 @@ impl ConsumerRouteFinish {
             Self::Keyframe(target) => finish_keyframe(&target, result),
             Self::SetupActivity { route, active } => {
                 finish_setup_activity(&route, active, result);
-            }
-            Self::SourceSelection(TransportPacketSelectionUpdate { update, target }) => {
-                finish_source_selection(update, &target, result, outcome);
             }
         }
     }
@@ -232,20 +203,6 @@ fn keyframe_control(target: &ConsumerRouteTarget) -> ConsumerRouteControl {
     ConsumerRouteControl::new(target.transport_route().clone()).request_keyframe(true)
 }
 
-fn source_selection_control(selection: &TransportPacketSelectionUpdate) -> ConsumerRouteControl {
-    let update = &selection.update;
-    let mut control = ConsumerRouteControl::new(selection.target.transport_route().clone())
-        .request_keyframe(update.request_keyframe);
-    if update.route_activity_changed {
-        let active = update.policy_pause_reason.is_none();
-        control = control.activity(ConsumerActivity::from_active(active));
-    }
-    if let Some(packet_gate) = &update.packet_gate {
-        control = control.packet_gate(packet_gate.clone());
-    }
-    control
-}
-
 fn finish_activity(
     activity: &ReceiverRouteActivity,
     diagnostics: DiagnosticsEventData,
@@ -295,29 +252,6 @@ fn finish_setup_activity(
             "media transport failed to request keyframe after consumer setup activity correction"
         );
     }
-}
-
-fn finish_source_selection(
-    update: ConsumerPacketSelectionUpdate,
-    target: &ConsumerRouteTarget,
-    result: ConsumerRouteControlOutcome,
-    outcome: &mut RoomRouteOutcome,
-) {
-    if result.packet_gate_failed() || result.activity_failed() {
-        warn!(
-            route = ?target.transport_route(),
-            route_active = update.policy_pause_reason.is_none(),
-            "media transport rejected the receiver-driven packet selection update"
-        );
-        return;
-    }
-    if result.keyframe_failed() {
-        warn!(
-            route = ?target.transport_route(),
-            "media transport failed to request an adaptation keyframe refresh"
-        );
-    }
-    outcome.packet_updates.push(update);
 }
 
 pub(super) async fn execute_relay_route_effects(

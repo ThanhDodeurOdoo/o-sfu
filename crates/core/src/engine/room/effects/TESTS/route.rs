@@ -11,18 +11,15 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, ProducerActivity, RouteControlPlan, SourcePacketGate,
-            SourcePacketOperatingPoint, TransportSessionKey,
+            ConsumerActivity, ProducerActivity, RouteControlPlan, TransportSessionKey,
             test_support::{
-                DebugPacketGate, DebugRouteEntry, test_media_transport_config,
-                test_media_transport_deps, test_rtc_port_range,
+                DebugRouteEntry, test_media_transport_config, test_media_transport_deps,
+                test_rtc_port_range,
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         room::media_graph::ConsumerRouteTransportRef,
-        source_model::{
-            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId, UserStreamId,
-        },
+        source_model::UserStreamId,
     },
 };
 
@@ -30,7 +27,6 @@ use crate::{
 async fn route_control_executor_applies_room_finish_work() -> Result<(), Box<dyn Error>> {
     let fixture = RouteFixture::new().await?;
     fixture.request_standalone_keyframe().await;
-    fixture.apply_source_selection().await?;
     fixture.apply_setup_activity_correction().await?;
     fixture.pause_route_activity().await?;
     Ok(())
@@ -40,7 +36,6 @@ struct RouteFixture {
     media_transport: MediaTransport,
     metrics: Arc<RuntimeMetrics>,
     route: TransportConsumerRoute,
-    route_ref: ConsumerRouteTransportRef,
     target: ConsumerRouteTarget,
 }
 
@@ -92,7 +87,7 @@ impl RouteFixture {
             source_media,
         );
         let target = ConsumerRouteTarget::for_test(
-            transport_ref.clone(),
+            transport_ref,
             route.clone(),
             UserStreamId::from("camera"),
             MediaKind::Video,
@@ -101,7 +96,6 @@ impl RouteFixture {
             media_transport,
             metrics,
             route,
-            route_ref: transport_ref,
             target,
         })
     }
@@ -148,46 +142,6 @@ impl RouteFixture {
                 .any(|event| event.event == "consumer.activity")
         );
         self.assert_route_state(false, 0, false).await?;
-        Ok(())
-    }
-
-    async fn apply_source_selection(&self) -> Result<(), io::Error> {
-        let keyframes_before = self.keyframe_requests();
-        let mut current_selection = ConsumerSourceSelection::open(true);
-        current_selection.set_policy_pause_reason(Some(PolicyPauseReason::BudgetPressure));
-        let mut update = ConsumerPacketSelectionUpdate::route_activity(
-            self.route_ref.clone(),
-            PublishedSourceId::from_raw(42),
-            current_selection,
-            None,
-        )
-        .ok_or_else(|| io::Error::other("route activity update should be created"))?;
-        update.packet_gate = Some(SourcePacketGate::OperatingPoint(
-            SourcePacketOperatingPoint::new(None, 0),
-        ));
-        update.request_keyframe = true;
-        let selection = TransportPacketSelectionUpdate {
-            update: update.clone(),
-            target: self.target.clone(),
-        };
-        let mut route_control = RouteControlPlan::new();
-        route_control.push_consumer(
-            source_selection_control(&selection),
-            ConsumerRouteFinish::SourceSelection(selection),
-        );
-
-        let outcome = execute_route_control(route_control, &self.media_transport).await;
-
-        assert_eq!(outcome.packet_updates, vec![update]);
-        assert_eq!(self.keyframe_requests(), keyframes_before + 1);
-        let route = self.assert_route_state(true, 1, true).await?;
-        assert_eq!(
-            route.effective_packet_gate,
-            DebugPacketGate::OperatingPoint {
-                rid: None,
-                max_temporal_layer_id: 0,
-            }
-        );
         Ok(())
     }
 

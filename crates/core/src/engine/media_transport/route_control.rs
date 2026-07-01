@@ -41,6 +41,17 @@ impl<P, C> RouteControlPlan<P, C> {
     pub(crate) fn set_receiver_bwe_targets(&mut self, updates: Vec<ReceiverBweTargetUpdate>) {
         self.receiver_bwe_targets = updates;
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.producers.is_empty()
+            && self.consumers.is_empty()
+            && self.receiver_bwe_targets.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn consumer_finishes_for_test(&self) -> impl Iterator<Item = &C> {
+        self.consumers.iter().map(|(_control, finish)| finish)
+    }
 }
 
 impl<P, C> Default for RouteControlPlan<P, C> {
