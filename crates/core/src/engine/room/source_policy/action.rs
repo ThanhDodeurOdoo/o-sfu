@@ -1,28 +1,15 @@
-use super::super::media_graph::{ConsumerRouteTarget, ConsumerRouteTransportRef};
+use super::super::media_graph::ConsumerRouteTransportRef;
 use crate::engine::{
     ConnectionId, UserId,
-    media_transport::{ReceiverBweTargetUpdate, SourcePacketGate},
+    media_transport::SourcePacketGate,
     source_model::{
         ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
         ReceiverVideoBudgetDiagnostics, SourceSelector,
     },
 };
 
-#[derive(Debug)]
-pub(super) struct ReceiverVideoPolicyPlan {
-    pub(super) state_packet_updates: Vec<ConsumerPacketSelectionUpdate>,
-    pub(super) transport_packet_updates: Vec<TransportPacketSelectionUpdate>,
-    pub(super) receiver_bwe_targets: Vec<ReceiverBweTargetUpdate>,
-}
-
-#[derive(Debug)]
-pub(in crate::engine::room) struct TransportPacketSelectionUpdate {
-    pub(in crate::engine::room) update: ConsumerPacketSelectionUpdate,
-    pub(in crate::engine::room) target: ConsumerRouteTarget,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct BudgetSolverOutcomes {
+pub(super) struct BudgetSolverOutcomes {
     bits: u8,
 }
 
@@ -32,61 +19,61 @@ impl BudgetSolverOutcomes {
     const RESUMED: u8 = 1 << 2;
     const PROTECTED_OVER_BUDGET: u8 = 1 << 3;
 
-    pub const fn degraded() -> Self {
+    pub(super) const fn degraded() -> Self {
         Self {
             bits: Self::DEGRADED,
         }
     }
 
-    pub const fn paused() -> Self {
+    pub(super) const fn paused() -> Self {
         Self { bits: Self::PAUSED }
     }
 
-    pub const fn resumed() -> Self {
+    pub(super) const fn resumed() -> Self {
         Self {
             bits: Self::RESUMED,
         }
     }
 
-    pub const fn with_protected_over_budget(mut self) -> Self {
+    pub(super) const fn with_protected_over_budget(mut self) -> Self {
         self.bits |= Self::PROTECTED_OVER_BUDGET;
         self
     }
 
-    pub const fn is_degraded(self) -> bool {
+    pub(super) const fn is_degraded(self) -> bool {
         self.bits & Self::DEGRADED != 0
     }
 
-    pub const fn is_paused(self) -> bool {
+    pub(super) const fn is_paused(self) -> bool {
         self.bits & Self::PAUSED != 0
     }
 
-    pub const fn is_resumed(self) -> bool {
+    pub(super) const fn is_resumed(self) -> bool {
         self.bits & Self::RESUMED != 0
     }
 
-    pub const fn is_protected_over_budget(self) -> bool {
+    pub(super) const fn is_protected_over_budget(self) -> bool {
         self.bits & Self::PROTECTED_OVER_BUDGET != 0
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConsumerPacketSelectionUpdate {
-    pub transport_ref: ConsumerRouteTransportRef,
-    pub source_id: PublishedSourceId,
-    pub selector: SourceSelector,
-    pub policy_pause_reason: Option<PolicyPauseReason>,
-    pub budget: ReceiverVideoBudgetDiagnostics,
-    pub outcomes: BudgetSolverOutcomes,
-    pub pressure_observations: u8,
-    pub upgrade_observations: u8,
-    pub packet_gate: Option<SourcePacketGate>,
-    pub route_activity_changed: bool,
-    pub request_keyframe: bool,
+pub(super) struct ConsumerPacketSelectionUpdate {
+    pub(super) transport_ref: ConsumerRouteTransportRef,
+    pub(super) source_id: PublishedSourceId,
+    pub(super) selector: SourceSelector,
+    pub(super) policy_pause_reason: Option<PolicyPauseReason>,
+    pub(super) budget: ReceiverVideoBudgetDiagnostics,
+    pub(super) outcomes: BudgetSolverOutcomes,
+    pub(super) pressure_observations: u8,
+    pub(super) upgrade_observations: u8,
+    pub(super) packet_gate: Option<SourcePacketGate>,
+    pub(super) route_activity_changed: bool,
+    pub(super) request_keyframe: bool,
 }
 
 impl ConsumerPacketSelectionUpdate {
-    pub fn route_activity(
+    pub(super) fn route_activity(
         transport_ref: ConsumerRouteTransportRef,
         source_id: PublishedSourceId,
         current_selection: ConsumerSourceSelection,
@@ -113,15 +100,19 @@ impl ConsumerPacketSelectionUpdate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FeaturedUserUpdate {
-    pub user_id: UserId,
-    pub connection_id: ConnectionId,
-    pub featured: Option<bool>,
+pub(super) struct FeaturedUserUpdate {
+    pub(super) user_id: UserId,
+    pub(super) connection_id: ConnectionId,
+    pub(super) featured: Option<bool>,
 }
 
 impl FeaturedUserUpdate {
     #[must_use]
-    pub fn new(user_id: UserId, connection_id: ConnectionId, featured: Option<bool>) -> Self {
+    pub(super) fn new(
+        user_id: UserId,
+        connection_id: ConnectionId,
+        featured: Option<bool>,
+    ) -> Self {
         Self {
             user_id,
             connection_id,

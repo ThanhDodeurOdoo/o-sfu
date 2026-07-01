@@ -28,7 +28,9 @@ pub(super) use crate::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
         media_transport::{
             AppliedSessionAnswer, MediaTransport, TransportMediaId, TransportSessionHealth,
-            test_support::{test_media_transport_builder, test_rtc_port_range},
+            test_support::{
+                test_media_transport_builder, test_media_transport_deps, test_rtc_port_range,
+            },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
         source_model::{
@@ -42,7 +44,7 @@ pub(super) use crate::{
 };
 
 pub(super) async fn refresh_source_policy(room: &Room, adapter: &MediaTransport) {
-    if let Some(commit) = source_policy::plan(
+    if let Some(transaction) = source_policy::plan(
         room,
         SourcePolicyTrigger::PacketSelection,
         Some(adapter),
@@ -50,7 +52,7 @@ pub(super) async fn refresh_source_policy(room: &Room, adapter: &MediaTransport)
     )
     .await
     {
-        RoomEffects::execute_source_policy_commit(room, adapter, commit).await;
+        RoomEffects::execute_source_policy_transaction(room, adapter, transaction).await;
     }
 }
 
@@ -82,9 +84,16 @@ pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
     reason = "the room test fixture uses a fixed-valid RTC config and should fail loudly if it stops being valid"
 )]
 pub(super) fn real_adapter() -> MediaTransport {
+    real_adapter_with_metrics(Arc::new(RuntimeMetrics::default()))
+}
+
+fn real_adapter_with_metrics(metrics: Arc<RuntimeMetrics>) -> MediaTransport {
+    let mut deps = test_media_transport_deps();
+    deps.metrics = metrics;
     let rtc_port_range =
         test_rtc_port_range(4).unwrap_or_else(|| panic!("RTC room test ports should be available"));
     match test_media_transport_builder(rtc_port_range)
+        .deps(deps)
         .worker_count(4)
         .build()
     {
@@ -302,6 +311,13 @@ impl ReadyRoomFixtureOptions {
 }
 
 async fn setup_ready_room_fixture(options: ReadyRoomFixtureOptions) -> ReadyRoomFixture {
+    setup_ready_room_fixture_with_adapter(options, real_adapter()).await
+}
+
+async fn setup_ready_room_fixture_with_adapter(
+    options: ReadyRoomFixtureOptions,
+    adapter: MediaTransport,
+) -> ReadyRoomFixture {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
@@ -310,8 +326,6 @@ async fn setup_ready_room_fixture(options: ReadyRoomFixtureOptions) -> ReadyRoom
     let (second_tx, second_rx) = test_sender();
     join_user_with_sender(&room, UserId::Integer(1), first_tx).await;
     join_user_with_sender(&room, UserId::Integer(2), second_tx).await;
-
-    let adapter = real_adapter();
 
     make_session_ready_with_transport(&room, &UserId::Integer(1), &adapter).await;
 
@@ -342,6 +356,27 @@ pub(super) async fn setup_two_ready_users() -> (
     (
         fixture.room,
         fixture.adapter,
+        fixture.first_rx,
+        fixture.second_rx,
+    )
+}
+
+pub(super) async fn setup_two_ready_users_with_media_metrics() -> (
+    Arc<super::super::Room>,
+    MediaTransport,
+    Arc<RuntimeMetrics>,
+    UserOutboundReceiver,
+    UserOutboundReceiver,
+) {
+    let metrics = Arc::new(RuntimeMetrics::default());
+    let adapter = real_adapter_with_metrics(Arc::clone(&metrics));
+    let fixture =
+        setup_ready_room_fixture_with_adapter(ReadyRoomFixtureOptions::two_ready_users(), adapter)
+            .await;
+    (
+        fixture.room,
+        fixture.adapter,
+        metrics,
         fixture.first_rx,
         fixture.second_rx,
     )

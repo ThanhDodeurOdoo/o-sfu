@@ -3,23 +3,25 @@
     reason = "test fixtures should fail loudly when they build invalid source graphs"
 )]
 
+use std::sync::Arc;
+
 use o_sfu_router::{MediaKind, RouterId, rtp::Rid};
 
 use super::*;
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate, MediaCodecFlags, RoomMediaLimits,
     engine::{
-        ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
-        media_transport::{
-            ReceiverBweTargetUpdate, SourcePacketGate, TransportMediaId, TransportSessionKey,
-        },
+        ConnectionId, MediaWorkerId, RoomInstanceId, UserId, UserPermissions,
+        media_transport::{SourcePacketGate, TransportMediaId},
+        metrics::RuntimeMetrics,
         room::{
-            RoomRuntimeContext, RouterPlacement,
-            media_graph::{ConsumerRouteTransportRef, RoomTopology},
+            RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
+            media_graph::ConsumerRouteTransportRef,
             rtp_capabilities::router_rtp_capabilities,
             source_policy::video::{
                 input::ReceiverVideoRouteInput, layout::ReceiverVideoLayoutIntent,
             },
+            state::RoomState,
         },
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceDescriptorParts,
@@ -47,21 +49,20 @@ fn single_visible_thumbnail_can_use_full_receiver_budget() {
     let mut current_selection = ConsumerSourceSelection::open(true);
     current_selection.set_selector(SourceSelector::Encoding(low_encoding_id));
     current_selection.set_adaptation_observations(0, 2);
-    let route = receiver_video_route_input(
+    let (state, route) = receiver_video_route_input(
         &source,
-        UserId::Integer(2),
+        &UserId::Integer(2),
         current_selection,
         1,
         Bitrate::from_kbps(1_200),
     );
 
-    let plan =
-        receiver_video_selection_plan(&test_topology(), &[route], BTreeMap::new(), usize::MAX);
+    let mut tx = SourcePolicyTransaction::default();
+    append_receiver_video_selection(&mut tx, &state, &[route], BTreeMap::new(), usize::MAX);
 
-    let update = plan
-        .transport_packet_updates
-        .first()
-        .map(|packet| &packet.update)
+    let mut updates = tx.route_updates_for_test();
+    let update = updates
+        .next()
         .expect("single route should emit a quality update");
     assert_eq!(
         update.selector,
@@ -92,91 +93,23 @@ fn multiple_visible_thumbnails_keep_safety_budget() {
     let mut current_selection = ConsumerSourceSelection::open(true);
     current_selection.set_selector(SourceSelector::Encoding(high_encoding_id));
     current_selection.set_adaptation_observations(1, 0);
-    let route = receiver_video_route_input(
+    let (state, route) = receiver_video_route_input(
         &source,
-        UserId::Integer(2),
+        &UserId::Integer(2),
         current_selection,
         2,
         Bitrate::from_kbps(1_200),
     );
 
-    let plan =
-        receiver_video_selection_plan(&test_topology(), &[route], BTreeMap::new(), usize::MAX);
+    let mut tx = SourcePolicyTransaction::default();
+    append_receiver_video_selection(&mut tx, &state, &[route], BTreeMap::new(), usize::MAX);
 
-    let update = plan
-        .transport_packet_updates
-        .first()
-        .map(|packet| &packet.update)
+    let mut updates = tx.route_updates_for_test();
+    let update = updates
+        .next()
         .expect("multi-thumbnail route should emit a quality update");
     assert_eq!(update.selector, SourceSelector::Encoding(low_encoding_id));
     assert!(update.outcomes.is_degraded());
-}
-
-#[test]
-fn receiver_without_video_routes_gets_zero_bwe_target() {
-    let plan = receiver_video_selection_plan(
-        &test_topology(),
-        &[],
-        [(
-            UserId::Integer(42),
-            ReceiverBweTargetUpdate::new(
-                TransportSessionKey::new(
-                    RoomInstanceId::from_raw(0),
-                    MediaWorkerId::from_raw(0),
-                    ConnectionId::from_raw(10),
-                    UserId::Integer(42),
-                ),
-                Bitrate::zero(),
-            ),
-        )]
-        .into(),
-        usize::MAX,
-    );
-
-    assert_eq!(plan.receiver_bwe_targets.len(), 1);
-    assert_eq!(
-        plan.receiver_bwe_targets
-            .first()
-            .map(ReceiverBweTargetUpdate::target),
-        Some(Bitrate::zero())
-    );
-}
-
-fn test_topology() -> RoomTopology {
-    let context =
-        RoomRuntimeContext::new(RoomInstanceId::from_raw(0), test_placement(), Vec::new());
-    let mut topology = RoomTopology::new(
-        &context,
-        router_rtp_capabilities(MediaCodecFlags::default()),
-    );
-    assert!(
-        topology
-            .commit_session_placement(
-                &UserId::Integer(1),
-                ConnectionId::from_raw(11),
-                None,
-                test_placement(),
-            )
-            .is_ok()
-    );
-    assert!(
-        topology
-            .commit_session_placement(
-                &UserId::Integer(2),
-                ConnectionId::from_raw(22),
-                None,
-                test_placement(),
-            )
-            .is_ok()
-    );
-    topology
-}
-
-fn test_placement() -> RouterPlacement {
-    RouterPlacement {
-        router: RouterId(1),
-        media_worker: MediaWorkerId::from_raw(0),
-    }
 }
 
 fn scalable_video_source(
@@ -224,34 +157,70 @@ fn encoding(
     })
 }
 
-fn receiver_video_route_input(
-    source: &PublishedSourceDescriptor,
-    consumer: UserId,
+fn receiver_video_route_input<'a>(
+    source: &'a PublishedSourceDescriptor,
+    consumer: &UserId,
     current_selection: ConsumerSourceSelection,
     visible_scalable_route_count: usize,
     receiver_bandwidth: Bitrate,
-) -> ReceiverVideoRouteInput<'_> {
+) -> (RoomState, ReceiverVideoRouteInput<'a>) {
+    let mut state = test_state();
     let source_owner = source.owner().user_id().clone();
-    let source_connection_id = ConnectionId::from_raw(11);
-    let consumer_connection_id = ConnectionId::from_raw(22);
+    let source_connection_id = join_test_user(&mut state, &source_owner);
+    let consumer_connection_id = join_test_user(&mut state, consumer);
     let source_media = TransportMediaId::new(101);
     let consumer_media = TransportMediaId::new(202);
+    let transport_ref = ConsumerRouteTransportRef::from_parts(
+        consumer.clone(),
+        consumer_connection_id,
+        consumer_media,
+        source_owner.clone(),
+        source_connection_id,
+        source_media,
+    );
 
-    ReceiverVideoRouteInput {
-        user_count: 3,
-        source,
-        transport_ref: ConsumerRouteTransportRef::from_parts(
-            consumer,
-            consumer_connection_id,
-            consumer_media,
-            source_owner,
-            source_connection_id,
-            source_media,
-        ),
-        current_selection,
-        layout_intent: ReceiverVideoLayoutIntent::new(SourceRoomPolicySelector::VisibleThumbnail),
-        visible_scalable_route_count,
-        active_speaker_rank: None,
-        receiver_bandwidth: Some(receiver_bandwidth),
-    }
+    (
+        state,
+        ReceiverVideoRouteInput {
+            user_count: 3,
+            source,
+            transport_ref,
+            current_selection,
+            layout_intent: ReceiverVideoLayoutIntent::new(
+                SourceRoomPolicySelector::VisibleThumbnail,
+            ),
+            visible_scalable_route_count,
+            active_speaker_rank: None,
+            receiver_bandwidth: Some(receiver_bandwidth),
+        },
+    )
+}
+
+fn test_state() -> RoomState {
+    let runtime_context = RoomRuntimeContext::new(
+        RoomInstanceId::from_raw(0),
+        RouterPlacement {
+            router: RouterId(1),
+            media_worker: MediaWorkerId::from_raw(0),
+        },
+        Vec::new(),
+    );
+    RoomState::new(
+        &runtime_context,
+        RoomAdmissionPolicy::new(4),
+        RoomMediaLimits::default(),
+        router_rtp_capabilities(MediaCodecFlags::default()),
+    )
+}
+
+fn test_sender() -> UserOutboundSender {
+    UserOutboundSender::channel(128, Arc::new(RuntimeMetrics::default())).0
+}
+
+fn join_test_user(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
+    state
+        .apply_join(user_id, UserPermissions::default(), test_sender())
+        .expect("test user should join")
+        .receipt
+        .connection_id
 }

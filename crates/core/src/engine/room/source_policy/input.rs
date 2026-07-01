@@ -20,8 +20,8 @@ use crate::{
 const ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT: usize = 5;
 
 #[derive(Debug)]
-pub struct SourcePolicyInput<'a> {
-    pub(super) routes: Vec<SourcePolicyRouteInput<'a>>,
+pub(super) struct SourcePolicySnapshot<'a> {
+    pub(super) routes: Vec<SourcePolicyRoute<'a>>,
     pub(super) receiver_bwe_targets: BTreeMap<UserId, ReceiverBweTargetUpdate>,
     pub(super) receiver_bandwidth_by_connection: BTreeMap<ConnectionId, Bitrate>,
     pub(super) active_speaker_media_ids: BTreeSet<TransportMediaId>,
@@ -34,13 +34,13 @@ pub struct SourcePolicyInput<'a> {
 }
 
 #[derive(Debug)]
-pub struct SourcePolicyRouteInput<'a> {
+pub(super) struct SourcePolicyRoute<'a> {
     pub(super) source: &'a PublishedSourceDescriptor,
     pub(super) transport_ref: ConsumerRouteTransportRef,
     pub(super) current_selection: ConsumerSourceSelection,
 }
 
-impl<'a> SourcePolicyInput<'a> {
+impl<'a> SourcePolicySnapshot<'a> {
     pub(super) fn from_state(
         state: &'a RoomState,
         active_speaker_sources: &[ActiveSpeakerSource],
@@ -75,7 +75,7 @@ impl<'a> SourcePolicyInput<'a> {
     }
 }
 
-fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRouteInput<'_>> {
+fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRoute<'_>> {
     let live_routes = state.live_consumer_routes();
     let mut routes = Vec::with_capacity(live_routes.size_hint().1.unwrap_or_default());
     for route in live_routes {
@@ -92,7 +92,7 @@ fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRouteInput<'_>> {
         if !current_selection.active() {
             continue;
         }
-        routes.push(SourcePolicyRouteInput {
+        routes.push(SourcePolicyRoute {
             source,
             transport_ref: route.transport_ref(),
             current_selection,

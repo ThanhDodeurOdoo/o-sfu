@@ -1,13 +1,14 @@
 use super::support::*;
 use crate::engine::{
     media_transport::ReceiverBandwidthSnapshot,
-    room::source_policy::SourcePolicyPlan,
-    source_model::{PublishedSourceId, SourcePolicy, SourcePublishIntent},
+    room::source_policy::SourcePolicyTransaction,
+    source_model::{ConsumerSourceSelection, PublishedSourceId, SourcePolicy, SourcePublishIntent},
 };
 
 #[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
-    let (room, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_users().await;
+    let (room, adapter, metrics, mut publisher_rx, mut subscriber_rx) =
+        setup_two_ready_users_with_media_metrics().await;
 
     publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
 
@@ -16,6 +17,25 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
         &drain_outbound(&mut subscriber_rx),
         TestSourceKind::ScalableVideo,
     );
+    assert_subscription_selected_rid(
+        &room,
+        &adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        "hi",
+    )
+    .await;
+    reset_subscription_selection_to_open(
+        &room,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
+    let keyframes_before = keyframe_request_count(&metrics);
+    refresh_source_policy(&room, &adapter).await;
+    assert!(keyframe_request_count(&metrics) > keyframes_before);
     assert_subscription_selected_rid(
         &room,
         &adapter,
@@ -112,7 +132,7 @@ async fn source_bitrate_cap_pause_survives_receiver_overload() {
     publish_capped_camera(&scenario.room, &scenario.adapter, Bitrate::from_kbps(100)).await;
     publish_simulcast_camera(&scenario.room, &UserId::Integer(3), &scenario.adapter).await;
 
-    let plan = {
+    let tx = {
         let receiver_user_id = UserId::Integer(2);
         let active_speaker_sources = scenario.adapter.active_speaker_source_snapshot().await;
         let receiver_connection_id = user_connection_id(&scenario.room, &receiver_user_id).await;
@@ -124,13 +144,14 @@ async fn source_bitrate_cap_pause_survives_receiver_overload() {
             per_session: vec![(receiver_session_key, Bitrate::from_kbps(100))],
         };
         let state = scenario.room.state.read().await;
-        SourcePolicyPlan::from_state(
+        SourcePolicyTransaction::plan_from_state(
             &state,
             &active_speaker_sources,
             &receiver_bandwidth_snapshot,
         )
+        .expect("source policy transaction should contain overload work")
     };
-    execute_source_policy_plan(&scenario, plan).await;
+    execute_source_policy_transaction(&scenario, tx).await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -217,7 +238,7 @@ async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
     scenario.publish_audio_and_camera(1).await;
     let audio_media_id = scenario.audio_media_id(1).await;
     scenario.mark_active_speaker(audio_media_id).await;
-    let plan = source_policy_plan_from_transport_snapshot(&scenario).await;
+    let tx = source_policy_transaction_from_transport_snapshot(&scenario).await;
 
     let (replacement_tx, _replacement_rx) = test_sender();
     join_user_without_transport_cleanup(
@@ -227,7 +248,7 @@ async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
         replacement_tx,
     )
     .await;
-    execute_source_policy_plan(&scenario, plan).await;
+    execute_source_policy_transaction(&scenario, tx).await;
 
     let info = scenario
         .room
@@ -263,11 +284,12 @@ async fn source_policy_ignores_receiver_bandwidth_from_replaced_connection() {
     let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
         per_session: vec![(old_session_key, Bitrate::from_kbps(100))],
     };
-    let plan = {
+    let tx = {
         let state = scenario.room.state.read().await;
-        SourcePolicyPlan::from_state(&state, &[], &receiver_bandwidth_snapshot)
+        SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth_snapshot)
+            .expect("source policy transaction should contain current bandwidth work")
     };
-    execute_source_policy_plan(&scenario, plan).await;
+    execute_source_policy_transaction(&scenario, tx).await;
 
     let diagnostics = scenario
         .room
@@ -549,60 +571,14 @@ async fn source_policy_budget_only_update_stays_state_only() {
     let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
         per_session: vec![(receiver_session_key, Bitrate::from_kbps(2_000))],
     };
-    let plan = {
+    let tx = {
         let state = room.state.read().await;
-        SourcePolicyPlan::from_state(&state, &[], &receiver_bandwidth_snapshot)
+        SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth_snapshot)
+            .expect("source policy transaction should contain budget observation work")
     };
 
     assert!(
-        plan.has_only_state_update_for_consumer_source_for_test(
-            &receiver_user_id,
-            camera_source_id
-        )
-    );
-}
-
-#[tokio::test]
-async fn source_policy_plan_captures_transport_route_before_execution() {
-    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
-        &[1, 2, 3],
-        RoomMediaLimits::try_new(4, 1).unwrap(),
-    )
-    .await;
-    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
-    let third_audio_media_id = scenario.audio_media_id(3).await;
-
-    scenario.mark_active_speaker(third_audio_media_id).await;
-    let third_camera_source_id = scenario
-        .room
-        .test_api()
-        .inspect()
-        .source_id_for_owner_stream(&UserId::Integer(3), TestSourceKind::ScalableVideo)
-        .await
-        .expect("third camera should have a source id before source policy planning");
-    let expected_route = {
-        let state = scenario.room.state.read().await;
-        let route = state
-            .live_consumer_routes()
-            .find(|route| {
-                route.consumer_user_id == UserId::Integer(2)
-                    && route.source.source_id() == third_camera_source_id
-            })
-            .expect("third camera should have a live consumer route");
-        state
-            .topology
-            .consumer_route_target_for_source(route.transport_ref(), route.source)
-            .transport_route()
-            .clone()
-    };
-    let plan = source_policy_plan_from_transport_snapshot(&scenario).await;
-
-    assert!(
-        plan.has_captured_transport_route_for_consumer_source_for_test(
-            &UserId::Integer(2),
-            third_camera_source_id,
-            &expected_route
-        )
+        tx.has_only_state_update_for_consumer_source_for_test(&receiver_user_id, camera_source_id)
     );
 }
 
@@ -614,7 +590,7 @@ async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
     )
     .await;
     scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
-    let (plan, third_camera_source_id) = retained_third_camera_policy_plan(&scenario).await;
+    let (tx, third_camera_source_id) = third_camera_policy_transaction(&scenario).await;
 
     assert!(
         scenario
@@ -628,7 +604,7 @@ async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
             )
             .await
     );
-    execute_source_policy_plan(&scenario, plan).await;
+    execute_source_policy_transaction(&scenario, tx).await;
 
     assert!(
         !scenario
@@ -648,7 +624,7 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
     )
     .await;
     scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
-    let (plan, _) = retained_third_camera_policy_plan(&scenario).await;
+    let (tx, _) = third_camera_policy_transaction(&scenario).await;
     let receiver_connection_id = user_connection_id(&scenario.room, &UserId::Integer(2)).await;
     let receiver_session_key = scenario
         .room
@@ -659,8 +635,8 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
         .adapter
         .close_session(&receiver_session_key)
         .await
-        .expect("test should close receiver transport before source policy commit");
-    execute_source_policy_plan(&scenario, plan).await;
+        .expect("test should close receiver transport before source policy transaction");
+    execute_source_policy_transaction(&scenario, tx).await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -673,9 +649,9 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
     .await;
 }
 
-async fn retained_third_camera_policy_plan(
+async fn third_camera_policy_transaction(
     scenario: &SourcePolicyScenario,
-) -> (SourcePolicyPlan, PublishedSourceId) {
+) -> (SourcePolicyTransaction, PublishedSourceId) {
     let third_audio_media_id = scenario.audio_media_id(3).await;
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -694,17 +670,13 @@ async fn retained_third_camera_policy_plan(
         .source_id_for_owner_stream(&UserId::Integer(3), TestSourceKind::ScalableVideo)
         .await
         .expect("third camera should have a source id before stale source policy work");
-    let mut plan = source_policy_plan_from_transport_snapshot(scenario).await;
-    assert!(plan.retain_packet_updates_for_consumer_source_for_test(
-        &UserId::Integer(2),
-        third_camera_source_id
-    ));
-    (plan, third_camera_source_id)
+    let tx = source_policy_transaction_from_transport_snapshot(scenario).await;
+    (tx, third_camera_source_id)
 }
 
-async fn source_policy_plan_from_transport_snapshot(
+async fn source_policy_transaction_from_transport_snapshot(
     scenario: &SourcePolicyScenario,
-) -> SourcePolicyPlan {
+) -> SourcePolicyTransaction {
     let active_speaker_sources = scenario.adapter.active_speaker_source_snapshot().await;
     let session_keys = {
         let state = scenario.room.state.read().await;
@@ -716,16 +688,54 @@ async fn source_policy_plan_from_transport_snapshot(
     };
     let receiver_bandwidth_snapshot = scenario.adapter.receiver_bandwidth_snapshot(&session_keys);
     let state = scenario.room.state.read().await;
-    SourcePolicyPlan::from_state(
+    SourcePolicyTransaction::plan_from_state(
         &state,
         &active_speaker_sources,
         &receiver_bandwidth_snapshot,
     )
+    .expect("source policy transaction should contain work before execution")
 }
 
-async fn execute_source_policy_plan(scenario: &SourcePolicyScenario, plan: SourcePolicyPlan) {
-    let commit = plan
-        .into_commit()
-        .expect("source policy plan should contain work before execution");
-    RoomEffects::execute_source_policy_commit(&scenario.room, &scenario.adapter, commit).await;
+async fn execute_source_policy_transaction(
+    scenario: &SourcePolicyScenario,
+    tx: SourcePolicyTransaction,
+) {
+    RoomEffects::execute_source_policy_transaction(&scenario.room, &scenario.adapter, tx).await;
+}
+
+async fn reset_subscription_selection_to_open(
+    room: &Room,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+    stream_type: TestSourceKind,
+) {
+    let stream_id = stream_id_for_source(stream_type);
+    let state = room.state.read().await;
+    let route = state
+        .topology
+        .live_consumer_routes()
+        .find(|route| {
+            route.consumer_user_id == *consumer_user_id
+                && route.source.owner().user_id() == producer_user_id
+                && route.source.stream_id() == &stream_id
+        })
+        .expect("test should have a live subscription route");
+    let transport_ref = route.transport_ref();
+    let source_id = route.source.source_id();
+    drop(state);
+
+    let mut state = room.state.write().await;
+    let updated =
+        state
+            .topology
+            .update_consumer_source_selection(&transport_ref, source_id, |selection| {
+                *selection = ConsumerSourceSelection::open(true);
+            });
+    drop(state);
+    assert!(updated);
+}
+
+fn keyframe_request_count(metrics: &RuntimeMetrics) -> u64 {
+    let snapshot = metrics.snapshot();
+    snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed()
 }

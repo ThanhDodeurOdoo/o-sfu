@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::MediaKind;
 
 use super::{
-    super::input::{SourcePolicyInput, SourcePolicyRouteInput},
+    super::input::{SourcePolicyRoute, SourcePolicySnapshot},
     layout::ReceiverVideoLayoutIntent,
 };
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
 
 pub(super) fn receiver_video_routes<'a>(
     state: &RoomState,
-    input: &SourcePolicyInput<'a>,
+    input: &SourcePolicySnapshot<'a>,
 ) -> Vec<ReceiverVideoRouteInput<'a>> {
     let visible_scalable_route_counts = visible_scalable_route_counts_by_consumer(
         state,
@@ -118,7 +118,7 @@ impl<'a> SelectableRouteEncodings<'a> {
 
 fn visible_scalable_route_counts_by_consumer(
     state: &RoomState,
-    routes: &[SourcePolicyRouteInput<'_>],
+    routes: &[SourcePolicyRoute<'_>],
     featured_source_user_ids: &BTreeSet<UserId>,
 ) -> BTreeMap<UserId, usize> {
     let mut counts = BTreeMap::new();
