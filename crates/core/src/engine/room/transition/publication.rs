@@ -73,9 +73,8 @@ impl RoomUserOperation<'_> {
         self,
         intent: &SourcePublishIntent,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
-        let room = self.room;
         let Some(validated_descriptor) = ({
-            let state = room.state.read().await;
+            let state = self.room.state.read().await;
             state.validate_publish(self.user_id, self.connection_id, intent)
         }) else {
             return Ok(PublishStageOutcome::Rejected);
@@ -87,9 +86,8 @@ impl RoomUserOperation<'_> {
         self,
         validated_descriptor: ValidatedPublish,
     ) -> Result<PublishStageOutcome, TransportAdapterError> {
-        let room = self.room;
         let is_duplicate = {
-            let state = room.state.read().await;
+            let state = self.room.state.read().await;
             state.staged_publishes.contains(
                 self.user_id,
                 self.connection_id,
@@ -122,11 +120,12 @@ impl RoomUserOperation<'_> {
             }
         };
         #[cfg(test)]
-        room.inject_next_duplicate_for_test(&validated_descriptor, media)
+        self.room
+            .inject_next_duplicate_for_test(&validated_descriptor, media)
             .await;
         let reserved_publish = StagedPublish::new(validated_descriptor, media);
         let duplicate = {
-            let mut state = room.state.write().await;
+            let mut state = self.room.state.write().await;
             if state
                 .validate_publish_commit(&reserved_publish.descriptor, reserved_publish.media)
                 .is_some()
@@ -239,9 +238,8 @@ impl RoomUserOperation<'_> {
         stream_id: &UserStreamId,
         active: bool,
     ) -> Option<()> {
-        let room = self.room;
         let commit = {
-            let mut state = room.state.write().await;
+            let mut state = self.room.state.write().await;
             state.apply_publication_activity(
                 self.user_id,
                 self.connection_id,
@@ -262,23 +260,17 @@ impl RoomUserOperation<'_> {
     }
 
     async fn unpublish(self, intent: &SourceUnpublishIntent) -> bool {
-        let room = self.room;
-        let user_id = self.user_id;
-        let connection_id = self.connection_id;
-        let media_port = self.media_transport;
         let commit = {
-            let mut state = room.state.write().await;
-            let commit = state.unpublish_track(user_id, connection_id, intent);
-            drop(state);
-            commit
+            let mut state = self.room.state.write().await;
+            state.unpublish_track(self.user_id, self.connection_id, intent)
         };
         let Some(commit) = commit else {
             return false;
         };
-        RoomEffects::from_commit(room, RoomCommit::Unpublish(commit))
-            .execute(room, RoomEffectContext::runtime(media_port))
+        RoomEffects::from_commit(self.room, RoomCommit::Unpublish(commit))
+            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
-        room.reconcile_spillover_routers().await;
+        self.room.reconcile_spillover_routers().await;
         true
     }
 }

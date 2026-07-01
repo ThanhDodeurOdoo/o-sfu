@@ -549,14 +549,13 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() -> TestResult {
             .await,
         "user should join before teardown",
     )?;
-    let connection_id = session.connection_id;
     assert!(
         test_state
             .room_manager
             .close_session(
                 &room_id,
                 &user_id,
-                connection_id,
+                session.connection_id,
                 &test_state.media_transport,
             )
             .await
