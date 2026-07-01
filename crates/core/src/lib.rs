@@ -81,7 +81,6 @@ pub use o_sfu_router::{ConnectionId, MediaWorkerId};
 mod engine;
 mod options;
 pub mod prelude;
-mod room;
 pub mod server;
 mod sfu;
 
@@ -90,7 +89,6 @@ pub(crate) use options::{
     RoomMediaLimits, RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
     RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
-pub(crate) use room::{PublishIntentOutcome, TransportEffectOutcome, UnpublishIntentOutcome};
 
 /// Media bitrate stored as bits per second (not bytes per second).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]

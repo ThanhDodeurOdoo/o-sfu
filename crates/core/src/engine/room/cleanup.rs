@@ -30,20 +30,21 @@ use std::{
 use tracing::warn;
 
 use super::{Room, media_graph::RelayRouteKey};
-use crate::{
-    TransportEffectOutcome,
-    engine::{
-        ConnectionId, UserId,
-        media_transport::{
-            MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
-        },
-        metrics::TransportCleanupFailureKind::{
-            self, QueueFull, RetryExhausted, Shutdown, Terminal,
-        },
-        sync::lock_unpoisoned,
+use crate::engine::{
+    ConnectionId, UserId,
+    media_transport::{
+        MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
+        TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
     },
+    metrics::TransportCleanupFailureKind::{self, QueueFull, RetryExhausted, Shutdown, Terminal},
+    sync::lock_unpoisoned,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportEffectOutcome {
+    Applied,
+    Failed,
+}
 
 fn warn_transport_cleanup_failure(operation: &TransportCleanupOperation, message: &'static str) {
     warn!(

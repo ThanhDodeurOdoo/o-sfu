@@ -25,17 +25,15 @@ use tracing::warn;
 
 use super::super::{
     Room, RoomUserOperation,
+    cleanup::TransportEffectOutcome,
     effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
     media_graph::{ProducerActivityCommit, PublishIntentPlan, ValidatedPublish},
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::{ConnectionId, UserId};
-use crate::{
-    PublishIntentOutcome, TransportEffectOutcome, UnpublishIntentOutcome,
-    engine::{
-        media_transport::{AppliedSessionAnswer, TransportAdapterError},
-        source_model::{SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
-    },
+use crate::engine::{
+    media_transport::{AppliedSessionAnswer, TransportAdapterError},
+    source_model::{SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
 };
 
 mod staging;
@@ -44,6 +42,21 @@ mod staging;
 mod test_support;
 
 pub use staging::{StagedPublish, StagedPublishes};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishIntentOutcome {
+    Noop,
+    Queue,
+    Activated,
+    Staged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpublishIntentOutcome {
+    Noop,
+    RolledBack,
+    Unpublished,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublishStageOutcome {

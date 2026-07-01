@@ -4,27 +4,23 @@ use o_sfu_router::MediaKind;
 use tracing::warn;
 
 use super::{RoomGaugeDelta, receiver_route::execute_receiver_route_setup};
-use crate::{
-    TransportEffectOutcome,
-    engine::{
-        diagnostics::DiagnosticsEventData,
-        media_transport::{
-            ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaTransport,
-            ProducerActivity, RouteControlPlan, TransportConsumerRoute, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportSourceKey,
+use crate::engine::{
+    diagnostics::DiagnosticsEventData,
+    media_transport::{
+        ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaTransport,
+        ProducerActivity, RouteControlPlan, TransportConsumerRoute, TransportRelayRouteAction,
+        TransportRelayRouteEffect, TransportSourceKey,
+    },
+    room::{
+        Room,
+        cleanup::{TransportCleanupOperation, TransportEffectOutcome},
+        media_graph::{
+            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, PendingConsumerSetup,
+            ReceiverRouteActivity, ReceiverRouteWork, ResolvedRelayRouteEffect,
         },
-        room::{
-            Room,
-            cleanup::TransportCleanupOperation,
-            media_graph::{
-                ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects,
-                PendingConsumerSetup, ReceiverRouteActivity, ReceiverRouteWork,
-                ResolvedRelayRouteEffect,
-            },
-            source_policy::{
-                ConsumerPacketSelectionUpdate, SourcePolicyCommit, SourcePolicyWakeups,
-                TransportPacketSelectionUpdate,
-            },
+        source_policy::{
+            ConsumerPacketSelectionUpdate, SourcePolicyCommit, SourcePolicyWakeups,
+            TransportPacketSelectionUpdate,
         },
     },
 };

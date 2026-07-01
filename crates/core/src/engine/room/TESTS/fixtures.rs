@@ -17,12 +17,13 @@ pub(super) use super::super::{
     JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
     RoomJoinError, RoomManager, UserCloseReason, UserOutbound, UserOutboundReceiver,
     UserOutboundSender,
+    cleanup::TransportEffectOutcome,
     effects::batch::RoomEffects,
     source_policy::{self, SourcePolicyTrigger},
     transition::PublishStageOutcome,
 };
 pub(super) use crate::{
-    RoomMediaLimits, TransportEffectOutcome,
+    RoomMediaLimits,
     engine::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
         media_transport::{

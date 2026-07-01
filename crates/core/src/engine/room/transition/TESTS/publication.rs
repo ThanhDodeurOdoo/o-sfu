@@ -10,19 +10,16 @@ use o_sfu_router::{
     rtp::MediaCapabilities, test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
 };
 
-use super::PublishStageOutcome;
-use crate::{
-    TransportEffectOutcome,
-    engine::{
-        ConnectionId, TestSourceKind, UserId, UserPermissions,
-        media_transport::{
-            AppliedSessionAnswer, MediaTransport, TransportMediaId,
-            test_support::{test_media_transport_builder, test_rtc_port_range},
-        },
-        metrics::RuntimeMetrics,
-        room::{Room, RoomConfig, RoomManager, UserOutboundSender},
-        source_model::test_support::{source_publish_intent_for_source, stream_id_for_source},
+use super::{PublishStageOutcome, TransportEffectOutcome};
+use crate::engine::{
+    ConnectionId, TestSourceKind, UserId, UserPermissions,
+    media_transport::{
+        AppliedSessionAnswer, MediaTransport, TransportMediaId,
+        test_support::{test_media_transport_builder, test_rtc_port_range},
     },
+    metrics::RuntimeMetrics,
+    room::{Room, RoomConfig, RoomManager, UserOutboundSender},
+    source_model::test_support::{source_publish_intent_for_source, stream_id_for_source},
 };
 
 fn media_transport() -> MediaTransport {

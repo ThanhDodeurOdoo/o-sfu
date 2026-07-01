@@ -8,7 +8,7 @@ pub(super) use str0m::{Candidate, Rtc, change::SdpOffer};
 
 pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
-    Bitrate, PublishIntentOutcome, RoomMediaLimits, RtcPortRange,
+    Bitrate, RoomMediaLimits, RtcPortRange,
     engine::{
         diagnostics::{
             DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSourceSelector,
@@ -18,7 +18,7 @@ pub(super) use crate::{
             SessionOffer, TransportMediaId, TransportSessionKey,
             test_support::{test_media_transport_builder, test_media_transport_deps},
         },
-        room::{RemoteSourceSnapshot, Room},
+        room::{PublishIntentOutcome, RemoteSourceSnapshot, Room},
     },
 };
 
