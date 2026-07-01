@@ -4,7 +4,6 @@ import test from "node:test";
 import { CLIENT_UPDATE } from "../dist/index.js";
 import { COMMAND_KIND, PENDING_REQUEST_KIND, WS_CLOSE_CODE } from "../dist/protocol_contract.js";
 import { createProtocolCore } from "../dist/runtime_contract.js";
-import { PendingRequests } from "../dist/internals/pending_requests.js";
 import { FakeMediaTrack, FakePeerConnection, FakeSender } from "./support/browser_fakes.mjs";
 import {
     EMPTY_FEATURES,
@@ -147,10 +146,17 @@ test("recording requests without protocol registration resolve false", async () 
 
 test("duplicate recording request id is handled as a runtime error", async () => {
     const core = new FakeProtocolCore();
-    core.startRecording = () =>
-        beginPendingRequest(
-            pendingRequest("record-1", PENDING_REQUEST_KIND.START_RECORDING, 10000)
-        );
+    core.startRecording = () => [
+        {
+            kind: COMMAND_KIND.BEGIN_PENDING_REQUEST,
+            request: {
+                kind: PENDING_REQUEST_KIND.START_RECORDING,
+                requestId: "record-1",
+                timeoutMs: 5000,
+                timeoutTimerId: 10000
+            }
+        }
+    ];
     const { client, handledErrors } = createSfuClientHarness({ protocolCore: core });
 
     const registeredPromise = client.startRecording({ audio: true });
@@ -186,6 +192,28 @@ test("runtime errors reject registered recording requests", async () => {
     await recordingRejection;
 });
 
+test("runtime aborts reject stale queued recording requests", async () => {
+    const { client, connectWithWelcome, sockets } = createSfuClientHarness({
+        createPeerConnection: (config) => {
+            const peerConnection = new FakePeerConnection(config);
+            peerConnection.setRemoteDescription = async () => {
+                throw new Error("broken remote offer");
+            };
+            return peerConnection;
+        }
+    });
+
+    await connectWithWelcome();
+
+    sockets[0].emitMessage("offer");
+    const recordingRejection = assert.rejects(
+        client.startRecording({ audio: true }),
+        /broken remote offer/
+    );
+    await tick();
+    await recordingRejection;
+});
+
 test("recording request timer setup failures reject through the public promise", async (t) => {
     const core = new FakeProtocolCore();
     const unhandledRejections = [];
@@ -208,16 +236,6 @@ test("recording request timer setup failures reject through the public promise",
     assert.equal(handledErrors.length, 1);
     assert.match(handledErrors[0].message, /timer setup failed/);
     assert.deepEqual(unhandledRejections, []);
-});
-
-test("pending request rejection includes registered recordings", async () => {
-    const pendingRequests = new PendingRequests();
-    const registeredPromise = pendingRequests.begin(
-        pendingRequest("start-recording", PENDING_REQUEST_KIND.START_RECORDING, 10000)
-    );
-    pendingRequests.rejectAll(new Error("recording runtime failure"));
-
-    await assert.rejects(registeredPromise, Error);
 });
 
 test("default runtime creates the protocol core from generated wasm bindings", () => {
@@ -254,19 +272,6 @@ function createRecoveryHarness(options = {}) {
         }),
         timers
     };
-}
-
-function pendingRequest(requestId, kind, timeoutTimerId) {
-    return {
-        requestId,
-        kind,
-        timeoutTimerId,
-        timeoutMs: 5000
-    };
-}
-
-function beginPendingRequest(request) {
-    return [{ kind: "beginPendingRequest", request }];
 }
 
 async function resolveRealRecordingRequest(startRequest, ok) {
