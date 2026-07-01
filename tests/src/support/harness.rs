@@ -365,9 +365,8 @@ impl Drop for TestServer {
 /// Panics in the spawned server task if the production listener exits with an
 /// error instead of being aborted by test cleanup.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
-    let bind_address = config.http.bind_address;
     let runtime = Runtime::new(&config)?;
-    let listener = TcpListener::bind(bind_address).await?;
+    let listener = TcpListener::bind(config.http.bind_address).await?;
     let addr = listener
         .local_addr()
         .map_err(|error| anyhow!("failed to read test listener address: {error}"))?;

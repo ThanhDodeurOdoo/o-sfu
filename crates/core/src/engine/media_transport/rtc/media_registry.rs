@@ -224,9 +224,8 @@ impl PacketLoopState {
         &mut self,
         handle: RegisteredMediaHandle,
     ) -> TransportMediaId {
-        let id = self.next_media_id;
+        let transport_media_id = TransportMediaId::new(self.next_media_id);
         self.next_media_id = self.next_media_id.saturating_add(1);
-        let transport_media_id = TransportMediaId::new(id);
         if let RegisteredMediaHandle::Producer { session_key, mid } = &handle {
             let session_lookup = self.session_media.entry(session_key.clone()).or_default();
             session_lookup.insert_owned_media(transport_media_id);

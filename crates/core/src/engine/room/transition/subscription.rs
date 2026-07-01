@@ -51,52 +51,38 @@ impl RoomUserOperation<'_> {
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> Option<()> {
-        let room = self.room;
         let commit = {
-            let mut state = room.state.write().await;
-            let commit = state.apply_receiver_intent(
-                self.user_id,
-                self.connection_id,
-                target_user_id,
-                intents,
-            );
-            drop(state);
-            commit
+            let mut state = self.room.state.write().await;
+            state.apply_receiver_intent(self.user_id, self.connection_id, target_user_id, intents)
         };
         let commit = commit?;
-        RoomEffects::from_commit(room, RoomCommit::ReceiverIntent(commit))
-            .execute(room, RoomEffectContext::runtime(self.media_transport))
+        RoomEffects::from_commit(self.room, RoomCommit::ReceiverIntent(commit))
+            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())
     }
 
     async fn setup_missing_consumers(self) -> Option<()> {
-        let room = self.room;
         let commit = {
-            let mut state = room.state.write().await;
-            let commit = state.refresh_consumer_readiness(self.user_id, self.connection_id);
-            drop(state);
-            commit
+            let mut state = self.room.state.write().await;
+            state.refresh_consumer_readiness(self.user_id, self.connection_id)
         };
         let commit = commit?;
-        RoomEffects::from_commit(room, RoomCommit::ConsumerReadiness(commit))
-            .execute(room, RoomEffectContext::runtime(self.media_transport))
+        RoomEffects::from_commit(self.room, RoomCommit::ConsumerReadiness(commit))
+            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())
     }
 
     async fn request_active_video_keyframes(self) {
-        let room = self.room;
         let Some(targets) = ({
-            let state = room.state.read().await;
-            let targets = state.active_video_keyframe_targets(self.user_id, self.connection_id);
-            drop(state);
-            targets
+            let state = self.room.state.read().await;
+            state.active_video_keyframe_targets(self.user_id, self.connection_id)
         }) else {
             return;
         };
         RoomEffects::keyframe_refresh(targets)
-            .execute(room, RoomEffectContext::runtime(self.media_transport))
+            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
     }
 }

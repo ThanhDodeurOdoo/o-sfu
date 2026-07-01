@@ -453,7 +453,6 @@ impl RoomState {
         let producer_target = self
             .producer_route_target(user_id, connection_id, stream_id)
             .ok_or(ProducerActivityRejection::MissingPublication)?;
-        let transport_media_id = producer_target.transport_media_id;
         let Some(transport_user_key) =
             self.committed_transport_user_key(user_id, producer_target.owner_connection_id)
         else {
@@ -469,7 +468,7 @@ impl RoomState {
         });
         let source_snapshots = self.remote_source_snapshots_for_users(source_recipients, false);
         Ok(ProducerActivityCommit {
-            source: TransportSourceKey::new(transport_user_key, transport_media_id),
+            source: TransportSourceKey::new(transport_user_key, producer_target.transport_media_id),
             stream_id: stream_id.clone(),
             active,
             source_snapshots,

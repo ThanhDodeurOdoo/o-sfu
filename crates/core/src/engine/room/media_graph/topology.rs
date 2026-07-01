@@ -732,12 +732,9 @@ impl RoomTopology {
     ) -> Vec<TransportCleanupOperation> {
         removals
             .into_iter()
-            .map(|removal| {
-                let connection_id = removal.connection;
-                TransportCleanupOperation::RemoveMedia {
-                    session_key: self.transport_user_key(&removal.user, connection_id),
-                    transport_media_id: removal.transport_media,
-                }
+            .map(|removal| TransportCleanupOperation::RemoveMedia {
+                session_key: self.transport_user_key(&removal.user, removal.connection),
+                transport_media_id: removal.transport_media,
             })
             .collect()
     }
