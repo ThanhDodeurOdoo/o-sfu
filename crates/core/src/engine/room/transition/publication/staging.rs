@@ -7,22 +7,20 @@ use std::{
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use tracing::warn;
 
+use super::TransportEffectOutcome;
+use crate::engine::{
+    ConnectionId, UserId,
+    media_transport::{AppliedSessionAnswer, SessionUploadEncoding, TransportMediaId},
+    room::{
+        RoomUserOperation,
+        cleanup::TransportCleanupOperation,
+        effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
+        media_graph::ValidatedPublish,
+    },
+    source_model::UserStreamId,
+};
 #[cfg(test)]
 use crate::engine::{TestSourceKind, source_model::test_support::stream_id_for_source};
-use crate::{
-    TransportEffectOutcome,
-    engine::{
-        ConnectionId, UserId,
-        media_transport::{AppliedSessionAnswer, SessionUploadEncoding, TransportMediaId},
-        room::{
-            RoomUserOperation,
-            cleanup::TransportCleanupOperation,
-            effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
-            media_graph::ValidatedPublish,
-        },
-        source_model::UserStreamId,
-    },
-};
 
 #[derive(Debug, Default)]
 pub struct StagedPublishes {

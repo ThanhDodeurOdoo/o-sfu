@@ -1,10 +1,8 @@
 use super::support::*;
-use crate::{
-    UnpublishIntentOutcome,
-    engine::{
-        UserInfo,
-        source_model::{SourcePolicy, SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
-    },
+use crate::engine::{
+    UserInfo,
+    room::UnpublishIntentOutcome,
+    source_model::{SourcePolicy, SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
 };
 
 #[tokio::test]

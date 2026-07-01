@@ -60,7 +60,7 @@
 use std::{collections::BTreeMap, mem::take, sync::Arc};
 
 use crate::{
-    Bitrate, ConnectionId, PublishIntentOutcome, UnpublishIntentOutcome,
+    Bitrate, ConnectionId,
     engine::{
         AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState, UserId,
         UserInfo,
@@ -69,8 +69,8 @@ use crate::{
             TransportAdapterError, TransportSessionHealth, TransportSessionKey,
         },
         room::{
-            BroadcastPayloadError, JoinUserRequest, Room, RoomManager, RoomManagerJoinError,
-            RoomUserOperation,
+            BroadcastPayloadError, JoinUserRequest, PublishIntentOutcome, Room, RoomManager,
+            RoomManagerJoinError, RoomUserOperation, UnpublishIntentOutcome,
         },
         source_model::{
             SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,

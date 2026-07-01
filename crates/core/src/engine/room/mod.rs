@@ -44,6 +44,7 @@ pub use outbound::{
 };
 pub use placement::{RoomRuntimeContext, RouterPlacement, RouterPlacements, RouterPlacementsError};
 pub use read_model::{IncomingBitrateSnapshot, RoomUserStatsSnapshot};
+pub(crate) use transition::{PublishIntentOutcome, UnpublishIntentOutcome};
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub use self::effects::batch::RoomEffectContext;

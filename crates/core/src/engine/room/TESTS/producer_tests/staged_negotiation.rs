@@ -14,7 +14,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
 
     assert_eq!(
         scenario.rollback_scalable_video().await,
-        Some(crate::TransportEffectOutcome::Applied)
+        Some(TransportEffectOutcome::Applied)
     );
 
     assert_eq!(scenario.staged_count().await, 0);
@@ -42,7 +42,7 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
     assert_eq!(scenario.staged_count().await, 1);
     assert_eq!(
         scenario.rollback_scalable_video().await,
-        Some(crate::TransportEffectOutcome::Applied)
+        Some(TransportEffectOutcome::Applied)
     );
 }
 
@@ -98,7 +98,7 @@ async fn staged_publish_duplicate_after_transport_reservation_cleans_second_medi
     );
     assert_eq!(
         scenario.rollback_scalable_video().await,
-        Some(crate::TransportEffectOutcome::Applied)
+        Some(TransportEffectOutcome::Applied)
     );
 }
 

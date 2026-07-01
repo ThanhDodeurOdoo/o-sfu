@@ -6,16 +6,13 @@ use o_sfu_router::{
 };
 use tracing::warn;
 
-use super::super::super::{Room, transition::StagedPublish};
-use crate::{
-    UnpublishIntentOutcome,
-    engine::{
-        ConnectionId, TestSourceKind, UserId,
-        media_transport::{MediaTransport, TransportMediaId},
-        source_model::{
-            SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,
-            test_support::source_publish_intent_for_source,
-        },
+use super::super::super::{Room, UnpublishIntentOutcome, transition::StagedPublish};
+use crate::engine::{
+    ConnectionId, TestSourceKind, UserId,
+    media_transport::{MediaTransport, TransportMediaId},
+    source_model::{
+        SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,
+        test_support::source_publish_intent_for_source,
     },
 };
 
