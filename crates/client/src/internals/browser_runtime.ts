@@ -47,13 +47,18 @@ const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
     private readonly _core: ProtocolCoreBindings;
-    private readonly _pendingRequests = new PendingRequests();
+    private readonly _pendingRequests = new PendingRequests(
+        (commands) => this.enqueue(commands),
+        (commands, begin) => this.enqueueRequest(commands, begin),
+        (id, ms) => this.scheduleTimer(id, ms)
+    );
     private readonly _remoteTracks = new RemoteTracks();
     private readonly _peerSession: PeerSession;
     private readonly _setTimer: (callback: () => void, ms: number) => TimerHandle;
     private readonly _socketSession: SocketSession;
     private readonly _context: BrowserRuntimeContext;
 
+    private _lastAbortError: Error | undefined;
     private _commandQueue: Promise<void> = Promise.resolve();
     private _epoch = 0;
     private _timerHandles = new Map<number, TimerHandle>();
@@ -164,22 +169,7 @@ export class BrowserRuntime {
             this.handleRuntimeError(error);
             return Promise.reject(error);
         }
-        const [first, ...pending] = commands;
-        if (first?.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
-            this.enqueue(commands);
-            return Promise.resolve(false);
-        }
-        let request: Promise<boolean> | undefined;
-        const task = this.enqueueTask((epoch) => {
-            request = this._pendingRequests.begin(first.request);
-            request.catch(() => undefined);
-            this.scheduleTimer(first.request.timeoutTimerId, first.request.timeoutMs);
-            return pending.length > 0 ? this.processCommands(pending, epoch) : undefined;
-        });
-        return task.then(
-            () => request ?? false,
-            (error) => request ?? Promise.reject(error)
-        );
+        return this._pendingRequests.drainRequestCommands(commands);
     }
 
     private enqueueProtocolCommands(getCommands: () => HostCommand[]): void {
@@ -194,11 +184,21 @@ export class BrowserRuntime {
         this.enqueueTask((epoch) => this.processCommands(commands, epoch));
     }
 
+    private enqueueRequest(commands: HostCommand[], begin: () => void): Promise<void> {
+        return this.enqueueTask((epoch) => {
+            begin();
+            return commands.length === 0 ? undefined : this.processCommands(commands, epoch);
+        });
+    }
+
     private enqueueTask(operation: (epoch: number) => void | Promise<void>): Promise<void> {
         const epoch = this._epoch;
-        const task = this._commandQueue.then(() =>
-            this.isCurrent(epoch) ? operation(epoch) : undefined
-        );
+        const task = this._commandQueue.then(() => {
+            if (!this.isCurrent(epoch)) {
+                throw this._lastAbortError ?? new Error("runtime command skipped after abort");
+            }
+            return operation(epoch);
+        });
         this._commandQueue = task.catch((error: unknown) => {
             if (this.isCurrent(epoch)) {
                 this.handleRuntimeError(error);
@@ -318,6 +318,7 @@ export class BrowserRuntime {
 
     private handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
+        this._lastAbortError = resolvedError;
         this._pendingRequests.rejectAll(resolvedError);
         let disconnectCommands: HostCommand[] | undefined;
         try {
