@@ -3,6 +3,7 @@ use tracing::warn;
 
 use super::{RoomGaugeDelta, receiver_route::execute_receiver_route_setup};
 use crate::engine::{
+    ConnectionId, UserId,
     diagnostics::DiagnosticsEventData,
     media_transport::{
         ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaTransport,
@@ -26,6 +27,7 @@ pub(super) struct RoomTransportPlan {
     receiver_route_relays: Vec<ResolvedRelayRouteEffect>,
     route_control: RoomRouteControlPlan,
     setups: Vec<(PendingConsumerSetup, ConsumerSetupOrigin)>,
+    readiness_keyframe_refresh: Option<(UserId, ConnectionId)>,
 }
 
 impl RoomTransportPlan {
@@ -73,13 +75,12 @@ impl RoomTransportPlan {
             .extend(work.setups.into_iter().map(|setup| (setup, origin)));
     }
 
-    pub(super) fn push_keyframes(&mut self, targets: Vec<ConsumerRouteTarget>) {
-        for target in targets {
-            self.route_control.push_consumer(
-                keyframe_control(&target),
-                ConsumerRouteFinish::Keyframe(target),
-            );
-        }
+    pub(super) fn defer_readiness_keyframe_refresh(
+        &mut self,
+        user_id: UserId,
+        connection_id: ConnectionId,
+    ) {
+        self.readiness_keyframe_refresh = Some((user_id, connection_id));
     }
 
     pub(super) async fn execute(
@@ -102,6 +103,23 @@ impl RoomTransportPlan {
         }
         for (setup, origin) in self.setups {
             execute_receiver_route_setup(setup, origin, room, media_transport, &mut outcome).await;
+        }
+        if let Some((user_id, connection_id)) = self.readiness_keyframe_refresh {
+            let targets = {
+                let state = room.state.read().await;
+                state.active_video_keyframe_targets(&user_id, connection_id)
+            };
+            if let Some(targets) = targets.filter(|targets| !targets.is_empty()) {
+                let mut route_control = RouteControlPlan::new();
+                for target in targets {
+                    route_control.push_consumer(
+                        keyframe_control(&target),
+                        ConsumerRouteFinish::Keyframe(target),
+                    );
+                }
+                let route_outcome = execute_route_control(route_control, media_transport).await;
+                outcome.diagnostics.extend(route_outcome.diagnostics);
+            }
         }
         outcome
     }

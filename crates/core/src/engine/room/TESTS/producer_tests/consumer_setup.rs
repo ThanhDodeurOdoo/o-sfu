@@ -1,5 +1,3 @@
-use o_sfu_router::rtp::MediaStream;
-
 use super::support::*;
 
 #[tokio::test]
@@ -38,21 +36,15 @@ async fn initial_answer_sets_up_pending_consumers_once() {
 async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
     let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
 
-    assert!(
-        scenario
-            .room
-            .test_api()
-            .media()
-            .publish_track(
-                &scenario.publisher_user_id,
-                TestSourceKind::ScalableVideo,
-                MediaKind::Video,
-                video_rtp_parameters_with_mid("cam-refresh-retry", 22_222),
-                &scenario.media_transport,
-            )
-            .await
-            .is_some()
-    );
+    publish_track(
+        &scenario.room,
+        &scenario.publisher_user_id,
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        video_rtp_parameters_with_mid("cam-refresh-retry", 22_222),
+        &scenario.media_transport,
+    )
+    .await;
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
     assert_remote_source_snapshot_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
@@ -66,21 +58,15 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
         .await
         .expect("first subscriber refresh should stage an rtc offer");
 
-    assert!(
-        scenario
-            .room
-            .test_api()
-            .media()
-            .publish_track(
-                &scenario.publisher_user_id,
-                TestSourceKind::ReadableVideo,
-                MediaKind::Video,
-                video_rtp_parameters_with_mid("screen-refresh-retry", 33_333),
-                &scenario.media_transport,
-            )
-            .await
-            .is_some()
-    );
+    publish_track(
+        &scenario.room,
+        &scenario.publisher_user_id,
+        TestSourceKind::ReadableVideo,
+        MediaKind::Video,
+        video_rtp_parameters_with_mid("screen-refresh-retry", 33_333),
+        &scenario.media_transport,
+    )
+    .await;
     assert_eq!(
         scenario.room.test_api().inspect().consumer_count().await,
         1,
@@ -119,6 +105,50 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
     assert!(
         drain_outbound(&mut scenario.subscriber_rx).is_empty(),
         "no new setup should be emitted once every consumer already exists"
+    );
+}
+
+#[tokio::test]
+async fn stale_refresh_does_not_request_replaced_receiver_keyframes() {
+    let scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
+
+    publish_track(
+        &scenario.room,
+        &scenario.publisher_user_id,
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        video_rtp_parameters_with_mid("cam-stale-refresh", 22_222),
+        &scenario.media_transport,
+    )
+    .await;
+    assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 1);
+
+    let stale_connection_id = scenario.subscriber_session_key.connection_id();
+    let (replacement_tx, _replacement_rx) = test_sender();
+    join_user_with_sender(
+        &scenario.room,
+        scenario.subscriber_user_id.clone(),
+        replacement_tx,
+    )
+    .await;
+
+    let requests_before_refresh = keyframe_request_count(&scenario);
+    assert_eq!(
+        scenario
+            .room
+            .user_operation(
+                &scenario.subscriber_user_id,
+                stale_connection_id,
+                &scenario.media_transport,
+            )
+            .apply_session_refreshed()
+            .await,
+        None
+    );
+    assert_eq!(
+        keyframe_request_count(&scenario),
+        requests_before_refresh,
+        "stale refresh must not request keyframes for routes owned by the replaced receiver"
     );
 }
 

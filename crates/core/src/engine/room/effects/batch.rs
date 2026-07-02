@@ -11,8 +11,8 @@ use crate::engine::{
     room::{
         Room,
         media_graph::{
-            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, ProducerActivityCommit,
-            PublishCommit, ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
+            ConsumerSetupOrigin, MediaTopologyEffects, ProducerActivityCommit, PublishCommit,
+            ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
         },
         source_policy::{SourcePolicyTransaction, SourcePolicyWakeups},
         state::{
@@ -141,18 +141,17 @@ impl RoomEffects {
                 batch
             }
             RoomCommit::ConsumerReadiness(commit) => {
+                let receiver_user_id = commit.receiver_user_id.clone();
+                let receiver_connection_id = commit.receiver_connection_id;
                 let mut batch =
                     Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Readiness);
+                batch
+                    .transport
+                    .defer_readiness_keyframe_refresh(receiver_user_id, receiver_connection_id);
                 batch.source_policy.route_graph_changed();
                 batch
             }
         }
-    }
-
-    pub(in crate::engine::room) fn keyframe_refresh(targets: Vec<ConsumerRouteTarget>) -> Self {
-        let mut batch = Self::default();
-        batch.transport.push_keyframes(targets);
-        batch
     }
 
     pub(in crate::engine::room) async fn execute_source_policy_transaction(
