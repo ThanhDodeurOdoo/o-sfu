@@ -41,8 +41,14 @@ impl RoomUserOperation<'_> {
     }
 
     async fn apply_receiver_readiness(self) -> Option<()> {
-        self.setup_missing_consumers().await?;
-        self.request_active_video_keyframes().await;
+        let commit = {
+            let mut state = self.room.state.write().await;
+            state.refresh_consumer_readiness(self.user_id, self.connection_id)
+        };
+        let commit = commit?;
+        RoomEffects::from_commit(self.room, RoomCommit::ConsumerReadiness(commit))
+            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
+            .await;
         Some(())
     }
 
@@ -60,30 +66,6 @@ impl RoomUserOperation<'_> {
             .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())
-    }
-
-    async fn setup_missing_consumers(self) -> Option<()> {
-        let commit = {
-            let mut state = self.room.state.write().await;
-            state.refresh_consumer_readiness(self.user_id, self.connection_id)
-        };
-        let commit = commit?;
-        RoomEffects::from_commit(self.room, RoomCommit::ConsumerReadiness(commit))
-            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
-            .await;
-        Some(())
-    }
-
-    async fn request_active_video_keyframes(self) {
-        let Some(targets) = ({
-            let state = self.room.state.read().await;
-            state.active_video_keyframe_targets(self.user_id, self.connection_id)
-        }) else {
-            return;
-        };
-        RoomEffects::keyframe_refresh(targets)
-            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
-            .await;
     }
 }
 

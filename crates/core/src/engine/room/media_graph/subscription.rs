@@ -478,10 +478,10 @@ impl RoomState {
             return None;
         }
         Some(
-            self.live_consumer_routes()
+            self.topology
+                .committed_consumer_routes_for_user(consumer_user_id)
                 .filter_map(|route| {
-                    if route.consumer_user_id != *consumer_user_id
-                        || route.state.consumer_connection_id != consumer_connection_id
+                    if route.state.consumer_connection_id != consumer_connection_id
                         || route.source.media_kind() != RouterMediaKind::Video
                     {
                         return None;
