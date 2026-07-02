@@ -4,6 +4,7 @@ import {
     type ClientUpdateDetail,
     type DownloadStates,
     type SessionId,
+    type SourceDescriptor,
     type StreamType
 } from "../public_api.js";
 import {
@@ -19,15 +20,22 @@ type TrackUpdateEmitter = (update: ClientUpdateDetail) => void;
 type SlotBinding = Pick<TrackBinding, "active" | "sessionId" | "type">;
 type RemoteMediaSlot = { binding?: SlotBinding; track?: MediaTrack; unbindTrack?: () => void };
 
-export class RemoteTracks {
+export class RemoteMedia {
     public readonly consumers = new Map<SessionId, ConsumersCompat>();
+
+    private _sources: readonly SourceDescriptor[] = [];
 
     private _slots = new Map<string, RemoteMediaSlot>();
     private _subscriptionStates = new Map<SessionId, DownloadStates>();
 
+    get sources(): readonly SourceDescriptor[] {
+        return this._sources;
+    }
+
     resetAll(): void {
         this.clearPeerConnectionState();
         this._subscriptionStates.clear();
+        this._sources = [];
     }
 
     clearPeerConnectionState(): void {
@@ -38,14 +46,18 @@ export class RemoteTracks {
         this._slots.clear();
     }
 
+    replaceSources(sources: readonly SourceDescriptor[]): void {
+        this._sources = sources;
+    }
+
     replaceTrackBindings(bindings: TrackBinding[], emitUpdate: TrackUpdateEmitter): void {
         const nextBindings = new Map<string, TrackBinding>();
         for (const binding of bindings) {
             nextBindings.set(binding.mid, binding);
         }
 
-        for (const mid of this._slots.keys()) {
-            if (this._slots.get(mid)?.binding && !nextBindings.has(mid)) {
+        for (const [mid, slot] of this._slots) {
+            if (slot.binding && !nextBindings.has(mid)) {
                 this.removeSlot(mid);
             }
         }
@@ -55,7 +67,8 @@ export class RemoteTracks {
         }
     }
 
-    removeSessionTracks(sessionId: SessionId): void {
+    removeSession(sessionId: SessionId): void {
+        this._sources = this._sources.filter((source) => source.sessionId !== sessionId);
         this.consumers.delete(sessionId);
         for (const [mid, slot] of this._slots) {
             if (slot.binding?.sessionId === sessionId) {
@@ -76,12 +89,11 @@ export class RemoteTracks {
         } else {
             this._subscriptionStates.set(sessionId, nextStates);
         }
-        const previousDownloadStates = previousStates ?? {};
         for (const slot of this._slots.values()) {
             if (slot.binding?.sessionId !== sessionId) {
                 continue;
             }
-            const previous = this.applySubscriptionState(slot.binding, previousDownloadStates);
+            const previous = this.applyState(slot.binding, previousStates);
             this.publishSlot(slot, previous, emitUpdate);
         }
     }
@@ -92,9 +104,7 @@ export class RemoteTracks {
             return;
         }
         const slot = this.getOrCreateSlot(mid);
-        const previous = slot.binding
-            ? this.applyCurrentSubscriptionState(slot.binding)
-            : undefined;
+        const previous = slot.binding ? this.currentBinding(slot.binding) : undefined;
         this.clearSlotTrack(slot);
         slot.track = event.track;
         this.bindTrackLifecycle(slot, mid, event.track, emitUpdate);
@@ -103,9 +113,7 @@ export class RemoteTracks {
 
     private applyBinding(mid: string, binding: TrackBinding, emitUpdate: TrackUpdateEmitter): void {
         const slot = this.getOrCreateSlot(mid);
-        const previous = slot.binding
-            ? this.applyCurrentSubscriptionState(slot.binding)
-            : undefined;
+        const previous = slot.binding ? this.currentBinding(slot.binding) : undefined;
         const { active, sessionId, type } = binding;
         const rebinding =
             previous !== undefined && (previous.sessionId !== sessionId || previous.type !== type);
@@ -129,7 +137,7 @@ export class RemoteTracks {
         if (!binding || !track) {
             return;
         }
-        const appliedBinding = this.applyCurrentSubscriptionState(binding);
+        const appliedBinding = this.currentBinding(binding);
         if (
             !force &&
             previous &&
@@ -144,9 +152,7 @@ export class RemoteTracks {
             this.clearConsumer(previous.sessionId, previous.type);
         }
         const consumers = this.consumers.get(appliedBinding.sessionId) ?? createEmptyConsumers();
-        consumers[appliedBinding.type] = {
-            track
-        };
+        consumers[appliedBinding.type] = { track };
         this.consumers.set(appliedBinding.sessionId, consumers);
         emitUpdate({
             name: CLIENT_UPDATE.TRACK,
@@ -173,7 +179,7 @@ export class RemoteTracks {
             if (!slot?.binding || slot.track !== track) {
                 return;
             }
-            const previous = this.applyCurrentSubscriptionState(slot.binding);
+            const previous = this.currentBinding(slot.binding);
             this.publishSlot(slot, previous, emitUpdate, true);
         };
         track.addEventListener("mute", emitTrackUpdate);
@@ -184,17 +190,11 @@ export class RemoteTracks {
         };
     }
 
-    private applyCurrentSubscriptionState(binding: SlotBinding): SlotBinding {
-        return this.applySubscriptionState(
-            binding,
-            this._subscriptionStates.get(binding.sessionId)
-        );
+    private currentBinding(binding: SlotBinding): SlotBinding {
+        return this.applyState(binding, this._subscriptionStates.get(binding.sessionId));
     }
 
-    private applySubscriptionState(
-        binding: SlotBinding,
-        states: DownloadStates | undefined
-    ): SlotBinding {
+    private applyState(binding: SlotBinding, states: DownloadStates | undefined): SlotBinding {
         return {
             active: binding.active && (states?.[binding.type] ?? true),
             sessionId: binding.sessionId,

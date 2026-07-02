@@ -684,6 +684,12 @@ test("info_change map payloads preserve __proto__ as an own property", async () 
 
 test("source descriptor updates are exposed as additive client state", async () => {
     const { client, emitMessage, updates, connect } = createSfuClientHarness();
+    const sourceSnapshots = [];
+    client.addEventListener("update", (event) => {
+        if (event.detail.name === CLIENT_UPDATE.SOURCE) {
+            sourceSnapshots.push(client.sourceDescriptors);
+        }
+    });
 
     await connect();
     await emitMessage("source-descriptors");
@@ -710,11 +716,13 @@ test("source descriptor updates are exposed as additive client state", async () 
         }
     ]);
     assert.deepEqual(client.sourceDescriptors, expectedSources);
+    assert.deepEqual(sourceSnapshots, [expectedSources]);
 
     client.disconnect();
     await tick();
 
     assert.deepEqual(client.sourceDescriptors, []);
+    assert.deepEqual(sourceSnapshots.at(-1), []);
 });
 
 test("renegotiation attaches pending audio only to upload-eligible mids", async () => {
@@ -1245,9 +1253,19 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
 test("peer departure clears remote-track state before disconnect update", async () => {
     const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
         createSfuClientHarness();
+    const consumerStateAtDisconnect = [];
+    client.addEventListener("update", (event) => {
+        if (event.detail.name === CLIENT_UPDATE.DISCONNECT) {
+            consumerStateAtDisconnect.push({
+                hasConsumer: client._consumers.has(42),
+                sourceDescriptors: client.sourceDescriptors
+            });
+        }
+    });
 
     await connectWithWelcome();
 
+    await emitMessage("source-descriptors");
     await emitOfferWithBinding({ core, emitMessage });
 
     const track = createCameraTrack("track-1");
@@ -1256,7 +1274,7 @@ test("peer departure clears remote-track state before disconnect update", async 
 
     await emitMessage("peer-left");
 
-    assert.equal(client._consumers.has(42), false);
+    assert.deepEqual(consumerStateAtDisconnect, [{ hasConsumer: false, sourceDescriptors: [] }]);
     assert.deepEqual(updates.at(-1), {
         name: CLIENT_UPDATE.DISCONNECT,
         payload: {
@@ -1826,8 +1844,12 @@ test("fatal runtime errors reset the public client surface", async () => {
         connect
     } = createSfuClientHarness();
     const stateChanges = [];
+    const sourcesAtError = [];
     client.addEventListener("stateChange", (event) => {
         stateChanges.push(event.detail);
+    });
+    client.addEventListener("handledError", () => {
+        sourcesAtError.push(client.sourceDescriptors);
     });
 
     await connect();
@@ -1857,6 +1879,7 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.equal(client.errors.length, 1);
     assert.equal(client.errors[0] instanceof Error, true);
     assert.equal(handledErrors[0], client.errors[0]);
+    assert.deepEqual(sourcesAtError, [[]]);
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
     assert.deepEqual(core.wsCloseCodes, []);
@@ -1896,24 +1919,35 @@ test("fatal runtime errors ignore stale remote-description failures after abort"
 
 test("fatal runtime errors keep the original error when protocol disconnect fails", async () => {
     const core = new FakeProtocolCore();
-    let disconnectCalls = 0;
+    const disconnect = core.disconnect.bind(core);
     core.disconnect = () => {
-        disconnectCalls += 1;
+        disconnect();
         throw new Error("disconnect failure");
     };
-    const { client, connect, emitMessage, handledErrors, open, sockets } = createSfuClientHarness({
-        protocolCore: core
-    });
+    const { client, connect, emitMessage, handledErrors, open, sockets, updates } =
+        createSfuClientHarness({
+            protocolCore: core
+        });
 
     await connect();
     await open();
+    await emitMessage("source-descriptors");
+
+    assert.notDeepEqual(client.sourceDescriptors, []);
 
     await emitMessage("explode");
 
     assert.equal(client.errors.length, 1);
     assert.equal(client.errors[0].message, "boom");
     assert.equal(handledErrors[0], client.errors[0]);
-    assert.equal(disconnectCalls, 1);
+    assert.equal(core.disconnectCalls, 1);
+    assert.deepEqual(client.sourceDescriptors, []);
+    assert.equal(
+        updates.some(
+            (update) => update.name === CLIENT_UPDATE.SOURCE && update.payload.sources.length === 0
+        ),
+        false
+    );
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
 });

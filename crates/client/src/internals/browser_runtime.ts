@@ -9,6 +9,7 @@ import {
     type RecordingOptions,
     type SessionId,
     type SessionInfo,
+    type SourceDescriptor,
     type SfuStats,
     type StreamType
 } from "../public_api.js";
@@ -29,7 +30,7 @@ import type {
 } from "./browser_types.js";
 import { PendingRequests } from "./pending_requests.js";
 import { PeerSession } from "./peer_session.js";
-import { RemoteTracks } from "./remote_tracks.js";
+import { RemoteMedia } from "./remote_media.js";
 import { SocketSession } from "./socket_session.js";
 
 type BrowserRuntimeContext = {
@@ -40,7 +41,9 @@ type BrowserRuntimeContext = {
     onUpdate: (update: ClientUpdateDetail) => void;
 };
 
-type PublicState = Pick<ProtocolCoreBindings, "state" | "features" | "recordingState">;
+type PublicState = Pick<ProtocolCoreBindings, "state" | "features" | "recordingState"> & {
+    sourceDescriptors: readonly SourceDescriptor[];
+};
 
 const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
 const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
@@ -53,7 +56,9 @@ export class BrowserRuntime {
         (commands, begin) => this.enqueueRequest(commands, begin),
         (id, ms) => this.scheduleTimer(id, ms)
     );
-    private readonly _remoteTracks = new RemoteTracks();
+    private readonly _media = new RemoteMedia();
+    public readonly consumers: ReadonlyMap<SessionId, ConsumersCompat> = this._media.consumers;
+
     private readonly _peerSession: PeerSession;
     private readonly _setTimer: (callback: () => void, ms: number) => TimerHandle;
     private readonly _socketSession: SocketSession;
@@ -82,7 +87,7 @@ export class BrowserRuntime {
         this._peerSession = new PeerSession(
             dependencies.createPeerConnection ??
                 ((config) => new RTCPeerConnection(config) as ClientPeerConnection),
-            this._remoteTracks,
+            this._media,
             this._context.onUpdate,
             () => this.enqueueProtocolCommands(() => this.onTransportReady()),
             () => {
@@ -95,10 +100,6 @@ export class BrowserRuntime {
             log
         );
         this.syncPublicState();
-    }
-
-    get consumers(): ReadonlyMap<SessionId, ConsumersCompat> {
-        return this._remoteTracks.consumers;
     }
 
     connect(url: string, jwt: string, room: string | null, iceServers?: RTCIceServer[]): void {
@@ -118,7 +119,7 @@ export class BrowserRuntime {
 
     subscribe(sessionId: SessionId, states: DownloadStates): void {
         this.enqueueTask(() => {
-            this._remoteTracks.updateSubscriptionStates(sessionId, states, this._context.onUpdate);
+            this._media.updateSubscriptionStates(sessionId, states, this._context.onUpdate);
         });
         this.enqueueProtocolCommands(() => this._core.subscribe(sessionId, states));
     }
@@ -164,7 +165,7 @@ export class BrowserRuntime {
         this._timerHandles.clear();
         this._peerSession.close();
         this._peerSession.clearPublications();
-        this._remoteTracks.resetAll();
+        this._media.resetAll();
         this._socketSession.abort(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
@@ -279,16 +280,19 @@ export class BrowserRuntime {
                 return [];
             case COMMAND_KIND.EMIT_UPDATE:
                 if (command.update.name === REMOTE_MEDIA_UPDATE) {
-                    this._remoteTracks.replaceTrackBindings(
+                    this._media.replaceTrackBindings(
                         command.update.payload.bindings,
                         this._context.onUpdate
                     );
-                } else {
-                    if (command.update.name === CLIENT_UPDATE.DISCONNECT) {
-                        this._remoteTracks.removeSessionTracks(command.update.payload.sessionId);
-                    }
-                    this._context.onUpdate(command.update);
+                    return [];
                 }
+                if (command.update.name === CLIENT_UPDATE.SOURCE) {
+                    this._media.replaceSources(command.update.payload.sources);
+                } else if (command.update.name === CLIENT_UPDATE.DISCONNECT) {
+                    this._media.removeSession(command.update.payload.sessionId);
+                }
+                this.syncPublicState();
+                this._context.onUpdate(command.update);
                 return [];
             case COMMAND_KIND.BEGIN_PENDING_REQUEST:
                 throw new Error("beginPendingRequest is only valid for request command drains");
@@ -345,6 +349,7 @@ export class BrowserRuntime {
             );
         }
         this.abort();
+        this.syncPublicState();
         if (disconnectCommands) {
             this.enqueue(disconnectCommands);
         }
@@ -355,6 +360,7 @@ export class BrowserRuntime {
         this._context.onPublicState({
             features: this._core.features,
             recordingState: this._core.recordingState,
+            sourceDescriptors: this._media.sources,
             state: this._core.state
         });
     }
