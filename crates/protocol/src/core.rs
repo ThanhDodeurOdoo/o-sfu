@@ -90,10 +90,6 @@ const MAX_OUTBOUND_BATCH_LEN: usize = 16;
 pub enum Command {
     /// Serialize and send a JSON frame over the WebSocket.
     SendWebSocket(String),
-    SetLocalUploadIntent {
-        stream_type: StreamType,
-        active: bool,
-    },
     /// Apply a remote SDP offer to the local `RTCPeerConnection`.
     ApplyNegotiation {
         request_id: RequestId,
@@ -568,12 +564,7 @@ impl ProtocolCore {
         } else {
             ClientMessage::Unpublish(StreamIntentPayload { stream_type })
         };
-        let mut commands = vec![Command::SetLocalUploadIntent {
-            stream_type,
-            active,
-        }];
-        commands.extend(self.enqueue_client_message(message, FlushMode::Batched));
-        command_batch(commands)
+        command_batch(self.enqueue_client_message(message, FlushMode::Batched))
     }
 
     /// Remembers the latest per-peer subscription intent for reconnect replay.
@@ -744,13 +735,8 @@ impl ProtocolCore {
             return Vec::new();
         }
 
-        let mut commands = Vec::new();
         let mut replay_batch = Vec::new();
         for stream_type in self.sticky_replay.active_publications() {
-            commands.push(Command::SetLocalUploadIntent {
-                stream_type,
-                active: true,
-            });
             let Some(envelope) =
                 ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
                     stream_type,
@@ -763,12 +749,11 @@ impl ProtocolCore {
             replay_batch.push(envelope);
         }
         if replay_batch.is_empty() {
-            return commands;
+            return Vec::new();
         }
 
         self.outbound_batch.extend(replay_batch);
-        commands.extend(self.flush_pending_batch(true));
-        commands
+        self.flush_pending_batch(true)
     }
 
     fn can_send_client_messages(&self) -> bool {

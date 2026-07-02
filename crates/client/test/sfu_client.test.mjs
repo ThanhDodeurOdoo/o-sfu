@@ -337,6 +337,12 @@ function lastSentEnvelope(socket) {
     return decodeSentFrame(socket, socket.sent.length - 1).at(-1);
 }
 
+function hasSentPublish(socket) {
+    return socket.sent.some((_, index) =>
+        decodeSentFrame(socket, index).some((envelope) => envelope.t === "publish")
+    );
+}
+
 function assertLastNegotiationResponse(socket, tag, responseTo) {
     assert.deepEqual(lastSentEnvelope(socket), {
         t: tag,
@@ -427,6 +433,56 @@ test("real protocol core replays sticky publish after recovery transport readine
             }
         }
     ]);
+
+    await emitMessage(buildNegotiationFrame("renegotiate", "server-republish", "2"), 1);
+
+    const replayTransceiver = peerConnections
+        .at(-1)
+        .transceivers.find((candidate) => candidate.mid === "2");
+    assert.ok(replayTransceiver);
+    assert.equal(replayTransceiver.sender.track, cameraTrack);
+    assert.equal(
+        peerConnections
+            .at(-1)
+            .answerSnapshots.at(-1)
+            .find((snapshot) => snapshot.mid === "2")?.senderTrack,
+        cameraTrack
+    );
+});
+
+test("real protocol core waits for transport-ready replay before binding recovery publish", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections, sockets } = harness;
+    const track = createCameraTrack("camera-track-recovery-pending");
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "server-initial", "1"));
+
+    sockets[0].emitClose(1011);
+    await tick();
+
+    client.publish("camera", track);
+    await tick();
+
+    await finishRecovery(harness);
+    await emitMessage(buildNegotiationFrame("offer", "server-recovery", "1"), 1);
+
+    assert.equal(
+        peerConnections
+            .at(-1)
+            .answerSnapshots.at(-1)
+            .some((section) => section.senderTrack === track),
+        false
+    );
+    assert.equal(hasSentPublish(sockets[1]), true);
+
+    await emitMessage(buildVideoRenegotiationFrame("server-republish", { mid: "2" }), 1);
+
+    const transceiver = peerConnections
+        .at(-1)
+        .transceivers.find((candidate) => candidate.mid === "2");
+    assert.ok(transceiver);
+    assert.equal(transceiver.sender.track, track);
 });
 
 test("real protocol core replays the latest sticky intents changed while recovering", async () => {
@@ -1395,6 +1451,98 @@ test("duplicate unpublish keeps later re-publish eligible for a new upload mid",
             .find((snapshot) => snapshot.mid === transceiver.mid)?.senderTrack,
         secondTrack
     );
+});
+
+test("same-turn unpublish and republish keeps the new track upload-eligible", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections } = harness;
+    const secondTrack = createCameraTrack("camera-track-same-turn-second");
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    client.publish("camera", createCameraTrack("camera-track-same-turn-first"));
+    await tick();
+    await emitMessage(buildVideoRenegotiationFrame("9", { mid: "2", simulcastEncodings: [] }));
+
+    client.publish("camera", null);
+    client.publish("camera", secondTrack);
+    await tick();
+    await emitMessage(buildVideoRenegotiationFrame("10", { mid: "3", simulcastEncodings: [] }));
+
+    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "3");
+    assert.ok(transceiver);
+    assert.equal(transceiver.sender.track, secondTrack);
+});
+
+test("explicit disconnect clears publication intent before reconnect", async () => {
+    const harness = createRecoveryHarness();
+    const { client, connect, emitMessage, open, peerConnections, sockets, timers } = harness;
+    const track = createCameraTrack("camera-track-after-disconnect");
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    client.publish("camera", track);
+    await tick();
+    timers.fireByDelay(100);
+    await tick();
+    await emitMessage(buildVideoRenegotiationFrame("9", { mid: "2", simulcastEncodings: [] }));
+
+    client.disconnect();
+    await tick();
+
+    await connect("ws://example.test/ws", "jwt-token", { channelUUID: "channel-a" });
+    await open(1);
+    await emitMessage(buildWelcomeFrame(), 1);
+    await emitMessage(buildNegotiationFrame("offer", "restart-offer", "1"), 1);
+
+    assert.equal(
+        peerConnections
+            .at(-1)
+            .answerSnapshots.at(-1)
+            .some((section) => section.senderTrack === track),
+        false
+    );
+    assert.equal(hasSentPublish(sockets[1]), false);
+
+    client.publish("camera", track);
+    await tick();
+    timers.fireByDelay(100);
+    await tick();
+
+    assert.equal(hasSentPublish(sockets[1]), true);
+
+    await emitMessage(buildVideoRenegotiationFrame("10", { mid: "2", simulcastEncodings: [] }), 1);
+
+    const transceiver = peerConnections
+        .at(-1)
+        .transceivers.find((candidate) => candidate.mid === "2");
+    assert.ok(transceiver);
+    assert.equal(transceiver.sender.track, track);
+});
+
+test("pre-connect publish does not survive a fresh connect", async () => {
+    const harness = createRecoveryHarness();
+    const { client, connect, emitMessage, open, peerConnections, sockets } = harness;
+    const track = createCameraTrack("camera-track-before-connect");
+
+    client.publish("camera", track);
+    await tick();
+
+    await connect("ws://example.test/ws", "jwt-token", { channelUUID: "channel-a" });
+    await open();
+    await emitMessage(buildWelcomeFrame());
+    await emitMessage(buildNegotiationFrame("offer", "server-initial", "1"));
+
+    assert.equal(
+        peerConnections
+            .at(-1)
+            .answerSnapshots.at(-1)
+            .some((section) => section.senderTrack === track),
+        false
+    );
+    assert.equal(hasSentPublish(sockets[0]), false);
 });
 
 test("canceling pending camera publish does not detach an attached screen sender", async () => {

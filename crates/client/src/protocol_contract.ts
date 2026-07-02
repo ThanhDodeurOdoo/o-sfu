@@ -41,7 +41,6 @@ export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PEND
 export const COMMAND_KIND = {
     CONNECT: "connect",
     SEND_WEB_SOCKET: "sendWebSocket",
-    SET_LOCAL_UPLOAD_INTENT: "setLocalUploadIntent",
     CLOSE_WEB_SOCKET: "closeWebSocket",
     APPLY_NEGOTIATION: "applyNegotiation",
     CREATE_PEER_CONNECTION: "createPeerConnection",

@@ -52,10 +52,6 @@ fn host_command_bridge_projects_commands_to_browser_payloads() {
                     }],
                 },
             },
-            Command::SetLocalUploadIntent {
-                stream_type: StreamType::Camera,
-                active: true,
-            },
         ])
         .expect("valid test command batch"),
     );
@@ -90,11 +86,6 @@ fn host_command_bridge_projects_commands_to_browser_payloads() {
                         }]
                     },
                 }
-            },
-            {
-                "kind": "setLocalUploadIntent",
-                "streamType": "camera",
-                "active": true
             }
         ])
     );
