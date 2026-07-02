@@ -215,13 +215,7 @@ export class FakeProtocolCore {
 
     publish(type, active) {
         this.publicationUpdates.push({ active, type });
-        return [
-            {
-                active,
-                kind: "setLocalUploadIntent",
-                streamType: type
-            }
-        ];
+        return [];
     }
 
     _withPendingNegotiationKind(commands) {

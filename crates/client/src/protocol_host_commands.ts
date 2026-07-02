@@ -8,7 +8,7 @@ import {
     type PendingRequestKind,
     type TrackBinding
 } from "./protocol_contract.js";
-import type { ClientUpdateDetail, ConnectionState, StreamType } from "./public_api.js";
+import type { ClientUpdateDetail, ConnectionState } from "./public_api.js";
 import {
     asRecord,
     requireBoolean,
@@ -47,11 +47,6 @@ export type PendingRequest = {
 
 export type HostCommand =
     | { kind: typeof COMMAND_KIND.SEND_WEB_SOCKET; frame: string }
-    | {
-          kind: typeof COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT;
-          streamType: StreamType;
-          active: boolean;
-      }
     | {
           kind: typeof COMMAND_KIND.APPLY_NEGOTIATION;
           requestId: string;
@@ -100,10 +95,6 @@ function validateHostCommand(value: unknown, context: string): HostCommand {
     switch (kind) {
         case COMMAND_KIND.SEND_WEB_SOCKET:
             requireString(command.frame, `${context}.frame`);
-            break;
-        case COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT:
-            validateStreamType(command.streamType, `${context}.streamType`);
-            requireBoolean(command.active, `${context}.active`);
             break;
         case COMMAND_KIND.APPLY_NEGOTIATION:
             requireString(command.requestId, `${context}.requestId`);

@@ -1,8 +1,10 @@
 import {
     CLIENT_LOG_LEVEL,
+    SFU_CLIENT_STATE,
     STREAM_TYPES,
     type ClientLogDetail,
     type ClientUpdateDetail,
+    type ConnectionState,
     type SfuStats,
     type StreamType
 } from "../public_api.js";
@@ -19,7 +21,7 @@ type NegotiationAnswer = {
     shouldSignalTransportReady: boolean;
 };
 
-type LocalTrackEffect = { publishActive?: boolean; peerTask?: () => Promise<void> };
+type PublicationEffect = { active?: boolean; peerTask?: () => Promise<void> };
 
 export class PeerSession {
     private _iceServers?: RTCIceServer[];
@@ -39,12 +41,22 @@ export class PeerSession {
         this._iceServers = iceServers;
     }
 
-    setLocalUploadIntent(type: StreamType, active: boolean): void {
-        this._uploads.setUploadIntent(type, active);
+    resumePublications(): void {
+        this._uploads.resumePublications();
     }
 
-    updateLocalTrack(type: StreamType, track: MediaStreamTrack | null): LocalTrackEffect {
-        const transition = this._uploads.setTrack(type, track);
+    clearPublications(): void {
+        this._uploads.clearPublications();
+    }
+
+    setPublication(
+        type: StreamType,
+        track: MediaStreamTrack | null,
+        state: ConnectionState
+    ): PublicationEffect {
+        const canAttach =
+            state === SFU_CLIENT_STATE.AUTHENTICATED || state === SFU_CLIENT_STATE.CONNECTED;
+        const transition = this._uploads.setPublication(type, track, canAttach);
         if (!transition.hadTrack && !transition.hasTrack) {
             return {};
         }
@@ -59,17 +71,15 @@ export class PeerSession {
                 return {};
             }
             const mid = transition.boundMid;
-            return {
-                peerTask: () => this._uploads.attachTrack(this._activePeer, mid, type)
-            };
+            return { peerTask: () => this._uploads.attachTrack(this._activePeer, mid, type) };
         }
         if (transition.hadTrack) {
             return {
-                peerTask: () => this._uploads.detachTrack(this._activePeer, type),
-                publishActive: false
+                active: false,
+                peerTask: () => this._uploads.detachTrack(this._activePeer, type)
             };
         }
-        return { publishActive: true };
+        return { active: true };
     }
 
     create(): void {
@@ -99,8 +109,8 @@ export class PeerSession {
         if (peer) {
             peer.close();
             this._log(CLIENT_LOG_LEVEL.INFO, "closed RTCPeerConnection");
-            this._uploads.clearPeerConnectionState();
         }
+        this._uploads.clearPeerConnectionState();
         this._tracks.clearPeerConnectionState();
         this._activePeer = null;
     }

@@ -9,7 +9,6 @@ use crate::{
     core::{
         Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest, ProtocolEvent,
     },
-    shared::StreamType,
     signaling::{NegotiationUploadSlot, RequestId},
 };
 
@@ -18,11 +17,6 @@ use crate::{
 pub enum HostCommand {
     SendWebSocket {
         frame: String,
-    },
-    SetLocalUploadIntent {
-        #[serde(rename = "streamType")]
-        stream_type: StreamType,
-        active: bool,
     },
     ApplyNegotiation {
         #[serde(rename = "requestId")]
@@ -100,15 +94,6 @@ pub fn project_commands(core_commands: CommandBatch) -> Vec<HostCommand> {
         match command {
             Command::SendWebSocket(frame) => {
                 host_commands.push(HostCommand::SendWebSocket { frame });
-            }
-            Command::SetLocalUploadIntent {
-                stream_type,
-                active,
-            } => {
-                host_commands.push(HostCommand::SetLocalUploadIntent {
-                    stream_type,
-                    active,
-                });
             }
             Command::ApplyNegotiation {
                 request_id,

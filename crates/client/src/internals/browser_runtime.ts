@@ -1,6 +1,7 @@
 import {
     CLIENT_LOG_LEVEL,
     CLIENT_UPDATE,
+    SFU_CLIENT_STATE,
     type ClientLogDetail,
     type ClientUpdateDetail,
     type ConnectionState,
@@ -83,7 +84,7 @@ export class BrowserRuntime {
                 ((config) => new RTCPeerConnection(config) as ClientPeerConnection),
             this._remoteTracks,
             this._context.onUpdate,
-            () => this.enqueueProtocolCommands(() => this._core.onTransportReady()),
+            () => this.enqueueProtocolCommands(() => this.onTransportReady()),
             () => {
                 log(
                     CLIENT_LOG_LEVEL.WARN,
@@ -104,6 +105,7 @@ export class BrowserRuntime {
         this.enqueueProtocolCommands(() => {
             const commands = this._core.connect(url, jwt, room);
             if (commands.some((command) => command.kind === COMMAND_KIND.CONNECT)) {
+                this._peerSession.clearPublications();
                 this._peerSession.setIceServers(iceServers);
             }
             return commands;
@@ -142,12 +144,16 @@ export class BrowserRuntime {
     }
 
     publish(type: StreamType, track: MediaStreamTrack | null): void {
-        const { publishActive, peerTask } = this._peerSession.updateLocalTrack(type, track);
+        const { active, peerTask } = this._peerSession.setPublication(
+            type,
+            track,
+            this._core.state
+        );
         if (peerTask) {
             this.enqueueTask(peerTask);
         }
-        if (publishActive !== undefined) {
-            this.enqueueProtocolCommands(() => this._core.publish(type, publishActive));
+        if (active !== undefined) {
+            this.enqueueProtocolCommands(() => this._core.publish(type, active));
         }
     }
 
@@ -157,6 +163,7 @@ export class BrowserRuntime {
         this._timerHandles.forEach((handle) => this._clearTimer(handle));
         this._timerHandles.clear();
         this._peerSession.close();
+        this._peerSession.clearPublications();
         this._remoteTracks.resetAll();
         this._socketSession.abort(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
@@ -232,9 +239,6 @@ export class BrowserRuntime {
             case COMMAND_KIND.SEND_WEB_SOCKET:
                 this._socketSession.send(command.frame);
                 return [];
-            case COMMAND_KIND.SET_LOCAL_UPLOAD_INTENT:
-                this._peerSession.setLocalUploadIntent(command.streamType, command.active);
-                return [];
             case COMMAND_KIND.APPLY_NEGOTIATION: {
                 const result = await this._peerSession.negotiate(
                     command.requestId,
@@ -251,7 +255,7 @@ export class BrowserRuntime {
                     result.answerSdp
                 );
                 if (result.shouldSignalTransportReady) {
-                    commands.push(...this._core.onTransportReady());
+                    commands.push(...this.onTransportReady());
                 }
                 return commands;
             }
@@ -265,6 +269,12 @@ export class BrowserRuntime {
                 this._socketSession.close(command.code);
                 return [];
             case COMMAND_KIND.EMIT_STATE_CHANGE:
+                if (
+                    command.state === SFU_CLIENT_STATE.CLOSED ||
+                    command.state === SFU_CLIENT_STATE.DISCONNECTED
+                ) {
+                    this._peerSession.clearPublications();
+                }
                 this._context.onStateChange(command.state, command.cause);
                 return [];
             case COMMAND_KIND.EMIT_UPDATE:
@@ -295,6 +305,11 @@ export class BrowserRuntime {
                 this._socketSession.open(command.url);
                 return [];
         }
+    }
+
+    private onTransportReady(): HostCommand[] {
+        this._peerSession.resumePublications();
+        return this._core.onTransportReady();
     }
 
     private cancelTimer(id: number): void {

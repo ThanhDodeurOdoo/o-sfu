@@ -15,34 +15,49 @@ export type UploadSlot = {
 };
 
 export class LocalUploads {
-    private _localTracks = new Map<StreamType, MediaTrack | null>();
+    private _attachableTypes = new Set<StreamType>();
+    private _localTracks = new Map<StreamType, MediaTrack>();
     private _senderMidByType = new Map<StreamType, string>();
-    private _uploadIntentByType = new Set<StreamType>();
 
-    setTrack(type: StreamType, track: MediaStreamTrack | null): UploadTransition {
-        const previousTrack = this._localTracks.get(type) ?? null;
-        this._localTracks.set(type, track);
-        if (track === null) {
-            this._uploadIntentByType.delete(type);
+    setPublication(
+        type: StreamType,
+        track: MediaStreamTrack | null,
+        canAttach: boolean
+    ): UploadTransition {
+        const hadTrack = this._localTracks.has(type);
+        const boundMid = this._senderMidByType.get(type);
+        this._attachableTypes.delete(type);
+        if (track) {
+            this._localTracks.set(type, track);
+            if (canAttach && boundMid === undefined) {
+                this._attachableTypes.add(type);
+            }
+        } else {
+            this._localTracks.delete(type);
         }
         return {
-            hadTrack: previousTrack !== null,
+            hadTrack,
             hasTrack: track !== null,
-            boundMid: this._senderMidByType.get(type)
+            boundMid
         };
     }
 
-    setUploadIntent(type: StreamType, active: boolean): void {
-        if (active) {
-            this._uploadIntentByType.add(type);
-        } else {
-            this._uploadIntentByType.delete(type);
+    resumePublications(): void {
+        for (const type of STREAM_TYPES) {
+            if (this.hasPendingPublication(type)) {
+                this._attachableTypes.add(type);
+            }
         }
     }
 
     clearPeerConnectionState(): void {
         this._senderMidByType.clear();
-        this._uploadIntentByType.clear();
+        this._attachableTypes.clear();
+    }
+
+    clearPublications(): void {
+        this._localTracks.clear();
+        this._attachableTypes.clear();
     }
 
     boundMidFor(streamType: StreamType): string | undefined {
@@ -75,6 +90,7 @@ export class LocalUploads {
             );
         }
         this._senderMidByType.set(streamType, mid);
+        this._attachableTypes.delete(streamType);
     }
 
     async detachTrack(
@@ -96,6 +112,9 @@ export class LocalUploads {
             updateTransceiverDirection(transceiver, null);
         }
         this._senderMidByType.delete(streamType);
+        if (this.hasPendingPublication(streamType)) {
+            this._attachableTypes.add(streamType);
+        }
     }
 
     async attachPendingTracks(
@@ -107,23 +126,19 @@ export class LocalUploads {
         }
         const pendingStreamTypes = STREAM_TYPES.filter(
             (streamType) =>
-                (this._localTracks.get(streamType) ?? null) !== null &&
-                this._uploadIntentByType.has(streamType) &&
-                !this._senderMidByType.has(streamType)
+                this.hasPendingPublication(streamType) && this._attachableTypes.has(streamType)
         );
         if (pendingStreamTypes.length === 0) {
             return;
         }
         const boundMids = new Set(this._senderMidByType.values());
-        const candidateTransceivers = peerConnection.getTransceivers().filter((transceiver) => {
-            const mid = transceiver.mid;
+        const transceivers = peerConnection.getTransceivers();
+        const remainingSlots = uploadSlots.filter((slot) => {
+            const transceiver = transceivers.find((candidate) => candidate.mid === slot.mid);
             return (
-                typeof mid === "string" &&
-                mid.length > 0 &&
-                // transceiver must be one of the slots offered by the sfu
-                uploadSlots.some((slot) => slot.mid === mid) &&
-                // and it must not be already assigned to another local stream
-                !boundMids.has(mid) &&
+                slot.mid.length > 0 &&
+                !boundMids.has(slot.mid) &&
+                transceiver !== undefined &&
                 // when the sfu offers an upload slot (a=recvonly), the browser
                 // sets the local transceiver to recvonly until we flip it to sendonly.
                 // we also check that it's unnegotiated (currentDirection === null)
@@ -133,10 +148,6 @@ export class LocalUploads {
                 transceiver.sender.track == null
             );
         });
-        const transceiverMidSet = new Set(
-            candidateTransceivers.map((transceiver) => transceiver.mid)
-        );
-        const remainingSlots = uploadSlots.filter((slot) => transceiverMidSet.has(slot.mid));
         for (const streamType of pendingStreamTypes) {
             const slotIndex = remainingSlots.findIndex(
                 (slot) => slot.kind === STREAM_KIND[streamType]
@@ -146,8 +157,11 @@ export class LocalUploads {
             }
             const [slot] = remainingSlots.splice(slotIndex, 1);
             await this.attachTrack(peerConnection, slot.mid, streamType, slot);
-            this._uploadIntentByType.delete(streamType);
         }
+    }
+
+    private hasPendingPublication(streamType: StreamType): boolean {
+        return this._localTracks.has(streamType) && !this._senderMidByType.has(streamType);
     }
 }
 
