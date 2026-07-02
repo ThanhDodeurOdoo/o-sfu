@@ -51,10 +51,11 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
             {
                 onLog: (detail) => this._emitRuntimeLog(detail),
                 onRuntimeError: (error) => this._handleRuntimeError(error),
-                onPublicState: ({ state, features, recordingState }) => {
+                onPublicState: ({ state, features, recordingState, sourceDescriptors }) => {
                     this._state = state;
                     this.availableFeatures = features;
                     this.recordingState = recordingState;
+                    this.sourceDescriptors = sourceDescriptors;
                 },
                 onStateChange: (state, cause) => this._emitStateChange(state, cause),
                 onUpdate: (update) => this._emitUpdate(update)
@@ -151,23 +152,12 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
     }
 
     private _emitUpdate(update: ClientUpdateDetail): void {
-        this._applyCompatUpdate(update);
         this._logUpdate(update);
         this.dispatchEvent(
             new CustomEvent("update", {
                 detail: update
             })
         );
-    }
-
-    private _applyCompatUpdate(update: ClientUpdateDetail): void {
-        if (update.name === CLIENT_UPDATE.CHANNEL_INFO_CHANGE) {
-            this.recordingState = update.payload.state;
-            return;
-        }
-        if (update.name === CLIENT_UPDATE.SOURCE) {
-            this.sourceDescriptors = update.payload.sources;
-        }
     }
 
     private _handleRuntimeError(error: Error): void {

@@ -11,7 +11,7 @@ import {
 import type { NegotiationKind } from "../protocol_contract.js";
 import type { ClientPeerConnection } from "./browser_types.js";
 import { LocalUploads, type UploadSlot } from "./local_uploads.js";
-import type { RemoteTracks } from "./remote_tracks.js";
+import type { RemoteMedia } from "./remote_media.js";
 import { localDescriptionHasOnlyInactiveMedia } from "./sdp_media_direction.js";
 
 type RuntimeLog = (level: ClientLogDetail["level"], message: string) => void;
@@ -30,7 +30,7 @@ export class PeerSession {
 
     constructor(
         private readonly _create: (config: RTCConfiguration) => ClientPeerConnection,
-        private readonly _tracks: RemoteTracks,
+        private readonly _media: RemoteMedia,
         private readonly _onUpdate: (update: ClientUpdateDetail) => void,
         private readonly _onTransportReady: () => void,
         private readonly _closeSocketForTransportFailure: () => void,
@@ -99,7 +99,7 @@ export class PeerSession {
                 CLIENT_LOG_LEVEL.DEBUG,
                 `received remote track event for mid ${event.transceiver.mid ?? "unknown"} (kind=${event.track.kind})`
             );
-            this._tracks.handleTrackEvent(event, this._onUpdate);
+            this._media.handleTrackEvent(event, this._onUpdate);
         };
         this._activePeer = peer;
     }
@@ -111,7 +111,7 @@ export class PeerSession {
             this._log(CLIENT_LOG_LEVEL.INFO, "closed RTCPeerConnection");
         }
         this._uploads.clearPeerConnectionState();
-        this._tracks.clearPeerConnectionState();
+        this._media.clearPeerConnectionState();
         this._activePeer = null;
     }
 
