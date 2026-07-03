@@ -45,7 +45,13 @@ async fn large_room_load_triggered_spillover_preserves_caps_and_cleanup() -> s::
         &mut clock,
     )
     .await;
-    close_spillover_wave(&mut peers, &room, first_publisher, cleanup_receivers).await?;
+    Box::pin(close_spillover_wave(
+        &mut peers,
+        &room,
+        first_publisher,
+        cleanup_receivers,
+    ))
+    .await?;
     assert_first_video_forwarded(&mut peers, &mut first_video, &mut clock).await;
     Box::pin(close_remaining_peers(peers)).await?;
     Ok(())
