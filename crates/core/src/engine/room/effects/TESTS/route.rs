@@ -11,7 +11,7 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, ProducerActivity, RouteControlPlan, TransportSessionKey,
+            ConsumerActivity, ProducerActivity, TransportSessionKey,
             test_support::{
                 DebugRouteEntry, test_media_transport_config, test_media_transport_deps,
                 test_rtc_port_range,
@@ -101,24 +101,24 @@ impl RouteFixture {
     }
 
     async fn request_standalone_keyframe(&self) {
-        let mut route_control = RouteControlPlan::new();
-        route_control.push_consumer(
+        let mut routes = RoomRouteEffects::new();
+        routes.push_consumer(
             keyframe_control(&self.target),
             ConsumerRouteFinish::Keyframe(self.target.clone()),
         );
-        execute_route_control(route_control, &self.media_transport).await;
+        execute_route_control(routes, &self.media_transport).await;
         assert_eq!(self.metrics.snapshot().rtc_keyframe_requests_forwarded(), 1);
     }
 
     async fn pause_route_activity(&self) -> Result<(), io::Error> {
         let activity = ReceiverRouteActivity::new(self.target.clone(), false);
-        let mut route_control = RouteControlPlan::new();
-        route_control.push_producer(
+        let mut routes = RoomRouteEffects::new();
+        routes.push_producer(
             self.route.source().clone(),
             ProducerActivity::Inactive,
             self.producer_finish(ProducerActivity::Inactive),
         );
-        route_control.push_consumer(
+        routes.push_consumer(
             activity_control(&activity),
             ConsumerRouteFinish::Activity(
                 activity,
@@ -126,7 +126,7 @@ impl RouteFixture {
             ),
         );
 
-        let outcome = execute_route_control(route_control, &self.media_transport).await;
+        let outcome = execute_route_control(routes, &self.media_transport).await;
 
         assert_eq!(outcome.diagnostics.len(), 2);
         assert!(

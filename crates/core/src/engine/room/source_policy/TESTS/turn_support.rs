@@ -1,13 +1,18 @@
 use super::{ConsumerPacketSelectionUpdate, SourcePolicyTransaction};
-use crate::engine::{UserId, source_model::PublishedSourceId};
+use crate::engine::{
+    UserId, room::effects::transport::ConsumerRouteFinish, source_model::PublishedSourceId,
+};
 
 impl SourcePolicyTransaction {
     pub(in crate::engine::room::source_policy) fn route_updates_for_test(
         &self,
     ) -> impl Iterator<Item = &ConsumerPacketSelectionUpdate> + '_ {
-        self.route_control
+        self.route_effects
             .consumer_finishes_for_test()
-            .map(|finish| &finish.selection)
+            .filter_map(|finish| match finish {
+                ConsumerRouteFinish::SourcePolicy { update, .. } => Some(update),
+                _ => None,
+            })
     }
 
     pub fn has_only_state_update_for_consumer_source_for_test(
@@ -15,14 +20,13 @@ impl SourcePolicyTransaction {
         consumer_user_id: &UserId,
         source_id: PublishedSourceId,
     ) -> bool {
-        let mut state_update = false;
-        for update in self.route_updates_for_test() {
-            if &update.transport_ref.consumer_user_id == consumer_user_id
+        if self.route_updates_for_test().any(|update| {
+            &update.transport_ref.consumer_user_id == consumer_user_id
                 && update.source_id == source_id
-            {
-                return false;
-            }
+        }) {
+            return false;
         }
+        let mut state_update = false;
         for update in &self.state_updates {
             if &update.transport_ref.consumer_user_id != consumer_user_id
                 || update.source_id != source_id

@@ -17,7 +17,7 @@ use crate::engine::{
             ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, PendingConsumerSetup,
             ReceiverRouteActivity, ReceiverRouteWork, ResolvedRelayRouteEffect,
         },
-        source_policy::SourcePolicyWakeups,
+        source_policy::{ConsumerPacketSelectionUpdate, SourcePolicyWakeups},
     },
 };
 
@@ -25,7 +25,7 @@ use crate::engine::{
 pub(super) struct RoomTransportPlan {
     topology: MediaTopologyEffects,
     receiver_route_relays: Vec<ResolvedRelayRouteEffect>,
-    route_control: RoomRouteControlPlan,
+    route_control: RoomRouteEffects,
     setups: Vec<(PendingConsumerSetup, ConsumerSetupOrigin)>,
     readiness_keyframe_refresh: Option<(UserId, ConnectionId)>,
 }
@@ -110,7 +110,7 @@ impl RoomTransportPlan {
                 state.active_video_keyframe_targets(&user_id, connection_id)
             };
             if let Some(targets) = targets.filter(|targets| !targets.is_empty()) {
-                let mut route_control = RouteControlPlan::new();
+                let mut route_control = RoomRouteEffects::new();
                 for target in targets {
                     route_control.push_consumer(
                         keyframe_control(&target),
@@ -133,26 +133,32 @@ pub(super) struct RoomTransportOutcome {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct RoomRouteOutcome {
-    diagnostics: Vec<DiagnosticsEventData>,
+pub(in crate::engine::room) struct RoomRouteOutcome {
+    pub(super) diagnostics: Vec<DiagnosticsEventData>,
+    pub(in crate::engine::room) accepted_policy_updates: Vec<ConsumerPacketSelectionUpdate>,
 }
 
 #[derive(Debug)]
-struct ProducerRouteFinish {
+pub(in crate::engine::room) struct ProducerRouteFinish {
     source: TransportSourceKey,
     activity: ProducerActivity,
     diagnostics: DiagnosticsEventData,
 }
 
-type RoomRouteControlPlan = RouteControlPlan<ProducerRouteFinish, ConsumerRouteFinish>;
+pub(in crate::engine::room) type RoomRouteEffects =
+    RouteControlPlan<ProducerRouteFinish, ConsumerRouteFinish>;
 
 #[derive(Debug)]
-enum ConsumerRouteFinish {
+pub(in crate::engine::room) enum ConsumerRouteFinish {
     Activity(ReceiverRouteActivity, DiagnosticsEventData),
     Keyframe(ConsumerRouteTarget),
     SetupActivity {
         route: TransportConsumerRoute,
         active: bool,
+    },
+    SourcePolicy {
+        update: ConsumerPacketSelectionUpdate,
+        route: TransportConsumerRoute,
     },
 }
 
@@ -166,8 +172,35 @@ impl ConsumerRouteFinish {
             Self::SetupActivity { route, active } => {
                 finish_setup_activity(&route, active, result);
             }
+            Self::SourcePolicy { update, route } => {
+                if result.packet_gate_failed() || result.activity_failed() {
+                    warn!(
+                        ?route,
+                        route_active = update.route_active(),
+                        "media transport rejected the receiver-driven packet selection update"
+                    );
+                    return;
+                }
+                if result.keyframe_failed() {
+                    warn!(
+                        ?route,
+                        "media transport failed to request an adaptation keyframe refresh"
+                    );
+                }
+                outcome.accepted_policy_updates.push(update);
+            }
         }
     }
+}
+
+pub(in crate::engine::room) fn push_source_policy_route(
+    route_control: &mut RoomRouteEffects,
+    update: ConsumerPacketSelectionUpdate,
+    target: &ConsumerRouteTarget,
+) {
+    let route = target.transport_route().clone();
+    let control = update.route_control(route.clone());
+    route_control.push_consumer(control, ConsumerRouteFinish::SourcePolicy { update, route });
 }
 
 pub(super) async fn execute_setup_activity_correction(
@@ -176,7 +209,7 @@ pub(super) async fn execute_setup_activity_correction(
     active: bool,
     media_transport: &MediaTransport,
 ) {
-    let mut route_control = RouteControlPlan::new();
+    let mut route_control = RoomRouteEffects::new();
     route_control.push_consumer(
         ConsumerRouteControl::new(route.clone())
             .activity(ConsumerActivity::from_active(active))
@@ -186,8 +219,8 @@ pub(super) async fn execute_setup_activity_correction(
     execute_route_control(route_control, media_transport).await;
 }
 
-async fn execute_route_control(
-    route_control: RoomRouteControlPlan,
+pub(in crate::engine::room) async fn execute_route_control(
+    route_control: RoomRouteEffects,
     media_transport: &MediaTransport,
 ) -> RoomRouteOutcome {
     let transport_outcome = media_transport.apply_route_control(route_control).await;
