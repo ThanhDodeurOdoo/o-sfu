@@ -18,7 +18,6 @@ pub(super) use super::super::{
     RoomJoinError, RoomManager, UserCloseReason, UserOutbound, UserOutboundReceiver,
     UserOutboundSender,
     cleanup::TransportEffectOutcome,
-    effects::batch::RoomEffects,
     source_policy::{self, SourcePolicyTrigger},
     transition::PublishStageOutcome,
 };
@@ -52,7 +51,7 @@ pub(super) async fn refresh_source_policy(room: &Room, adapter: &MediaTransport)
     )
     .await
     {
-        RoomEffects::execute_source_policy_transaction(room, adapter, transaction).await;
+        transaction.execute(room, adapter).await;
     }
 }
 

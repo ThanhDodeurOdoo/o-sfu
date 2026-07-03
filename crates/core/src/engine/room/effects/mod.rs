@@ -4,6 +4,6 @@ pub mod batch;
 mod observability;
 mod output;
 mod receiver_route;
-mod transport;
+pub(in crate::engine::room) mod transport;
 
 pub(in crate::engine::room) use observability::RoomGaugeDelta;

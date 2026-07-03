@@ -151,7 +151,7 @@ async fn source_bitrate_cap_pause_survives_receiver_overload() {
         )
         .expect("source policy transaction should contain overload work")
     };
-    execute_source_policy_transaction(&scenario, tx).await;
+    tx.execute(&scenario.room, &scenario.adapter).await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -248,7 +248,7 @@ async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
         replacement_tx,
     )
     .await;
-    execute_source_policy_transaction(&scenario, tx).await;
+    tx.execute(&scenario.room, &scenario.adapter).await;
 
     let info = scenario
         .room
@@ -289,7 +289,7 @@ async fn source_policy_ignores_receiver_bandwidth_from_replaced_connection() {
         SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth_snapshot)
             .expect("source policy transaction should contain current bandwidth work")
     };
-    execute_source_policy_transaction(&scenario, tx).await;
+    tx.execute(&scenario.room, &scenario.adapter).await;
 
     let diagnostics = scenario
         .room
@@ -604,7 +604,7 @@ async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
             )
             .await
     );
-    execute_source_policy_transaction(&scenario, tx).await;
+    tx.execute(&scenario.room, &scenario.adapter).await;
 
     assert!(
         !scenario
@@ -636,7 +636,7 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
         .close_session(&receiver_session_key)
         .await
         .expect("test should close receiver transport before source policy transaction");
-    execute_source_policy_transaction(&scenario, tx).await;
+    tx.execute(&scenario.room, &scenario.adapter).await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -694,13 +694,6 @@ async fn source_policy_transaction_from_transport_snapshot(
         &receiver_bandwidth_snapshot,
     )
     .expect("source policy transaction should contain work before execution")
-}
-
-async fn execute_source_policy_transaction(
-    scenario: &SourcePolicyScenario,
-    tx: SourcePolicyTransaction,
-) {
-    RoomEffects::execute_source_policy_transaction(&scenario.room, &scenario.adapter, tx).await;
 }
 
 async fn reset_subscription_selection_to_open(

@@ -27,7 +27,7 @@ use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
     RoomUserStatsSnapshot,
     directory::{RoomDirectory, RoomDirectoryEntry, RoomLifecycleLease},
-    effects::batch::{RoomEffectContext, RoomEffects},
+    effects::batch::RoomEffectContext,
     factory::RoomFactory,
     membership::JoinUserRequest,
     placement::WorkerLoadIndex,
@@ -288,8 +288,7 @@ impl RoomManager {
             )
             .await
             {
-                RoomEffects::execute_source_policy_transaction(&room, media_transport, transaction)
-                    .await;
+                transaction.execute(&room, media_transport).await;
             }
         }
     }

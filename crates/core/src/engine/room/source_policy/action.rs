@@ -1,7 +1,9 @@
 use super::super::media_graph::ConsumerRouteTransportRef;
 use crate::engine::{
     ConnectionId, UserId,
-    media_transport::SourcePacketGate,
+    media_transport::{
+        ConsumerActivity, ConsumerRouteControl, SourcePacketGate, TransportConsumerRoute,
+    },
     source_model::{
         ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
         ReceiverVideoBudgetDiagnostics, SourceSelector,
@@ -58,7 +60,7 @@ impl BudgetSolverOutcomes {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ConsumerPacketSelectionUpdate {
+pub(in crate::engine::room) struct ConsumerPacketSelectionUpdate {
     pub(super) transport_ref: ConsumerRouteTransportRef,
     pub(super) source_id: PublishedSourceId,
     pub(super) selector: SourceSelector,
@@ -96,6 +98,24 @@ impl ConsumerPacketSelectionUpdate {
 
     pub(super) const fn requires_media_transport_effect(&self) -> bool {
         self.packet_gate.is_some() || self.route_activity_changed || self.request_keyframe
+    }
+
+    pub(in crate::engine::room) fn route_control(
+        &self,
+        route: TransportConsumerRoute,
+    ) -> ConsumerRouteControl {
+        let mut control = ConsumerRouteControl::new(route).request_keyframe(self.request_keyframe);
+        if self.route_activity_changed {
+            control = control.activity(ConsumerActivity::from_active(self.route_active()));
+        }
+        if let Some(packet_gate) = &self.packet_gate {
+            control = control.packet_gate(packet_gate.clone());
+        }
+        control
+    }
+
+    pub(in crate::engine::room) const fn route_active(&self) -> bool {
+        self.policy_pause_reason.is_none()
     }
 }
 

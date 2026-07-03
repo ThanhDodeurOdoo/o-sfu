@@ -2,8 +2,6 @@
 
 use std::mem;
 
-use tracing::warn;
-
 use super::{
     action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
     audio,
@@ -12,13 +10,14 @@ use super::{
 };
 use crate::engine::{
     media_transport::{
-        ActiveSpeakerSource, ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome,
-        MediaTransport, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate, RouteControlPlan,
-        TransportConsumerRoute,
+        ActiveSpeakerSource, MediaTransport, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
     },
     metrics::{self, BudgetSolverOutcome},
     room::{
-        Room, RoomEventMessage, media_graph::ConsumerRouteTarget, outbound::MessageFanout,
+        Room, RoomEventMessage,
+        effects::transport::{RoomRouteEffects, execute_route_control, push_source_policy_route},
+        media_graph::ConsumerRouteTarget,
+        outbound::MessageFanout,
         state::RoomState,
     },
 };
@@ -49,7 +48,7 @@ impl SourcePolicyTrigger {
 ///
 /// multiple wakeups collapse to one strongest trigger
 /// [`Self::plan`] runs policy planning after route effects and pre-policy output
-/// drain, then room effects execute transport work before committing state
+/// drain, then the transaction applies route effects before committing accepted state updates
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SourcePolicyWakeups {
     trigger: Option<SourcePolicyTrigger>,
@@ -136,15 +135,9 @@ async fn run_packet_selection(
 #[path = "TESTS/turn_support.rs"]
 mod test_support;
 
-#[derive(Debug)]
-struct RouteFinish {
-    selection: ConsumerPacketSelectionUpdate,
-    route: TransportConsumerRoute,
-}
-
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct SourcePolicyTransaction {
-    route_control: RouteControlPlan<(), RouteFinish>,
+    route_effects: RoomRouteEffects,
     state_updates: Vec<ConsumerPacketSelectionUpdate>,
     featured_users: Vec<FeaturedUserUpdate>,
 }
@@ -173,16 +166,11 @@ impl SourcePolicyTransaction {
         selection: ConsumerPacketSelectionUpdate,
         target: &ConsumerRouteTarget,
     ) {
-        let finish = RouteFinish {
-            selection,
-            route: target.transport_route().clone(),
-        };
-        let control = finish.control();
-        self.route_control.push_consumer(control, finish);
+        push_source_policy_route(&mut self.route_effects, selection, target);
     }
 
     pub(super) fn set_receiver_bwe_targets(&mut self, targets: Vec<ReceiverBweTargetUpdate>) {
-        self.route_control.set_receiver_bwe_targets(targets);
+        self.route_effects.set_receiver_bwe_targets(targets);
     }
 
     pub(in crate::engine::room) async fn execute(
@@ -191,60 +179,24 @@ impl SourcePolicyTransaction {
         media_transport: &MediaTransport,
     ) {
         let Self {
-            route_control,
+            route_effects,
             mut state_updates,
             featured_users,
         } = self;
-        if !route_control.is_empty() {
-            let outcome = media_transport.apply_route_control(route_control).await;
-            for (update, result) in outcome.consumers {
-                update.finish(result, &mut state_updates);
-            }
+        if !route_effects.is_empty() {
+            state_updates.extend(
+                execute_route_control(route_effects, media_transport)
+                    .await
+                    .accepted_policy_updates,
+            );
         }
         commit_accepted_updates(room, &state_updates, &featured_users).await;
     }
 
     fn is_empty(&self) -> bool {
         self.state_updates.is_empty()
-            && self.route_control.is_empty()
+            && self.route_effects.is_empty()
             && self.featured_users.is_empty()
-    }
-}
-
-impl RouteFinish {
-    fn control(&self) -> ConsumerRouteControl {
-        let mut control = ConsumerRouteControl::new(self.route.clone())
-            .request_keyframe(self.selection.request_keyframe);
-        if self.selection.route_activity_changed {
-            let active = self.selection.policy_pause_reason.is_none();
-            control = control.activity(ConsumerActivity::from_active(active));
-        }
-        if let Some(packet_gate) = &self.selection.packet_gate {
-            control = control.packet_gate(packet_gate.clone());
-        }
-        control
-    }
-
-    fn finish(
-        self,
-        result: ConsumerRouteControlOutcome,
-        updates: &mut Vec<ConsumerPacketSelectionUpdate>,
-    ) {
-        if result.packet_gate_failed() || result.activity_failed() {
-            warn!(
-                route = ?self.route,
-                route_active = self.selection.policy_pause_reason.is_none(),
-                "media transport rejected the receiver-driven packet selection update"
-            );
-            return;
-        }
-        if result.keyframe_failed() {
-            warn!(
-                route = ?self.route,
-                "media transport failed to request an adaptation keyframe refresh"
-            );
-        }
-        updates.push(self.selection);
     }
 }
 
