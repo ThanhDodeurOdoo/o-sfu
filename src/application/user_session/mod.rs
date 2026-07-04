@@ -2,15 +2,13 @@ use std::sync::Arc;
 
 use o_sfu_protocol::wire::ServerEnvelope;
 
-use crate::core::prelude::MediaSession;
-
 mod client_input;
 mod lifecycle;
 mod media;
 mod remote_sources;
 mod room_events;
 
-use media::ServerNegotiation;
+use media::ServerMediaNegotiation;
 
 pub type UserOutput = Vec<ServerEnvelope>;
 
@@ -23,7 +21,6 @@ pub enum UserError {
 
 pub struct User {
     remote_address: Arc<str>,
-    session: MediaSession,
-    negotiation: ServerNegotiation,
+    media: ServerMediaNegotiation,
     cleanup_finished: bool,
 }

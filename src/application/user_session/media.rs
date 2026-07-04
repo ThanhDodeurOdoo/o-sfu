@@ -13,7 +13,8 @@ use super::{User, UserError, UserOutput};
 use crate::{
     application::stream_catalog::{DiscussStream, source_publish_intent_for_stream_type},
     core::prelude::{
-        Bitrate, NegotiationOffer, SessionError, SfuCoreError, UploadEncoding, UploadSlot,
+        Bitrate, MediaSession, NegotiationOffer, SessionError, SfuCoreError, SourcePublishIntent,
+        SourceUnpublishIntent,
     },
     runtime::telemetry::schema::event as telemetry_event,
 };
@@ -24,22 +25,8 @@ impl User {
         response_to: RequestId,
         response: ClientResponse,
     ) -> Result<UserOutput, UserError> {
-        let (response_kind, answer) = match response {
-            ClientResponse::Offer(answer) => (NegotiationKind::Offer, answer),
-            ClientResponse::Renegotiate(answer) => (NegotiationKind::Renegotiate, answer),
-        };
-        self.validate_negotiation_answer(&response_to, &answer)?;
-        if !self.negotiation.expects_answer(&response_to, response_kind) {
-            self.log_unknown_answer(&response_to);
-            return Err(UserError::ProtocolViolation);
-        }
-        let offer = self
-            .session
-            .answer(&answer.sdp)
-            .await
-            .map_err(|e| self.negotiation_error(response_kind, Some(&response_to), e))?;
-        self.negotiation.clear_pending();
-        Ok(self.issue_offer(NegotiationKind::Renegotiate, offer))
+        let result = self.media.answer(response_to, response).await;
+        result.map_err(|e| self.answer_error(e))
     }
 
     #[instrument(
@@ -53,12 +40,8 @@ impl User {
     )]
     pub(super) async fn renegotiate(&mut self) -> Result<UserOutput, UserError> {
         self.reject_stale_connection().await?;
-        let offer = self
-            .session
-            .renegotiate()
-            .await
-            .map_err(|e| self.negotiation_error(NegotiationKind::Renegotiate, None, e))?;
-        Ok(self.issue_offer(NegotiationKind::Renegotiate, offer))
+        let result = self.media.renegotiate().await;
+        result.map_err(|e| self.negotiation_error(NegotiationKind::Renegotiate, None, e))
     }
 
     #[instrument(
@@ -79,13 +62,12 @@ impl User {
     ) -> Result<UserOutput, UserError> {
         let result = if active {
             let intent = source_publish_intent_for_stream_type(stream_type);
-            self.session.publish(intent).await
+            self.media.publish(intent).await
         } else {
             let intent = DiscussStream::for_type(stream_type).unpublish_intent();
-            self.session.unpublish(intent).await
+            self.media.unpublish(intent).await
         };
-        let offer = result.map_err(|error| self.publish_error(stream_type, error))?;
-        Ok(self.issue_offer(NegotiationKind::Renegotiate, offer))
+        result.map_err(|error| self.publish_error(stream_type, error))
     }
 
     #[instrument(
@@ -111,10 +93,9 @@ impl User {
             .filter_map(|stream| stream.subscription_intent_if_requested(&states))
             .collect::<BTreeMap<_, _>>();
         span.record("source_count", source_intents.len());
-        self.session
-            .subscribe(&target_user_id, &source_intents)
-            .await
-            .map_err(|error| self.subscribe_error(&target_user_id, error))?;
+        let session = self.media.session();
+        let result = session.subscribe(&target_user_id, &source_intents).await;
+        result.map_err(|error| self.subscribe_error(&target_user_id, error))?;
         Ok(UserOutput::new())
     }
 
@@ -128,38 +109,93 @@ impl User {
         )
     )]
     pub(super) async fn run_initial_offer(&mut self) -> Result<UserOutput, UserError> {
-        let offer = self
-            .session
-            .establish()
-            .await
-            .map_err(|e| self.negotiation_error(NegotiationKind::Offer, None, e))?;
-        Ok(self.issue_offer(NegotiationKind::Offer, offer))
-    }
-
-    fn issue_offer(
-        &mut self,
-        kind: NegotiationKind,
-        offer: Option<NegotiationOffer>,
-    ) -> UserOutput {
-        offer.map_or_else(UserOutput::new, |offer| {
-            vec![self.negotiation.issue(kind, offer)]
-        })
+        let result = self.media.establish().await;
+        result.map_err(|e| self.negotiation_error(NegotiationKind::Offer, None, e))
     }
 }
 
-#[derive(Default)]
-pub(super) struct ServerNegotiation {
+pub(super) struct ServerMediaNegotiation {
+    session: MediaSession,
     next: u64,
-    pending: Option<PendingServerOffer>,
+    pending: Option<(RequestId, NegotiationKind)>,
 }
 
-struct PendingServerOffer {
-    request_id: RequestId,
-    kind: NegotiationKind,
+enum AnswerError {
+    Protocol(RequestId, &'static str),
+    Session(NegotiationKind, RequestId, SessionError),
 }
 
-impl ServerNegotiation {
-    fn issue(&mut self, kind: NegotiationKind, offer: NegotiationOffer) -> ServerEnvelope {
+const EMPTY_SDP_ANSWER_LOG: &str = "received empty SDP answer for negotiation request";
+const UNKNOWN_ANSWER_LOG: &str = "received negotiation answer for an unknown or stale request";
+
+impl ServerMediaNegotiation {
+    pub(super) fn new(session: MediaSession) -> Self {
+        Self {
+            session,
+            next: 0,
+            pending: None,
+        }
+    }
+
+    pub(super) const fn session(&self) -> &MediaSession {
+        &self.session
+    }
+
+    async fn establish(&mut self) -> Result<UserOutput, SessionError> {
+        let offer = self.session.establish().await?;
+        Ok(self.issue(NegotiationKind::Offer, offer))
+    }
+
+    async fn renegotiate(&mut self) -> Result<UserOutput, SessionError> {
+        let offer = self.session.renegotiate().await?;
+        Ok(self.issue(NegotiationKind::Renegotiate, offer))
+    }
+
+    async fn publish(&mut self, intent: SourcePublishIntent) -> Result<UserOutput, SessionError> {
+        let offer = self.session.publish(intent).await?;
+        Ok(self.issue(NegotiationKind::Renegotiate, offer))
+    }
+
+    async fn unpublish(
+        &mut self,
+        intent: SourceUnpublishIntent,
+    ) -> Result<UserOutput, SessionError> {
+        let offer = self.session.unpublish(intent).await?;
+        Ok(self.issue(NegotiationKind::Renegotiate, offer))
+    }
+
+    async fn answer(
+        &mut self,
+        response_to: RequestId,
+        response: ClientResponse,
+    ) -> Result<UserOutput, AnswerError> {
+        let (kind, answer) = match response {
+            ClientResponse::Offer(answer) => (NegotiationKind::Offer, answer),
+            ClientResponse::Renegotiate(answer) => (NegotiationKind::Renegotiate, answer),
+        };
+        if answer.sdp.is_empty() {
+            return Err(AnswerError::Protocol(response_to, EMPTY_SDP_ANSWER_LOG));
+        }
+        if !self.expects(&response_to, kind) {
+            return Err(AnswerError::Protocol(response_to, UNKNOWN_ANSWER_LOG));
+        }
+        let offer = match self.session.answer(&answer.sdp).await {
+            Ok(offer) => offer,
+            Err(error) => return Err(AnswerError::Session(kind, response_to, error)),
+        };
+        self.pending = None;
+        Ok(self.issue(NegotiationKind::Renegotiate, offer))
+    }
+
+    pub(super) async fn close(&mut self) {
+        self.pending = None;
+        self.session.close().await;
+    }
+
+    fn issue(&mut self, kind: NegotiationKind, offer: Option<NegotiationOffer>) -> UserOutput {
+        let Some(offer) = offer else {
+            return UserOutput::new();
+        };
         let req_id = RequestId::new(format!("server-{}", self.next));
         self.next = self.next.saturating_add(1);
         let payload = session_description_payload(offer);
@@ -167,23 +203,15 @@ impl ServerNegotiation {
             NegotiationKind::Offer => ServerRequest::Offer(payload),
             NegotiationKind::Renegotiate => ServerRequest::Renegotiate(payload),
         };
-        let pending = PendingServerOffer {
-            request_id: req_id.clone(),
-            kind,
-        };
-        self.pending = Some(pending);
-        ServerEnvelope::Request {
+        self.pending = Some((req_id.clone(), kind));
+        vec![ServerEnvelope::Request {
             request_id: req_id,
             request,
-        }
+        }]
     }
 
-    fn expects_answer(&self, id: &RequestId, kind: NegotiationKind) -> bool {
-        matches!(self.pending.as_ref(), Some(slot) if slot.request_id == *id && slot.kind == kind)
-    }
-
-    pub(super) fn clear_pending(&mut self) {
-        self.pending = None;
+    fn expects(&self, id: &RequestId, kind: NegotiationKind) -> bool {
+        matches!(self.pending.as_ref(), Some((req_id, pending_kind)) if req_id == id && *pending_kind == kind)
     }
 }
 
@@ -193,34 +221,44 @@ fn session_description_payload(offer: NegotiationOffer) -> SessionDescriptionPay
         upload_slots: offer
             .upload_slots
             .into_iter()
-            .map(protocol_upload_slot)
+            .map(|slot| NegotiationUploadSlot {
+                mid: slot.mid,
+                kind: slot.kind,
+                codecs: slot.codecs,
+                simulcast_encodings: slot
+                    .simulcast_encodings
+                    .into_iter()
+                    .map(|encoding| NegotiationUploadEncoding {
+                        rid: encoding.rid,
+                        max_bitrate: encoding.max_bitrate.map(Bitrate::as_bps),
+                        resolution_scale: encoding.resolution_scale,
+                        max_framerate: encoding.max_framerate,
+                    })
+                    .collect(),
+            })
             .collect(),
-    }
-}
-
-fn protocol_upload_slot(slot: UploadSlot) -> NegotiationUploadSlot {
-    NegotiationUploadSlot {
-        mid: slot.mid,
-        kind: slot.kind,
-        codecs: slot.codecs,
-        simulcast_encodings: slot
-            .simulcast_encodings
-            .into_iter()
-            .map(protocol_upload_encoding)
-            .collect(),
-    }
-}
-
-fn protocol_upload_encoding(encoding: UploadEncoding) -> NegotiationUploadEncoding {
-    NegotiationUploadEncoding {
-        rid: encoding.rid,
-        max_bitrate: encoding.max_bitrate.map(Bitrate::as_bps),
-        resolution_scale: encoding.resolution_scale,
-        max_framerate: encoding.max_framerate,
     }
 }
 
 impl User {
+    fn answer_error(&self, error: AnswerError) -> UserError {
+        match error {
+            AnswerError::Protocol(response_to, message) => {
+                warn!(
+                    user_id = ?self.user_id(),
+                    connection_id = ?self.connection_id(),
+                    remote_address = self.remote_address.as_ref(),
+                    ?response_to,
+                    "{message}"
+                );
+                UserError::ProtocolViolation
+            }
+            AnswerError::Session(kind, response_to, error) => {
+                self.negotiation_error(kind, Some(&response_to), error)
+            }
+        }
+    }
+
     fn negotiation_error(
         &self,
         kind: NegotiationKind,
@@ -282,34 +320,6 @@ impl User {
             "media session command failed"
         );
         user_error(error)
-    }
-
-    fn validate_negotiation_answer(
-        &self,
-        response_to: &RequestId,
-        answer: &SessionDescriptionPayload,
-    ) -> Result<(), UserError> {
-        if answer.sdp.is_empty() {
-            warn!(
-                user_id = ?self.user_id(),
-                connection_id = ?self.connection_id(),
-                remote_address = self.remote_address.as_ref(),
-                ?response_to,
-                "received empty SDP answer for negotiation request"
-            );
-            return Err(UserError::ProtocolViolation);
-        }
-        Ok(())
-    }
-
-    fn log_unknown_answer(&self, response_to: &RequestId) {
-        warn!(
-            user_id = ?self.user_id(),
-            connection_id = ?self.connection_id(),
-            remote_address = self.remote_address.as_ref(),
-            ?response_to,
-            "received negotiation answer for an unknown or stale request"
-        );
     }
 }
 
