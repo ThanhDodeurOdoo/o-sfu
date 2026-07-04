@@ -45,18 +45,11 @@ function isBrowserCloseCode(code) {
 }
 
 export class FakeSender {
-    constructor(
-        statsReport = undefined,
-        { parameterApi = true, rejectSetParameters = false } = {}
-    ) {
+    constructor(statsReport = undefined, { rejectSetParameters = false } = {}) {
         this.parameters = { encodings: [] };
         this.rejectSetParameters = rejectSetParameters;
         this.statsReport = statsReport;
         this.track = null;
-        if (!parameterApi) {
-            this.getParameters = undefined;
-            this.setParameters = undefined;
-        }
     }
 
     async getStats() {

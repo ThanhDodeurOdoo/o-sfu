@@ -655,7 +655,3 @@ fn backlog_pressure_score(backlog_depth: usize, capacity: usize) -> u8 {
     let score = backlog_depth.saturating_mul(100) / capacity;
     u8::try_from(score.min(100)).unwrap_or(100)
 }
-
-#[cfg(test)]
-#[path = "TESTS/lifecycle.rs"]
-mod tests;

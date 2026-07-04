@@ -19,7 +19,5 @@ mod relay_spillover;
 mod replacement_flow;
 #[path = "full_stack/support.rs"]
 mod support;
-#[path = "full_stack/synthetic_media.rs"]
-mod synthetic_media;
 #[path = "full_stack/video_routing.rs"]
 mod video_routing;

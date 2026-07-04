@@ -9,8 +9,6 @@ use super::{
     cleanup::CleanupReconciler, definition::RoomDefinition, factory::RoomInit,
     placement::LoadTriggeredPlacementState, state::RoomState,
 };
-#[cfg(test)]
-use crate::engine::media_transport::TransportMediaId;
 use crate::{
     RoomSpilloverMode, RoomWorkerPolicy,
     engine::{
@@ -57,10 +55,6 @@ pub struct Room {
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) cleanup_reconciler: Mutex<CleanupReconciler>,
     pub(super) state: RwLock<RoomState>,
-    #[cfg(test)]
-    pub(super) duplicate_staged_publish_after_reservation: Mutex<Option<TransportMediaId>>,
-    #[cfg(test)]
-    pub(super) duplicate_staged_publish_cleanup_target: Mutex<Option<TransportMediaId>>,
 }
 
 impl Room {
@@ -81,10 +75,6 @@ impl Room {
             load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
             metrics: services.metrics,
             cleanup_reconciler: Mutex::new(CleanupReconciler::default()),
-            #[cfg(test)]
-            duplicate_staged_publish_after_reservation: Mutex::new(None),
-            #[cfg(test)]
-            duplicate_staged_publish_cleanup_target: Mutex::new(None),
             state: RwLock::new(RoomState::new(
                 &runtime_context,
                 runtime_policy.admission_policy,

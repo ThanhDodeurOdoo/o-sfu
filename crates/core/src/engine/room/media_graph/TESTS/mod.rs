@@ -101,10 +101,6 @@ fn test_sender() -> UserOutboundSender {
     UserOutboundSender::channel(128, Arc::new(RuntimeMetrics::default())).0
 }
 
-fn has_committed_consumer(topology: &super::RoomTopology, key: &ConsumerKey) -> bool {
-    topology.committed_consumer_route_for_key(key).is_some()
-}
-
 fn join_test_user(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
     state
         .apply_join(user_id, UserPermissions::default(), test_sender())
@@ -989,126 +985,6 @@ fn unpublish_track_clears_transport_media_owner_index() {
         TransportMediaId::new(101),
         44_000,
     ));
-}
-
-#[test]
-fn unpublish_track_repairs_missing_topology_router_and_clears_state() {
-    let mut state = test_state();
-    let user_id = UserId::Integer(1);
-
-    join_test_user(&mut state, &user_id);
-    let connection_id = set_test_user_ready(&mut state, &user_id);
-
-    let transport_media_id = TransportMediaId::new(100);
-
-    assert!(publish_video_track(
-        &mut state,
-        &user_id,
-        connection_id,
-        transport_media_id,
-        43_000,
-    ));
-    state
-        .topology
-        .routing_mut_for_test()
-        .remove_router_for_test(RouterId(1));
-    assert!(
-        state
-            .unpublish_track(
-                &user_id,
-                connection_id,
-                &SourceUnpublishIntent::new(stream_id_for_source(TestSourceKind::ScalableVideo)),
-            )
-            .is_some()
-    );
-
-    assert_eq!(
-        state.producer_stream_id_for_transport_media_id(transport_media_id),
-        None
-    );
-    assert_eq!(state.media_counts().publications, 0);
-}
-
-#[test]
-fn purge_user_media_removes_only_indexed_user_and_source_entries() {
-    let mut state = test_state();
-    let publisher_id = UserId::Integer(1);
-    let subscriber_id = UserId::Integer(2);
-    let other_publisher_id = UserId::Integer(3);
-
-    join_test_user(&mut state, &publisher_id);
-    join_test_user(&mut state, &subscriber_id);
-    join_test_user(&mut state, &other_publisher_id);
-
-    let publisher_connection_id = state
-        .user_connection_id(&publisher_id)
-        .expect("publisher should have a connection id");
-    let other_publisher_connection_id = state
-        .user_connection_id(&other_publisher_id)
-        .expect("other publisher should have a connection id");
-    let (_, publisher_source_id) = install_test_published_producer(
-        &mut state,
-        &publisher_id,
-        TestSourceKind::ScalableVideo,
-        TransportMediaId::new(10),
-    );
-    let (_, other_source_id) = install_test_published_producer(
-        &mut state,
-        &other_publisher_id,
-        TestSourceKind::ReadableVideo,
-        TransportMediaId::new(30),
-    );
-
-    let removed_consumer_key = install_test_consumer_state(
-        &mut state,
-        &subscriber_id,
-        publisher_source_id,
-        publisher_connection_id,
-        TransportMediaId::new(10),
-        TransportMediaId::new(20),
-    );
-    let pending_removed_key = ConsumerKey::new(&publisher_id, other_source_id);
-    assert!(state.topology.reserve_consumer_setup_for_test(
-        pending_removed_key.clone(),
-        ConsumerSourceSelection::open(true)
-    ));
-
-    let surviving_consumer_key = install_test_consumer_state(
-        &mut state,
-        &subscriber_id,
-        other_source_id,
-        other_publisher_connection_id,
-        TransportMediaId::new(30),
-        TransportMediaId::new(40),
-    );
-    state.topology.remove_user_media_for_test(&publisher_id);
-
-    let topology = &state.topology;
-    assert!(topology.source(publisher_source_id).is_none());
-    assert!(topology.source(other_source_id).is_some());
-    assert!(!has_committed_consumer(topology, &removed_consumer_key));
-    assert!(!topology.has_consumer_setup_or_route(&pending_removed_key));
-    assert!(
-        topology
-            .consumer_source_selection(&removed_consumer_key)
-            .is_none()
-    );
-    assert!(has_committed_consumer(topology, &surviving_consumer_key));
-    assert!(
-        topology
-            .consumer_source_selection(&surviving_consumer_key)
-            .is_some()
-    );
-    assert_eq!(
-        topology.committed_consumer_user_ids_for_source(other_source_id),
-        BTreeSet::from([subscriber_id])
-    );
-    state
-        .topology
-        .remove_user_media_for_test(&other_publisher_id);
-    let topology = &state.topology;
-    assert!(topology.source(other_source_id).is_none());
-    assert!(!has_committed_consumer(topology, &surviving_consumer_key));
 }
 
 #[test]

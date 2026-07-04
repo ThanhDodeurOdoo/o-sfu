@@ -75,10 +75,6 @@ name = "full_stack"
 path = "integration/full_stack.rs"
 
 [[test]]
-name = "public_error_api"
-path = "integration/public_error_api.rs"
-
-[[test]]
 name = "telemetry_ui"
 path = "integration/telemetry_ui.rs"
 

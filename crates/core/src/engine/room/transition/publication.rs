@@ -119,10 +119,6 @@ impl RoomUserOperation<'_> {
                 return Err(error);
             }
         };
-        #[cfg(test)]
-        self.room
-            .inject_next_duplicate_for_test(&validated_descriptor, media)
-            .await;
         let reserved_publish = StagedPublish::new(validated_descriptor, media);
         let duplicate = {
             let mut state = self.room.state.write().await;

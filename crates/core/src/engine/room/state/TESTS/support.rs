@@ -1,6 +1,4 @@
 #[cfg(test)]
-use o_sfu_router::RouterId;
-#[cfg(test)]
 use {super::super::media_graph::ConsumerKey, crate::engine::source_model::PublishedSourceId};
 
 use super::shared::RoomState;
@@ -34,11 +32,6 @@ impl RoomState {
 
     pub fn has_session(&self, user_id: &UserId) -> bool {
         self.users.contains_key(user_id)
-    }
-
-    #[cfg(test)]
-    pub fn routing_home_router_id(&self, user_id: &UserId) -> Option<RouterId> {
-        self.topology.routing().home_router_id_for_user(user_id)
     }
 
     pub fn routing_router_count(&self) -> usize {

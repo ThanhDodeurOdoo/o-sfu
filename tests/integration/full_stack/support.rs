@@ -28,8 +28,7 @@ pub(super) use o_sfu_telemetry::diagnostics::{
 pub(super) use o_sfu_tests::support::{
     TEST_ROOM_KEY, TestResult, TestServer, create_room,
     fake_media::{
-        FakeClock, FakeMediaSource, SYNTHETIC_OPUS_ONE_FRAME_TOC, SyntheticH264Stream,
-        SyntheticOpusStream, SyntheticVp8Stream,
+        FakeClock, FakeMediaSource, SyntheticH264Stream, SyntheticOpusStream, SyntheticVp8Stream,
     },
     metrics_text,
     protocol_full_stack::{

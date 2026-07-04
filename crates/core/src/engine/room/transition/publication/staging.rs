@@ -91,16 +91,6 @@ impl StagedPublishes {
     }
 
     #[cfg(test)]
-    pub fn insert_for_test(&mut self, transaction: StagedPublish) {
-        let key = transaction.key();
-        assert!(
-            !self.staged.contains_key(&key),
-            "test duplicate staged publish slot should be empty before injection"
-        );
-        self.staged.insert(key, transaction);
-    }
-
-    #[cfg(test)]
     pub fn staged_count(&self, user_id: &UserId, connection_id: ConnectionId) -> usize {
         self.staged
             .keys()

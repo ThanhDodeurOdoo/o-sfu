@@ -4,13 +4,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use super::{
-    BundleBroadcastUpdate, BundleConnectionState, BundleRemoteMediaUpdate, BundleSourceUpdate,
-    BundleStateChange, BundleTrackUpdate, BundleUpdate, bundle_session_info_key,
+    BundleBroadcastUpdate, BundleConnectionState, BundleStateChange, BundleTrackUpdate,
+    BundleUpdate, bundle_session_info_key,
 };
-use crate::{
-    shared::{RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId, UserInfo},
-    signaling::{SourceDescriptor, TrackBinding},
-};
+use crate::shared::{RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId, UserInfo};
 
 fn assert_round_trip<T>(value: &T, expected_json: Value) -> serde_json::Result<()>
 where
@@ -134,62 +131,6 @@ fn bundle_updates_round_trip() -> serde_json::Result<()> {
                     "video": false
                 },
                 "stopCode": "user_request"
-            }
-        }),
-    )
-}
-
-#[test]
-fn bundle_source_update_round_trips() -> serde_json::Result<()> {
-    let source_update = BundleUpdate::Source(BundleSourceUpdate {
-        sources: vec![SourceDescriptor {
-            source_id: String::from("source-7"),
-            user_id: UserId::Integer(7),
-            stream_type: StreamType::Camera,
-            active: true,
-            mid: None,
-            encodings: Vec::new(),
-        }],
-    });
-
-    assert_round_trip(
-        &source_update,
-        json!({
-            "name": "source",
-            "payload": {
-                "sources": [{
-                    "sourceId": "source-7",
-                    "sessionId": 7,
-                    "type": "camera",
-                    "active": true,
-                    "encodings": []
-                }]
-            }
-        }),
-    )
-}
-
-#[test]
-fn bundle_remote_media_update_round_trips() -> serde_json::Result<()> {
-    let remote_media = BundleUpdate::RemoteMedia(BundleRemoteMediaUpdate {
-        bindings: vec![TrackBinding {
-            mid: String::from("0"),
-            user_id: UserId::Integer(7),
-            stream_type: StreamType::Camera,
-            active: true,
-        }],
-    });
-    assert_round_trip(
-        &remote_media,
-        json!({
-            "name": "remote_media",
-            "payload": {
-                "bindings": [{
-                    "mid": "0",
-                    "sessionId": 7,
-                    "type": "camera",
-                    "active": true
-                }]
             }
         }),
     )

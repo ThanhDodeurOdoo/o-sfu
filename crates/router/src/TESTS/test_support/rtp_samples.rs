@@ -30,20 +30,6 @@ pub fn sample_client_rtp_capabilities() -> MediaCapabilities {
 }
 
 #[must_use]
-pub fn sample_client_rtp_capabilities_without_video_rtx() -> MediaCapabilities {
-    MediaCapabilities::new(
-        vec![
-            opus_codec_capability(),
-            video_codec_capability_without_transport_cc(),
-        ],
-        vec![HeaderExtension::new(
-            webrtc::RtpHeaderExtensionUri::Mid,
-            HEADER_EXTENSION_ID_MID,
-        )],
-    )
-}
-
-#[must_use]
 pub fn sample_audio_rtp_parameters(ssrc: u32) -> MediaStream {
     MediaStream::new(
         vec![opus_codec_parameters()],
@@ -153,11 +139,6 @@ fn opus_codec_capability() -> MediaCodecCapability {
 
 fn video_codec_capability() -> MediaCodecCapability {
     video_codec_capability_with_feedback(true)
-}
-
-fn video_codec_capability_without_transport_cc() -> MediaCodecCapability {
-    video_codec_capability_with_feedback(false)
-        .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None))
 }
 
 fn video_codec_capability_with_feedback(include_transport_cc: bool) -> MediaCodecCapability {

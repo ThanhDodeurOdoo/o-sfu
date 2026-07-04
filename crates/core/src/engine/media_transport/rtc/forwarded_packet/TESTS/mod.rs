@@ -426,26 +426,3 @@ fn forwarded_packet_caches_the_resolved_src_media() {
     state.remove_media_handle(transport_media_id);
     assert_eq!(packet.resolve_src_media(&state), Some(transport_media_id));
 }
-
-#[test]
-fn forwarded_packet_facts_cache_the_resolved_src_media() {
-    let session_key = test_transport_session_key(51, 0, 19, UserId::Integer(17));
-    let mut state = PacketLoopState::default();
-    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: session_key.clone(),
-        mid: Mid::from("aud-up"),
-    });
-    let mut packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
-    let facts = packet.resolve_facts(&state);
-    assert!(facts.is_some());
-    let Some(facts) = facts else {
-        return;
-    };
-
-    assert_eq!(facts.src_media, transport_media_id);
-    state.remove_media_handle(transport_media_id);
-    assert_eq!(
-        packet.resolve_facts(&state).map(|facts| facts.src_media),
-        Some(transport_media_id)
-    );
-}

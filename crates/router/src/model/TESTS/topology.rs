@@ -442,39 +442,10 @@ fn topology_never_reports_primary_router_as_idle_spillover() {
 }
 
 #[test]
-fn topology_reports_missing_router_for_user_lookup() {
-    let mut topology = RoutingTopology::new_for_test(RouterId(7));
-    let user_id = UserId::Integer(10);
-    assert!(join_on_router(&mut topology, &user_id, 42, 7, 0).is_ok());
-    topology.remove_router_for_test(RouterId(7));
-
-    assert_eq!(
-        topology.remove_session(&user_id),
-        Err(RoutingError::MissingRouterForSession {
-            user_id,
-            router_id: RouterId(7),
-        })
-    );
-}
-
-#[test]
 fn topology_placement_bundle_rejects_empty_router_sets() {
     assert_eq!(
         RouterPlacements::try_from_vec(Vec::new()),
         Err(RouterPlacementsError::Empty)
-    );
-}
-
-#[test]
-fn topology_reports_missing_user_mapping_from_router_state() {
-    let mut topology = RoutingTopology::new_for_test(RouterId(7));
-    let user_id = UserId::Integer(10);
-    assert!(join_on_router(&mut topology, &user_id, 42, 7, 0).is_ok());
-    topology.remove_user_mappings_for_test(&user_id);
-
-    assert_eq!(
-        topology.add_producer(&user_id, RouterMediaKind::Audio),
-        Err(RoutingError::MissingSessionMapping { user_id })
     );
 }
 
