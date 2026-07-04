@@ -11,10 +11,9 @@ use super::{
         BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError, RoomMediaCounts,
         RoomUserPermissions, RouterPlacement, UserCloseReason,
         cleanup::TransportCleanupOperation,
-        effects::RoomGaugeDelta,
+        effects::{RoomGaugeDelta, transport::RoomTransportPlan},
         media_graph::{
-            CommittedTransportReceipt, MediaTopologyEffects, SessionPlacementCommit,
-            SessionPlacementRejection,
+            CommittedTransportReceipt, SessionPlacementCommit, SessionPlacementRejection,
         },
         outbound::{MessageFanout, OutboundSender, RemoteSourceSnapshot, fanout_all},
         user_negotiation::{UserNegotiation, UserNegotiationUpdate},
@@ -57,7 +56,7 @@ pub struct UserCloseRequest {
     pub reason: UserCloseReason,
 }
 
-type RuntimeUserRemoval = (ActiveUser, MediaTopologyEffects);
+type RuntimeUserRemoval = (ActiveUser, RoomTransportPlan);
 
 #[derive(Debug)]
 pub struct PresenceCommit {
@@ -76,9 +75,13 @@ pub struct JoinCommit {
     pub counts: RoomGaugeDelta,
     pub effects: LifecycleEffects,
     pub receipt: CommittedTransportReceipt,
-    pub media_effects: MediaTopologyEffects,
+    pub transport_plan: RoomTransportPlan,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "connection close is cold and boxing the room transport plan would add allocation without simplifying ownership"
+)]
 #[derive(Debug)]
 pub enum ConnectionCloseCommit {
     Current {
@@ -87,7 +90,7 @@ pub enum ConnectionCloseCommit {
         connection_id: ConnectionId,
         cleanup: Option<TransportCleanupOperation>,
         effects: LifecycleEffects,
-        media_effects: MediaTopologyEffects,
+        transport_plan: RoomTransportPlan,
     },
     StalePlacement {
         counts: RoomGaugeDelta,
@@ -100,7 +103,7 @@ pub struct DisconnectCommit {
     pub counts: RoomGaugeDelta,
     pub close_operations: Vec<TransportCleanupOperation>,
     pub effects: LifecycleEffects,
-    pub media_effects: MediaTopologyEffects,
+    pub transport_plan: RoomTransportPlan,
 }
 
 impl RoomState {
@@ -262,9 +265,9 @@ impl RoomState {
         source_recipients.remove(user_id);
         let placement = self.apply_join_routing(user_id, connection_id, is_new, home_placement)?;
         let routing_receipt = placement.receipt;
-        let mut media_effects = placement.replacement_effects;
+        let mut transport_plan = placement.replacement_transport_plan;
         if let Some(previous_connection) = previous_connection {
-            media_effects.extend_cleanup(
+            transport_plan.extend_cleanup(
                 self.staged_publishes
                     .cleanup_operations_for_connection(user_id, previous_connection),
             );
@@ -308,18 +311,18 @@ impl RoomState {
             counts: self.membership_delta(users_before, media_before),
             effects,
             receipt: routing_receipt,
-            media_effects,
+            transport_plan,
         })
     }
 
     fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
         let user = self.users.remove(user_id)?;
-        let mut media_effects = self.topology.remove_session(user_id, user.connection_id);
-        media_effects.extend_cleanup(
+        let mut transport_plan = self.topology.remove_session(user_id, user.connection_id);
+        transport_plan.extend_cleanup(
             self.staged_publishes
                 .cleanup_operations_for_connection(user_id, user.connection_id),
         );
-        Some((user, media_effects))
+        Some((user, transport_plan))
     }
 
     pub fn close_connection(
@@ -349,7 +352,7 @@ impl RoomState {
             .topology
             .committed_consumer_user_ids_for_owner_sources(user_id);
         source_recipients.remove(user_id);
-        let (user, media_effects) = self.remove_runtime_user(user_id)?;
+        let (user, transport_plan) = self.remove_runtime_user(user_id)?;
         Some(ConnectionCloseCommit::Current {
             counts: self.membership_delta(users_before, media_before),
             user_id: user_id.clone(),
@@ -365,7 +368,7 @@ impl RoomState {
                 })],
                 source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
             },
-            media_effects,
+            transport_plan,
         })
     }
 
@@ -451,7 +454,7 @@ impl RoomState {
         let mut close_requests = Vec::new();
         let mut close_operations = Vec::new();
         let mut fanouts = Vec::new();
-        let mut media_effects = MediaTopologyEffects::default();
+        let mut transport_plan = RoomTransportPlan::default();
         for user_id in user_ids {
             let Some(connection_id) = self.users.get(user_id).map(|user| user.connection_id) else {
                 continue;
@@ -459,10 +462,10 @@ impl RoomState {
             let close_operation = TransportCleanupOperation::CloseUser {
                 session_key: self.transport_user_key(user_id, connection_id),
             };
-            let Some((user, user_media_effects)) = self.remove_runtime_user(user_id) else {
+            let Some((user, user_transport_plan)) = self.remove_runtime_user(user_id) else {
                 continue;
             };
-            media_effects.extend(user_media_effects);
+            transport_plan.extend(user_transport_plan);
             close_operations.push(close_operation);
             close_requests.push(UserCloseRequest {
                 sender: user.sender,
@@ -480,7 +483,7 @@ impl RoomState {
                 fanouts,
                 source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
             },
-            media_effects,
+            transport_plan,
         }
     }
 

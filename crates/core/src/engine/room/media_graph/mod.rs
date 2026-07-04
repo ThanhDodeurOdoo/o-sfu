@@ -42,8 +42,7 @@ pub(super) use self::{
     route_graph::{RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{ReceiverRouteActivity, ReceiverRouteCommit, ReceiverRouteWork},
     topology::{
-        CommittedTransportReceipt, MediaTopologyEffects, RoomTopology, SessionPlacementCommit,
-        SessionPlacementRejection,
+        CommittedTransportReceipt, RoomTopology, SessionPlacementCommit, SessionPlacementRejection,
     },
 };
 

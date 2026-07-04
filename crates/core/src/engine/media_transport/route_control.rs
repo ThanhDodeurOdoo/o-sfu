@@ -42,6 +42,12 @@ impl<P, C> RouteControlPlan<P, C> {
         self.receiver_bwe_targets = updates;
     }
 
+    pub(crate) fn append(&mut self, other: Self) {
+        self.producers.extend(other.producers);
+        self.consumers.extend(other.consumers);
+        self.receiver_bwe_targets.extend(other.receiver_bwe_targets);
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.producers.is_empty()
             && self.consumers.is_empty()

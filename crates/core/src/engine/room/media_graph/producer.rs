@@ -9,12 +9,12 @@ use tracing::{error, warn};
 use super::{
     super::{
         RoomMediaCounts,
+        effects::transport::RoomTransportPlan,
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::{PresenceCommit, RemoteSourceRefresh, RoomState},
     },
     ProducerRouteTarget, ProducerRuntimeId, ReceiverRouteWork, SourceTransportMediaIndexEntry,
     subscription::ReceiverRouteScope,
-    topology::MediaTopologyEffects,
 };
 use crate::{
     Bitrate,
@@ -85,7 +85,7 @@ pub struct UnpublishCommit {
     pub before: RoomMediaCounts,
     pub after: RoomMediaCounts,
     pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
-    pub media_effects: MediaTopologyEffects,
+    pub transport_plan: RoomTransportPlan,
     pub presence: Option<PresenceCommit>,
 }
 
@@ -395,13 +395,13 @@ impl RoomState {
             .topology
             .committed_consumer_user_ids_for_source(producer_target.source_id);
         let before = self.media_counts();
-        let media_effects = self.topology.unpublish_source(user_id, &producer_target)?;
+        let transport_plan = self.topology.unpublish_source(user_id, &producer_target)?;
         let after = self.media_counts();
         Some(UnpublishCommit {
             before,
             after,
             source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
-            media_effects,
+            transport_plan,
             presence: intent.presence().and_then(|info| {
                 self.apply_presence_update(user_id, connection_id, info, RemoteSourceRefresh::Skip)
             }),
