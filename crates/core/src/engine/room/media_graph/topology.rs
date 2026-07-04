@@ -32,6 +32,7 @@ use crate::{
         room::{
             RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
             cleanup::TransportCleanupOperation,
+            effects::transport::RoomTransportPlan,
             outbound::OutboundSender,
             placement::{LoadTriggeredPlacementState, WorkerLoadIndex},
         },
@@ -60,7 +61,7 @@ pub struct CommittedTransportReceipt {
 #[derive(Debug)]
 pub struct SessionPlacementCommit {
     pub receipt: CommittedTransportReceipt,
-    pub replacement_effects: MediaTopologyEffects,
+    pub replacement_transport_plan: RoomTransportPlan,
 }
 
 #[derive(Debug)]
@@ -74,46 +75,6 @@ pub(super) struct ConsumerActivityCommit {
 pub enum SessionPlacementRejection {
     MissingPreviousSession { previous_connection: ConnectionId },
     Router(RoutingError),
-}
-
-#[derive(Debug, Default)]
-pub struct MediaTopologyEffects {
-    relay_effects: Vec<ResolvedRelayRouteEffect>,
-    transport_cleanup: Vec<TransportCleanupOperation>,
-}
-
-impl MediaTopologyEffects {
-    pub fn new(
-        relay_effects: Vec<ResolvedRelayRouteEffect>,
-        transport_cleanup: Vec<TransportCleanupOperation>,
-    ) -> Self {
-        Self {
-            relay_effects,
-            transport_cleanup,
-        }
-    }
-
-    pub fn extend(&mut self, other: Self) {
-        self.relay_effects.extend(other.relay_effects);
-        self.transport_cleanup.extend(other.transport_cleanup);
-    }
-
-    pub fn extend_cleanup(&mut self, transport_cleanup: Vec<TransportCleanupOperation>) {
-        self.transport_cleanup.extend(transport_cleanup);
-    }
-
-    pub fn push_cleanup(&mut self, operation: TransportCleanupOperation) {
-        self.transport_cleanup.push(operation);
-    }
-
-    pub fn into_parts(
-        self,
-    ) -> (
-        Vec<ResolvedRelayRouteEffect>,
-        Vec<TransportCleanupOperation>,
-    ) {
-        (self.relay_effects, self.transport_cleanup)
-    }
 }
 
 impl RoomTopology {
@@ -786,7 +747,7 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         target: &ProducerRouteTarget,
-    ) -> Option<MediaTopologyEffects> {
+    ) -> Option<RoomTransportPlan> {
         let transport_removals = self.transport_removals_for_producer_target(user_id, target);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         if let Some(error) = self
@@ -803,7 +764,10 @@ impl RoomTopology {
         }
         let relay_effects = self.remove_source(target.source_id)?;
         let relay_effects = self.resolved_relay_route_effects(relay_effects);
-        Some(MediaTopologyEffects::new(relay_effects, transport_cleanup))
+        Some(RoomTransportPlan::from_relays_and_cleanup(
+            relay_effects,
+            transport_cleanup,
+        ))
     }
 
     pub fn set_published_source_activity(
@@ -873,8 +837,8 @@ impl RoomTopology {
             connection_id: router_receipt.connection_id,
             transport_session_key: session_key,
         };
-        let replacement_effects = previous_session_key.as_ref().map_or_else(
-            MediaTopologyEffects::default,
+        let replacement_transport_plan = previous_session_key.as_ref().map_or_else(
+            RoomTransportPlan::default,
             |replaced_session_key| {
                 let transport_cleanup = vec![TransportCleanupOperation::CloseUser {
                     session_key: replaced_session_key.clone(),
@@ -885,12 +849,12 @@ impl RoomTopology {
                     user_id,
                     replaced_session_key,
                 );
-                MediaTopologyEffects::new(relay_effects, transport_cleanup)
+                RoomTransportPlan::from_relays_and_cleanup(relay_effects, transport_cleanup)
             },
         );
         Ok(SessionPlacementCommit {
             receipt,
-            replacement_effects,
+            replacement_transport_plan,
         })
     }
 
@@ -898,7 +862,7 @@ impl RoomTopology {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> MediaTopologyEffects {
+    ) -> RoomTransportPlan {
         let transport_removals = self.transport_removals_for_user(user_id);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         let relay_effects = self.remove_user_media(user_id);
@@ -912,7 +876,7 @@ impl RoomTopology {
                 "repaired user topology during room teardown"
             );
         }
-        MediaTopologyEffects::new(relay_effects, transport_cleanup)
+        RoomTransportPlan::from_relays_and_cleanup(relay_effects, transport_cleanup)
     }
 
     pub(super) fn commit_consumer_setup(

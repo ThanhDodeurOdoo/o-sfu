@@ -14,29 +14,53 @@ use crate::engine::{
         Room,
         cleanup::{TransportCleanupOperation, TransportEffectOutcome},
         media_graph::{
-            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, ReceiverRouteActivity,
-            ReceiverRouteWork, ResolvedRelayRouteEffect,
+            ConsumerRouteTarget, ConsumerSetupOrigin, ReceiverRouteActivity, ReceiverRouteWork,
+            ResolvedRelayRouteEffect,
         },
         source_policy::{ConsumerPacketSelectionUpdate, SourcePolicyWakeups},
     },
 };
 
 #[derive(Debug, Default)]
-pub(super) struct RoomTransportPlan {
-    topology: MediaTopologyEffects,
-    receiver_route_relays: Vec<ResolvedRelayRouteEffect>,
+pub(in crate::engine::room) struct RoomTransportPlan {
+    relays: Vec<ResolvedRelayRouteEffect>,
+    cleanup: Vec<TransportCleanupOperation>,
     route_control: RoomRouteEffects,
     setup_turns: Vec<ReceiverSetupTurn>,
     readiness_keyframe_refresh: Option<(UserId, ConnectionId)>,
 }
 
 impl RoomTransportPlan {
-    pub(super) fn extend_topology(&mut self, effects: MediaTopologyEffects) {
-        self.topology.extend(effects);
+    pub(in crate::engine::room) fn from_relays_and_cleanup(
+        relays: Vec<ResolvedRelayRouteEffect>,
+        cleanup: Vec<TransportCleanupOperation>,
+    ) -> Self {
+        Self {
+            relays,
+            cleanup,
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::engine::room) fn extend(&mut self, other: Self) {
+        self.relays.extend(other.relays);
+        self.cleanup.extend(other.cleanup);
+        self.route_control.append(other.route_control);
+        self.setup_turns.extend(other.setup_turns);
+        if let Some(refresh) = other.readiness_keyframe_refresh {
+            self.readiness_keyframe_refresh = Some(refresh);
+        }
+    }
+
+    pub(in crate::engine::room) fn extend_cleanup(
+        &mut self,
+        cleanup: Vec<TransportCleanupOperation>,
+    ) {
+        self.cleanup.extend(cleanup);
     }
 
     pub(super) fn push_cleanup(&mut self, operation: TransportCleanupOperation) {
-        self.topology.push_cleanup(operation);
+        self.cleanup.push(operation);
     }
 
     pub(super) fn push_producer(
@@ -63,7 +87,7 @@ impl RoomTransportPlan {
         origin: ConsumerSetupOrigin,
         mut diagnostics: impl FnMut(&ReceiverRouteActivity) -> DiagnosticsEventData,
     ) {
-        self.receiver_route_relays.extend(work.relays);
+        self.relays.extend(work.relays);
         for activity in work.activities {
             let event = diagnostics(&activity);
             self.route_control.push_consumer(
@@ -93,13 +117,11 @@ impl RoomTransportPlan {
             return RoomTransportOutcome::default();
         };
         let mut outcome = RoomTransportOutcome::default();
-        let (topology_relays, cleanup) = self.topology.into_parts();
-        execute_relay_route_effects(room, media_transport, &topology_relays).await;
-        execute_relay_route_effects(room, media_transport, &self.receiver_route_relays).await;
+        execute_relay_route_effects(room, media_transport, &self.relays).await;
         let route_outcome = execute_route_control(self.route_control, media_transport).await;
         outcome.diagnostics.extend(route_outcome.diagnostics);
-        if !cleanup.is_empty() {
-            room.execute_transport_cleanup_operations(media_transport, &cleanup)
+        if !self.cleanup.is_empty() {
+            room.execute_transport_cleanup_operations(media_transport, &self.cleanup)
                 .await;
         }
         for turn in self.setup_turns {
@@ -123,6 +145,13 @@ impl RoomTransportPlan {
             }
         }
         outcome
+    }
+
+    #[cfg(test)]
+    pub(in crate::engine::room) fn relays_and_cleanup(
+        &self,
+    ) -> (&[ResolvedRelayRouteEffect], &[TransportCleanupOperation]) {
+        (&self.relays, &self.cleanup)
     }
 }
 

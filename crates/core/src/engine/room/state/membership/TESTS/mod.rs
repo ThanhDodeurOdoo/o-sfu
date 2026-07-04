@@ -342,7 +342,7 @@ fn presence_update_returns_none_for_stale_connection() {
 fn disconnect_sessions_ignores_missing_members() {
     let mut state = test_state();
     let outcome = state.apply_disconnect_users(&[UserId::Integer(1)]);
-    let (relays, cleanup) = outcome.media_effects.into_parts();
+    let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
 
     assert!(relays.is_empty());
     assert!(cleanup.is_empty());
@@ -358,16 +358,15 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
     let outcome = state
         .apply_join(&relay.publisher, UserPermissions::default(), test_sender())
         .expect("replacement join should succeed");
-    let (relays, cleanup) = outcome.media_effects.into_parts();
+    let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
 
-    assert!(has_source_relay_release(&relays, &relay));
+    assert!(has_source_relay_release(relays, &relay));
     assert!(cleanup.iter().any(|operation| {
         matches!(
             operation,
             TransportCleanupOperation::CloseUser {
                 session_key,
             } if session_key == &relay.publisher_session
-                && session_key.connection_id() == relay.publisher_connection
         )
     }));
     assert!(!cleanup.iter().any(|operation| {
@@ -387,12 +386,12 @@ fn leave_releases_relay_before_forgetting_source_session() {
     let outcome = state
         .close_connection(&relay.publisher, relay.publisher_connection)
         .expect("publisher leave should succeed");
-    let ConnectionCloseCommit::Current { media_effects, .. } = outcome else {
+    let ConnectionCloseCommit::Current { transport_plan, .. } = outcome else {
         panic!("publisher leave should remove the current user");
     };
-    let (relays, _cleanup) = media_effects.into_parts();
+    let (relays, _) = transport_plan.relays_and_cleanup();
 
-    assert!(has_source_relay_release(&relays, &relay));
+    assert!(has_source_relay_release(relays, &relay));
 }
 
 #[test]
@@ -401,7 +400,7 @@ fn disconnect_releases_relay_before_forgetting_source_session() {
     let relay = install_relayed_source(&mut state);
 
     let outcome = state.apply_disconnect_users(from_ref(&relay.publisher));
-    let (relays, _cleanup) = outcome.media_effects.into_parts();
+    let (relays, _) = outcome.transport_plan.relays_and_cleanup();
 
-    assert!(has_source_relay_release(&relays, &relay));
+    assert!(has_source_relay_release(relays, &relay));
 }

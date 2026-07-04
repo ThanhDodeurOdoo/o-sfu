@@ -11,8 +11,8 @@ use crate::engine::{
     room::{
         Room,
         media_graph::{
-            ConsumerSetupOrigin, MediaTopologyEffects, ProducerActivityCommit, PublishCommit,
-            ReceiverRouteCommit, ReceiverRouteWork, UnpublishCommit,
+            ConsumerSetupOrigin, ProducerActivityCommit, PublishCommit, ReceiverRouteCommit,
+            ReceiverRouteWork, UnpublishCommit,
         },
         source_policy::SourcePolicyWakeups,
         state::{
@@ -123,7 +123,7 @@ impl RoomEffects {
                 batch
                     .observability
                     .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
-                batch.extend_media_topology_effects(commit.media_effects);
+                batch.transport.extend(commit.transport_plan);
                 batch.output.push_source_snapshots(commit.source_snapshots);
                 batch.push_presence(commit.presence);
                 batch.source_policy.route_graph_changed();
@@ -159,7 +159,7 @@ impl RoomEffects {
             counts,
             effects,
             receipt,
-            media_effects,
+            transport_plan,
         } = commit;
         let user_id = receipt.transport_session_key.user_id().clone();
         let diagnostics = RoomDiagnosticsContext::new(
@@ -170,7 +170,7 @@ impl RoomEffects {
         .event_data(room, telemetry_event::USER_JOINED);
         let mut batch = Self::default();
         batch.observability.push_gauge(counts);
-        batch.extend_media_topology_effects(media_effects);
+        batch.transport.extend(transport_plan);
         batch.source_policy.route_graph_changed();
         batch.output.push_lifecycle(effects);
         batch.observability.register_user(user_id);
@@ -187,7 +187,7 @@ impl RoomEffects {
                 connection_id,
                 cleanup,
                 effects,
-                media_effects,
+                transport_plan,
             } => {
                 batch.observability.push_gauge(counts);
                 let mut diagnostics = DiagnosticsEventData::for_user(
@@ -200,7 +200,7 @@ impl RoomEffects {
                     diagnostics = diagnostics
                         .with_media_worker_id(cleanup.session_key().media_worker_id().as_usize());
                 }
-                batch.extend_media_topology_effects(media_effects);
+                batch.transport.extend(transport_plan);
                 batch.output.push_lifecycle(effects);
                 batch.observability.record(diagnostics);
                 batch.observability.forget_user(user_id);
@@ -220,7 +220,7 @@ impl RoomEffects {
     fn from_disconnect(room: &Room, commit: DisconnectCommit) -> Self {
         let mut batch = Self::default();
         batch.observability.push_gauge(commit.counts);
-        batch.extend_media_topology_effects(commit.media_effects);
+        batch.transport.extend(commit.transport_plan);
         batch.source_policy.route_graph_changed();
         batch.output.push_lifecycle(commit.effects);
         for close_operation in commit.close_operations {
@@ -317,10 +317,6 @@ impl RoomEffects {
             origin,
         );
         batch
-    }
-
-    fn extend_media_topology_effects(&mut self, effects: MediaTopologyEffects) {
-        self.transport.extend_topology(effects);
     }
 
     fn push_receiver_work(
