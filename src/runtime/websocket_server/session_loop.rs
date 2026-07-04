@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     application::user_session::{UserError, UserOutput},
+    config::UserConfig,
     core::server::room::{UserCloseReason, UserOutbound, UserOutboundEvent, UserOutboundOverflow},
     runtime::{
         metrics::{RuntimeMetrics, WsSessionLoopExitReason},
@@ -47,7 +48,8 @@ pub(super) struct ActiveWebSocketSession {
     writer: WsWriter,
     reader: WsReader,
     accepted: AcceptedUser,
-    services: WebSocketServices,
+    user_config: UserConfig,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl ActiveWebSocketSession {
@@ -57,7 +59,6 @@ impl ActiveWebSocketSession {
         remote_address: Arc<str>,
         pre_auth_permit: PreAuthWebSocketPermit,
     ) -> Option<Self> {
-        let metrics = Arc::clone(&services.metrics);
         let started_at = Instant::now();
         let session = async {
             let (mut writer, mut reader) = socket.split();
@@ -69,16 +70,19 @@ impl ActiveWebSocketSession {
             let accepted =
                 AcceptedUser::establish(&services, auth, remote_address, &mut writer).await?;
 
-            Some(Self {
-                writer,
-                reader,
-                accepted,
-                services,
-            })
+            Some((writer, reader, accepted))
         }
         .await;
-        metrics.record_ws_handshake_duration(started_at.elapsed());
-        session
+        services
+            .metrics
+            .record_ws_handshake_duration(started_at.elapsed());
+        session.map(|(writer, reader, accepted)| Self {
+            writer,
+            reader,
+            accepted,
+            user_config: services.user,
+            metrics: services.metrics,
+        })
     }
 
     pub(super) fn record_upgrade_span(&self) {
@@ -86,10 +90,10 @@ impl ActiveWebSocketSession {
     }
 
     pub(super) async fn serve(mut self) {
-        self.services.metrics.record_ws_user_loop_started();
+        self.metrics.record_ws_user_loop_started();
         let reason = self.run_until_exit().await;
-        self.services.metrics.record_ws_user_loop_exit(reason);
-        self.accepted.finish(&self.services, reason).await;
+        self.metrics.record_ws_user_loop_exit(reason);
+        self.accepted.finish(reason).await;
     }
 
     /// drives websocket liveness and transport health from one owner loop
@@ -97,8 +101,8 @@ impl ActiveWebSocketSession {
     /// transport health is checked before each ping so RTC teardown can close idle
     /// or negotiating sockets
     async fn run_until_exit(&mut self) -> WsSessionLoopExitReason {
-        let ping_interval = Duration::from_millis(self.services.user.ping_interval_ms);
-        let ping_timeout = Duration::from_millis(self.services.user.timeout_ms);
+        let ping_interval = Duration::from_millis(self.user_config.ping_interval_ms);
+        let ping_timeout = Duration::from_millis(self.user_config.timeout_ms);
         let mut next_ping_at = Instant::now() + ping_interval;
         let mut next_transport_state_check_at = next_ping_at;
         let mut liveness_state = LivenessState::Idle;
@@ -182,7 +186,7 @@ impl ActiveWebSocketSession {
             return None;
         }
         debug!("closing websocket because the underlying RTC transport disconnected");
-        self.accepted.user.close(&self.services.room_manager).await;
+        self.accepted.user.close().await;
         close_writer_bounded(&mut self.writer, WebSocketCloseCode::Error).await;
         Some(WsSessionLoopExitReason::TransportDisconnected)
     }
@@ -236,7 +240,7 @@ impl ActiveWebSocketSession {
 
     async fn handle_binary_payload(&mut self, payload: &[u8]) -> Option<WsSessionLoopExitReason> {
         if payload.len() > MAX_CLIENT_FRAME_BYTES {
-            self.services.metrics.record_ws_bus_invalid_input_failure();
+            self.metrics.record_ws_bus_invalid_input_failure();
             warn!(
                 payload_len = payload.len(),
                 max_len = MAX_CLIENT_FRAME_BYTES,
@@ -250,7 +254,7 @@ impl ActiveWebSocketSession {
         match str::from_utf8(payload) {
             Ok(payload) => self.handle_text_payload(payload).await,
             Err(_error) => {
-                self.services.metrics.record_ws_bus_invalid_input_failure();
+                self.metrics.record_ws_bus_invalid_input_failure();
                 warn!("received websocket binary frame with invalid UTF-8");
                 Some(
                     self.close_client_error(WebSocketCloseCode::ProtocolError)
@@ -266,15 +270,13 @@ impl ActiveWebSocketSession {
             Err(error) => {
                 match error.kind() {
                     ClientBatchDecodeFailureKind::InvalidInput => {
-                        self.services.metrics.record_ws_bus_invalid_input_failure();
+                        self.metrics.record_ws_bus_invalid_input_failure();
                         warn!(
                             "failed to decode client websocket batch because the payload was invalid"
                         );
                     }
                     ClientBatchDecodeFailureKind::UnsupportedFeature => {
-                        self.services
-                            .metrics
-                            .record_ws_bus_unsupported_feature_failure();
+                        self.metrics.record_ws_bus_unsupported_feature_failure();
                         warn!(
                             "failed to decode client websocket batch because it used an unsupported feature"
                         );
@@ -286,9 +288,7 @@ impl ActiveWebSocketSession {
                 );
             }
         };
-        self.services
-            .metrics
-            .record_ws_bus_batch_received(batch.len());
+        self.metrics.record_ws_bus_batch_received(batch.len());
         let mut output = UserOutput::new();
         for envelope in batch {
             if let Some(exit_reason) = self.handle_client_envelope(envelope, &mut output).await {
@@ -309,7 +309,7 @@ impl ActiveWebSocketSession {
         envelope: ClientEnvelope,
         output: &mut UserOutput,
     ) -> Option<WsSessionLoopExitReason> {
-        record_client_envelope_metrics(&self.services.metrics, &envelope);
+        record_client_envelope_metrics(&self.metrics, &envelope);
         match self.accepted.user.apply_client_envelope(envelope).await {
             Ok(user_output) => {
                 output.extend(user_output);
@@ -376,8 +376,7 @@ impl ActiveWebSocketSession {
         let envelope_count = output.len();
         match send_user_output_bounded(&mut self.writer, output).await {
             Ok(batch_count) => {
-                self.services
-                    .metrics
+                self.metrics
                     .record_ws_bus_batches_sent(batch_count, envelope_count);
                 None
             }
@@ -406,7 +405,7 @@ impl ActiveWebSocketSession {
             close_writer_bounded(&mut self.writer, WebSocketCloseCode::Kicked).await;
             return Some(WsSessionLoopExitReason::OutboundCloseSignal);
         }
-        self.services.metrics.record_ws_bus_send_failure();
+        self.metrics.record_ws_bus_send_failure();
         if log_send_failure {
             debug!(
                 close_code = u16::from(code),

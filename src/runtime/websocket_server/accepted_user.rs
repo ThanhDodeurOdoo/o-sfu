@@ -70,7 +70,6 @@ impl AcceptedUser {
         match state
             .sfu_core
             .admit_user(
-                &state.room_manager,
                 room.uuid(),
                 JoinUserRequest {
                     user_id: user_id.clone(),
@@ -153,7 +152,7 @@ impl AcceptedUser {
                 "failed to initialize websocket user"
             );
             state.metrics.record_ws_user_initialize_failure();
-            self.user.close(&state.room_manager).await;
+            self.user.close().await;
             return None;
         };
         if send_user_output_bounded(writer, output).await.is_err() {
@@ -171,17 +170,13 @@ impl AcceptedUser {
                 outcome = "startup_send_failed",
                 "failed to send websocket user startup payload"
             );
-            self.user.close(&state.room_manager).await;
+            self.user.close().await;
             return None;
         }
         Some(())
     }
 
-    pub(super) async fn finish(
-        &mut self,
-        state: &WebSocketServices,
-        reason: WsSessionLoopExitReason,
-    ) {
+    pub(super) async fn finish(&mut self, reason: WsSessionLoopExitReason) {
         info!(
             event = telemetry_event::WS_CONNECTION_CLOSED,
             connection_id = ?self.user.connection_id(),
@@ -189,6 +184,6 @@ impl AcceptedUser {
             ?reason,
             "closing websocket user"
         );
-        self.user.close(&state.room_manager).await;
+        self.user.close().await;
     }
 }

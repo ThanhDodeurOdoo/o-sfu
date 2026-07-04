@@ -7,7 +7,7 @@
 )]
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::{Duration, Instant},
@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use o_sfu_core::{
     prelude::{
-        Bitrate, CodecPreferences, ConnectionId, MediaCodecFlags, RoomMediaLimits,
+        Bitrate, CodecPreferences, MediaCodecFlags, MediaSession, RoomMediaLimits,
         RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags, SessionBitrateLimits, SfuCore,
         SourceSubscriptionIntent, UserStreamId, VideoBitrateLimits,
     },
@@ -179,8 +179,7 @@ struct PublishedMedia {
 
 struct GeneralCallScenario {
     core: SfuCore,
-    live_users: BTreeSet<RawUserId>,
-    manager: RoomManager,
+    manager: Arc<RoomManager>,
     media: PublishedMedia,
     media_transport: MediaTransport,
     outbound_metrics: Arc<RuntimeMetrics>,
@@ -189,7 +188,7 @@ struct GeneralCallScenario {
     source_policy_updates: SourcePolicyUpdateSubscription,
     stats: GeneralCallStats,
     synthetic_now: Instant,
-    user_connections: BTreeMap<RawUserId, ConnectionId>,
+    user_sessions: BTreeMap<RawUserId, MediaSession>,
 }
 
 impl GeneralCallScenario {
@@ -205,10 +204,9 @@ impl GeneralCallScenario {
                 Some("general-call-benchmark"),
             )
             .await;
-        let core = SfuCore::new(media_transport.clone());
+        let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
         Ok(Self {
             core,
-            live_users: BTreeSet::new(),
             manager,
             media: PublishedMedia::default(),
             media_transport,
@@ -218,7 +216,7 @@ impl GeneralCallScenario {
             source_policy_updates,
             stats: GeneralCallStats::default(),
             synthetic_now: Instant::now(),
-            user_connections: BTreeMap::new(),
+            user_sessions: BTreeMap::new(),
         })
     }
 
@@ -306,40 +304,31 @@ impl GeneralCallScenario {
     }
 
     async fn join_ready(&mut self, raw_user_id: RawUserId) -> Result<()> {
-        let user_id = user(raw_user_id);
         let (sender, receiver) = UserOutboundSender::channel(
             OUTBOUND_QUEUE_CAPACITY,
             Arc::clone(&self.outbound_metrics),
         );
-        let admission = self
-            .manager
-            .join_user(
+        let session = self
+            .core
+            .admit_user(
                 self.room.uuid(),
                 JoinUserRequest {
-                    user_id: user_id.clone(),
+                    user_id: user(raw_user_id),
                     label: Some(format!("user-{raw_user_id}")),
                     permissions: UserPermissions::default(),
                     sender,
                 },
-                &self.media_transport,
             )
             .await
             .map_err(|error| anyhow!("user {raw_user_id} join failed: {error:?}"))?;
         self.room
             .test_api()
             .lifecycle()
-            .make_session_ready(&user_id, &self.media_transport)
+            .make_session_ready(session.user_id(), &self.media_transport)
             .await
             .map_err(|error| anyhow!("user {raw_user_id} readiness failed: {error:?}"))?;
-        if !self.live_users.insert(raw_user_id) {
-            return Err(anyhow!("user {raw_user_id} joined twice"));
-        }
-        if self
-            .user_connections
-            .insert(raw_user_id, admission.connection_id)
-            .is_some()
-        {
-            return Err(anyhow!("user {raw_user_id} connection already exists"));
+        if self.user_sessions.insert(raw_user_id, session).is_some() {
+            return Err(anyhow!("user {raw_user_id} session already exists"));
         }
         if self.receivers.insert(raw_user_id, receiver).is_some() {
             return Err(anyhow!("user {raw_user_id} receiver already exists"));
@@ -443,25 +432,12 @@ impl GeneralCallScenario {
     }
 
     async fn close_user(&mut self, raw_user_id: RawUserId) -> Result<()> {
-        let user_id = user(raw_user_id);
-        let connection_id = self.connection_id(raw_user_id)?;
-        if !self
-            .manager
-            .close_session(
-                self.room.uuid(),
-                &user_id,
-                connection_id,
-                &self.media_transport,
-            )
-            .await
-        {
+        let mut session = self
+            .user_sessions
+            .remove(&raw_user_id)
+            .ok_or_else(|| anyhow!("user {raw_user_id} session was not tracked"))?;
+        if !session.close().await {
             return Err(anyhow!("user {raw_user_id} close did not remove a session"));
-        }
-        if !self.live_users.remove(&raw_user_id) {
-            return Err(anyhow!("user {raw_user_id} was not live"));
-        }
-        if self.user_connections.remove(&raw_user_id).is_none() {
-            return Err(anyhow!("user {raw_user_id} connection was not tracked"));
         }
         if self.media.audio.remove(&raw_user_id).is_some() {
             self.stats.unpublications = self.stats.unpublications.saturating_add(1);
@@ -481,7 +457,7 @@ impl GeneralCallScenario {
     }
 
     async fn subscribe_all_live_users_to_audio(&mut self) -> Result<()> {
-        let receivers = self.live_users.iter().copied().collect::<Vec<_>>();
+        let receivers = self.user_sessions.keys().copied().collect::<Vec<_>>();
         let publishers = self.media.audio.keys().copied().collect::<Vec<_>>();
         for receiver in receivers {
             for publisher in publishers.iter().copied() {
@@ -525,13 +501,11 @@ impl GeneralCallScenario {
         publisher: RawUserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> Result<()> {
-        let receiver_user_id = user(receiver);
         let publisher_user_id = user(publisher);
-        let receiver_connection_id = self.connection_id(receiver)?;
         let session = self
-            .core
-            .session(&self.room, &receiver_user_id, receiver_connection_id)
-            .await;
+            .user_sessions
+            .get(&receiver)
+            .ok_or_else(|| anyhow!("user {receiver} session was missing"))?;
         session
             .subscribe(&publisher_user_id, intents)
             .await
@@ -588,8 +562,8 @@ impl GeneralCallScenario {
         self.stats.consumer_count = inspect.consumer_count().await;
         self.stats.router_count = inspect.routing_router_count().await;
 
-        let live_users = self.live_users.iter().copied().collect::<Vec<_>>();
-        for raw_user_id in live_users {
+        let users = self.user_sessions.keys().copied().collect::<Vec<_>>();
+        for raw_user_id in users {
             if inspect
                 .routing_home_media_worker_id(&user(raw_user_id))
                 .await
@@ -624,20 +598,17 @@ impl GeneralCallScenario {
         source_kind: TestSourceKind,
     ) -> Result<TransportMediaId> {
         let user_id = user(raw_user_id);
-        let connection_id = self.connection_id(raw_user_id)?;
+        let connection_id = self
+            .user_sessions
+            .get(&raw_user_id)
+            .map(MediaSession::connection_id)
+            .ok_or_else(|| anyhow!("user {raw_user_id} connection was missing"))?;
         self.room
             .test_api()
             .inspect()
             .producer_transport_media_id(&user_id, connection_id, source_kind)
             .await
             .ok_or_else(|| anyhow!("user {raw_user_id} {source_kind:?} media id was missing"))
-    }
-
-    fn connection_id(&self, raw_user_id: RawUserId) -> Result<ConnectionId> {
-        self.user_connections
-            .get(&raw_user_id)
-            .copied()
-            .ok_or_else(|| anyhow!("user {raw_user_id} connection was missing"))
     }
 
     fn drain_outbound_events(&mut self) {
@@ -676,17 +647,19 @@ fn media_transport() -> Result<MediaTransport> {
         .map_err(|error| anyhow!("benchmark media transport build failed: {error}"))
 }
 
-fn room_manager() -> Result<RoomManager> {
+fn room_manager() -> Result<Arc<RoomManager>> {
     let media_limits = RoomMediaLimits::try_new(4, 3)?;
-    Ok(RoomManager::for_test_with_config(RoomManagerConfig::new(
-        WORKER_COUNT,
-        RoomRuntimePolicy::new(
-            RoomAdmissionPolicy::new(12),
-            RuntimeFeatureFlags::default(),
-            rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
-        )
-        .with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(WORKER_COUNT))
-        .with_media_limits(media_limits),
+    Ok(Arc::new(RoomManager::for_test_with_config(
+        RoomManagerConfig::new(
+            WORKER_COUNT,
+            RoomRuntimePolicy::new(
+                RoomAdmissionPolicy::new(12),
+                RuntimeFeatureFlags::default(),
+                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            )
+            .with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(WORKER_COUNT))
+            .with_media_limits(media_limits),
+        ),
     )))
 }
 

@@ -6,7 +6,7 @@ use tracing::{debug, error};
 use super::{User, UserError, UserOutput};
 use crate::{
     core::prelude::{MediaSession, TransportSessionHealth},
-    runtime::{ConnectionId, room},
+    runtime::ConnectionId,
 };
 
 impl User {
@@ -64,10 +64,10 @@ impl User {
     ///
     /// clears pending negotiation state and closes the room session so staged media
     /// plus transport user state are rolled back
-    pub async fn close(&mut self, rooms: &room::RoomManager) {
+    pub async fn close(&mut self) {
         if !self.cleanup_finished {
             self.negotiation.clear_pending();
-            self.session.close(rooms).await;
+            self.session.close().await;
             self.cleanup_finished = true;
         }
     }

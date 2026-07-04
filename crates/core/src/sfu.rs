@@ -1,7 +1,7 @@
 //! `SfuCore` admits room users into [`MediaSession`] handles
 //! each handle represent one admitted user connection in one room
 //! callers use it to drive the browser offer/answer lifecycle and then express
-//! publish, subscribe, recording and cleanup intent without improting room or
+//! publish, subscribe, recording and cleanup intent without importing room or
 //! transport internals
 //!
 //! ```text
@@ -13,32 +13,29 @@
 //! close     -> rollback staged media and remove the connection
 //! ```
 //!
-//! negotiation is serialize through `&mut MediaSession`
-//! a new offer is not craeted while another offer is awaiting an answer
-//! publish intent received during that widnow is queued and replayed after the
+//! negotiation is serialized through `&mut MediaSession`
+//! a new offer is not created while another offer is awaiting an answer
+//! publish intent received during that window is queued and replayed after the
 //! accepted answer
 //!
 //! # Examples
 //!
-//! the server runtime follows this shape when a websocket user enter a room
-//!
 //! ```no_run
 //! use o_sfu_core::{
 //!     prelude::{NegotiationOffer, SfuCore, SourcePublishIntent},
-//!     server::room::{JoinUserRequest, RoomManager},
+//!     server::room::JoinUserRequest,
 //! };
 //!
 //! # async fn send_offer(_: NegotiationOffer) {}
 //! # async fn example(
 //! #     core: SfuCore,
-//! #     rooms: RoomManager,
 //! #     room_id: String,
 //! #     request: JoinUserRequest,
 //! #     publish_intent: SourcePublishIntent,
 //! #     initial_answer_sdp: String,
 //! # ) -> Result<(), o_sfu_core::prelude::SessionError> {
 //! let mut session = core
-//!     .admit_user(&rooms, &room_id, request)
+//!     .admit_user(&room_id, request)
 //!     .await
 //!     .expect("room admission succeeds");
 //!
@@ -315,12 +312,12 @@ impl SfuCoreError {
 
 /// cloneable core handle used to create room-bound media sessions
 ///
-/// `SfuCore` owns no room state
-/// it holds the media transport service that every [`MediaSession`] uses when a
-/// room mutation needs WebRTC work
+/// it holds the room registry and media transport services that every
+/// [`MediaSession`] uses when a room mutation needs lifecycle or WebRTC work
 #[derive(Debug, Clone)]
 pub struct SfuCore {
     media_transport: MediaTransport,
+    rooms: Arc<RoomManager>,
 }
 
 /// one user connection in one room
@@ -341,8 +338,11 @@ pub struct MediaSession {
 
 impl SfuCore {
     #[must_use]
-    pub fn new(media_transport: MediaTransport) -> Self {
-        Self { media_transport }
+    pub fn new(media_transport: MediaTransport, rooms: Arc<RoomManager>) -> Self {
+        Self {
+            media_transport,
+            rooms,
+        }
     }
 
     /// admits one room user and returns the media session that owns the
@@ -354,45 +354,20 @@ impl SfuCore {
     /// rejects the user
     pub async fn admit_user(
         &self,
-        rooms: &RoomManager,
         room_id: &str,
         request: JoinUserRequest,
     ) -> Result<MediaSession, RoomManagerJoinError> {
-        let admission = rooms
+        let admission = self
+            .rooms
             .join_user(room_id, request, &self.media_transport)
             .await?;
-        Ok(self.session_with_transport_key(&admission.room, admission.transport_session_key))
-    }
-
-    /// builds a media session for an existing room user
-    ///
-    /// production websocket admission should use [`SfuCore::admit_user`]
-    /// instead, so the caller does not handle transport session keys
-    #[must_use]
-    pub async fn session(
-        &self,
-        room: &Arc<Room>,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> MediaSession {
-        let transport_user_key = room.transport_user_key(user_id, connection_id).await;
-        self.session_with_transport_key(room, transport_user_key)
-    }
-
-    /// builds a media session from an already committed transport key
-    #[must_use]
-    fn session_with_transport_key(
-        &self,
-        room: &Arc<Room>,
-        transport_user_key: TransportSessionKey,
-    ) -> MediaSession {
-        MediaSession {
+        Ok(MediaSession {
             core: self.clone(),
-            room: Arc::clone(room),
-            transport_user_key,
+            room: admission.room,
+            transport_user_key: admission.transport_session_key,
             phase: SessionPhase::default(),
             closed: false,
-        }
+        })
     }
 }
 
@@ -543,12 +518,14 @@ impl MediaSession {
     /// current-session cleanup drains connection-scoped staged media through
     /// room state
     /// stale sessions do not remove a replacement connection for the same user
-    pub async fn close(&mut self, rooms: &RoomManager) -> bool {
+    pub async fn close(&mut self) -> bool {
         if self.closed {
             return false;
         }
         self.phase.clear_queued_publishes();
-        let did_close = rooms
+        let did_close = self
+            .core
+            .rooms
             .close_session(
                 self.room_id(),
                 self.user_id(),

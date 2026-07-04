@@ -25,7 +25,7 @@ pub(super) use crate::runtime::{
         RoomResponse, STATS_PATH, StatsResponse,
     },
     media_transport::MediaTransport,
-    room::{JoinUserRequest, Room, RoomConfig, UserOutboundReceiver},
+    room::{Room, RoomConfig, UserOutboundReceiver},
     test_support::{
         RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder, RuntimeTestState, TEST_AUTH_KEY,
         TEST_ROOM_KEY, test_outbound_sender,

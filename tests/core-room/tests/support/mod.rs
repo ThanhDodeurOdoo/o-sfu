@@ -15,8 +15,8 @@ use o_sfu_core::{
     ConnectionId,
     prelude::{
         Bitrate, CodecPreferences, LocalSpilloverPolicy, LocalSpilloverPolicyParts,
-        MediaCodecFlags, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
-        SessionBitrateLimits, UserStreamId, VideoBitrateLimits,
+        MediaCodecFlags, MediaSession, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
+        SessionBitrateLimits, SfuCore, UserStreamId, VideoBitrateLimits,
     },
     server::{
         diagnostics::DiagnosticsStore,
@@ -192,10 +192,10 @@ pub async fn close_user(
 }
 
 pub struct ReadyRoom {
-    pub manager: RoomManager,
     pub room: Arc<Room>,
     pub media_transport: MediaTransport,
     receivers: BTreeMap<i64, UserOutboundReceiver>,
+    pub sessions: BTreeMap<i64, MediaSession>,
 }
 
 impl ReadyRoom {
@@ -219,25 +219,38 @@ impl ReadyRoom {
 }
 
 pub async fn join_ready_users(user_ids: &[i64]) -> Result<ReadyRoom> {
-    let manager = RoomManager::for_test();
+    let manager = Arc::new(RoomManager::for_test());
     let room = serve_room(&manager, "issuer-core-room-ready").await;
     let media_transport = media_transport()?;
+    let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
     let mut receivers = BTreeMap::new();
+    let mut sessions = BTreeMap::new();
     for &raw_user_id in user_ids {
-        let user_id = UserId::Integer(raw_user_id);
-        let (_connection_id, receiver) =
-            join_user_with_receiver(&manager, &room, raw_user_id, &media_transport).await?;
+        let (sender, receiver) = test_sender();
+        let session = core
+            .admit_user(
+                room.uuid(),
+                JoinUserRequest {
+                    user_id: UserId::Integer(raw_user_id),
+                    label: None,
+                    permissions: UserPermissions::default(),
+                    sender,
+                },
+            )
+            .await
+            .map_err(|error| anyhow!("user should join through core: {error:?}"))?;
         room.test_api()
             .lifecycle()
-            .make_session_ready(&user_id, &media_transport)
+            .make_session_ready(session.user_id(), &media_transport)
             .await?;
         receivers.insert(raw_user_id, receiver);
+        sessions.insert(raw_user_id, session);
     }
     Ok(ReadyRoom {
-        manager,
         room,
         media_transport,
         receivers,
+        sessions,
     })
 }
 

@@ -21,7 +21,13 @@ use serde_json::Value;
 use super::fixtures::*;
 use crate::{
     application::stream_catalog::source_publish_intent_for_stream_type,
-    core::server::session::{UserId, UserInfo, UserPermissions},
+    core::{
+        prelude::MediaSession,
+        server::{
+            room::JoinUserRequest,
+            session::{UserId, UserInfo, UserPermissions},
+        },
+    },
     runtime::{
         diagnostics::types::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
         room::Room,
@@ -98,16 +104,24 @@ async fn join_room_user(
     room: &Room,
     user_id: UserId,
     context: &'static str,
-) -> TestResult<UserOutboundReceiver> {
+) -> TestResult<(MediaSession, UserOutboundReceiver)> {
     let (tx, rx) = test_outbound_sender(state);
-    require_ok(
-        room.test_api()
-            .lifecycle()
-            .join_user(user_id, None, UserPermissions::default(), tx)
+    let session = require_ok(
+        state
+            .sfu_core
+            .admit_user(
+                room.uuid(),
+                JoinUserRequest {
+                    user_id,
+                    label: None,
+                    permissions: UserPermissions::default(),
+                    sender: tx,
+                },
+            )
             .await,
         context,
     )?;
-    Ok(rx)
+    Ok((session, rx))
 }
 
 async fn make_session_ready(
@@ -200,57 +214,43 @@ async fn diagnostics_routes_require_the_configured_bearer_token() -> TestResult 
 async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
     let test_state = test_state_with_handles();
     let room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await;
-    let alice_session_id = UserId::Integer(1);
-    let bob_session_id = UserId::Integer(2);
-    let carol_session_id = UserId::Integer(3);
-    let _receivers = [
-        join_room_user(
-            &test_state.state,
-            &room,
-            alice_session_id.clone(),
-            "alice should join diagnostics room",
-        )
-        .await?,
-        join_room_user(
-            &test_state.state,
-            &room,
-            bob_session_id.clone(),
-            "bob should join diagnostics room",
-        )
-        .await?,
-        join_room_user(
-            &test_state.state,
-            &room,
-            carol_session_id.clone(),
-            "carol should join diagnostics room",
-        )
-        .await?,
-    ];
-    make_session_ready(&room, &bob_session_id, &test_state.media_transport).await?;
-    make_session_ready(&room, &carol_session_id, &test_state.media_transport).await?;
+    let alice_user_id = UserId::Integer(1);
+    let bob_user_id = UserId::Integer(2);
+    let carol_user_id = UserId::Integer(3);
+    let (alice_session, alice_rx) = join_room_user(
+        &test_state.state,
+        &room,
+        alice_user_id.clone(),
+        "alice should join diagnostics room",
+    )
+    .await?;
+    let (_, bob_rx) = join_room_user(
+        &test_state.state,
+        &room,
+        bob_user_id.clone(),
+        "bob should join diagnostics room",
+    )
+    .await?;
+    let (_, carol_rx) = join_room_user(
+        &test_state.state,
+        &room,
+        carol_user_id.clone(),
+        "carol should join diagnostics room",
+    )
+    .await?;
+    let _receivers = [alice_rx, bob_rx, carol_rx];
+    make_session_ready(&room, &bob_user_id, &test_state.media_transport).await?;
+    make_session_ready(&room, &carol_user_id, &test_state.media_transport).await?;
     publish_media_stream(
         &room,
-        &alice_session_id,
+        &alice_user_id,
         StreamType::Camera,
         test_simulcast_video_rtp_parameters(),
         &test_state.media_transport,
     )
     .await?;
-    let alice_connection_id = require_some(
-        room.test_api()
-            .inspect()
-            .user_connection_id(&alice_session_id)
-            .await,
-        "alice should still have a live connection",
-    )?;
     for _ in 0..2 {
-        test_state
-            .state
-            .sfu_core
-            .session(&room, &alice_session_id, alice_connection_id)
-            .await
-            .update_info(UserInfo::default())
-            .await;
+        alice_session.update_info(UserInfo::default()).await;
     }
 
     let room_summaries: Vec<DiagnosticsRoomSummary> =
@@ -343,7 +343,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
         format!(
             "/internal/diagnostics/node-graph/rooms/{}/users/{}",
             room.uuid(),
-            alice_session_id.clone().into_integer_string()
+            alice_user_id.clone().into_integer_string()
         ),
     )
     .await?;
@@ -366,7 +366,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
         format!(
             "/internal/diagnostics/node-graph/rooms/{}/users/{}",
             room.uuid(),
-            bob_session_id.clone().into_integer_string()
+            bob_user_id.clone().into_integer_string()
         ),
     )
     .await?;
@@ -383,12 +383,12 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
         &test_state.state,
         format!(
             "/internal/diagnostics/users/{}",
-            alice_session_id.clone().into_integer_string()
+            alice_user_id.clone().into_integer_string()
         ),
     )
     .await?;
     assert_eq!(session_detail.room_id, room.uuid());
-    assert_eq!(session_detail.user.user_id, alice_session_id);
+    assert_eq!(session_detail.user.user_id, alice_user_id);
     assert_eq!(session_detail.user.publications.len(), 1);
     assert_eq!(session_detail.user.publications[0].source_id, 1);
     assert_eq!(session_detail.user.publications[0].encoding_ids.len(), 2);
@@ -403,7 +403,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
         &test_state.state,
         format!(
             "/internal/diagnostics/users/{}",
-            bob_session_id.clone().into_integer_string()
+            bob_user_id.clone().into_integer_string()
         ),
     )
     .await?;
@@ -449,22 +449,21 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() -> TestResult {
     let test_state = test_state_with_handles();
     let first_room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await;
     let second_room = serve_diagnostics_room(&test_state, "issuer-b", "203.0.113.11").await;
-    let _receivers = [
-        join_room_user(
-            &test_state.state,
-            &first_room,
-            UserId::Integer(7),
-            "first matching user should join",
-        )
-        .await?,
-        join_room_user(
-            &test_state.state,
-            &second_room,
-            UserId::Integer(7),
-            "second matching user should join",
-        )
-        .await?,
-    ];
+    let (_, first_rx) = join_room_user(
+        &test_state.state,
+        &first_room,
+        UserId::Integer(7),
+        "first matching user should join",
+    )
+    .await?;
+    let (_, second_rx) = join_room_user(
+        &test_state.state,
+        &second_room,
+        UserId::Integer(7),
+        "second matching user should join",
+    )
+    .await?;
+    let _receivers = [first_rx, second_rx];
 
     let response = route_response(
         &test_state.state,
@@ -498,7 +497,7 @@ async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() ->
     let test_state = test_state_with_handles();
     let room = serve_diagnostics_room(&test_state, "issuer-replacement", "203.0.113.12").await;
     let user_id = UserId::Integer(9);
-    let _first_rx = join_room_user(
+    let (_, _first_rx) = join_room_user(
         &test_state.state,
         &room,
         user_id.clone(),

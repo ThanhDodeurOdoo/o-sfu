@@ -1,8 +1,5 @@
 use super::support::*;
-use crate::{
-    engine::room::RoomUserAdmission,
-    prelude::{MediaSession, NegotiationOffer, SfuCore},
-};
+use crate::prelude::{MediaSession, NegotiationOffer, SfuCore};
 
 #[tokio::test]
 async fn media_session_initial_offer_is_one_shot() {
@@ -88,7 +85,7 @@ async fn media_session_close_rolls_back_staged_publish_and_removes_room_session(
     let video = TestSourceKind::ScalableVideo;
     fixture.assert_staged(video, true).await;
 
-    assert!(fixture.session.close(&fixture.manager).await);
+    assert!(fixture.session.close().await);
 
     fixture.assert_staged(video, false).await;
     assert!(
@@ -104,7 +101,6 @@ async fn media_session_close_rolls_back_staged_publish_and_removes_room_session(
 #[tokio::test]
 async fn media_session_close_is_idempotent_after_completed_cleanup() {
     let PublisherFixture {
-        manager,
         room,
         user_id,
         mut session,
@@ -113,8 +109,8 @@ async fn media_session_close_is_idempotent_after_completed_cleanup() {
     } = build_publisher_fixture(55_207).await;
     establish_session(&mut session, &mut remote).await;
 
-    assert!(session.close(&manager).await);
-    assert!(!session.close(&manager).await);
+    assert!(session.close().await);
+    assert!(!session.close().await);
 
     assert!(!room.test_api().inspect().has_session(&user_id).await);
 }
@@ -127,16 +123,14 @@ async fn replacement_drains_staged_publish_before_stale_close() {
     let video = TestSourceKind::ScalableVideo;
     let staged_media_id = fixture
         .room
-        .staged_media_id(&fixture.user_id, fixture.connection_id, video)
+        .staged_media_id(&fixture.user_id, fixture.session.connection_id(), video)
         .await
         .expect("test publish should be staged");
-    let replacement = admit_user(
-        &fixture.manager,
-        &fixture.room,
-        fixture.user_id.clone(),
-        &fixture.media_transport,
-    )
-    .await;
+    let replacement = fixture
+        .core
+        .admit_user(fixture.room.uuid(), join_request(fixture.user_id.clone()))
+        .await
+        .expect("replacement user should join through core facade");
 
     fixture.assert_staged(video, false).await;
     assert!(
@@ -148,7 +142,7 @@ async fn replacement_drains_staged_publish_before_stale_close() {
             .is_none()
     );
 
-    assert!(!fixture.session.close(&fixture.manager).await);
+    assert!(!fixture.session.close().await);
 
     assert_eq!(
         fixture
@@ -157,7 +151,7 @@ async fn replacement_drains_staged_publish_before_stale_close() {
             .inspect()
             .user_connection_id(&fixture.user_id)
             .await,
-        Some(replacement.connection_id)
+        Some(replacement.connection_id())
     );
 }
 
@@ -167,11 +161,10 @@ async fn build_publisher_session(port: u16) -> (MediaSession, Rtc) {
 }
 
 struct PublisherFixture {
-    manager: RoomManager,
+    core: SfuCore,
     room: Arc<Room>,
     media_transport: MediaTransport,
     user_id: UserId,
-    connection_id: ConnectionId,
     session: MediaSession,
     remote: Rtc,
 }
@@ -182,7 +175,7 @@ impl PublisherFixture {
             self.room
                 .has_staged_publish(
                     &self.user_id,
-                    self.connection_id,
+                    self.session.connection_id(),
                     &stream_id_for_source(source),
                 )
                 .await,
@@ -200,7 +193,7 @@ impl PublisherFixture {
 }
 
 async fn build_publisher_fixture(port: u16) -> PublisherFixture {
-    let manager = RoomManager::for_test();
+    let manager = Arc::new(RoomManager::for_test());
     let room = manager
         .serve_room(
             "issuer-sfu-core",
@@ -210,42 +203,30 @@ async fn build_publisher_fixture(port: u16) -> PublisherFixture {
         )
         .await;
     let media_transport = build_real_rtc_media_transport();
-    let core = SfuCore::new(media_transport.clone());
+    let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
     let publisher_user_id = UserId::Integer(1);
-    let admission = admit_user(&manager, &room, publisher_user_id.clone(), &media_transport).await;
-    let connection_id = admission.connection_id;
-    let session = core.session(&room, &publisher_user_id, connection_id).await;
+    let session = core
+        .admit_user(room.uuid(), join_request(publisher_user_id.clone()))
+        .await
+        .expect("publisher should join through core facade");
     PublisherFixture {
-        manager,
+        core,
         room,
         media_transport,
         user_id: publisher_user_id,
-        connection_id,
         session,
         remote: build_remote_rtc(port),
     }
 }
 
-async fn admit_user(
-    manager: &RoomManager,
-    room: &Arc<Room>,
-    user_id: UserId,
-    media_transport: &MediaTransport,
-) -> RoomUserAdmission {
+fn join_request(user_id: UserId) -> JoinUserRequest {
     let (sender, _receiver) = test_sender();
-    manager
-        .join_user(
-            room.uuid(),
-            JoinUserRequest {
-                user_id,
-                label: None,
-                permissions: UserPermissions::default(),
-                sender,
-            },
-            media_transport,
-        )
-        .await
-        .expect("user should join through manager")
+    JoinUserRequest {
+        user_id,
+        label: None,
+        permissions: UserPermissions::default(),
+        sender,
+    }
 }
 
 async fn establish_session(session: &mut MediaSession, remote: &mut Rtc) {

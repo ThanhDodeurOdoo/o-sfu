@@ -281,7 +281,7 @@ impl RuntimeState {
         metrics: Arc<RuntimeMetrics>,
         media_transport: MediaTransport,
     ) -> Self {
-        let sfu_core = SfuCore::new(media_transport.clone());
+        let sfu_core = SfuCore::new(media_transport.clone(), Arc::clone(&rooms));
         let pre_auth_websocket_admission = websocket_server::PreAuthWebSocketAdmission::new(
             config.auth.max_pre_auth_websocket_sessions,
             config.auth.max_pre_auth_websocket_sessions_per_origin,

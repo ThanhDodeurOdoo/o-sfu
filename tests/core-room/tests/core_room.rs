@@ -3,15 +3,14 @@
     reason = "integration tests use panic-based assertions for clear failures"
 )]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use o_sfu_core::{
-    prelude::{ConnectionId, RoomWorkerPolicy, SfuCore, SourceSubscriptionIntent, UserStreamId},
+    prelude::{RoomWorkerPolicy, SourceSubscriptionIntent, UserStreamId},
     server::{
         room::{
-            JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager,
-            RoomManagerJoinError,
+            JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerJoinError,
             test_support::{
                 TestSourceKind, TestSubscriptionStates, stream_id_for_source,
                 subscription_intents_from_test_states,
@@ -23,10 +22,10 @@ use o_sfu_core::{
 mod support;
 
 use support::{
-    TEST_ROOM_KEY, close_user, home_worker, join_ready_users, join_user, load_triggered_policy,
-    load_triggered_policy_with_cap, manager_with_policy, manager_with_policy_and_worker_count,
-    media_transport, publish_audio_and_camera, publish_track, router_count,
-    seed_source_fanout_pressure, serve_room, test_sender, test_video_rtp_parameters,
+    ReadyRoom, TEST_ROOM_KEY, close_user, home_worker, join_ready_users, join_user,
+    load_triggered_policy, load_triggered_policy_with_cap, manager_with_policy,
+    manager_with_policy_and_worker_count, media_transport, publish_audio_and_camera, publish_track,
+    router_count, seed_source_fanout_pressure, serve_room, test_sender, test_video_rtp_parameters,
     user_connection_id,
 };
 
@@ -55,17 +54,19 @@ fn pause_audio_and_scalable_video_intents() -> SubscriptionIntents {
 }
 
 async fn update_subscription(
-    core: &SfuCore,
-    room: &Arc<Room>,
-    subscriber_id: &UserId,
-    subscriber_connection_id: ConnectionId,
+    ready: &ReadyRoom,
+    subscriber_id: i64,
     publisher_id: &UserId,
     intents: &SubscriptionIntents,
-) -> bool {
-    let session = core
-        .session(room, subscriber_id, subscriber_connection_id)
-        .await;
-    session.subscribe(publisher_id, intents).await.is_ok()
+) -> Result<()> {
+    let session = ready
+        .sessions
+        .get(&subscriber_id)
+        .ok_or_else(|| anyhow!("ready room should include subscriber session"))?;
+    session
+        .subscribe(publisher_id, intents)
+        .await
+        .map_err(|error| anyhow!("subscription update should commit: {error}"))
 }
 
 #[tokio::test]
@@ -332,36 +333,26 @@ async fn subscription_change_pauses_and_resumes_consumer_silently() -> Result<()
     ready.drain_user(1)?;
     ready.drain_user(2)?;
 
-    let core = SfuCore::new(ready.media_transport.clone());
-    let subscriber_id = UserId::Integer(2);
+    let subscriber_id = 2;
     let publisher_id = UserId::Integer(1);
-    let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert!(
-        update_subscription(
-            &core,
-            &ready.room,
-            &subscriber_id,
-            subscriber_connection_id,
-            &publisher_id,
-            &pause_scalable_video_intents(),
-        )
-        .await
-    );
+    update_subscription(
+        &ready,
+        subscriber_id,
+        &publisher_id,
+        &pause_scalable_video_intents(),
+    )
+    .await?;
     ready.assert_no_outbound(1)?;
     ready.assert_no_outbound(2)?;
     assert_eq!(ready.room.test_api().inspect().consumer_count().await, 1);
 
-    assert!(
-        update_subscription(
-            &core,
-            &ready.room,
-            &subscriber_id,
-            subscriber_connection_id,
-            &publisher_id,
-            &resume_scalable_video_intents(),
-        )
-        .await
-    );
+    update_subscription(
+        &ready,
+        subscriber_id,
+        &publisher_id,
+        &resume_scalable_video_intents(),
+    )
+    .await?;
     ready.assert_no_outbound(1)?;
     ready.assert_no_outbound(2)?;
     assert_eq!(ready.room.test_api().inspect().consumer_count().await, 1);
@@ -373,21 +364,15 @@ async fn subscription_change_persists_preference_for_future_consumer_setup() -> 
     let mut ready = join_ready_users(&[1, 2]).await?;
     ready.drain_user(1)?;
     ready.drain_user(2)?;
-    let core = SfuCore::new(ready.media_transport.clone());
-    let subscriber_id = UserId::Integer(2);
+    let subscriber_id = 2;
     let publisher_id = UserId::Integer(1);
-    let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert!(
-        update_subscription(
-            &core,
-            &ready.room,
-            &subscriber_id,
-            subscriber_connection_id,
-            &publisher_id,
-            &pause_audio_and_scalable_video_intents(),
-        )
-        .await
-    );
+    update_subscription(
+        &ready,
+        subscriber_id,
+        &publisher_id,
+        &pause_audio_and_scalable_video_intents(),
+    )
+    .await?;
     ready.assert_no_outbound(1)?;
     ready.assert_no_outbound(2)?;
 
@@ -411,21 +396,15 @@ async fn subscription_change_handles_multiple_stream_types() -> Result<()> {
     ready.drain_user(1)?;
     ready.drain_user(2)?;
 
-    let core = SfuCore::new(ready.media_transport.clone());
-    let subscriber_id = UserId::Integer(2);
+    let subscriber_id = 2;
     let publisher_id = UserId::Integer(1);
-    let subscriber_connection_id = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert!(
-        update_subscription(
-            &core,
-            &ready.room,
-            &subscriber_id,
-            subscriber_connection_id,
-            &publisher_id,
-            &pause_audio_and_scalable_video_intents(),
-        )
-        .await
-    );
+    update_subscription(
+        &ready,
+        subscriber_id,
+        &publisher_id,
+        &pause_audio_and_scalable_video_intents(),
+    )
+    .await?;
 
     ready.assert_no_outbound(1)?;
     ready.assert_no_outbound(2)?;
@@ -447,32 +426,21 @@ async fn publication_activity_after_source_owner_leave_is_a_noop() -> Result<()>
     ready.drain_user(1)?;
     ready.drain_user(2)?;
     let publisher_id = UserId::Integer(1);
-    let publisher_connection = user_connection_id(&ready.room, &publisher_id).await?;
-    let core = SfuCore::new(ready.media_transport.clone());
-
-    close_user(
-        &ready.manager,
-        &ready.room,
-        1,
-        publisher_connection,
-        &ready.media_transport,
-    )
-    .await?;
+    let mut publisher_session = ready
+        .sessions
+        .remove(&1)
+        .ok_or_else(|| anyhow!("ready room should include publisher session"))?;
+    assert!(publisher_session.close().await);
     ready.drain_user(2)?;
 
-    let subscriber_id = UserId::Integer(2);
-    let subscriber_connection = user_connection_id(&ready.room, &subscriber_id).await?;
-    assert!(
-        update_subscription(
-            &core,
-            &ready.room,
-            &subscriber_id,
-            subscriber_connection,
-            &publisher_id,
-            &pause_scalable_video_intents(),
-        )
-        .await
-    );
+    let subscriber_id = 2;
+    update_subscription(
+        &ready,
+        subscriber_id,
+        &publisher_id,
+        &pause_scalable_video_intents(),
+    )
+    .await?;
     ready.assert_no_outbound(2)?;
 
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
