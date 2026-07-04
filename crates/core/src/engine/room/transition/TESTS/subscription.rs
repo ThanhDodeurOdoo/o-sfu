@@ -548,14 +548,14 @@ async fn relay_setup_failure_releases_pending_setup_for_retry() {
     assert_eq!(room.test_api().inspect().consumer_count().await, 0);
     let retry_relays = {
         let mut state = room.state.write().await;
-        let commit = state
+        let mut setups = state
             .refresh_consumer_readiness(&subscriber_id, subscriber_connection_id)
-            .expect("subscriber session should still be current");
-        let mut setups = commit.work.setups;
-        assert_eq!(setups.len(), 1);
+            .expect("subscriber session should still be current")
+            .work
+            .setups;
         let setup = setups.pop().expect("retry setup should be planned");
+        assert!(setups.is_empty());
         let (_, _, relays) = state.release_pending_consumer_setup(setup);
-        drop(state);
         relays
     };
     assert_eq!(retry_relays.len(), 1);

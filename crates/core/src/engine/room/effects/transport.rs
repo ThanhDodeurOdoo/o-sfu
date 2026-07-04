@@ -1,7 +1,7 @@
 use o_sfu_router::MediaKind;
 use tracing::warn;
 
-use super::{RoomGaugeDelta, receiver_route::execute_receiver_route_setup};
+use super::{RoomGaugeDelta, receiver_route::ReceiverSetupTurn};
 use crate::engine::{
     ConnectionId, UserId,
     diagnostics::DiagnosticsEventData,
@@ -14,8 +14,8 @@ use crate::engine::{
         Room,
         cleanup::{TransportCleanupOperation, TransportEffectOutcome},
         media_graph::{
-            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, PendingConsumerSetup,
-            ReceiverRouteActivity, ReceiverRouteWork, ResolvedRelayRouteEffect,
+            ConsumerRouteTarget, ConsumerSetupOrigin, MediaTopologyEffects, ReceiverRouteActivity,
+            ReceiverRouteWork, ResolvedRelayRouteEffect,
         },
         source_policy::{ConsumerPacketSelectionUpdate, SourcePolicyWakeups},
     },
@@ -26,7 +26,7 @@ pub(super) struct RoomTransportPlan {
     topology: MediaTopologyEffects,
     receiver_route_relays: Vec<ResolvedRelayRouteEffect>,
     route_control: RoomRouteEffects,
-    setups: Vec<(PendingConsumerSetup, ConsumerSetupOrigin)>,
+    setup_turns: Vec<ReceiverSetupTurn>,
     readiness_keyframe_refresh: Option<(UserId, ConnectionId)>,
 }
 
@@ -71,8 +71,9 @@ impl RoomTransportPlan {
                 ConsumerRouteFinish::Activity(activity, event),
             );
         }
-        self.setups
-            .extend(work.setups.into_iter().map(|setup| (setup, origin)));
+        for setup in work.setups {
+            self.setup_turns.push(ReceiverSetupTurn::new(setup, origin));
+        }
     }
 
     pub(super) fn defer_readiness_keyframe_refresh(
@@ -101,8 +102,8 @@ impl RoomTransportPlan {
             room.execute_transport_cleanup_operations(media_transport, &cleanup)
                 .await;
         }
-        for (setup, origin) in self.setups {
-            execute_receiver_route_setup(setup, origin, room, media_transport, &mut outcome).await;
+        for turn in self.setup_turns {
+            turn.execute(room, media_transport, &mut outcome).await;
         }
         if let Some((user_id, connection_id)) = self.readiness_keyframe_refresh {
             let targets = {

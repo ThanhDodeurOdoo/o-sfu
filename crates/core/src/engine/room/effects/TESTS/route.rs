@@ -27,8 +27,9 @@ use crate::{
 async fn route_control_executor_applies_room_finish_work() -> Result<(), Box<dyn Error>> {
     let fixture = RouteFixture::new().await?;
     fixture.request_standalone_keyframe().await;
-    fixture.apply_setup_activity_correction().await?;
     fixture.pause_route_activity().await?;
+    fixture.apply_setup_activity_correction(false).await?;
+    fixture.apply_setup_activity_correction(true).await?;
     Ok(())
 }
 
@@ -129,46 +130,27 @@ impl RouteFixture {
         let outcome = execute_route_control(routes, &self.media_transport).await;
 
         assert_eq!(outcome.diagnostics.len(), 2);
-        assert!(
-            outcome
-                .diagnostics
-                .iter()
-                .any(|event| event.event == "producer.activity")
-        );
-        assert!(
-            outcome
-                .diagnostics
-                .iter()
-                .any(|event| event.event == "consumer.activity")
-        );
+        let has_event = |name| outcome.diagnostics.iter().any(|event| event.event == name);
+        assert!(has_event("producer.activity"));
+        assert!(has_event("consumer.activity"));
         self.assert_route_state(false, 0, false).await?;
         Ok(())
     }
 
-    async fn apply_setup_activity_correction(&self) -> Result<(), io::Error> {
-        let keyframes_before = self.keyframe_requests();
+    async fn apply_setup_activity_correction(&self, active: bool) -> Result<(), io::Error> {
+        let keyframes = self.keyframe_request_count();
         execute_setup_activity_correction(
             self.route.clone(),
             MediaKind::Video,
-            false,
+            active,
             &self.media_transport,
         )
         .await;
 
-        assert_eq!(self.keyframe_requests(), keyframes_before);
-        self.assert_route_state(true, 0, false).await?;
-
-        execute_setup_activity_correction(
-            self.route.clone(),
-            MediaKind::Video,
-            true,
-            &self.media_transport,
-        )
-        .await;
-
-        assert_eq!(self.keyframe_requests(), keyframes_before + 1);
-        self.assert_route_state(true, 1, true).await?;
-        Ok(())
+        let expected_keyframes = if active { keyframes + 1 } else { keyframes };
+        assert_eq!(self.keyframe_request_count(), expected_keyframes);
+        self.assert_route_state(false, usize::from(active), active)
+            .await
     }
 
     async fn assert_route_state(
@@ -176,7 +158,7 @@ impl RouteFixture {
         source_active: bool,
         active_destination_count: usize,
         destination_active: bool,
-    ) -> Result<DebugRouteEntry, io::Error> {
+    ) -> Result<(), io::Error> {
         let route = self.route_entry().await?;
         assert_eq!(route.source_active, source_active);
         assert_eq!(route.active_destination_count, active_destination_count);
@@ -184,7 +166,7 @@ impl RouteFixture {
             destination.dest_transport_media_id == self.route.consumer_transport_media_id()
                 && destination.active == destination_active
         }));
-        Ok(route)
+        Ok(())
     }
 
     async fn route_entry(&self) -> Result<DebugRouteEntry, io::Error> {
@@ -195,17 +177,17 @@ impl RouteFixture {
             .ok_or_else(|| io::Error::other("video route should exist"))
     }
 
-    fn keyframe_requests(&self) -> u64 {
-        let snapshot = self.metrics.snapshot();
-        snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed()
-    }
-
     fn producer_finish(&self, activity: ProducerActivity) -> ProducerRouteFinish {
         ProducerRouteFinish {
             source: self.route.source().clone(),
             activity,
             diagnostics: diagnostics(self.route.source_session_key(), "producer.activity"),
         }
+    }
+
+    fn keyframe_request_count(&self) -> u64 {
+        let snapshot = self.metrics.snapshot();
+        snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed()
     }
 }
 
