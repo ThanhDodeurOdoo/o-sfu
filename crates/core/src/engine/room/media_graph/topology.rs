@@ -1135,20 +1135,6 @@ impl RoomTopology {
         self.route_graph.remove_key_state(key);
     }
 
-    pub(in crate::engine::room) fn reserve_consumer_setup_for_test(
-        &mut self,
-        key: ConsumerKey,
-        selection: ConsumerSourceSelection,
-    ) -> bool {
-        self.route_graph
-            .reserve_consumer_setup(key, selection)
-            .is_some()
-    }
-
-    pub(in crate::engine::room) fn remove_user_media_for_test(&mut self, user_id: &UserId) {
-        self.remove_user_media(user_id);
-    }
-
     pub(in crate::engine::room) fn transport_removals_for_users_for_test(
         &self,
         departing_user_ids: &BTreeSet<UserId>,

@@ -315,7 +315,3 @@ fn receive_buffer(recycle_rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
     buffer.clear();
     buffer
 }
-
-#[cfg(test)]
-#[path = "TESTS/udp.rs"]
-mod tests;

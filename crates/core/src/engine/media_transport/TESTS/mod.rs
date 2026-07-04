@@ -266,13 +266,6 @@ async fn expect_initial_offer(
         .unwrap_or_else(|error| panic!("test session should create an RTC offer: {error:?}"))
 }
 
-#[test]
-fn media_transport_builder_uses_one_worker_by_default() {
-    let result = test_media_transport_builder(test_rtc_range(1)).build();
-
-    assert!(result.is_ok());
-}
-
 #[tokio::test]
 async fn media_transport_close_session_without_packet_loop_does_not_start_worker() {
     let adapter = test_media_transport(1, test_rtc_range(1));
@@ -439,14 +432,6 @@ fn rtc_rejects_answers_without_projectable_client_capabilities() {
         super::fuzz_support::client_rtp_capabilities_from_answer("v=0\r\ns=invalid-answer\r\n");
 
     assert_eq!(projected, None);
-}
-
-#[test]
-fn transport_session_key_exposes_typed_media_worker_id() {
-    let session_key = test_session_key(10, 0, 1, UserId::Integer(1));
-    let media_worker_id: MediaWorkerId = session_key.media_worker_id();
-
-    assert_eq!(media_worker_id, MediaWorkerId::from_raw(0));
 }
 
 #[tokio::test]

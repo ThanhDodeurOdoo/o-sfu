@@ -1,10 +1,9 @@
 use super::{
-    BudgetSolverOutcome, HttpRoute, MetricName, RtcDatagramDropReason, RtcDatagramRoutePath,
-    RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
-    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
-    RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetricsSnapshot, SourceSelectionKind,
-    TransportCleanupFailureKind, TransportHealthState, TransportIceState,
-    counter::ExportedMetricLabel, labels::ExportedMetricLabelPair,
+    HttpRoute, MetricName, RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome,
+    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
+    RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind, RtpRelayDropKind,
+    RuntimeMetricsSnapshot, TransportHealthState, TransportIceState, counter::ExportedMetricLabel,
+    labels::ExportedMetricLabelPair,
 };
 
 macro_rules! snapshot_counter_accessors {
@@ -271,29 +270,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         self.transport_ice_state_changes(TransportIceState::Disconnected)
     }
 
-    fn transport_cleanup_failures(&self, kind: TransportCleanupFailureKind) -> u64 {
-        self.counter_value(
-            MetricName::TransportCleanupFailuresTotal,
-            &[("kind", metric_label(kind))],
-        )
-    }
-
-    fn transport_cleanup_failures_terminal(&self) -> u64 {
-        self.transport_cleanup_failures(TransportCleanupFailureKind::Terminal)
-    }
-
-    fn transport_cleanup_failures_retry_exhausted(&self) -> u64 {
-        self.transport_cleanup_failures(TransportCleanupFailureKind::RetryExhausted)
-    }
-
-    fn transport_cleanup_failures_queue_full(&self) -> u64 {
-        self.transport_cleanup_failures(TransportCleanupFailureKind::QueueFull)
-    }
-
-    fn transport_cleanup_failures_shutdown(&self) -> u64 {
-        self.transport_cleanup_failures(TransportCleanupFailureKind::Shutdown)
-    }
-
     fn rtp_forwarded_packets(&self, destination: RtpForwardDestinationKind) -> u64 {
         self.counter_value(
             MetricName::RtpForwardedPacketsTotal,
@@ -490,56 +466,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
 
     fn rtc_remote_packet_gate_flushes(&self) -> u64 {
         self.rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed)
-    }
-
-    fn source_selection_updates(&self, selector: SourceSelectionKind) -> u64 {
-        self.counter_value(
-            MetricName::SourceSelectionUpdatesTotal,
-            &[("selector", metric_label(selector))],
-        )
-    }
-
-    fn source_selection_updates_open(&self) -> u64 {
-        self.source_selection_updates(SourceSelectionKind::Open)
-    }
-
-    fn source_selection_updates_encoding(&self) -> u64 {
-        self.source_selection_updates(SourceSelectionKind::Encoding)
-    }
-
-    fn source_selection_updates_operating_point(&self) -> u64 {
-        self.source_selection_updates(SourceSelectionKind::OperatingPoint)
-    }
-
-    fn source_selection_updates_room_policy_featured(&self) -> u64 {
-        self.source_selection_updates(SourceSelectionKind::RoomPolicyFeatured)
-    }
-
-    fn source_selection_updates_room_policy_thumbnail(&self) -> u64 {
-        self.source_selection_updates(SourceSelectionKind::RoomPolicyThumbnail)
-    }
-
-    fn budget_solver_outcomes(&self, outcome: BudgetSolverOutcome) -> u64 {
-        self.counter_value(
-            MetricName::BudgetSolverOutcomesTotal,
-            &[("outcome", metric_label(outcome))],
-        )
-    }
-
-    fn budget_solver_outcomes_degraded(&self) -> u64 {
-        self.budget_solver_outcomes(BudgetSolverOutcome::Degraded)
-    }
-
-    fn budget_solver_outcomes_paused(&self) -> u64 {
-        self.budget_solver_outcomes(BudgetSolverOutcome::Paused)
-    }
-
-    fn budget_solver_outcomes_resumed(&self) -> u64 {
-        self.budget_solver_outcomes(BudgetSolverOutcome::Resumed)
-    }
-
-    fn budget_solver_outcomes_protected_over_budget(&self) -> u64 {
-        self.budget_solver_outcomes(BudgetSolverOutcome::ProtectedOverBudget)
     }
 
     fn transport_user_lifetime_le_1_second(&self) -> u64 {

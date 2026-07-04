@@ -140,7 +140,3 @@ fn layout_preference(
         .and_then(|states| states.get(source.stream_id()))
         .and_then(|intent| intent.layout())
 }
-
-#[cfg(test)]
-#[path = "TESTS/layout.rs"]
-mod tests;

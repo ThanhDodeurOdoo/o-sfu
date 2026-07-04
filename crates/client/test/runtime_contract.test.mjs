@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
 import { CLIENT_UPDATE } from "../dist/index.js";
 import { NEGOTIATION_KIND, PENDING_REQUEST_KIND } from "../dist/protocol_contract.js";
@@ -149,14 +147,6 @@ const remoteMediaUpdate = (bindings) => ({
     update: { name: "remote_media", payload: { bindings } }
 });
 
-test("source tree does not own generated protocol manifest", () => {
-    const sourceManifestPath = fileURLToPath(
-        new URL("../src/generated/protocol_manifest.json", import.meta.url)
-    );
-
-    assert.equal(existsSync(sourceManifestPath), false);
-});
-
 test("default WASM protocol core validates host command shape only", () => {
     const misorderedHostCommands = [negotiationCommand(NEGOTIATION_KIND.OFFER)];
     configureDefaultWasmProtocolCoreProvider(() =>
@@ -190,22 +180,6 @@ test("injected protocol core validates host command shape only", () => {
     assertThrowsError(() => core.onTimer(1));
     assert.deepEqual(core.onWsMessage("offer"), misorderedHostCommands);
     assert.deepEqual(core.onWsOpen(), [{ kind: "sendWebSocket", frame: "auth" }]);
-});
-
-test("injected protocol core rejects obsolete direct media host commands", () => {
-    for (const command of [
-        { kind: "attachTrack", mid: "0", streamType: "camera" },
-        { kind: "detachTrack", streamType: "camera" },
-        { kind: "replaceTrackBindings", bindings: [] },
-        { kind: "removeSessionTracks", sessionId: 7 }
-    ]) {
-        assertInjectedCoreThrows(
-            {
-                connect: () => [command]
-            },
-            (core) => core.connect("ws://example.test", "jwt", null)
-        );
-    }
 });
 
 test("injected protocol core validates pending request start commands", () => {

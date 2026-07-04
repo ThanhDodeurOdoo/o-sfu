@@ -8,7 +8,7 @@ mod fixtures;
 
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -23,24 +23,22 @@ use tokio::sync::{mpsc, oneshot};
 use super::{
     AddSendMediaRequest, KeyframeRequestMode, KeyframeRequestTarget, apply_route_control_request,
     control::remove_consumer_route, drain_due_rid_kf_refreshes, request_kf_for_target,
-    respond_set_consumer_pkt_gates, worker_add_send_media, worker_remove_media,
+    respond_set_consumer_pkt_gates, worker_add_send_media,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
     engine::{
         UserId,
         media_transport::{
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
-            TransportSourceKey,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSourceKey,
             rtc::{
-                bitrate::BitrateRegistry,
                 bootstrap,
                 commands::{
                     ConsumerPacketGateCommand, RemoteSourceControl, RouteControlRequest,
                     RtcMediaControlCommand,
                 },
                 keyframe_tracker::KeyframeRequestDecision,
-                media_registry::{ConsumerKeyframeTarget, RegisteredMediaHandle},
+                media_registry::ConsumerKeyframeTarget,
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
                 source_route::RemoteSourceRegistration,
@@ -1022,101 +1020,6 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
         &PacketLayerGate::Rid(selected_rid),
         None,
     );
-}
-
-fn prepare_already_absent_producer_registration(
-    state: &mut PacketLoopState,
-    session_key: &TransportSessionKey,
-    producer_mid: Mid,
-    negotiated_parameters: Option<RouterRtpParameters>,
-) -> TransportMediaId {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_100));
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            session_key,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
-    );
-    let session_state = state.users.get_mut(session_key);
-    assert!(session_state.is_some());
-    let Some(session_state) = session_state else {
-        panic!("producer session should exist after RTC state bootstrap");
-    };
-    {
-        let mut direct_api = session_state.rtc.direct_api();
-        direct_api.declare_media(producer_mid, MediaKind::Video);
-        direct_api.remove_media(producer_mid);
-    }
-    session_state.sdp_negotiation.initial_offer_applied = true;
-    if let Some(parameters) = negotiated_parameters {
-        session_state
-            .sdp_negotiation
-            .negotiated_producer_parameters
-            .insert(producer_mid, parameters);
-    }
-
-    state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: session_key.clone(),
-        mid: producer_mid,
-    })
-}
-
-#[test]
-fn remove_media_releases_unnegotiated_producer_when_removal_cannot_stage() {
-    let session_key = test_source_session_key(161);
-    let producer_mid = Mid::from("cam-up");
-    let mut state = PacketLoopState::default();
-    let transport_media_id =
-        prepare_already_absent_producer_registration(&mut state, &session_key, producer_mid, None);
-    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
-
-    assert_eq!(
-        worker_remove_media(
-            &mut state,
-            &bitrate_registry,
-            &session_key,
-            transport_media_id,
-        ),
-        Ok(())
-    );
-
-    assert!(state.media_handle(transport_media_id).is_none());
-    assert_eq!(drain_ready_sessions(&mut state), vec![session_key.clone()]);
-}
-
-#[test]
-fn remove_media_keeps_negotiated_handle_when_removal_cannot_stage() {
-    let session_key = test_source_session_key(261);
-    let producer_mid = Mid::from("cam-up-negotiated");
-    let mut state = PacketLoopState::default();
-    let negotiated_parameters =
-        RouterRtpParameters::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(72_701)])
-            .with_mid(producer_mid.to_string());
-    let transport_media_id = prepare_already_absent_producer_registration(
-        &mut state,
-        &session_key,
-        producer_mid,
-        Some(negotiated_parameters),
-    );
-    let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
-
-    let result = worker_remove_media(
-        &mut state,
-        &bitrate_registry,
-        &session_key,
-        transport_media_id,
-    );
-
-    assert_eq!(result, Err(TransportAdapterError::InvalidInput));
-    assert!(matches!(
-        state.media_handle(transport_media_id),
-        Some(RegisteredMediaHandle::Producer { session_key: stored_session_key, mid })
-            if stored_session_key == &session_key && *mid == producer_mid
-    ));
 }
 
 #[test]

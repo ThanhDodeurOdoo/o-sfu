@@ -1,12 +1,6 @@
 #[cfg(test)]
 use {
-    super::{
-        ActiveRelayTarget, ForwardedPacket, RELAY_MAILBOX_CAPACITY, RelayEnqueueOutcome,
-        RelayPacketMailbox,
-    },
-    crate::engine::{
-        media_transport::TransportMediaId, media_transport::rtc::state::PacketLoopState,
-    },
+    super::{ForwardedPacket, RELAY_MAILBOX_CAPACITY, RelayPacketMailbox},
     tokio::sync::mpsc,
 };
 
@@ -21,19 +15,5 @@ impl RelayPacketMailbox {
     ) -> (Self, mpsc::Receiver<ForwardedPacket>) {
         let (tx, rx) = mpsc::channel(capacity);
         (Self::new(tx), rx)
-    }
-}
-
-#[cfg(test)]
-impl ActiveRelayTarget {
-    pub fn forward_packet_outcome(
-        &self,
-        state: &PacketLoopState,
-        packet: &ForwardedPacket,
-        src_media: TransportMediaId,
-    ) -> Option<RelayEnqueueOutcome> {
-        self.target
-            .forward_packet(state, packet, src_media)
-            .map(|report| report.outcome)
     }
 }

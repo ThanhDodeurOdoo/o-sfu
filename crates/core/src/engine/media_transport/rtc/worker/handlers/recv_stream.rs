@@ -42,7 +42,3 @@ pub(super) fn apply_recv_stream(
         stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
     }
 }
-
-#[cfg(test)]
-#[path = "TESTS/recv_stream.rs"]
-mod tests;

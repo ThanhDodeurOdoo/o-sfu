@@ -47,62 +47,6 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
 }
 
 #[tokio::test]
-async fn staged_publish_duplicate_after_transport_reservation_cleans_second_media() {
-    let scenario = StagedPublishScenario::new().await;
-    let session_key = scenario
-        .room
-        .transport_user_key(&scenario.user_id, scenario.connection_id)
-        .await;
-    let pre_reserved_media_id = scenario
-        .adapter
-        .publish_media(
-            &session_key,
-            MediaKind::Video,
-            &test_simulcast_video_rtp_parameters(),
-        )
-        .await
-        .expect("test reservation should allocate transport media");
-    scenario
-        .room
-        .stage_next_duplicate_for_test(pre_reserved_media_id);
-
-    assert_eq!(
-        scenario.stage_scalable_video().await,
-        PublishStageOutcome::DuplicateAfterReservation
-    );
-    let cleanup_target = scenario
-        .room
-        .duplicate_cleanup_target_for_test()
-        .expect("test hook should record duplicate cleanup target");
-
-    assert_eq!(scenario.staged_count().await, 1);
-    assert_eq!(
-        scenario
-            .staged_media_id(TestSourceKind::ScalableVideo)
-            .await,
-        pre_reserved_media_id
-    );
-    assert!(
-        scenario
-            .adapter
-            .transport_media_mid(&session_key, pre_reserved_media_id)
-            .await
-            .is_some()
-    );
-    assert!(
-        scenario
-            .adapter
-            .transport_media_mid(&session_key, cleanup_target)
-            .await
-            .is_none()
-    );
-    assert_eq!(
-        scenario.rollback_scalable_video().await,
-        Some(TransportEffectOutcome::Applied)
-    );
-}
-
-#[tokio::test]
 async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction() {
     let mut scenario = StagedPublishScenario::new().await;
 

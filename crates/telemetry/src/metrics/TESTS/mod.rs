@@ -68,10 +68,17 @@ fn assert_transport_lifecycle_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.transport_user_lifetime_sum_micros(), 1_500_000);
     assert_eq!(snapshot.transport_cleanup_retries(), 1);
     assert_eq!(snapshot.transport_cleanup_retry_successes(), 1);
-    assert_eq!(snapshot.transport_cleanup_failures_retry_exhausted(), 1);
-    assert_eq!(snapshot.transport_cleanup_failures_terminal(), 0);
-    assert_eq!(snapshot.transport_cleanup_failures_queue_full(), 0);
-    assert_eq!(snapshot.transport_cleanup_failures_shutdown(), 0);
+    for (kind, expected) in [
+        ("retry_exhausted", 1),
+        ("terminal", 0),
+        ("queue_full", 0),
+        ("shutdown", 0),
+    ] {
+        assert_eq!(
+            snapshot.counter_value(MetricName::TransportCleanupFailuresTotal, &[("kind", kind)]),
+            expected
+        );
+    }
 }
 
 fn assert_rtp_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -142,15 +149,30 @@ fn assert_rtc_remote_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
 }
 
 fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
-    assert_eq!(snapshot.source_selection_updates_open(), 0);
-    assert_eq!(snapshot.source_selection_updates_encoding(), 1);
-    assert_eq!(snapshot.source_selection_updates_operating_point(), 0);
-    assert_eq!(snapshot.source_selection_updates_room_policy_featured(), 0);
-    assert_eq!(snapshot.source_selection_updates_room_policy_thumbnail(), 0);
-    assert_eq!(snapshot.budget_solver_outcomes_degraded(), 1);
-    assert_eq!(snapshot.budget_solver_outcomes_paused(), 1);
-    assert_eq!(snapshot.budget_solver_outcomes_resumed(), 1);
-    assert_eq!(snapshot.budget_solver_outcomes_protected_over_budget(), 1);
+    for (selector, expected) in [
+        ("open", 0),
+        ("encoding", 1),
+        ("operating_point", 0),
+        ("room_policy_featured", 0),
+        ("room_policy_thumbnail", 0),
+    ] {
+        assert_eq!(
+            snapshot.counter_value(
+                MetricName::SourceSelectionUpdatesTotal,
+                &[("selector", selector)]
+            ),
+            expected
+        );
+    }
+    for outcome in ["degraded", "paused", "resumed", "protected_over_budget"] {
+        assert_eq!(
+            snapshot.counter_value(
+                MetricName::BudgetSolverOutcomesTotal,
+                &[("outcome", outcome)]
+            ),
+            1
+        );
+    }
 }
 
 fn assert_control_plane_latency_metrics(snapshot: &RuntimeMetricsSnapshot) {

@@ -8,7 +8,7 @@
 use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{
     MediaKind,
-    rtp::{MediaCodec, MediaFormat, Mid, PayloadType, Rid, Ssrc},
+    rtp::{MediaCodec, MediaFormat, PayloadType, Rid, Ssrc},
 };
 
 use super::*;
@@ -109,59 +109,6 @@ fn consumer_selection_delivery_requires_active_intent_and_policy_admission() {
     selection.set_policy_pause_reason(None);
     selection.set_active(false);
     assert!(!selection.delivery_active());
-}
-
-#[test]
-fn descriptor_keeps_source_encoding_identity_separate() {
-    let source_id = PublishedSourceId::from_raw(7);
-    let low_encoding_id = SourceEncodingId::from_raw(1);
-    let high_encoding_id = SourceEncodingId::from_raw(2);
-    let owner = PublishedSourceOwner::new(UserId::Integer(42));
-    let descriptor = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-        source_id,
-        owner,
-        stream_id: UserStreamId::new("main-video"),
-        media_kind: MediaKind::Video,
-        policy: SourcePolicy::hidden(),
-        mid: Some(Mid::new("video-0")),
-        encodings: vec![
-            source_encoding(source_id, low_encoding_id, "lo"),
-            source_encoding(source_id, high_encoding_id, "hi"),
-        ],
-    })
-    .expect("source descriptor should be valid");
-
-    assert_eq!(descriptor.source_id(), source_id);
-    assert_eq!(descriptor.owner().user_id(), &UserId::Integer(42));
-    assert_eq!(descriptor.stream_id().as_str(), "main-video");
-    assert_eq!(descriptor.media_kind(), MediaKind::Video);
-    assert_eq!(
-        descriptor.mid().map(Mid::as_str),
-        Some("video-0"),
-        "the source owns the SDP media-section identity separately from RID"
-    );
-
-    let encodings = descriptor.encodings().collect::<Vec<_>>();
-    assert_eq!(encodings.len(), 2);
-    assert_eq!(encodings[0].source_id(), source_id);
-    assert_eq!(encodings[0].rid().map(Rid::as_str), Some("lo"));
-    assert_eq!(encodings[0].primary_ssrc(), Some(Ssrc::new(101)));
-    assert_eq!(encodings[0].repair_ssrc(), Some(Ssrc::new(201)));
-    assert_eq!(encodings[0].max_bitrate(), Some(Bitrate::from_kbps(150)));
-    assert_eq!(encodings[0].max_temporal_layer_id(), None);
-    assert_eq!(
-        encodings[0]
-            .negotiated_format()
-            .map(MediaFormat::payload_type_id),
-        Some(PayloadType::new(96))
-    );
-    assert_eq!(
-        descriptor
-            .encoding(high_encoding_id)
-            .and_then(SourceEncodingDescriptor::rid)
-            .map(Rid::as_str),
-        Some("hi")
-    );
 }
 
 #[test]

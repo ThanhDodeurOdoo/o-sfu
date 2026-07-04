@@ -7,10 +7,7 @@ use crate::engine::source_model::UserStreamId;
 #[cfg(test)]
 use crate::engine::{ConnectionId, UserId};
 #[cfg(test)]
-use crate::engine::{
-    TestSourceKind, media_transport::TransportMediaId, room::media_graph::ValidatedPublish,
-    sync::lock_unpoisoned,
-};
+use crate::engine::{TestSourceKind, media_transport::TransportMediaId};
 
 impl StagedPublish {
     pub(crate) async fn commit_with_parameters(
@@ -35,35 +32,6 @@ impl Room {
             .await
             .staged_publishes
             .staged_count(user_id, connection_id)
-    }
-
-    pub(crate) fn stage_next_duplicate_for_test(&self, transport_media_id: TransportMediaId) {
-        *lock_unpoisoned(&self.duplicate_staged_publish_after_reservation) =
-            Some(transport_media_id);
-        *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target) = None;
-    }
-
-    pub(crate) fn duplicate_cleanup_target_for_test(&self) -> Option<TransportMediaId> {
-        *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target)
-    }
-
-    pub(super) async fn inject_next_duplicate_for_test(
-        &self,
-        descriptor: &ValidatedPublish,
-        cleanup_target: TransportMediaId,
-    ) {
-        let Some(staged_transport_media_id) =
-            lock_unpoisoned(&self.duplicate_staged_publish_after_reservation).take()
-        else {
-            return;
-        };
-        *lock_unpoisoned(&self.duplicate_staged_publish_cleanup_target) = Some(cleanup_target);
-        let transaction = StagedPublish::new(descriptor.clone(), staged_transport_media_id);
-        self.state
-            .write()
-            .await
-            .staged_publishes
-            .insert_for_test(transaction);
     }
 
     pub(crate) async fn staged_media_id(

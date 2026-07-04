@@ -33,11 +33,6 @@ impl PacketLoopLagSnapshot {
             .store(self.elapsed_ms(observed_at), Ordering::Release);
     }
 
-    #[cfg(test)]
-    pub fn publish_for_test(&self, lag_ms: u64, observed_at: Instant) {
-        self.publish(lag_ms, observed_at);
-    }
-
     pub fn packet_loop_lag_ms_at(&self, now: Instant) -> u64 {
         let observed_elapsed_ms = self.observed_elapsed_ms.load(Ordering::Acquire);
         if observed_elapsed_ms == NO_PACKET_LOOP_LAG_SAMPLE {

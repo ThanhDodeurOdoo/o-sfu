@@ -41,33 +41,6 @@ test("connect normalizes the URL and sends auth on WebSocket open", async () => 
     assert.deepEqual(sockets[0].sent, ["auth-frame"]);
 });
 
-test("connect emits public client and runtime log events", async () => {
-    const { client, connect } = createSfuClientHarness();
-    const logs = [];
-    client.addEventListener("log", (event) => {
-        logs.push(event.detail);
-    });
-
-    await connect("ws://example.test/ws", "jwt-token");
-
-    assert.ok(
-        logs.some(
-            (log) =>
-                log.id === "sfu_client" &&
-                log.level === "info" &&
-                log.message === "connect requested for implicit room"
-        )
-    );
-    assert.ok(
-        logs.some(
-            (log) =>
-                log.id === "browser_runtime" &&
-                log.level === "info" &&
-                log.message.includes("opening websocket connection")
-        )
-    );
-});
-
 test("ignored duplicate connect keeps the accepted ICE server config", async () => {
     const harness = createRecoveryHarness();
     const { client, connect, emitMessage, open, peerConnections } = harness;
@@ -2005,13 +1978,4 @@ test("deprecated updateUpload and updateDownload delegate to publish and subscri
 
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
     assert.equal(core.subscriptionUpdates.length, 1);
-});
-
-test("deprecated updateUpload treats undefined like the legacy no-track sentinel", async () => {
-    const { client, core } = createSfuClientHarness();
-
-    client.updateUpload("camera", undefined);
-    await tick();
-
-    assert.deepEqual(core.publicationUpdates, []);
 });

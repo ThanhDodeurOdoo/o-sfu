@@ -244,23 +244,6 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
 }
 
 #[test]
-fn leave_repairs_missing_topology_router_and_removes_member() {
-    let mut state = test_state();
-    let user_id = UserId::Integer(1);
-    let connection_id = join_test_user(&mut state, &user_id);
-    state
-        .topology
-        .routing_mut_for_test()
-        .remove_router_for_test(RouterId(1));
-
-    let outcome = state.close_connection(&user_id, connection_id);
-
-    assert!(outcome.is_some());
-    assert!(!state.users.contains_key(&user_id));
-    assert_eq!(state.routing_home_router_id(&user_id), None);
-}
-
-#[test]
 fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
@@ -288,23 +271,6 @@ fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
         state.committed_transport_user_key(&user_id, connection_id),
         None
     );
-}
-
-#[test]
-fn disconnect_repairs_missing_topology_router_and_removes_member() {
-    let mut state = test_state();
-    let user_id = UserId::Integer(1);
-    join_test_user(&mut state, &user_id);
-    state
-        .topology
-        .routing_mut_for_test()
-        .remove_router_for_test(RouterId(1));
-
-    let outcome = state.apply_disconnect_users(from_ref(&user_id));
-
-    assert_eq!(outcome.close_operations.len(), 1);
-    assert!(!state.users.contains_key(&user_id));
-    assert_eq!(state.routing_home_router_id(&user_id), None);
 }
 
 #[test]

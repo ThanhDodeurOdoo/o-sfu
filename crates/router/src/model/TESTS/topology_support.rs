@@ -36,20 +36,6 @@ impl RoutingTopology {
             .active(user_id)
             .map(|session| session.placement.router)
     }
-
-    pub fn remove_router_for_test(&mut self, router_id: RouterId) {
-        self.routers.remove(&router_id);
-    }
-
-    pub fn remove_user_mappings_for_test(&mut self, user_id: &UserId) {
-        let Some(router_id) = self.home_router_id_for_user(user_id) else {
-            return;
-        };
-        let Some(router) = self.routers.get_mut(&router_id) else {
-            return;
-        };
-        router.remove_user_mappings_for_test(user_id);
-    }
 }
 
 #[cfg(kani)]

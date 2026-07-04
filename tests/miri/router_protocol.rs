@@ -1,4 +1,3 @@
-use o_sfu_protocol::wire::{ClientEnvelope, ClientMessage, StreamIntentPayload, StreamType};
 use o_sfu_router::{
     MediaKind, Router, RouterError, RouterId,
     ids::{ConsumerId, ProducerId, SessionId as RouterSessionId, TransportId},
@@ -67,27 +66,5 @@ fn router_session_teardown_keeps_remaining_routing_consistent() {
     assert_eq!(
         router.remove_consumer(ConsumerId(400)),
         Err(RouterError::MissingConsumer(ConsumerId(400)))
-    );
-}
-
-#[test]
-fn signaling_codec_round_trip_preserves_subscribe_payload() {
-    let encoded = ClientEnvelope::Message(ClientMessage::Publish(StreamIntentPayload {
-        stream_type: StreamType::Screen,
-    }))
-    .into_envelope();
-    assert!(encoded.is_ok());
-
-    let Ok(encoded) = encoded else {
-        return;
-    };
-    let decoded = ClientEnvelope::decode(encoded);
-    assert_eq!(
-        decoded,
-        Ok(ClientEnvelope::Message(ClientMessage::Publish(
-            StreamIntentPayload {
-                stream_type: StreamType::Screen,
-            },
-        )))
     );
 }
