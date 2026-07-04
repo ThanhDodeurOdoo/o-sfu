@@ -19,6 +19,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 
 - [The Rust Book](https://doc.rust-lang.org/book/)
 - [Comprehensive Rust by Google](https://google.github.io/comprehensive-rust)
+- [Canonical's rust best practices](https://canonical.github.io/rust-best-practices/)
 - [The Rustonomicon (unsafe/advanced)](https://doc.rust-lang.org/nomicon/)
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
 - [Rust Cookbook](https://github.com/rust-lang-nursery/rust-cookbook/)
