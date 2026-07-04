@@ -57,7 +57,6 @@ fn remote_source_projection() -> RemoteSourceProjection {
                 resolution_scale: None,
                 max_framerate: None,
                 policy_role: None,
-                max_temporal_layer_id: None,
                 negotiated_format: None,
             },
         )],

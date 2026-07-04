@@ -1,6 +1,4 @@
-use super::{
-    PolicyPauseReason, ReceiverVideoBudgetDiagnostics, SourceEncodingId, SourceOperatingPoint,
-};
+use super::{PolicyPauseReason, ReceiverVideoBudgetDiagnostics, SourceEncodingId};
 use crate::Bitrate;
 
 /// Resolved packet-selection command for one consumer/source route.
@@ -11,8 +9,6 @@ use crate::Bitrate;
 ///
 /// [`Self::Open`] means the route has no source-level packet gate.
 /// [`Self::Encoding`] means "forward the negotiated RID for this encoding".
-/// [`Self::OperatingPoint`] means "forward this encoding up to this temporal
-/// layer".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceSelector {
     /// Forward the source without a source-level packet gate.
@@ -26,15 +22,6 @@ pub enum SourceSelector {
     /// Projection maps the encoding id to its negotiated RID. If the encoding
     /// has no RID, projection fails rather than guessing at packet identity.
     Encoding(SourceEncodingId),
-    /// Forward one encoding up to a codec-native temporal layer ceiling.
-    ///
-    /// Projection requires advertised temporal metadata and rejects a selector
-    /// whose temporal ceiling is higher than the source declared.
-    #[allow(
-        dead_code,
-        reason = "operating-point selectors stay internal until RFC 9626 metadata negotiation is implemented"
-    )]
-    OperatingPoint(SourceOperatingPoint),
 }
 
 impl SourceSelector {
@@ -42,16 +29,7 @@ impl SourceSelector {
     pub const fn selected_encoding(self) -> Option<SourceEncodingId> {
         match self {
             Self::Encoding(encoding_id) => Some(encoding_id),
-            Self::OperatingPoint(operating_point) => Some(operating_point.encoding_id()),
             Self::Open => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn selected_operating_point(self) -> Option<SourceOperatingPoint> {
-        match self {
-            Self::OperatingPoint(operating_point) => Some(operating_point),
-            Self::Open | Self::Encoding(_) => None,
         }
     }
 }

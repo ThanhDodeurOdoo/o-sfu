@@ -568,7 +568,6 @@ impl ActiveSpeakerSourceDiagnostic {
 pub enum SourcePacketGate {
     Open,
     Rid(String),
-    OperatingPoint(SourcePacketOperatingPoint),
 }
 
 /// Relay route mutation applied by the media transport.
@@ -749,33 +748,6 @@ impl ReceiverBweTargetUpdate {
 
     pub const fn set_target(&mut self, target: Bitrate) {
         self.target = target;
-    }
-}
-
-/// Packet-facing layered operating point selected for one source route.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourcePacketOperatingPoint {
-    rid: Option<String>,
-    max_temporal_layer_id: u8,
-}
-
-impl SourcePacketOperatingPoint {
-    #[must_use]
-    pub fn new(rid: Option<String>, max_temporal_layer_id: u8) -> Self {
-        Self {
-            rid,
-            max_temporal_layer_id,
-        }
-    }
-
-    #[must_use]
-    pub fn rid(&self) -> Option<&str> {
-        self.rid.as_deref()
-    }
-
-    #[must_use]
-    pub const fn max_temporal_layer_id(&self) -> u8 {
-        self.max_temporal_layer_id
     }
 }
 

@@ -226,28 +226,6 @@ test("injected protocol core validates source descriptors", () => {
     }
 });
 
-test("injected protocol core accepts valid temporal layer ids", () => {
-    const core = wrapProtocolCoreBindings(
-        validCore({
-            connect: () => [sourceUpdate([validSourceDescriptor({ maxTemporalLayerId: 7 })])]
-        })
-    );
-
-    assert.doesNotThrow(() => core.connect("ws://example.test", "jwt", null));
-});
-
-for (const maxTemporalLayerId of [-1, 8, 1.5, "2", Number.NaN]) {
-    test(`injected protocol core rejects invalid temporal layer id ${String(maxTemporalLayerId)}`, () => {
-        const core = wrapProtocolCoreBindings(
-            validCore({
-                connect: () => [sourceUpdate([validSourceDescriptor({ maxTemporalLayerId })])]
-            })
-        );
-
-        assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
-    });
-}
-
 test("injected protocol core rejects NaN and infinite numeric session IDs", () => {
     for (const sessionId of [Number.NaN, Number.POSITIVE_INFINITY]) {
         assertInjectedCoreThrows(

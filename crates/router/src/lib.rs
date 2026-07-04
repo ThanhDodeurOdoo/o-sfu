@@ -165,7 +165,6 @@ pub mod state {
         mutation::{
             ConsumerSpec, ProducerSpec, ReceiveTransportHandle, SendTransportHandle, SessionHandle,
         },
-        observer::{NoopRouterObserver, RouterEvent, RouterObserver},
         route_state::{ConsumerRouteState, ProducerRouteState},
         session::{Session, SessionState},
         transport::TransportDirection,

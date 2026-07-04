@@ -1,6 +1,6 @@
 use super::{
     ConsumerCapability, ConsumerId, ConsumerRouteState, MediaKind, ProducerId, Router, RouterError,
-    RouterObserver, SessionId, TransportDirection, TransportId,
+    SessionId, TransportDirection, TransportId,
 };
 
 /// producer input accepted by a receive-transport handle.
@@ -83,13 +83,13 @@ impl ConsumerSpec {
 ///
 /// The handle borrows the router mutably, so no other router mutation can
 /// interleave between session lookup and transport creation.
-pub struct SessionHandle<'a, O: RouterObserver> {
-    router: &'a mut Router<O>,
+pub struct SessionHandle<'a> {
+    router: &'a mut Router,
     session_id: SessionId,
 }
 
-impl<'a, O: RouterObserver> SessionHandle<'a, O> {
-    pub(super) const fn new(router: &'a mut Router<O>, session_id: SessionId) -> Self {
+impl<'a> SessionHandle<'a> {
+    pub(super) const fn new(router: &'a mut Router, session_id: SessionId) -> Self {
         Self { router, session_id }
     }
 
@@ -102,14 +102,10 @@ impl<'a, O: RouterObserver> SessionHandle<'a, O> {
     pub fn open_receive_transport(
         self,
         transport_id: TransportId,
-    ) -> Result<ReceiveTransportHandle<'a, O>, RouterError> {
+    ) -> Result<ReceiveTransportHandle<'a>, RouterError> {
         self.router
             .insert_transport(transport_id, self.session_id, TransportDirection::Receive)?;
-        Ok(ReceiveTransportHandle::new(
-            self.router,
-            transport_id,
-            self.session_id,
-        ))
+        Ok(ReceiveTransportHandle::new(self.router, transport_id))
     }
 
     /// open a send transport owned by this session
@@ -121,7 +117,7 @@ impl<'a, O: RouterObserver> SessionHandle<'a, O> {
     pub fn open_send_transport(
         self,
         transport_id: TransportId,
-    ) -> Result<SendTransportHandle<'a, O>, RouterError> {
+    ) -> Result<SendTransportHandle<'a>, RouterError> {
         self.router
             .insert_transport(transport_id, self.session_id, TransportDirection::Send)?;
         Ok(SendTransportHandle::new(self.router, transport_id))
@@ -130,24 +126,18 @@ impl<'a, O: RouterObserver> SessionHandle<'a, O> {
 
 /// short-lived mutation scope for one live receive transport.
 ///
-/// The handle carries the session id proven when it was created, so publishing
-/// can emit lifecycle events without looking the transport up again.
-pub struct ReceiveTransportHandle<'a, O: RouterObserver> {
-    router: &'a mut Router<O>,
+/// The handle proves the transport direction before publishing, so producer
+/// attachment only checks id uniqueness.
+pub struct ReceiveTransportHandle<'a> {
+    router: &'a mut Router,
     transport_id: TransportId,
-    session_id: SessionId,
 }
 
-impl<'a, O: RouterObserver> ReceiveTransportHandle<'a, O> {
-    pub(super) const fn new(
-        router: &'a mut Router<O>,
-        transport_id: TransportId,
-        session_id: SessionId,
-    ) -> Self {
+impl<'a> ReceiveTransportHandle<'a> {
+    pub(super) const fn new(router: &'a mut Router, transport_id: TransportId) -> Self {
         Self {
             router,
             transport_id,
-            session_id,
         }
     }
 
@@ -158,8 +148,7 @@ impl<'a, O: RouterObserver> ReceiveTransportHandle<'a, O> {
     /// returns [`RouterError::DuplicateProducer`] when the producer id is
     /// already live
     pub fn publish(self, spec: ProducerSpec) -> Result<ProducerId, RouterError> {
-        self.router
-            .insert_producer(self.session_id, self.transport_id, spec)
+        self.router.insert_producer(self.transport_id, spec)
     }
 }
 
@@ -167,13 +156,13 @@ impl<'a, O: RouterObserver> ReceiveTransportHandle<'a, O> {
 ///
 /// The handle proves the transport direction before consumer attachment, so
 /// consuming only checks producer existence, capability and id uniqueness.
-pub struct SendTransportHandle<'a, O: RouterObserver> {
-    router: &'a mut Router<O>,
+pub struct SendTransportHandle<'a> {
+    router: &'a mut Router,
     transport_id: TransportId,
 }
 
-impl<'a, O: RouterObserver> SendTransportHandle<'a, O> {
-    pub(super) const fn new(router: &'a mut Router<O>, transport_id: TransportId) -> Self {
+impl<'a> SendTransportHandle<'a> {
+    pub(super) const fn new(router: &'a mut Router, transport_id: TransportId) -> Self {
         Self {
             router,
             transport_id,

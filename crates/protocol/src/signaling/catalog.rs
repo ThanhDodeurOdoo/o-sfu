@@ -114,8 +114,6 @@ pub struct SourceEncodingDescriptor {
     pub max_framerate: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_role: Option<UploadLayerPolicyRole>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_temporal_layer_id: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

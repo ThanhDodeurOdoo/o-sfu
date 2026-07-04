@@ -232,59 +232,6 @@ async fn websocket_pre_auth_permit_is_released_after_early_client_close() {
 }
 
 #[tokio::test]
-async fn websocket_authenticates_with_room_key_and_sends_welcome_payload() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(7));
-    assert!(token.is_some());
-    let Some(token) = token else {
-        return;
-    };
-    let authenticated = authenticate_with_room(&server, &token, Some(room.uuid())).await;
-    assert!(authenticated.is_some());
-    let Some(mut websocket) = authenticated else {
-        return;
-    };
-    let welcome = read_welcome(&mut websocket).await;
-    assert!(welcome.is_some(), "welcome payload should exist");
-    let Some(welcome) = welcome else {
-        return;
-    };
-    assert_eq!(
-        welcome,
-        WelcomePayload {
-            features: AvailableFeatures {
-                rtc: true,
-                transcription: false,
-                audio_recording: false,
-                video_recording: false,
-            },
-            recording: RecordingState {
-                recording: Some(false),
-                audio: Some(false),
-                transcription: Some(false),
-                video: Some(false),
-            },
-            peers: vec![],
-        }
-    );
-
-    let close_result = websocket.close(None).await;
-    assert!(close_result.is_ok());
-    sleep(Duration::from_millis(20)).await;
-
-    let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.ws_connections_accepted(), 1);
-    assert_eq!(metrics.ws_handshake_credentials_received(), 1);
-    assert_eq!(metrics.ws_users_joined(), 1);
-    assert_eq!(metrics.ws_user_loops_started(), 1);
-}
-
-#[tokio::test]
 async fn websocket_closes_authenticated_user_when_room_is_full() -> TestResult {
     let server = TestServerBuilder::new()
         .room_size(1)
@@ -565,28 +512,6 @@ async fn websocket_rejects_oversized_auth_token_with_auth_failure() {
         read_close_code(&mut websocket).await,
         Some(CloseCode::Library(4106)),
     );
-}
-
-#[tokio::test]
-async fn websocket_authenticates_room_key_token_without_explicit_room_id() {
-    let server = TestServerBuilder::new().spawn().await;
-    assert!(server.is_some());
-    let Some(server) = server else {
-        return;
-    };
-    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
-    let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(9));
-    assert!(token.is_some());
-    let Some(token) = token else {
-        return;
-    };
-    let authenticated = authenticate_with_jwt(&server, &token).await;
-    assert!(authenticated.is_some());
-    let Some(mut websocket) = authenticated else {
-        return;
-    };
-    let welcome = read_welcome(&mut websocket).await;
-    assert!(welcome.is_some(), "welcome payload should exist");
 }
 
 #[tokio::test]

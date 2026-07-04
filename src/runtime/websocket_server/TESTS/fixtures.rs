@@ -12,10 +12,9 @@ pub(super) use std::{
 pub(super) use anyhow::{Result, anyhow};
 pub(super) use futures_util::{SinkExt, StreamExt};
 pub(super) use o_sfu_protocol::wire::{
-    AuthPayload, AvailableFeatures, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch,
-    RecordingState, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
-    SessionDescriptionPayload, StreamIntentPayload, StreamType, UserId, UserPermissions,
-    WelcomePayload,
+    AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, EnvelopeBatch, RequestId,
+    ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload, StreamType, UserId,
+    UserPermissions, WelcomePayload,
 };
 use str0m::{Candidate, Rtc, change::SdpOffer};
 pub(super) use tokio::{

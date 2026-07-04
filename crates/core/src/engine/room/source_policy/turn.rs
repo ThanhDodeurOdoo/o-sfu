@@ -131,10 +131,6 @@ async fn run_packet_selection(
     SourcePolicyTransaction::plan_from_state(&state, active_speakers, &bandwidth)
 }
 
-#[cfg(test)]
-#[path = "TESTS/turn_support.rs"]
-mod test_support;
-
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct SourcePolicyTransaction {
     route_effects: RoomRouteEffects,

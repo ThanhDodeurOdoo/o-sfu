@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{
     relay_registry::{RelayPacketMailbox, RelayTargetId},
-    route_control::{PacketLayerGate, PacketOperatingPointGate},
+    route_control::PacketLayerGate,
 };
 use crate::engine::{
     RoomInstanceId,
@@ -251,12 +251,6 @@ fn packet_layer_gate(packet_gate: &SourcePacketGate) -> PacketLayerGate {
     match packet_gate {
         SourcePacketGate::Open => PacketLayerGate::Open,
         SourcePacketGate::Rid(rid) => PacketLayerGate::Rid(rid.as_str().into()),
-        SourcePacketGate::OperatingPoint(operating_point) => {
-            PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-                operating_point.rid().map(Into::into),
-                operating_point.max_temporal_layer_id(),
-            ))
-        }
     }
 }
 

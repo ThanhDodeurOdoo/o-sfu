@@ -36,7 +36,7 @@ use super::{
 use crate::engine::{
     media_transport::TransportMediaId,
     metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
-    packet_sink_registry::{PacketSinkLookup, RegisteredPacketSink},
+    packet_sink_registry::{PacketSinkRouteCache, RegisteredPacketSink},
 };
 
 /// Plans destinations for one packet using already-projected transport state.
@@ -50,7 +50,7 @@ use crate::engine::{
 /// effects and must not be sent back into second-hop relay sinks.
 pub(super) fn plan_forwards(
     state: &PacketLoopState,
-    packet_sinks: &impl PacketSinkLookup,
+    packet_sinks: &PacketSinkRouteCache,
     metrics: &impl RtcRouteControlMetrics,
     pkt_idx: usize,
     pkt: &mut ForwardedPacket,

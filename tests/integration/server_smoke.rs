@@ -22,10 +22,6 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 const SLOW_CONSUMER_BATCH_LEN: usize = 64;
 const SLOW_CONSUMER_PAYLOAD_BYTES: usize = 1_024;
 
-async fn default_server() -> TestResult<TestServer> {
-    spawn_test_server(test_config(1_000, 10)).await
-}
-
 async fn server_with_room(issuer: &str) -> TestResult<(TestServer, String)> {
     server_with_configured_room(test_config(1_000, 10), issuer).await
 }
@@ -339,85 +335,6 @@ async fn bulk_disconnected_socket_cannot_broadcast_after_logical_removal() -> Te
     assert_eq!(bob.read_close_code().await, Some(CloseCode::Library(4108)));
     require_some(alice.close().await, "alice should close")?;
     assert!(server.wait_for_room_absence(&room).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn bulk_disconnect_scopes_each_room_independently_from_integration_test() -> TestResult {
-    let server = default_server().await?;
-    let room_a = room(&server, "issuer-a").await?;
-    let room_b = room(&server, "issuer-b").await?;
-
-    let (mut a_keep, mut a_drop) =
-        protocol_pair(&server, &room_a, UserId::Integer(1), UserId::Integer(2)).await?;
-    let b_drop_token = token(&room_b, UserId::Integer(1))?;
-    let b_keep_token = token(&room_b, UserId::Integer(2))?;
-    let (mut b_drop, mut b_keep) = require_some(
-        Box::pin(connect_protocol_pair(
-            &server,
-            &b_drop_token,
-            &b_keep_token,
-            UserId::Integer(2),
-        ))
-        .await,
-        "room B protocol pair should connect",
-    )?;
-
-    let status = disconnect_sessions_via_http(
-        &server,
-        BTreeMap::from([
-            (room_a.clone(), vec![UserId::Integer(2)]),
-            (room_b.clone(), vec![UserId::Integer(1)]),
-        ]),
-    )
-    .await;
-    assert_eq!(status, Some(StatusCode::OK));
-
-    assert_eq!(
-        a_drop.read_close_code().await,
-        Some(CloseCode::Library(4108))
-    );
-    assert_eq!(
-        b_drop.read_close_code().await,
-        Some(CloseCode::Library(4108))
-    );
-
-    let a_departure = read_until_server_message(&mut a_keep, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(2))
-    })
-    .await;
-    let a_departure = require_some(a_departure, "room A survivor should receive departure")?;
-    if let ServerMessage::PeerLeft(payload) = a_departure {
-        assert_eq!(payload.user_id, UserId::Integer(2));
-    } else {
-        panic!("expected room A to receive the disconnected peerleft notification");
-    }
-
-    let b_departure = read_until_server_message(&mut b_keep, Duration::from_secs(1), |message| {
-        matches!(message, ServerMessage::PeerLeft(payload) if payload.user_id == UserId::Integer(1))
-    })
-    .await;
-    let b_departure = require_some(b_departure, "room B survivor should receive departure")?;
-    if let ServerMessage::PeerLeft(payload) = b_departure {
-        assert_eq!(payload.user_id, UserId::Integer(1));
-    } else {
-        panic!("expected room B to receive the disconnected peerleft notification");
-    }
-
-    assert_eq!(
-        a_keep
-            .read_server_message_with_timeout(Duration::from_millis(150))
-            .await,
-        None,
-        "room A survivor must not receive cross-room traffic after the bulk disconnect"
-    );
-    assert_eq!(
-        b_keep
-            .read_server_message_with_timeout(Duration::from_millis(150))
-            .await,
-        None,
-        "room B survivor must not receive cross-room traffic after the bulk disconnect"
-    );
     Ok(())
 }
 

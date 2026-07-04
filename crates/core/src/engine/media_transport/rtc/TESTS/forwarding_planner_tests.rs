@@ -29,7 +29,7 @@ use crate::engine::{
     },
     metrics::{RtpForwardDestinationKind, RuntimeMetrics},
     packet_sink_registry::{
-        PacketSink as MediaPacketSink, PacketSinkLookup, RoomPacketSinkRegistry,
+        PacketSink as MediaPacketSink, PacketSinkRouteCache, RoomPacketSinkRegistry,
     },
 };
 
@@ -59,13 +59,22 @@ impl MediaPacketSink for CountingSink {
 
 fn populate_forward_routes(
     state: &PacketLoopState,
-    packet_sinks: &impl PacketSinkLookup,
+    packet_sinks: &RoomPacketSinkRegistry,
     metrics: &RuntimeMetrics,
     pending_packets: &mut [ForwardedPacket],
     forwards: &mut Vec<PacketForward>,
 ) {
+    let mut packet_sink_cache = PacketSinkRouteCache::default();
+    packet_sink_cache.refresh_from(packet_sinks);
     for (pkt_idx, packet) in pending_packets.iter_mut().enumerate() {
-        plan_pkt_forwards(state, packet_sinks, metrics, pkt_idx, packet, forwards);
+        plan_pkt_forwards(
+            state,
+            &packet_sink_cache,
+            metrics,
+            pkt_idx,
+            packet,
+            forwards,
+        );
     }
 }
 
@@ -90,7 +99,7 @@ enum ExpectedForward<'a> {
 
 fn plan_forwards(
     state: &PacketLoopState,
-    packet_sinks: &impl PacketSinkLookup,
+    packet_sinks: &RoomPacketSinkRegistry,
     metrics: &RuntimeMetrics,
     mut pending_packets: Vec<ForwardedPacket>,
 ) -> Vec<PacketForward> {

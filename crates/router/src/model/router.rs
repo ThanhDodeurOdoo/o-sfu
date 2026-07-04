@@ -1,10 +1,10 @@
 //! pure router state machine plus local dependency indexes
 
 use super::{
-    Consumer, ConsumerId, ConsumerRouteState, ConsumerSpec, NoopRouterObserver, Producer,
-    ProducerId, ProducerRouteState, ProducerSpec, ReceiveTransportHandle, RouterError, RouterEvent,
-    RouterId, RouterObserver, SendTransportHandle, Session, SessionHandle, SessionId, Transport,
-    TransportDirection, TransportId, proof_storage::BTreeMap, relation_index::RouterIndexes,
+    Consumer, ConsumerId, ConsumerRouteState, ConsumerSpec, Producer, ProducerId,
+    ProducerRouteState, ProducerSpec, ReceiveTransportHandle, RouterError, RouterId,
+    SendTransportHandle, Session, SessionHandle, SessionId, Transport, TransportDirection,
+    TransportId, proof_storage::BTreeMap, relation_index::RouterIndexes,
 };
 
 /// pure routing state for one router instance
@@ -20,30 +20,18 @@ use super::{
 /// every mutation that changes a primary entity must keep the matching reverse
 /// relation in the same transition
 #[derive(Debug, Clone)]
-pub struct Router<O: RouterObserver = NoopRouterObserver> {
+pub struct Router {
     pub(super) id: RouterId,
     pub(super) sessions: BTreeMap<SessionId, Session>,
     pub(super) transports: BTreeMap<TransportId, Transport>,
     pub(super) producers: BTreeMap<ProducerId, Producer>,
     pub(super) consumers: BTreeMap<ConsumerId, Consumer>,
     pub(super) indexes: RouterIndexes,
-    observer: O,
 }
 
-impl Router<NoopRouterObserver> {
-    /// create a router without lifecycle observation
+impl Router {
     #[must_use]
     pub fn new(id: RouterId) -> Self {
-        Self::new_with_observer(id, NoopRouterObserver)
-    }
-}
-
-impl<O: RouterObserver> Router<O> {
-    /// create a router with a synchronous observer
-    ///
-    /// observer callbacks run inside router mutations and must not re-enter the router
-    #[must_use]
-    pub fn new_with_observer(id: RouterId, observer: O) -> Self {
         Self {
             id,
             sessions: BTreeMap::new(),
@@ -51,7 +39,6 @@ impl<O: RouterObserver> Router<O> {
             producers: BTreeMap::new(),
             consumers: BTreeMap::new(),
             indexes: RouterIndexes::new(),
-            observer,
         }
     }
 
@@ -75,8 +62,6 @@ impl<O: RouterObserver> Router<O> {
             return Err(RouterError::DuplicateSession(session_id));
         }
         self.sessions.insert(session_id, session);
-        self.observer
-            .on_event(RouterEvent::SessionJoined { session_id });
         Ok(())
     }
 
@@ -85,7 +70,7 @@ impl<O: RouterObserver> Router<O> {
     /// # Errors
     ///
     /// returns [`RouterError::MissingSession`] when the session does not exist
-    pub fn session(&mut self, session_id: SessionId) -> Result<SessionHandle<'_, O>, RouterError> {
+    pub fn session(&mut self, session_id: SessionId) -> Result<SessionHandle<'_>, RouterError> {
         if !self.sessions.contains_key(&session_id) {
             return Err(RouterError::MissingSession(session_id));
         }
@@ -102,13 +87,9 @@ impl<O: RouterObserver> Router<O> {
     pub fn receive_transport(
         &mut self,
         transport_id: TransportId,
-    ) -> Result<ReceiveTransportHandle<'_, O>, RouterError> {
-        let transport = self.transport_with_direction(transport_id, TransportDirection::Receive)?;
-        Ok(ReceiveTransportHandle::new(
-            self,
-            transport_id,
-            transport.session_id(),
-        ))
+    ) -> Result<ReceiveTransportHandle<'_>, RouterError> {
+        self.ensure_transport_direction(transport_id, TransportDirection::Receive)?;
+        Ok(ReceiveTransportHandle::new(self, transport_id))
     }
 
     /// start a scoped mutation flow for an existing send transport
@@ -121,8 +102,8 @@ impl<O: RouterObserver> Router<O> {
     pub fn send_transport(
         &mut self,
         transport_id: TransportId,
-    ) -> Result<SendTransportHandle<'_, O>, RouterError> {
-        self.transport_with_direction(transport_id, TransportDirection::Send)?;
+    ) -> Result<SendTransportHandle<'_>, RouterError> {
+        self.ensure_transport_direction(transport_id, TransportDirection::Send)?;
         Ok(SendTransportHandle::new(self, transport_id))
     }
 
@@ -145,7 +126,6 @@ impl<O: RouterObserver> Router<O> {
 
     pub(super) fn insert_producer(
         &mut self,
-        session_id: SessionId,
         transport_id: TransportId,
         spec: ProducerSpec,
     ) -> Result<ProducerId, RouterError> {
@@ -159,12 +139,6 @@ impl<O: RouterObserver> Router<O> {
             Producer::new(producer_id, transport_id, media_kind),
         );
         self.indexes.add_producer(transport_id, producer_id);
-        self.observer.on_event(RouterEvent::ProducerAdded {
-            session_id,
-            transport_id,
-            producer_id,
-            media_kind,
-        });
         Ok(producer_id)
     }
 
@@ -198,16 +172,16 @@ impl<O: RouterObserver> Router<O> {
         Ok(consumer_id)
     }
 
-    fn transport_with_direction(
+    fn ensure_transport_direction(
         &self,
         transport_id: TransportId,
         direction: TransportDirection,
-    ) -> Result<Transport, RouterError> {
+    ) -> Result<(), RouterError> {
         let Some(&transport) = self.transports.get(&transport_id) else {
             return Err(RouterError::MissingTransport(transport_id));
         };
         if transport.direction() == direction {
-            return Ok(transport);
+            return Ok(());
         }
         match direction {
             TransportDirection::Send => {
@@ -275,31 +249,16 @@ impl<O: RouterObserver> Router<O> {
 
     /// remove one producer and every consumer that depends on it
     ///
-    /// producer removal is strict about its owning transport
-    /// if the transport is
-    /// missing, the router state has already diverged and the caller gets a
-    /// recoverable error instead of a fabricated lifecycle event
-    ///
     /// unrelated transports and unrelated consumers stay live
     ///
     /// # Errors
     ///
     /// returns [`RouterError::MissingProducer`] when the producer does not exist
-    /// or [`RouterError::MissingProducerTransport`] when the producer's owning
-    /// transport is missing
     pub fn remove_producer(&mut self, producer_id: ProducerId) -> Result<(), RouterError> {
-        let Some(producer) = self.producers.get(&producer_id).copied() else {
+        if !self.producers.contains_key(&producer_id) {
             return Err(RouterError::MissingProducer(producer_id));
-        };
-        let transport_id = producer.transport_id();
-        let Some(transport) = self.transports.get(&transport_id) else {
-            return Err(RouterError::MissingProducerTransport {
-                producer_id,
-                transport_id,
-            });
-        };
-        let session_id = transport.session_id();
-        self.detach_producer(producer_id, session_id);
+        }
+        self.detach_producer(producer_id);
         Ok(())
     }
 
@@ -339,8 +298,6 @@ impl<O: RouterObserver> Router<O> {
         for transport_id in transport_ids {
             self.remove_transport(transport_id);
         }
-        self.observer
-            .on_event(RouterEvent::SessionLeft { session_id });
 
         Ok(())
     }
@@ -360,12 +317,11 @@ impl<O: RouterObserver> Router<O> {
 
         let producer_ids = self.indexes.take_transport_producers(transport_id);
         for producer_id in producer_ids {
-            self.detach_producer(producer_id, transport.session_id());
+            self.detach_producer(producer_id);
         }
     }
 
-    /// remove a producer after the caller has resolved its owning session
-    fn detach_producer(&mut self, producer_id: ProducerId, session_id: SessionId) {
+    fn detach_producer(&mut self, producer_id: ProducerId) {
         let Some(producer) = self.producers.remove(&producer_id) else {
             return;
         };
@@ -378,12 +334,6 @@ impl<O: RouterObserver> Router<O> {
         for consumer_id in consumer_ids {
             self.detach_consumer(consumer_id);
         }
-        self.observer.on_event(RouterEvent::ProducerRemoved {
-            session_id,
-            transport_id,
-            producer_id,
-            media_kind: producer.media_kind(),
-        });
     }
 
     fn detach_consumer(&mut self, consumer_id: ConsumerId) {

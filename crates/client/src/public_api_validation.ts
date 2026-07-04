@@ -12,8 +12,6 @@ import {
     type SessionInfo
 } from "./public_api.js";
 
-const MIN_TEMPORAL_LAYER_ID = 0;
-const MAX_TEMPORAL_LAYER_ID = 7;
 const FEATURE_BOOLEAN_FIELDS = [
     "rtc",
     "transcription",
@@ -221,7 +219,6 @@ function validateSourceEncodingDescriptor(value: unknown, context: string): void
     requireOptionalPositiveNumber(descriptor.resolutionScale, `${context}.resolutionScale`);
     requireOptionalNonNegativeInteger(descriptor.maxFramerate, `${context}.maxFramerate`);
     validateOptionalPolicyRole(descriptor.policyRole, `${context}.policyRole`);
-    requireOptionalTemporalLayerId(descriptor.maxTemporalLayerId, `${context}.maxTemporalLayerId`);
 }
 
 function toStringKeyedRecord(value: unknown, context: string): Record<string, unknown> {
@@ -260,18 +257,6 @@ function requireOptionalPositiveNumber(value: unknown, context: string): void {
         context,
         "must be a positive number",
         (number) => Number.isFinite(number) && number > 0
-    );
-}
-
-function requireOptionalTemporalLayerId(value: unknown, context: string): void {
-    requireOptionalNumber(
-        value,
-        context,
-        `must be an integer from ${MIN_TEMPORAL_LAYER_ID} through ${MAX_TEMPORAL_LAYER_ID} when provided`,
-        (number) =>
-            Number.isInteger(number) &&
-            number >= MIN_TEMPORAL_LAYER_ID &&
-            number <= MAX_TEMPORAL_LAYER_ID
     );
 }
 

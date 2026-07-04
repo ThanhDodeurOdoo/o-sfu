@@ -35,10 +35,7 @@ pub use descriptor::{
     SourceEncodingDescriptorParts, SourceModelError,
 };
 pub use diagnostics::{OverBudgetExceptionReason, ReceiverVideoBudgetDiagnostics};
-pub use ids::{
-    PublishedSourceId, PublishedSourceOwner, SourceEncodingId, SourceOperatingPoint,
-    SourceTemporalLayerId, UserStreamId,
-};
+pub use ids::{PublishedSourceId, PublishedSourceOwner, SourceEncodingId, UserStreamId};
 pub use intent::{SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent};
 pub use policy::{
     ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, PolicyPauseReason,

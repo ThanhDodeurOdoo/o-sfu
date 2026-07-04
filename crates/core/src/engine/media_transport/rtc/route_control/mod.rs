@@ -9,7 +9,8 @@ mod active_speaker;
 mod packet_gate;
 
 pub use active_speaker::SourceAudioPolicyState;
+#[cfg(test)]
+pub(super) use packet_gate::PacketOperatingPointGate;
 pub(super) use packet_gate::{
-    PacketLayerGate, PacketLayerMetadata, PacketOperatingPointGate, aggregate_packet_gates,
-    intersect_packet_gates,
+    PacketLayerGate, PacketLayerMetadata, aggregate_packet_gates, intersect_packet_gates,
 };

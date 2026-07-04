@@ -493,7 +493,6 @@ interface SourceEncodingDescriptor {
     resolutionScale?: number;
     maxFramerate?: number;
     policyRole?: "featured" | "thumbnail" | "degradedThumbnail";
-    maxTemporalLayerId?: number;
 }
 ```
 

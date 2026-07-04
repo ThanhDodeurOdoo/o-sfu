@@ -40,7 +40,7 @@ use crate::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
             PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
             SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            SourceSelector, SourceUnpublishIntent, UploadLayerPolicyRole, UserStreamId,
+            SourceSelector, UploadLayerPolicyRole, UserStreamId,
             test_support::{
                 TestSubscriptionStates, source_kind_for_stream_id,
                 source_publish_intent_for_source, stream_id_for_source,
@@ -128,35 +128,6 @@ fn scalable_video_states(active: bool) -> TestSubscriptionStates {
         readable_video: None,
         ..TestSubscriptionStates::default()
     }
-}
-
-fn publish_video_track(
-    state: &mut RoomState,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    transport_media_id: TransportMediaId,
-    ssrc: u32,
-) -> bool {
-    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
-        &sample_video_rtp_parameters(None, ssrc),
-        &state.router_rtp_capabilities(),
-    )
-    .expect("publisher RTP parameters should derive consumable router parameters");
-    let validated_publish = state
-        .validate_publish(
-            user_id,
-            connection_id,
-            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
-        )
-        .expect("publish descriptor should validate once the user is publish-ready");
-    state
-        .commit_publish_reservation(
-            validated_publish,
-            consumable_rtp_parameters,
-            &[],
-            transport_media_id,
-        )
-        .is_some()
 }
 
 fn test_upload_encodings() -> Vec<SessionUploadEncoding> {
@@ -270,7 +241,6 @@ fn test_source_descriptor(
                 resolution_scale: None,
                 max_framerate: None,
                 policy_role: None,
-                max_temporal_layer_id: None,
                 negotiated_format: None,
             },
         )],
@@ -824,55 +794,6 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
 }
 
 #[test]
-fn commit_publish_reservation_populates_transport_media_owner_index() {
-    let mut state = test_state();
-    let user_id = UserId::Integer(1);
-
-    join_test_user(&mut state, &user_id);
-    let connection_id = set_test_user_ready(&mut state, &user_id);
-
-    let consumable_rtp_parameters = derive_consumable_rtp_parameters(
-        &sample_video_rtp_parameters(None, 42_000),
-        &state.router_rtp_capabilities(),
-    )
-    .expect("publisher RTP parameters should derive consumable router parameters");
-    let validated_publish = state
-        .validate_publish(
-            &user_id,
-            connection_id,
-            &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
-        )
-        .expect("publish descriptor should validate once the user is publish-ready");
-    let transport_media_id = TransportMediaId::new(99);
-
-    assert!(
-        state
-            .commit_publish_reservation(
-                validated_publish,
-                consumable_rtp_parameters,
-                &[],
-                transport_media_id,
-            )
-            .is_some()
-    );
-    assert_eq!(
-        state
-            .producer_stream_id_for_transport_media_id(transport_media_id)
-            .and_then(|stream_id| source_kind_for_stream_id(&stream_id)),
-        Some(TestSourceKind::ScalableVideo),
-    );
-    assert_eq!(
-        state.inspect_producer_owner_user_id_for_transport_media_id(transport_media_id),
-        Some(user_id)
-    );
-    assert_eq!(
-        state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
-        Some(connection_id)
-    );
-    assert_eq!(state.media_counts().publications, 1);
-}
-
-#[test]
 fn commit_publish_reservation_registers_all_source_encodings() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
@@ -937,54 +858,6 @@ fn commit_publish_reservation_registers_all_source_encodings() {
             .map(|encoding| encoding.encoding_id())
             .collect::<Vec<_>>()
     );
-}
-
-#[test]
-fn unpublish_track_clears_transport_media_owner_index() {
-    let mut state = test_state();
-    let user_id = UserId::Integer(1);
-
-    join_test_user(&mut state, &user_id);
-    let connection_id = set_test_user_ready(&mut state, &user_id);
-
-    let transport_media_id = TransportMediaId::new(100);
-
-    assert!(publish_video_track(
-        &mut state,
-        &user_id,
-        connection_id,
-        transport_media_id,
-        43_000,
-    ));
-    assert!(
-        state
-            .unpublish_track(
-                &user_id,
-                connection_id,
-                &SourceUnpublishIntent::new(stream_id_for_source(TestSourceKind::ScalableVideo)),
-            )
-            .is_some()
-    );
-    assert_eq!(
-        state.producer_stream_id_for_transport_media_id(transport_media_id),
-        None
-    );
-    assert_eq!(
-        state.inspect_producer_owner_user_id_for_transport_media_id(transport_media_id),
-        None
-    );
-    assert_eq!(
-        state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
-        None
-    );
-    assert_eq!(state.media_counts().publications, 0);
-    assert!(publish_video_track(
-        &mut state,
-        &user_id,
-        connection_id,
-        TransportMediaId::new(101),
-        44_000,
-    ));
 }
 
 #[test]

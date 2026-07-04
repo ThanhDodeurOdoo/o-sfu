@@ -104,7 +104,7 @@ pub mod source_model {
     pub use crate::engine::source_model::{
         PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
         PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-        SourceEncodingId, SourceModelError, SourceTemporalLayerId,
+        SourceEncodingId, SourceModelError,
     };
 }
 
@@ -146,12 +146,12 @@ pub mod transport {
             MediaTransport, MediaTransportBuildError, MediaTransportBuilder, MediaTransportConfig,
             MediaTransportDeps, ProducerActivity, ReceiverBandwidthSnapshot, RelayRouteActivity,
             SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
-            SourcePacketOperatingPoint, SourcePolicyDirtyState, SourcePolicySignal,
-            SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-            TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
-            TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
-            TransportSessionKey, TransportSourceKey, TransportWorkerPressureSnapshot,
+            SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
+            TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute,
+            TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySample,
+            TransportQualitySnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
+            TransportResult, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
+            TransportWorkerPressureSnapshot,
         },
         prelude::SessionBitrateLimits,
     };

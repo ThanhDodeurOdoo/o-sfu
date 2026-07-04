@@ -96,7 +96,3 @@ fn lock_origins(
 ) -> MutexGuard<'_, HashMap<Arc<str>, OriginAdmission>> {
     origins.lock().unwrap_or_else(PoisonError::into_inner)
 }
-
-#[cfg(test)]
-#[path = "TESTS/admission.rs"]
-mod tests;

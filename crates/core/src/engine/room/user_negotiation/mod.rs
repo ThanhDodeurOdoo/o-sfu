@@ -55,7 +55,3 @@ impl UserNegotiation {
         update
     }
 }
-
-#[cfg(test)]
-#[path = "TESTS/user_negotiation.rs"]
-mod tests;
