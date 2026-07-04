@@ -18,7 +18,6 @@ fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Resul
                 resolution_scale: Some(4),
                 max_framerate: None,
                 policy_role: Some(UploadLayerPolicyRole::Thumbnail),
-                max_temporal_layer_id: Some(0),
             },
             SourceEncodingDescriptor {
                 encoding_id: String::from("encoding-2"),
@@ -27,7 +26,6 @@ fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Resul
                 resolution_scale: Some(1),
                 max_framerate: None,
                 policy_role: Some(UploadLayerPolicyRole::Featured),
-                max_temporal_layer_id: Some(2),
             },
         ],
     };
@@ -50,7 +48,6 @@ fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Resul
                         "maxBitrate": 150_000,
                         "resolutionScale": 4,
                         "policyRole": "thumbnail",
-                        "maxTemporalLayerId": 0,
                     },
                     {
                         "encodingId": "encoding-2",
@@ -58,7 +55,6 @@ fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Resul
                         "maxBitrate": 900_000,
                         "resolutionScale": 1,
                         "policyRole": "featured",
-                        "maxTemporalLayerId": 2,
                     },
                 ],
             }],

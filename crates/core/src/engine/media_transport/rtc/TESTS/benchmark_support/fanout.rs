@@ -7,9 +7,7 @@ use super::super::{
     state::PacketLoopState,
     test_support::{MediaWorkerScenario, sample_forwarded_packet, test_transport_session_key},
 };
-use crate::engine::{
-    UserId, metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry,
-};
+use crate::engine::{UserId, metrics::RuntimeMetrics, packet_sink_registry::PacketSinkRouteCache};
 
 pub const ROUTE_PLANNING_TURNS: usize = 1024;
 
@@ -22,7 +20,7 @@ pub const ROUTE_PLANNING_TURNS: usize = 1024;
 /// production planner work instead of fixture allocation
 pub struct FanoutBenchTopology {
     state: PacketLoopState,
-    packet_sinks: RoomPacketSinkRegistry,
+    packet_sinks: PacketSinkRouteCache,
     metrics: RuntimeMetrics,
     pending_packets: Vec<ForwardedPacket>,
     forwards: Vec<PacketForward>,
@@ -47,7 +45,7 @@ impl FanoutBenchTopology {
         )];
         let mut topology = Self {
             state,
-            packet_sinks: RoomPacketSinkRegistry::default(),
+            packet_sinks: PacketSinkRouteCache::default(),
             metrics: RuntimeMetrics::default(),
             pending_packets,
             forwards: Vec::with_capacity(destination_count),

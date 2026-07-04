@@ -1,6 +1,5 @@
 use std::fmt::{self, Display, Formatter};
 
-use o_sfu_rfc::rtp::frame_marking;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::UserId;
@@ -88,10 +87,10 @@ impl Display for PublishedSourceId {
 
 /// Stable room-domain identity for one advertised source encoding
 ///
-/// The id names an operating point of a source such as a simulcast `lo` or
-/// `hi` layer. It does not encode a RID string or worker-local
-/// route so selectors can keep pointing at the same encoding after transport
-/// details are refreshed.
+/// The id names an advertised encoding of a source such as a simulcast `lo` or
+/// `hi` layer. It does not encode a RID string or worker-local route so
+/// selectors can keep pointing at the same encoding after transport details are
+/// refreshed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceEncodingId(u64);
 
@@ -118,82 +117,6 @@ impl SourceEncodingId {
 impl Display for SourceEncodingId {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         write!(formatter, "encoding-{}", self.0)
-    }
-}
-
-/// Codec-native temporal layer id used by SVC operating points.
-///
-/// The current representation follows the RFC 9626 frame-marking
-/// temporal-id range. Spatial identity remains modeled by the source encoding,
-/// which keeps hybrid simulcast plus SVC as one selected encoding plus one
-/// temporal ceiling instead of a second parallel source graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SourceTemporalLayerId(u8);
-
-impl SourceTemporalLayerId {
-    #[allow(
-        dead_code,
-        reason = "production SVC descriptors will construct temporal ids after RFC 9626 negotiation lands"
-    )]
-    #[must_use]
-    pub const fn new(value: u8) -> Option<Self> {
-        if frame_marking::is_valid_temporal_layer_id(value) {
-            Some(Self(value))
-        } else {
-            None
-        }
-    }
-
-    #[allow(
-        dead_code,
-        reason = "base-layer operating-point diagnostics are staged until production SVC selection is reachable"
-    )]
-    #[must_use]
-    pub const fn base() -> Self {
-        Self(frame_marking::BASE_LAYER_ID)
-    }
-
-    #[must_use]
-    pub const fn as_u8(self) -> u8 {
-        self.0
-    }
-}
-
-/// One source operating point selected by room or receiver policy.
-///
-/// The selected encoding carries the simulcast or spatial choice. The temporal
-/// layer ceiling carries the first codec-native SVC dimension that can be
-/// projected into transport packet gates when frame-marking metadata is present.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SourceOperatingPoint {
-    encoding_id: SourceEncodingId,
-    max_temporal_layer_id: SourceTemporalLayerId,
-}
-
-impl SourceOperatingPoint {
-    #[allow(
-        dead_code,
-        reason = "operating-point selectors are staged until negotiated temporal metadata is production-reachable"
-    )]
-    #[must_use]
-    pub const fn new(
-        encoding_id: SourceEncodingId,
-        max_temporal_layer_id: SourceTemporalLayerId,
-    ) -> Self {
-        Self {
-            encoding_id,
-            max_temporal_layer_id,
-        }
-    }
-
-    #[must_use]
-    pub const fn encoding_id(self) -> SourceEncodingId {
-        self.encoding_id
-    }
-
-    #[must_use]
-    pub const fn max_temporal_layer_id(self) -> SourceTemporalLayerId {
-        self.max_temporal_layer_id
     }
 }
 

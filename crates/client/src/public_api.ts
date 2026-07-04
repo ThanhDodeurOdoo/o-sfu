@@ -53,7 +53,6 @@ export interface SourceEncodingDescriptor {
     resolutionScale?: number;
     maxFramerate?: number;
     policyRole?: SourceEncodingPolicyRole;
-    maxTemporalLayerId?: number;
 }
 
 export interface SourceDescriptor {

@@ -5,7 +5,6 @@
     reason = "test assertions use expect, unwrap and direct indexing for direct fixture failures"
 )]
 
-use o_sfu_rfc::rtp::frame_marking;
 use o_sfu_router::{
     MediaKind,
     rtp::{MediaCodec, MediaFormat, PayloadType, Rid, Ssrc},
@@ -64,7 +63,6 @@ fn source_encoding_with_policy_role(
         resolution_scale: None,
         max_framerate: None,
         policy_role,
-        max_temporal_layer_id: None,
         negotiated_format: Some(video_format(96)),
     })
 }
@@ -268,42 +266,6 @@ fn descriptor_rejects_duplicate_encoding_ids() {
             source_id,
             encoding_id,
         }
-    );
-}
-
-#[test]
-fn selector_targets_runtime_encoding_identity_not_transport_or_rid() {
-    let encoding_id = SourceEncodingId::from_raw(3);
-    let temporal_layer = SourceTemporalLayerId::new(2)
-        .expect("test temporal layer should fit the RFC 9626 TID range");
-    let operating_point = SourceOperatingPoint::new(encoding_id, temporal_layer);
-
-    assert_eq!(
-        SourceSelector::Encoding(encoding_id).selected_encoding(),
-        Some(encoding_id)
-    );
-    assert_eq!(
-        SourceSelector::OperatingPoint(operating_point).selected_encoding(),
-        Some(encoding_id)
-    );
-    assert_eq!(
-        SourceSelector::OperatingPoint(operating_point).selected_operating_point(),
-        Some(operating_point)
-    );
-    assert_eq!(SourceSelector::Open.selected_encoding(), None);
-}
-
-#[test]
-fn temporal_layer_ids_follow_the_rfc_frame_marking_range() {
-    assert_eq!(SourceTemporalLayerId::base().as_u8(), 0);
-    assert_eq!(
-        SourceTemporalLayerId::new(frame_marking::TEMPORAL_LAYER_ID_MAX)
-            .map(SourceTemporalLayerId::as_u8),
-        Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
-    );
-    assert_eq!(
-        SourceTemporalLayerId::new(frame_marking::TEMPORAL_LAYER_ID_MAX + 1),
-        None
     );
 }
 

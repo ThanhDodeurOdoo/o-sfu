@@ -5,8 +5,8 @@ use o_sfu_router::{
 use thiserror::Error;
 
 use super::{
-    PublishedSourceId, PublishedSourceOwner, SourceEncodingId, SourcePolicy, SourceTemporalLayerId,
-    UploadLayerPolicyRole, UserStreamId,
+    PublishedSourceId, PublishedSourceOwner, SourceEncodingId, SourcePolicy, UploadLayerPolicyRole,
+    UserStreamId,
 };
 use crate::Bitrate;
 
@@ -286,8 +286,6 @@ pub struct SourceEncodingDescriptor {
     max_framerate: Option<u16>,
     /// Server-defined policy role associated with this encoding.
     policy_role: Option<UploadLayerPolicyRole>,
-    /// Highest temporal layer advertised for codec-native layered forwarding.
-    max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated payload and codec information for this encoding.
     negotiated_format: Option<MediaFormat>,
 }
@@ -310,7 +308,6 @@ impl SourceEncodingDescriptor {
             resolution_scale: parts.resolution_scale,
             max_framerate: parts.max_framerate,
             policy_role: parts.policy_role,
-            max_temporal_layer_id: parts.max_temporal_layer_id,
             negotiated_format: parts.negotiated_format,
         }
     }
@@ -361,11 +358,6 @@ impl SourceEncodingDescriptor {
     }
 
     #[must_use]
-    pub const fn max_temporal_layer_id(&self) -> Option<SourceTemporalLayerId> {
-        self.max_temporal_layer_id
-    }
-
-    #[must_use]
     pub fn negotiated_format(&self) -> Option<&MediaFormat> {
         self.negotiated_format.as_ref()
     }
@@ -396,8 +388,6 @@ pub struct SourceEncodingDescriptorParts {
     pub max_framerate: Option<u16>,
     /// Optional policy role advertised for this encoding.
     pub policy_role: Option<UploadLayerPolicyRole>,
-    /// Optional temporal-layer ceiling advertised for codec-native SVC.
-    pub max_temporal_layer_id: Option<SourceTemporalLayerId>,
     /// Negotiated codec and payload information when available.
     pub negotiated_format: Option<MediaFormat>,
 }

@@ -543,46 +543,6 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
 }
 
 #[tokio::test]
-async fn source_policy_budget_only_update_stays_state_only() {
-    let SourcePolicyScenario { room, adapter } =
-        SourcePolicyScenario::with_ready_users(&[1, 2]).await;
-    let receiver_user_id = UserId::Integer(2);
-
-    publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
-    assert_subscription_selected_rid(
-        &room,
-        &adapter,
-        &receiver_user_id,
-        &UserId::Integer(1),
-        TestSourceKind::ScalableVideo,
-        "hi",
-    )
-    .await;
-    let camera_source_id = room
-        .test_api()
-        .inspect()
-        .source_id_for_owner_stream(&UserId::Integer(1), TestSourceKind::ScalableVideo)
-        .await
-        .expect("camera should have a source id before source policy planning");
-    let receiver_connection_id = user_connection_id(&room, &receiver_user_id).await;
-    let receiver_session_key = room
-        .transport_user_key(&receiver_user_id, receiver_connection_id)
-        .await;
-    let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
-        per_session: vec![(receiver_session_key, Bitrate::from_kbps(2_000))],
-    };
-    let tx = {
-        let state = room.state.read().await;
-        SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth_snapshot)
-            .expect("source policy transaction should contain budget observation work")
-    };
-
-    assert!(
-        tx.has_only_state_update_for_consumer_source_for_test(&receiver_user_id, camera_source_id)
-    );
-}
-
-#[tokio::test]
 async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],

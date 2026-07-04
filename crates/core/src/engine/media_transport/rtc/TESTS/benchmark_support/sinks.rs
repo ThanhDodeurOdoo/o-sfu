@@ -19,7 +19,7 @@ use crate::engine::{
     UserId,
     media_transport::{TransportMediaId, TransportSessionKey},
     metrics::{RtcMetricsRecorder, RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics},
-    packet_sink_registry::{PacketSink, RoomPacketSinkRegistry},
+    packet_sink_registry::{PacketSink, PacketSinkRouteCache, RoomPacketSinkRegistry},
 };
 
 pub const PACKET_SINK_FANOUT_TURNS: usize = 512;
@@ -63,7 +63,7 @@ impl PacketSink for CountingPacketSink {
 /// exercising production route planning plus flush delivery into the sink
 pub struct PacketSinkFanoutBenchFixture {
     state: PacketLoopState,
-    packet_sinks: RoomPacketSinkRegistry,
+    packet_sinks: PacketSinkRouteCache,
     sink: Arc<CountingPacketSink>,
     metrics: RuntimeMetrics,
     egress_metrics: Arc<RtpMetricsRecorder>,
@@ -88,6 +88,8 @@ impl PacketSinkFanoutBenchFixture {
             Arc::<CountingPacketSink>::clone(&sink),
             RtpForwardDestinationKind::Recording,
         );
+        let mut packet_sink_cache = PacketSinkRouteCache::default();
+        packet_sink_cache.refresh_from(&packet_sinks);
 
         let metrics = RuntimeMetrics::default();
         let egress_metrics = metrics.register_rtp_worker();
@@ -101,7 +103,7 @@ impl PacketSinkFanoutBenchFixture {
 
         let mut fixture = Self {
             state,
-            packet_sinks,
+            packet_sinks: packet_sink_cache,
             sink,
             metrics,
             egress_metrics,

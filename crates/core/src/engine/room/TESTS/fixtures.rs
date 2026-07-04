@@ -1,7 +1,4 @@
-pub(super) use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+pub(super) use std::{sync::Arc, time::Instant};
 
 use o_sfu_router::test_support::rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
@@ -11,7 +8,6 @@ pub(super) use o_sfu_router::{
     MediaKind,
     rtp::{MediaCapabilities, MediaStream},
 };
-pub(super) use tokio::time::timeout;
 
 pub(super) use super::super::{
     JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,

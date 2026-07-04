@@ -57,12 +57,11 @@ pub use types::{
     ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
     ProducerActivity, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate, RelayRouteActivity,
     SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
-    SourcePacketOperatingPoint, TransportAdapterError, TransportBitrateSnapshot,
-    TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
-    TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
-    TransportRelayRouteEffect, TransportResult, TransportRidActivity, TransportSessionHealth,
-    TransportSessionKey, TransportSourceActivity, TransportSourceActivitySnapshot,
-    TransportSourceKey, TransportWorkerPressureSnapshot,
+    TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
+    TransportPlacementPressureSnapshot, TransportQualitySample, TransportQualitySnapshot,
+    TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult, TransportRidActivity,
+    TransportSessionHealth, TransportSessionKey, TransportSourceActivity,
+    TransportSourceActivitySnapshot, TransportSourceKey, TransportWorkerPressureSnapshot,
 };
 
 use self::workers::signaling_to_str0m_media_kind;

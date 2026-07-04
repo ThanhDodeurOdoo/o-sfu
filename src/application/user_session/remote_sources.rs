@@ -7,7 +7,7 @@ use crate::{
     application::stream_catalog::stream_type_for_stream_id,
     core::{
         prelude::{Bitrate, UploadLayerPolicyRole},
-        server::source_model::{PublishedSourceDescriptor, SourceTemporalLayerId},
+        server::source_model::PublishedSourceDescriptor,
     },
     runtime::room::RemoteSourceSnapshot,
 };
@@ -61,9 +61,6 @@ fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDes
                 UploadLayerPolicyRole::Thumbnail => ProtocolRole::Thumbnail,
                 UploadLayerPolicyRole::DegradedThumbnail => ProtocolRole::DegradedThumbnail,
             }),
-            max_temporal_layer_id: encoding
-                .max_temporal_layer_id()
-                .map(SourceTemporalLayerId::as_u8),
         })
         .collect()
 }

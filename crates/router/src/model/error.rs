@@ -17,11 +17,6 @@ pub enum RouterError {
     MissingTransport(TransportId),
     #[error("missing producer {0:?}")]
     MissingProducer(ProducerId),
-    #[error("missing transport {transport_id:?} for producer {producer_id:?}")]
-    MissingProducerTransport {
-        producer_id: ProducerId,
-        transport_id: TransportId,
-    },
     #[error("missing consumer {0:?}")]
     MissingConsumer(ConsumerId),
     #[error("producer transport {0:?} is not a receive transport")]

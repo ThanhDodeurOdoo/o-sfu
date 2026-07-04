@@ -10,7 +10,6 @@ pub(crate) mod diagnostic;
 pub(crate) mod error;
 pub(crate) mod ids;
 pub(crate) mod mutation;
-pub(crate) mod observer;
 mod producer;
 mod proof_storage;
 mod relation_index;
@@ -35,7 +34,6 @@ pub use self::{
     mutation::{
         ConsumerSpec, ProducerSpec, ReceiveTransportHandle, SendTransportHandle, SessionHandle,
     },
-    observer::{NoopRouterObserver, RouterEvent, RouterObserver},
     route_state::{ConsumerRouteState, ProducerRouteState},
     router::Router,
     rtp::{

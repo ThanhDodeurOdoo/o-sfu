@@ -149,13 +149,7 @@ fn assert_rtc_remote_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
 }
 
 fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
-    for (selector, expected) in [
-        ("open", 0),
-        ("encoding", 1),
-        ("operating_point", 0),
-        ("room_policy_featured", 0),
-        ("room_policy_thumbnail", 0),
-    ] {
+    for (selector, expected) in [("open", 0), ("encoding", 1)] {
         assert_eq!(
             snapshot.counter_value(
                 MetricName::SourceSelectionUpdatesTotal,

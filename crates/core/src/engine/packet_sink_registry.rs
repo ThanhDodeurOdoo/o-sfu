@@ -84,10 +84,6 @@ impl Default for RoomPacketSinkRegistry {
     }
 }
 
-pub trait PacketSinkLookup {
-    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink>;
-}
-
 #[derive(Default)]
 pub struct PacketSinkRouteCache {
     generation: u64,
@@ -104,19 +100,10 @@ impl PacketSinkRouteCache {
         self.generation = snapshot.generation;
         self.active_rooms = snapshot.active_rooms;
     }
-}
 
-impl PacketSinkLookup for PacketSinkRouteCache {
     #[inline]
-    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
+    pub fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
         self.active_rooms.get(&room_instance_id).cloned()
-    }
-}
-
-impl PacketSinkLookup for RoomPacketSinkRegistry {
-    #[inline]
-    fn sink_for_room(&self, room_instance_id: RoomInstanceId) -> Option<RegisteredPacketSink> {
-        Self::sink_for_room(self, room_instance_id)
     }
 }
 

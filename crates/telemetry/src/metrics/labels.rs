@@ -236,9 +236,6 @@ pub enum RtcRemotePacketGateConvergence {
 pub enum SourceSelectionKind {
     Open,
     Encoding,
-    OperatingPoint,
-    RoomPolicyFeatured,
-    RoomPolicyThumbnail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -531,9 +528,6 @@ impl_exported_metric_label!(RtcRemotePacketGateConvergence {
 impl_exported_metric_label!(SourceSelectionKind {
     Open => (0, "open"),
     Encoding => (1, "encoding"),
-    OperatingPoint => (2, "operating_point"),
-    RoomPolicyFeatured => (3, "room_policy_featured"),
-    RoomPolicyThumbnail => (4, "room_policy_thumbnail"),
 });
 
 impl_exported_metric_label!(BudgetSolverOutcome {

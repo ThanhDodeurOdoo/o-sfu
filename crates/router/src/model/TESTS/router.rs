@@ -3,8 +3,6 @@
     reason = "router tests use panic only for mandatory fixture setup failures"
 )]
 
-use std::{cell::RefCell, rc::Rc};
-
 use super::router_invariants::assert_router_is_consistent;
 use crate::{
     MediaKind, Router, RouterError, RouterId,
@@ -12,7 +10,7 @@ use crate::{
     model::test_support::router_state_snapshot,
     state::{
         ConsumerCapability, ConsumerRouteState, ConsumerSpec, ProducerRouteState, ProducerSpec,
-        RouterEvent, RouterObserver, Session, SessionState,
+        Session, SessionState,
     },
 };
 
@@ -28,15 +26,11 @@ const PRODUCER: ProducerId = ProducerId(300);
 const CONSUMER: ConsumerId = ConsumerId(400);
 const SECOND_CONSUMER: ConsumerId = ConsumerId(401);
 
-fn join<O: RouterObserver>(router: &mut Router<O>, session_id: SessionId) {
+fn join(router: &mut Router, session_id: SessionId) {
     assert_eq!(router.join(Session::new(session_id)), Ok(()));
 }
 
-fn open_receive<O: RouterObserver>(
-    router: &mut Router<O>,
-    session_id: SessionId,
-    transport_id: TransportId,
-) {
+fn open_receive(router: &mut Router, session_id: SessionId, transport_id: TransportId) {
     assert_eq!(
         router
             .session(session_id)
@@ -46,11 +40,7 @@ fn open_receive<O: RouterObserver>(
     );
 }
 
-fn open_send<O: RouterObserver>(
-    router: &mut Router<O>,
-    session_id: SessionId,
-    transport_id: TransportId,
-) {
+fn open_send(router: &mut Router, session_id: SessionId, transport_id: TransportId) {
     assert_eq!(
         router
             .session(session_id)
@@ -60,8 +50,8 @@ fn open_send<O: RouterObserver>(
     );
 }
 
-fn publish<O: RouterObserver>(
-    router: &mut Router<O>,
+fn publish(
+    router: &mut Router,
     producer_id: ProducerId,
     transport_id: TransportId,
     media_kind: MediaKind,
@@ -74,8 +64,8 @@ fn publish<O: RouterObserver>(
     );
 }
 
-fn consume<O: RouterObserver>(
-    router: &mut Router<O>,
+fn consume(
+    router: &mut Router,
     consumer_id: ConsumerId,
     producer_id: ProducerId,
     transport_id: TransportId,
@@ -89,11 +79,7 @@ fn consume<O: RouterObserver>(
     );
 }
 
-fn consume_compatible<O: RouterObserver>(
-    router: &mut Router<O>,
-    consumer_id: ConsumerId,
-    transport_id: TransportId,
-) {
+fn consume_compatible(router: &mut Router, consumer_id: ConsumerId, transport_id: TransportId) {
     consume(
         router,
         consumer_id,
@@ -103,8 +89,8 @@ fn consume_compatible<O: RouterObserver>(
     );
 }
 
-fn try_publish<O: RouterObserver>(
-    router: &mut Router<O>,
+fn try_publish(
+    router: &mut Router,
     transport_id: TransportId,
     spec: ProducerSpec,
 ) -> Result<ProducerId, RouterError> {
@@ -113,8 +99,8 @@ fn try_publish<O: RouterObserver>(
         .and_then(|transport| transport.publish(spec))
 }
 
-fn try_consume<O: RouterObserver>(
-    router: &mut Router<O>,
+fn try_consume(
+    router: &mut Router,
     transport_id: TransportId,
     spec: ConsumerSpec,
 ) -> Result<ConsumerId, RouterError> {
@@ -223,47 +209,6 @@ fn removing_a_producer_cleans_dependent_consumers_but_keeps_transports() {
     );
     assert!(!snapshot.producer_consumers().contains_key(PRODUCER));
     assert_router_is_consistent(&router);
-}
-
-#[test]
-fn removing_a_producer_rejects_missing_owning_transport() {
-    let observer = EventCaptureObserver::default();
-    let event_log = observer.clone();
-    let mut router = Router::new_with_observer(ROUTER, observer);
-
-    join(&mut router, PUBLISHER_SESSION);
-    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
-    publish(
-        &mut router,
-        PRODUCER,
-        PUBLISHER_RECV_TRANSPORT,
-        MediaKind::Audio,
-    );
-
-    router.transports.remove(&PUBLISHER_RECV_TRANSPORT);
-
-    assert_eq!(
-        router.remove_producer(PRODUCER),
-        Err(RouterError::MissingProducerTransport {
-            producer_id: PRODUCER,
-            transport_id: PUBLISHER_RECV_TRANSPORT,
-        })
-    );
-    assert!(router_state_snapshot(&router).contains_producer(PRODUCER));
-    assert_eq!(
-        event_log.recorded_events(),
-        vec![
-            RouterEvent::SessionJoined {
-                session_id: PUBLISHER_SESSION,
-            },
-            RouterEvent::ProducerAdded {
-                session_id: PUBLISHER_SESSION,
-                transport_id: PUBLISHER_RECV_TRANSPORT,
-                producer_id: PRODUCER,
-                media_kind: MediaKind::Audio,
-            },
-        ]
-    );
 }
 
 #[test]
@@ -596,125 +541,4 @@ fn joined_sessions_store_only_router_lifecycle_state() {
         Some(SessionState::Active)
     );
     assert_router_is_consistent(&router);
-}
-
-#[test]
-fn explicit_producer_removal_emits_one_removal_event() {
-    let observer = EventCaptureObserver::default();
-    let event_log = observer.clone();
-    let mut router = Router::new_with_observer(ROUTER, observer);
-
-    join(&mut router, PUBLISHER_SESSION);
-    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
-    publish(
-        &mut router,
-        PRODUCER,
-        PUBLISHER_RECV_TRANSPORT,
-        MediaKind::Video,
-    );
-
-    assert_eq!(router.remove_producer(PRODUCER), Ok(()));
-
-    assert_eq!(
-        event_log.recorded_events(),
-        vec![
-            RouterEvent::SessionJoined {
-                session_id: PUBLISHER_SESSION,
-            },
-            RouterEvent::ProducerAdded {
-                session_id: PUBLISHER_SESSION,
-                transport_id: PUBLISHER_RECV_TRANSPORT,
-                producer_id: PRODUCER,
-                media_kind: MediaKind::Video,
-            },
-            RouterEvent::ProducerRemoved {
-                session_id: PUBLISHER_SESSION,
-                transport_id: PUBLISHER_RECV_TRANSPORT,
-                producer_id: PRODUCER,
-                media_kind: MediaKind::Video,
-            },
-        ]
-    );
-    assert!(!router_state_snapshot(&router).contains_producer(PRODUCER));
-}
-
-#[test]
-fn missing_producer_removal_emits_no_removal_event() {
-    let observer = EventCaptureObserver::default();
-    let event_log = observer.clone();
-    let mut router = Router::new_with_observer(ROUTER, observer);
-
-    assert_eq!(
-        router.remove_producer(PRODUCER),
-        Err(RouterError::MissingProducer(PRODUCER))
-    );
-
-    assert!(event_log.recorded_events().is_empty());
-}
-
-#[derive(Clone, Default)]
-struct EventCaptureObserver {
-    events: Rc<RefCell<Vec<RouterEvent>>>,
-}
-
-impl EventCaptureObserver {
-    fn recorded_events(&self) -> Vec<RouterEvent> {
-        self.events.borrow().clone()
-    }
-}
-
-impl RouterObserver for EventCaptureObserver {
-    fn on_event(&mut self, event: RouterEvent) {
-        self.events.borrow_mut().push(event);
-    }
-}
-
-#[test]
-fn router_emits_session_and_producer_lifecycle_events() {
-    let observer = EventCaptureObserver::default();
-    let event_log = observer.clone();
-    let mut router = Router::new_with_observer(ROUTER, observer);
-
-    join(&mut router, PUBLISHER_SESSION);
-    join(&mut router, SUBSCRIBER_SESSION);
-    open_receive(&mut router, PUBLISHER_SESSION, PUBLISHER_RECV_TRANSPORT);
-    open_send(&mut router, SUBSCRIBER_SESSION, SUBSCRIBER_SEND_TRANSPORT);
-    publish(
-        &mut router,
-        PRODUCER,
-        PUBLISHER_RECV_TRANSPORT,
-        MediaKind::Video,
-    );
-    assert_eq!(router.remove_session(PUBLISHER_SESSION), Ok(()));
-    assert_eq!(router.remove_session(SUBSCRIBER_SESSION), Ok(()));
-
-    assert_eq!(
-        event_log.recorded_events(),
-        vec![
-            RouterEvent::SessionJoined {
-                session_id: PUBLISHER_SESSION,
-            },
-            RouterEvent::SessionJoined {
-                session_id: SUBSCRIBER_SESSION,
-            },
-            RouterEvent::ProducerAdded {
-                session_id: PUBLISHER_SESSION,
-                transport_id: PUBLISHER_RECV_TRANSPORT,
-                producer_id: PRODUCER,
-                media_kind: MediaKind::Video,
-            },
-            RouterEvent::ProducerRemoved {
-                session_id: PUBLISHER_SESSION,
-                transport_id: PUBLISHER_RECV_TRANSPORT,
-                producer_id: PRODUCER,
-                media_kind: MediaKind::Video,
-            },
-            RouterEvent::SessionLeft {
-                session_id: PUBLISHER_SESSION,
-            },
-            RouterEvent::SessionLeft {
-                session_id: SUBSCRIBER_SESSION,
-            },
-        ]
-    );
 }

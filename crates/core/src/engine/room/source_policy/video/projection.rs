@@ -6,7 +6,7 @@ use super::{
     selection::{AdaptationCounts, ReceiverRouteSelection},
 };
 use crate::engine::{
-    media_transport::{SourcePacketGate, SourcePacketOperatingPoint},
+    media_transport::SourcePacketGate,
     source_model::{PublishedSourceDescriptor, ReceiverVideoBudgetDiagnostics, SourceSelector},
 };
 
@@ -14,8 +14,6 @@ use crate::engine::{
 pub(super) enum SourcePacketGateProjectionError {
     MissingEncoding,
     MissingRid,
-    MissingTemporalMetadata,
-    TemporalLayerExceedsAdvertised,
 }
 
 pub(super) fn source_packet_gate_for_selector(
@@ -32,23 +30,6 @@ pub(super) fn source_packet_gate_for_selector(
                 .rid()
                 .ok_or(SourcePacketGateProjectionError::MissingRid)?;
             Ok(SourcePacketGate::Rid(rid.as_str().to_owned()))
-        }
-        SourceSelector::OperatingPoint(operating_point) => {
-            let encoding = source
-                .encoding(operating_point.encoding_id())
-                .ok_or(SourcePacketGateProjectionError::MissingEncoding)?;
-            let max_temporal_layer_id = encoding
-                .max_temporal_layer_id()
-                .ok_or(SourcePacketGateProjectionError::MissingTemporalMetadata)?;
-            if operating_point.max_temporal_layer_id() > max_temporal_layer_id {
-                return Err(SourcePacketGateProjectionError::TemporalLayerExceedsAdvertised);
-            }
-            Ok(SourcePacketGate::OperatingPoint(
-                SourcePacketOperatingPoint::new(
-                    encoding.rid().map(|rid| rid.as_str().to_owned()),
-                    operating_point.max_temporal_layer_id().as_u8(),
-                ),
-            ))
         }
     }
 }
@@ -120,7 +101,3 @@ impl From<RouteOutcome> for BudgetSolverOutcomes {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "TESTS/projection.rs"]
-mod tests;

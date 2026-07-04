@@ -47,11 +47,6 @@ impl<P, C> RouteControlPlan<P, C> {
             && self.consumers.is_empty()
             && self.receiver_bwe_targets.is_empty()
     }
-
-    #[cfg(test)]
-    pub(crate) fn consumer_finishes_for_test(&self) -> impl Iterator<Item = &C> {
-        self.consumers.iter().map(|(_control, finish)| finish)
-    }
 }
 
 impl<P, C> Default for RouteControlPlan<P, C> {

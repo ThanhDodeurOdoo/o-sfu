@@ -26,7 +26,6 @@ use crate::{
             ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
             PublishedSourceDescriptor, PublishedSourceId, SourceEncodingDescriptor,
             SourceEncodingId, SourceRoomPolicySelector, SourceRoutePriority, SourceSelector,
-            SourceTemporalLayerId,
         },
     },
 };
@@ -277,9 +276,6 @@ fn source_encoding(
     source_activity: Option<&TransportSourceActivity>,
 ) -> DiagnosticsSourceEncoding {
     let negotiated_format = encoding.negotiated_format();
-    let max_temporal_layer_id = encoding
-        .max_temporal_layer_id()
-        .map(SourceTemporalLayerId::as_u8);
     let rid_activity = encoding
         .rid()
         .and_then(|rid| rid_activity(source_activity, rid.as_str()));
@@ -292,7 +288,8 @@ fn source_encoding(
         policy_role: encoding
             .policy_role()
             .map(|role| role.as_wire_value().to_owned()),
-        max_temporal_layer_id,
+        max_temporal_layer_id: None,
+        temporal_layer_metadata: DiagnosticsTemporalLayerMetadata::Absent,
         payload_type: negotiated_format.map(MediaFormat::payload_type),
         primary_ssrc: encoding.primary_ssrc().map(Ssrc::value),
         repair_ssrc: encoding.repair_ssrc().map(Ssrc::value),
@@ -302,11 +299,6 @@ fn source_encoding(
         last_keyframe_age_ms: rid_activity
             .and_then(TransportRidActivity::last_keyframe_age)
             .map(duration_millis),
-        temporal_layer_metadata: if max_temporal_layer_id.is_some() {
-            DiagnosticsTemporalLayerMetadata::Advertised
-        } else {
-            DiagnosticsTemporalLayerMetadata::Absent
-        },
     }
 }
 
@@ -325,15 +317,6 @@ fn selection(
     selection: ConsumerSourceSelection,
 ) -> DiagnosticsSourceSelection {
     let selected_encoding_id = selection.selector().selected_encoding();
-    let selected_temporal_layer_id = selection
-        .selector()
-        .selected_operating_point()
-        .map(|operating_point| operating_point.max_temporal_layer_id().as_u8());
-    let temporal_layer_selection = if selected_temporal_layer_id.is_some() {
-        DiagnosticsTemporalLayerSelection::Selected
-    } else {
-        DiagnosticsTemporalLayerSelection::NotSelected
-    };
     let budget = selection.budget();
     DiagnosticsSourceSelection {
         active: selection.active(),
@@ -358,8 +341,8 @@ fn selection(
             .and_then(|encoding_id| source.encoding(encoding_id))
             .and_then(SourceEncodingDescriptor::rid)
             .map(|rid| rid.as_str().to_owned()),
-        selected_temporal_layer_id,
-        temporal_layer_selection,
+        selected_temporal_layer_id: None,
+        temporal_layer_selection: DiagnosticsTemporalLayerSelection::NotSelected,
         upgrade_observations: selection.upgrade_observations(),
     }
 }
@@ -387,16 +370,13 @@ fn source_selector(value: SourceSelector) -> DiagnosticsSourceSelector {
     match value {
         SourceSelector::Open => DiagnosticsSourceSelector::Open,
         SourceSelector::Encoding(_) => DiagnosticsSourceSelector::Encoding,
-        SourceSelector::OperatingPoint(_) => DiagnosticsSourceSelector::OperatingPoint,
     }
 }
 
 fn source_selection_reason(value: SourceSelector) -> DiagnosticsSourceSelectionReason {
     match value {
         SourceSelector::Open => DiagnosticsSourceSelectionReason::Open,
-        SourceSelector::Encoding(_) | SourceSelector::OperatingPoint(_) => {
-            DiagnosticsSourceSelectionReason::ReceiverAdaptation
-        }
+        SourceSelector::Encoding(_) => DiagnosticsSourceSelectionReason::ReceiverAdaptation,
     }
 }
 

@@ -10,9 +10,7 @@ use crate::{
     Router,
     ids::{ConsumerId, ProducerId, RouterId, SessionId, TransportId},
     rtp::MediaKind,
-    state::{
-        ConsumerRouteState, ProducerRouteState, RouterObserver, SessionState, TransportDirection,
-    },
+    state::{ConsumerRouteState, ProducerRouteState, SessionState, TransportDirection},
 };
 
 /// read-only view over one detached reverse relation
@@ -212,7 +210,7 @@ impl RouterStateSnapshot {
 /// assertions that need to compare primary topology and reverse-index topology
 /// after a router transition
 #[must_use]
-pub fn router_state_snapshot<O: RouterObserver>(router: &Router<O>) -> RouterStateSnapshot {
+pub fn router_state_snapshot(router: &Router) -> RouterStateSnapshot {
     let index_snapshot = router.indexes.snapshot();
     RouterStateSnapshot {
         id: router.id,
@@ -275,7 +273,7 @@ pub fn router_state_snapshot<O: RouterObserver>(router: &Router<O>) -> RouterSta
 /// a `false` result means the router's internal topology has diverged
 /// callers should not treat it as a recoverable application error
 #[must_use]
-pub fn router_satisfies_invariants<O: RouterObserver>(router: &Router<O>) -> bool {
+pub fn router_satisfies_invariants(router: &Router) -> bool {
     references_are_valid(router)
         && reverse_indices_are_exact(router)
         && transport_directions_are_valid(router)
@@ -283,7 +281,7 @@ pub fn router_satisfies_invariants<O: RouterObserver>(router: &Router<O>) -> boo
         && consumer_route_shadows_producer(router)
 }
 
-fn references_are_valid<O: RouterObserver>(router: &Router<O>) -> bool {
+fn references_are_valid(router: &Router) -> bool {
     for transport in router.transports.values() {
         if !router.sessions.contains_key(&transport.session_id()) {
             return false;
@@ -307,7 +305,7 @@ fn references_are_valid<O: RouterObserver>(router: &Router<O>) -> bool {
     true
 }
 
-fn reverse_indices_are_exact<O: RouterObserver>(router: &Router<O>) -> bool {
+fn reverse_indices_are_exact(router: &Router) -> bool {
     router.indexes.session_transports_are_exact(
         router.transports.values(),
         |session_id| router.sessions.contains_key(&session_id),
@@ -347,7 +345,7 @@ fn reverse_indices_are_exact<O: RouterObserver>(router: &Router<O>) -> bool {
     )
 }
 
-fn transport_directions_are_valid<O: RouterObserver>(router: &Router<O>) -> bool {
+fn transport_directions_are_valid(router: &Router) -> bool {
     for producer in router.producers.values() {
         let Some(transport) = router.transports.get(&producer.transport_id()) else {
             return false;
@@ -369,7 +367,7 @@ fn transport_directions_are_valid<O: RouterObserver>(router: &Router<O>) -> bool
     true
 }
 
-fn consumer_media_matches_producer<O: RouterObserver>(router: &Router<O>) -> bool {
+fn consumer_media_matches_producer(router: &Router) -> bool {
     for consumer in router.consumers.values() {
         let Some(producer) = router.producers.get(&consumer.producer_id()) else {
             return false;
@@ -382,7 +380,7 @@ fn consumer_media_matches_producer<O: RouterObserver>(router: &Router<O>) -> boo
     true
 }
 
-fn consumer_route_shadows_producer<O: RouterObserver>(router: &Router<O>) -> bool {
+fn consumer_route_shadows_producer(router: &Router) -> bool {
     for consumer in router.consumers.values() {
         let Some(producer) = router.producers.get(&consumer.producer_id()) else {
             return false;
@@ -404,15 +402,15 @@ fn consumer_route_shadows_producer<O: RouterObserver>(router: &Router<O>) -> boo
 #[cfg(kani)]
 pub mod proof {
     pub use super::super::{relation_index::RelationProofView, topology::test_support::proof::*};
-    use super::{super::NoopRouterObserver, *};
+    use super::*;
 
-    pub struct RouterProofView<'a, O: RouterObserver = NoopRouterObserver> {
-        router: &'a Router<O>,
+    pub struct RouterProofView<'a> {
+        router: &'a Router,
     }
 
-    impl<'a, O: RouterObserver> RouterProofView<'a, O> {
+    impl<'a> RouterProofView<'a> {
         #[must_use]
-        pub fn new(router: &'a Router<O>) -> Self {
+        pub fn new(router: &'a Router) -> Self {
             Self { router }
         }
 

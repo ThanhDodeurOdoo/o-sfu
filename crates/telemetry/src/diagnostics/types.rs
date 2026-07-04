@@ -35,7 +35,6 @@ pub enum DiagnosticsRouteState {
 pub enum DiagnosticsSourceSelector {
     Open,
     Encoding,
-    OperatingPoint,
     RoomPolicyPinned,
     RoomPolicyFeatured,
     RoomPolicyReadableDetail,

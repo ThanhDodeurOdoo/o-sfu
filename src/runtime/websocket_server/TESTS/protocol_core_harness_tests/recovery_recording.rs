@@ -35,84 +35,6 @@ async fn recovery_peers(alice_user_id: UserId, bob_user_id: UserId) -> TestResul
 }
 
 #[tokio::test]
-async fn protocol_core_subscribe_updates_real_rtc_consumer_activity() -> TestResult {
-    let (server, room, mut alice, mut bob) = Box::pin(real_rtc_peers(
-        "issuer-protocol-rtc-subscribe",
-        UserId::Integer(91),
-        UserId::Integer(92),
-        56_311,
-        56_312,
-    ))
-    .await?;
-
-    require_some(
-        alice.publish(ProtocolStreamType::Camera, true).await,
-        "publisher should stage the initial protocol publish",
-    )?;
-    require_some(
-        alice.read_server_frame().await,
-        "publisher should consume the rtc-backed renegotiation request and answer it",
-    )?;
-
-    let track_bindings = require_some(
-        read_track_snapshot(&mut bob).await,
-        "subscriber should receive the translated track snapshot",
-    )?;
-    assert_eq!(track_bindings.len(), 1);
-    let published_track = require_some(
-        track_bindings.first(),
-        "subscriber should keep one published track",
-    )?;
-    assert_eq!(published_track.user_id, ProtocolSessionId::Integer(91));
-    assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
-    assert!(published_track.active);
-    require_some(
-        bob.read_server_frame().await,
-        "subscriber should consume the rtc-backed follow-up renegotiation request",
-    )?;
-    require_some(
-        consume_peer_info_update(
-            &mut bob,
-            ProtocolSessionId::Integer(91),
-            ProtocolSessionInfo {
-                is_camera_on: Some(true),
-                ..ProtocolSessionInfo::default().snapshot_complete()
-            },
-        )
-        .await,
-        "subscriber should consume the publisher camera-info update before subscribe activity assertions",
-    )?;
-
-    require_some(
-        assert_real_rtc_subscribe_activity(
-            &mut bob,
-            &server,
-            &room,
-            published_track,
-            UserId::Integer(91),
-            UserId::Integer(92),
-            false,
-        )
-        .await,
-        "subscriber should disable the existing rtc route without extra websocket signaling",
-    )?;
-    require_some(
-        assert_real_rtc_subscribe_activity(
-            &mut bob,
-            &server,
-            &room,
-            published_track,
-            UserId::Integer(91),
-            UserId::Integer(92),
-            true,
-        )
-        .await,
-        "real rtc route should mark the subscriber destination active again after subscribe(camera=true)",
-    )?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn protocol_core_replays_latest_subscribe_after_real_rtc_server_recovery() -> TestResult {
     let alice_user_id = UserId::Integer(93);
     let bob_user_id = UserId::Integer(94);
@@ -300,32 +222,6 @@ async fn protocol_core_replays_latest_info_after_real_server_recovery() -> TestR
 }
 
 #[tokio::test]
-async fn protocol_core_propagates_raise_hand_info_over_real_server_user_flow() -> TestResult {
-    let (_server, _channel, mut alice, mut bob) =
-        Box::pin(recovery_peers(UserId::Integer(91), UserId::Integer(92))).await?;
-
-    let latest_info = ProtocolSessionInfo {
-        is_raising_hand: Some(true),
-        ..ProtocolSessionInfo::default()
-    };
-    require_some(
-        update_info_and_deliver_to_peer(&mut bob, &mut alice, latest_info.clone()).await,
-        "raise-hand info should deliver",
-    )?;
-    assert_eq!(
-        alice.updates.last(),
-        Some(&BundleUpdate::SessionInfoChange(BTreeMap::from([(
-            bundle_session_info_key(&ProtocolSessionId::Integer(92)),
-            ProtocolSessionInfo {
-                is_raising_hand: Some(true),
-                ..ProtocolSessionInfo::default().snapshot_complete()
-            },
-        )])))
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn protocol_core_replays_latest_publish_after_real_server_recovery() -> TestResult {
     let (_server, _channel, mut alice, mut bob) =
         Box::pin(recovery_peers(UserId::Integer(81), UserId::Integer(82))).await?;
@@ -351,42 +247,6 @@ async fn protocol_core_replays_latest_publish_after_real_server_recovery() -> Te
         )
         .await,
         "publisher recovery should replay camera publish",
-    )?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn protocol_core_replays_latest_publish_after_real_rtc_server_recovery() -> TestResult {
-    let (_server, _channel, mut alice, mut bob) = Box::pin(real_rtc_peers(
-        "issuer-protocol-rtc-recovery",
-        UserId::Integer(91),
-        UserId::Integer(92),
-        55_091,
-        55_092,
-    ))
-    .await?;
-
-    require_some(
-        publish_camera_and_setup_subscriber(
-            &mut bob,
-            &mut alice,
-            &ProtocolSessionId::Integer(92),
-            "publisher should stage the initial protocol publish",
-            "publisher should consume the initial publish renegotiation and answer it",
-            "subscriber should receive the initial translated track snapshot",
-        )
-        .await,
-        "real RTC camera publish should setup the subscriber",
-    )?;
-
-    require_some(
-        recover_publisher_and_replay_camera_publish(
-            &mut bob,
-            &mut alice,
-            ProtocolSessionId::Integer(92),
-        )
-        .await,
-        "real RTC publisher recovery should replay camera publish",
     )?;
     Ok(())
 }

@@ -13,7 +13,7 @@ use crate::engine::{
         test_support::{ForwardedPacket, sample_forwarded_packet, test_transport_session_key},
     },
     metrics::RtpForwardDestinationKind,
-    packet_sink_registry::{PacketSinkLookup, PacketSinkRouteCache, RoomPacketSinkRegistry},
+    packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
     recording::MediaPacketSink,
     sync::lock_unpoisoned,
 };
@@ -93,15 +93,6 @@ fn write_packet(
         packet.received_at(),
         packet.payload(),
     );
-}
-
-#[test]
-fn packet_sink_registry_is_a_noop_when_no_room_is_active() {
-    let registry = RoomPacketSinkRegistry::default();
-    let session_key = test_transport_session_key(10, 0, 1, UserId::Integer(1));
-    let packet = sample_forwarded_packet(session_key, "aud-up", b"payload");
-
-    write_packet(&registry, &packet, TransportMediaId::default());
 }
 
 #[test]

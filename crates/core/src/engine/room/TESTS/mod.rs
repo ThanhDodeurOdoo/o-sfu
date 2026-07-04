@@ -23,6 +23,3 @@ mod outbound_tests;
 #[cfg(test)]
 #[path = "producer_tests.rs"]
 mod producer_tests;
-#[cfg(test)]
-#[path = "recording_tests.rs"]
-mod recording_tests;

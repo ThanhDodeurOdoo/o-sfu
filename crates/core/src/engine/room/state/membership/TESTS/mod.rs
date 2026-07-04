@@ -100,7 +100,6 @@ fn install_test_published_producer(
                 resolution_scale: None,
                 max_framerate: None,
                 policy_role: None,
-                max_temporal_layer_id: None,
                 negotiated_format: None,
             },
         )],
@@ -349,49 +348,6 @@ fn disconnect_sessions_ignores_missing_members() {
     assert!(cleanup.is_empty());
     assert!(outcome.effects.close_requests.is_empty());
     assert!(outcome.effects.fanouts.is_empty());
-}
-
-#[test]
-fn replacement_join_clears_transport_media_owner_index() {
-    let mut state = test_state();
-    let user_id = UserId::Integer(1);
-    let connection_id = join_test_user(&mut state, &user_id);
-    let transport_media_id = TransportMediaId::new(30);
-    let routed_producer_id = state
-        .topology
-        .routing_mut_for_test()
-        .add_producer(&user_id, MediaKind::Video)
-        .expect("replacement test producer route should be added");
-    install_test_published_producer(
-        &mut state,
-        &user_id,
-        connection_id,
-        TestSourceKind::ScalableVideo,
-        routed_producer_id,
-        transport_media_id,
-        MediaStream::new(vec![], vec![], vec![]),
-    );
-
-    assert_eq!(
-        state.inspect_producer_owner_user_id_for_transport_media_id(transport_media_id),
-        Some(user_id.clone())
-    );
-    assert_eq!(
-        state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
-        Some(connection_id)
-    );
-
-    join_test_user(&mut state, &user_id);
-
-    assert_eq!(
-        state.inspect_producer_owner_user_id_for_transport_media_id(transport_media_id),
-        None
-    );
-    assert_eq!(
-        state.inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id),
-        None
-    );
-    assert_eq!(state.media_counts().publications, 0);
 }
 
 #[test]

@@ -326,7 +326,6 @@ impl RoomState {
                         .and_then(MatchedUploadEncoding::resolution_scale),
                     max_framerate: upload_profile.and_then(MatchedUploadEncoding::max_framerate),
                     policy_role,
-                    max_temporal_layer_id: None,
                     negotiated_format: negotiated_format_for_binding(
                         consumable_rtp_parameters,
                         binding.payload_type(),

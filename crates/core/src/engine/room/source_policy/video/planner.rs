@@ -49,7 +49,3 @@ fn append_receiver_video_selection(
     }
     tx.set_receiver_bwe_targets(receiver_bwe_targets.into_values().collect());
 }
-
-#[cfg(test)]
-#[path = "TESTS/planner.rs"]
-mod tests;

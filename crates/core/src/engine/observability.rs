@@ -41,6 +41,5 @@ pub(crate) const fn source_selection_kind(selector: SourceSelector) -> SourceSel
     match selector {
         SourceSelector::Open => SourceSelectionKind::Open,
         SourceSelector::Encoding(_) => SourceSelectionKind::Encoding,
-        SourceSelector::OperatingPoint(_) => SourceSelectionKind::OperatingPoint,
     }
 }
