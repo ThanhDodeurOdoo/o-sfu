@@ -3,7 +3,7 @@ use std::sync::Arc;
 use o_sfu_protocol::wire::{ServerEnvelope, ServerMessage, UserId, WelcomePayload};
 use tracing::{debug, error};
 
-use super::{User, UserError, UserOutput};
+use super::{ServerMediaNegotiation, User, UserError, UserOutput};
 use crate::{
     core::prelude::{MediaSession, TransportSessionHealth},
     runtime::ConnectionId,
@@ -14,22 +14,21 @@ impl User {
     pub fn new(session: MediaSession, remote_address: Arc<str>) -> Self {
         Self {
             remote_address,
-            session,
-            negotiation: super::ServerNegotiation::default(),
+            media: ServerMediaNegotiation::new(session),
             cleanup_finished: false,
         }
     }
 
     pub(crate) fn room_id(&self) -> &str {
-        self.session.room_id()
+        self.media.session().room_id()
     }
 
     pub(crate) const fn connection_id(&self) -> ConnectionId {
-        self.session.connection_id()
+        self.media.session().connection_id()
     }
 
     pub(crate) fn user_id(&self) -> &UserId {
-        self.session.user_id()
+        self.media.session().user_id()
     }
 
     pub(crate) fn remote_address(&self) -> &str {
@@ -37,22 +36,19 @@ impl User {
     }
 
     pub(crate) async fn is_current_connection(&self) -> bool {
-        self.session.is_current_connection().await
+        self.media.session().is_current_connection().await
     }
 
     #[must_use]
     pub fn transport_disconnected(&self) -> bool {
-        matches!(
-            self.session.endpoint_health(),
-            Some(TransportSessionHealth::Disconnected)
-        )
+        self.media.session().endpoint_health() == Some(TransportSessionHealth::Disconnected)
     }
 
     pub async fn start(&mut self) -> Result<UserOutput, UserError> {
         let welcome = WelcomePayload {
-            features: self.session.available_features(),
-            recording: self.session.recording_state().await,
-            peers: self.session.peer_snapshots().await,
+            features: self.media.session().available_features(),
+            recording: self.media.session().recording_state().await,
+            peers: self.media.session().peer_snapshots().await,
         };
         self.reject_stale_connection().await?;
         let mut output = vec![ServerEnvelope::Message(ServerMessage::Welcome(welcome))];
@@ -60,14 +56,9 @@ impl User {
         Ok(output)
     }
 
-    /// must run before [`User`] is dropped
-    ///
-    /// clears pending negotiation state and closes the room session so staged media
-    /// plus transport user state are rolled back
     pub async fn close(&mut self) {
         if !self.cleanup_finished {
-            self.negotiation.clear_pending();
-            self.session.close().await;
+            self.media.close().await;
             self.cleanup_finished = true;
         }
     }

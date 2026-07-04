@@ -45,15 +45,13 @@ impl User {
     }
 
     async fn update_info(&self, info: UserInfo) -> Result<UserOutput, UserError> {
-        self.session.update_info(info).await;
+        self.media.session().update_info(info).await;
         Ok(UserOutput::new())
     }
 
     async fn broadcast(&self, message: JsonPayload) -> Result<UserOutput, UserError> {
-        self.session
-            .broadcast(message)
-            .await
-            .map_err(|_error| UserError::ProtocolViolation)?;
+        let result = self.media.session().broadcast(message).await;
+        result.map_err(|_error| UserError::ProtocolViolation)?;
         Ok(UserOutput::new())
     }
 
@@ -62,7 +60,7 @@ impl User {
         request_id: RequestId,
         options: RecordingOptions,
     ) -> UserOutput {
-        let ok = self.session.start_recording(options).await;
+        let ok = self.media.session().start_recording(options).await;
         vec![ServerEnvelope::Response {
             response_to: request_id,
             response: ServerResponse::StartRecording(RecordingActionResult { ok }),
@@ -70,7 +68,7 @@ impl User {
     }
 
     async fn stop_recording(&self, request_id: RequestId) -> UserOutput {
-        let ok = self.session.stop_recording().await;
+        let ok = self.media.session().stop_recording().await;
         vec![ServerEnvelope::Response {
             response_to: request_id,
             response: ServerResponse::StopRecording(RecordingActionResult { ok }),
