@@ -2,31 +2,66 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::MediaKind;
 
-use super::{
-    super::input::{SourcePolicyRoute, SourcePolicySnapshot},
-    layout::ReceiverVideoLayoutIntent,
-};
+use super::super::input::SourcePolicySnapshot;
 use crate::{
     Bitrate,
     engine::{
-        UserId,
+        UserId, VideoLayoutIntent,
         room::{media_graph::ConsumerRouteTransportRef, state::RoomState},
         source_model::{
-            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId,
-            SourceAdaptationPolicy, SourceEncodingDescriptor,
+            ConsumerSourceSelection, PublishedSourceDescriptor, SourceAdaptationPolicy,
+            SourceRoomPolicySelector, SourceRoutePriority,
         },
     },
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::engine::room) struct ReceiverVideoLayoutIntent {
+    role: SourceRoomPolicySelector,
+}
+
+impl ReceiverVideoLayoutIntent {
+    #[must_use]
+    pub(in crate::engine::room) const fn role(self) -> SourceRoomPolicySelector {
+        self.role
+    }
+
+    #[must_use]
+    pub(in crate::engine::room) const fn priority(self) -> SourceRoutePriority {
+        self.role.priority()
+    }
+
+    #[must_use]
+    pub(super) const fn uses_featured_quality(self) -> bool {
+        self.role.uses_featured_quality()
+    }
+
+    #[must_use]
+    const fn counts_toward_visible_budget(self) -> bool {
+        self.role.counts_toward_visible_budget()
+    }
+
+    #[must_use]
+    fn resolve(
+        source: &PublishedSourceDescriptor,
+        preference: Option<VideoLayoutIntent>,
+        active_speaker: bool,
+    ) -> Self {
+        let role = source
+            .policy()
+            .layout()
+            .map_or(SourceRoomPolicySelector::Hidden, |policy| {
+                policy.resolve(preference, active_speaker)
+            });
+        Self { role }
+    }
+}
 
 pub(super) fn receiver_video_routes<'a>(
     state: &RoomState,
     input: &SourcePolicySnapshot<'a>,
 ) -> Vec<ReceiverVideoRouteInput<'a>> {
-    let visible_scalable_route_counts = visible_scalable_route_counts_by_consumer(
-        state,
-        &input.routes,
-        &input.featured_source_user_ids,
-    );
+    let mut visible_scalable_route_counts = BTreeMap::new();
     let mut routes = Vec::with_capacity(input.routes.len());
     for route in &input.routes {
         let source = route.source;
@@ -41,16 +76,20 @@ pub(super) fn receiver_video_routes<'a>(
             source,
             &input.featured_source_user_ids,
         );
+        if source.policy().adaptation() == SourceAdaptationPolicy::ScalableVideo
+            && layout_intent.counts_toward_visible_budget()
+        {
+            *visible_scalable_route_counts
+                .entry(route.transport_ref.consumer_user_id.clone())
+                .or_default() += 1;
+        }
         routes.push(ReceiverVideoRouteInput {
             user_count: input.user_count,
             source,
             transport_ref: route.transport_ref.clone(),
             current_selection: route.current_selection,
             layout_intent,
-            visible_scalable_route_count: visible_scalable_route_counts
-                .get(&route.transport_ref.consumer_user_id)
-                .copied()
-                .unwrap_or(1),
+            visible_scalable_route_count: 1,
             active_speaker_rank: input
                 .active_speaker_rank_by_user
                 .get(source.owner().user_id())
@@ -61,85 +100,75 @@ pub(super) fn receiver_video_routes<'a>(
                 .copied(),
         });
     }
+    for route in &mut routes {
+        route.visible_scalable_route_count = visible_scalable_route_counts
+            .get(&route.transport_ref.consumer_user_id)
+            .copied()
+            .unwrap_or(1);
+    }
     routes
 }
 
 #[derive(Debug)]
-pub struct ReceiverVideoRouteInput<'a> {
-    pub user_count: usize,
-    pub source: &'a PublishedSourceDescriptor,
+pub(super) struct ReceiverVideoRouteInput<'a> {
+    pub(super) user_count: usize,
+    pub(super) source: &'a PublishedSourceDescriptor,
     pub(super) transport_ref: ConsumerRouteTransportRef,
-    pub current_selection: ConsumerSourceSelection,
-    pub layout_intent: ReceiverVideoLayoutIntent,
-    pub visible_scalable_route_count: usize,
-    pub active_speaker_rank: Option<usize>,
-    pub receiver_bandwidth: Option<Bitrate>,
+    pub(super) current_selection: ConsumerSourceSelection,
+    pub(super) layout_intent: ReceiverVideoLayoutIntent,
+    pub(super) visible_scalable_route_count: usize,
+    pub(super) active_speaker_rank: Option<usize>,
+    pub(super) receiver_bandwidth: Option<Bitrate>,
 }
 
-impl ReceiverVideoRouteInput<'_> {
-    pub const fn source_id(&self) -> PublishedSourceId {
-        self.source.source_id()
-    }
-
-    pub const fn adaptation_policy(&self) -> SourceAdaptationPolicy {
-        self.source.policy().adaptation()
-    }
-
-    pub fn encodings(&self) -> SelectableRouteEncodings<'_> {
-        SelectableRouteEncodings::new(self.source)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SelectableRouteEncodings<'a> {
-    source: &'a PublishedSourceDescriptor,
-}
-
-impl<'a> SelectableRouteEncodings<'a> {
+impl RoomState {
     #[must_use]
-    fn new(source: &'a PublishedSourceDescriptor) -> Self {
-        Self { source }
-    }
-
-    #[must_use]
-    pub fn len(self) -> usize {
-        self.source.selectable_encoding_count()
-    }
-
-    #[must_use]
-    pub fn get(self, rank: usize) -> Option<&'a SourceEncodingDescriptor> {
-        self.source.selectable_encoding_by_rank(rank)
-    }
-
-    pub fn iter(self) -> impl Iterator<Item = &'a SourceEncodingDescriptor> {
-        self.source.selectable_encodings()
-    }
-}
-
-fn visible_scalable_route_counts_by_consumer(
-    state: &RoomState,
-    routes: &[SourcePolicyRoute<'_>],
-    featured_source_user_ids: &BTreeSet<UserId>,
-) -> BTreeMap<UserId, usize> {
-    let mut counts = BTreeMap::new();
-    for route in routes {
-        let source = route.source;
-        if source.media_kind() != MediaKind::Video
-            || source.policy().adaptation() != SourceAdaptationPolicy::ScalableVideo
-        {
-            continue;
-        }
-        let layout_intent = state.receiver_video_layout_intent(
-            &route.transport_ref.consumer_user_id,
+    pub(in crate::engine::room) fn receiver_video_layout_intent(
+        &self,
+        consumer_user_id: &UserId,
+        source: &PublishedSourceDescriptor,
+        active_speaker_source_user_ids: &BTreeSet<UserId>,
+    ) -> ReceiverVideoLayoutIntent {
+        let preference = layout_preference(self, consumer_user_id, source);
+        ReceiverVideoLayoutIntent::resolve(
             source,
-            featured_source_user_ids,
-        );
-        if !layout_intent.counts_toward_visible_budget() {
-            continue;
-        }
-        *counts
-            .entry(route.transport_ref.consumer_user_id.clone())
-            .or_default() += 1;
+            preference,
+            active_speaker_source_user_ids.contains(source.owner().user_id()),
+        )
     }
-    counts
+
+    #[must_use]
+    pub(in crate::engine::room) fn diagnostics_video_layout_intent(
+        &self,
+        consumer_user_id: &UserId,
+        source: &PublishedSourceDescriptor,
+    ) -> Option<ReceiverVideoLayoutIntent> {
+        source.policy().layout()?;
+        let preference = layout_preference(self, consumer_user_id, source);
+        let active_speaker = self
+            .users
+            .get(source.owner().user_id())
+            .is_some_and(|user| user.featured() == Some(true));
+        Some(ReceiverVideoLayoutIntent::resolve(
+            source,
+            preference,
+            active_speaker,
+        ))
+    }
+}
+
+fn layout_preference(
+    state: &RoomState,
+    consumer_user_id: &UserId,
+    source: &PublishedSourceDescriptor,
+) -> Option<VideoLayoutIntent> {
+    state
+        .users
+        .get(consumer_user_id)
+        .and_then(|user| {
+            user.desired_source_subscriptions
+                .get(source.owner().user_id())
+        })
+        .and_then(|states| states.get(source.stream_id()))
+        .and_then(|intent| intent.layout())
 }
