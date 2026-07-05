@@ -22,7 +22,7 @@ use crate::model::{
 
 pub(super) mod router_state;
 mod shadow;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test-support", kani))]
 #[path = "../TESTS/topology_support.rs"]
 pub(super) mod test_support;
 
@@ -85,55 +85,45 @@ impl From<RouterAdapterError> for RoutingError {
 
 /// producer id plus its authoritative router
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RoutedProducerId {
-    router_id: RouterId,
-    producer_id: RouterProducerId,
-}
+pub struct RoutedProducerId(RouterId, RouterProducerId);
 
 impl RoutedProducerId {
+    #[cfg(any(test, feature = "test-support", kani))]
     #[must_use]
-    pub const fn new(router_id: RouterId, producer_id: RouterProducerId) -> Self {
-        Self {
-            router_id,
-            producer_id,
-        }
+    pub const fn for_test(router_id: RouterId, producer_id: RouterProducerId) -> Self {
+        Self(router_id, producer_id)
     }
 
     #[must_use]
     pub const fn producer_id(self) -> RouterProducerId {
-        self.producer_id
+        self.1
     }
 
     #[must_use]
     pub const fn router_id(self) -> RouterId {
-        self.router_id
+        self.0
     }
 }
 
 /// consumer id plus its authoritative source router
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct RoutedConsumerId {
-    router_id: RouterId,
-    consumer_id: RouterConsumerId,
-}
+pub struct RoutedConsumerId(RouterId, RouterConsumerId);
 
 impl RoutedConsumerId {
+    #[cfg(any(test, feature = "test-support", kani))]
     #[must_use]
-    pub const fn new(router_id: RouterId, consumer_id: RouterConsumerId) -> Self {
-        Self {
-            router_id,
-            consumer_id,
-        }
+    pub const fn for_test(router_id: RouterId, consumer_id: RouterConsumerId) -> Self {
+        Self(router_id, consumer_id)
     }
 
     #[must_use]
     pub const fn consumer_id(self) -> RouterConsumerId {
-        self.consumer_id
+        self.1
     }
 
     #[must_use]
     pub const fn router_id(self) -> RouterId {
-        self.router_id
+        self.0
     }
 }
 
@@ -484,7 +474,7 @@ impl RoutingTopology {
         let producer_id = self
             .router_mut_for_user(user_id, router_id)?
             .add_producer(user_id, media_kind)?;
-        let routed_producer_id = RoutedProducerId::new(router_id, producer_id);
+        let routed_producer_id = RoutedProducerId(router_id, producer_id);
         self.shadow_sessions
             .register_producer(routed_producer_id, user_id.clone());
         Ok(routed_producer_id)
@@ -529,7 +519,7 @@ impl RoutingTopology {
                 return Err(error.into());
             }
         };
-        let routed_consumer_id = RoutedConsumerId::new(producer_id.router_id(), consumer_id);
+        let routed_consumer_id = RoutedConsumerId(producer_id.router_id(), consumer_id);
         self.shadow_sessions.register_consumer(
             routed_consumer_id,
             producer_id,
