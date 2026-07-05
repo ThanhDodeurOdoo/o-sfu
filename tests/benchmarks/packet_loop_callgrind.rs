@@ -277,7 +277,8 @@ fn interleaved_fanout(mut fixture: WorkerPacketCommandMixBenchFixture) -> usize 
     black_box(fixture.run_packet_command_mix())
 }
 
-// measures ready session output draining
+// measures ready session output draining inside a lightly active packet-loop
+// turn
 #[library_benchmark(config = callgrind_config(1.0))]
 #[bench::drain(SessionDrainBenchFixture::new())]
 fn session_drain_128(mut fixture: SessionDrainBenchFixture) -> usize {

@@ -15,14 +15,17 @@ use std::{
 
 use tokio::sync::mpsc;
 
-use super::super::{
-    bootstrap::ensure_session_rtc_state,
-    forwarded_packet::ForwardedPacket,
-    packet_loop::{
-        PacketLoopBuffers, SessionDrainContext, drain_ready_sessions, drain_relay_packets,
+use super::{
+    super::{
+        bootstrap::ensure_session_rtc_state,
+        forwarded_packet::ForwardedPacket,
+        packet_loop::{
+            PacketLoopBuffers, SessionDrainContext, drain_ready_sessions, drain_relay_packets,
+        },
+        state::{PacketLoopState, RtcSnapshotState},
+        test_support::{sample_forwarded_packet, test_transport_session_key},
     },
-    state::{PacketLoopState, RtcSnapshotState},
-    test_support::{sample_forwarded_packet, test_transport_session_key},
+    fanout::FanoutBenchTopology,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -34,6 +37,9 @@ use crate::{
     },
 };
 
+const SESSION_DRAIN_MEDIA_TURNS: usize = 16;
+const SESSION_DRAIN_MEDIA_FANOUT: usize = 8;
+
 pub struct SessionDrainBenchFixture {
     state: PacketLoopState,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
@@ -41,6 +47,7 @@ pub struct SessionDrainBenchFixture {
     metrics: RuntimeMetrics,
     source_policy_signal: Arc<SourcePolicySignal>,
     buffers: PacketLoopBuffers,
+    fanout: FanoutBenchTopology,
     now: Instant,
 }
 
@@ -77,11 +84,13 @@ impl SessionDrainBenchFixture {
             metrics: RuntimeMetrics::default(),
             source_policy_signal: Arc::new(SourcePolicySignal::default()),
             buffers: PacketLoopBuffers::new(),
+            fanout: FanoutBenchTopology::with_local_destinations(SESSION_DRAIN_MEDIA_FANOUT),
             now: Instant::now(),
         }
     }
 
     pub fn drain_sessions(&mut self) -> usize {
+        let mut work = 0_usize;
         for session_key in self.state.users.keys().cloned().collect::<Vec<_>>() {
             self.state.mark_session_dirty(&session_key);
         }
@@ -94,7 +103,13 @@ impl SessionDrainBenchFixture {
             source_policy_signal: &self.source_policy_signal,
         };
         drain_ready_sessions(&mut self.state, &context, &mut self.buffers, self.now);
-        self.buffers.pending_packets.len()
+        work = work.saturating_add(self.buffers.pending_packets.len());
+
+        for _ in 0..SESSION_DRAIN_MEDIA_TURNS {
+            work = work.saturating_add(self.fanout.plan_packet_send());
+        }
+
+        work
     }
 }
 
