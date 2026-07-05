@@ -277,13 +277,12 @@ fn leave_removes_consumer_routes_for_departed_session() {
     let mut state = test_state();
     let producer_connection_id = join_test_user(&mut state, &UserId::Integer(1));
     let consumer_connection_id = join_test_user(&mut state, &UserId::Integer(2));
-    let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(10));
     let (_, source_id) = install_test_published_producer(
         &mut state,
         &UserId::Integer(1),
         producer_connection_id,
         TestSourceKind::ScalableVideo,
-        routed_producer_id,
+        RoutedProducerId::for_test(RouterId(1), ProducerId(10)),
         TransportMediaId::new(11),
         MediaStream::new(vec![], vec![], vec![]),
     );
@@ -291,7 +290,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
     assert!(state.topology.commit_consumer_route_for_test(
         consumer_key,
         ConsumerState {
-            routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(20)),
+            routed_consumer_id: RoutedConsumerId::for_test(RouterId(1), ConsumerId(20)),
             consumer_connection_id,
             source_connection_id: producer_connection_id,
             source_media: TransportMediaId::new(11),

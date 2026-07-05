@@ -12,10 +12,6 @@ use crate::model::{
     SessionId as RouterSessionId, TransportId as RouterTransportId,
 };
 
-#[cfg(any(test, feature = "test-support"))]
-#[path = "../TESTS/topology_router_state_support.rs"]
-mod test_support;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RouterAdapterError {
     MissingSessionMapping { user_id: UserId },

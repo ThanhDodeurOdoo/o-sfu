@@ -381,7 +381,7 @@ fn topology_rejects_shadow_consumer_without_receiver_home_placement() {
         add_active_consumer(
             &mut topology,
             &missing_consumer_user_id,
-            RoutedProducerId::new(RouterId(9), RouterProducerId(1)),
+            RoutedProducerId::for_test(RouterId(9), RouterProducerId(1)),
             ConsumerCapability::Compatible,
         ),
         Err(RoutingError::MissingSessionPlacement {
@@ -400,7 +400,7 @@ fn topology_rejects_consumer_on_missing_attached_router() {
         add_active_consumer(
             &mut topology,
             &consumer_user_id,
-            RoutedProducerId::new(RouterId(99), RouterProducerId(1)),
+            RoutedProducerId::for_test(RouterId(99), RouterProducerId(1)),
             ConsumerCapability::Compatible,
         ),
         Err(RoutingError::MissingRouter {
@@ -454,7 +454,10 @@ fn topology_preserves_pure_router_errors_without_synthetic_user_ids() {
     let mut topology = RoutingTopology::new_for_test(RouterId(9));
 
     assert_eq!(
-        topology.remove_producer(RoutedProducerId::new(RouterId(9), RouterProducerId(99))),
+        topology.remove_producer(RoutedProducerId::for_test(
+            RouterId(9),
+            RouterProducerId(99)
+        )),
         Err(RoutingError::Router(RouterError::MissingProducer(
             RouterProducerId(99)
         )))

@@ -1,11 +1,14 @@
+#[cfg(test)]
 use o_sfu_model::UserId;
 
+#[cfg(any(test, feature = "test-support"))]
 use super::RoutingTopology;
+#[cfg(test)]
 use crate::model::{MediaCapabilities, RouterId};
 
+#[cfg(test)]
 impl RoutingTopology {
-    #[must_use]
-    pub fn new_for_test(primary_router_id: RouterId) -> Self {
+    pub(crate) fn new_for_test(primary_router_id: RouterId) -> Self {
         Self::new(
             primary_router_id,
             None,
@@ -13,28 +16,28 @@ impl RoutingTopology {
         )
     }
 
-    #[must_use]
-    pub fn user_count(&self) -> usize {
+    pub(crate) fn user_count(&self) -> usize {
         self.sessions.active_connection_by_user.len()
     }
 
-    #[must_use]
-    pub fn router_count(&self) -> usize {
-        self.routers.len()
-    }
-
-    #[must_use]
-    pub fn mapped_session_count_for_router(&self, router_id: RouterId) -> Option<usize> {
+    pub(crate) fn mapped_session_count_for_router(&self, router_id: RouterId) -> Option<usize> {
         self.routers
             .get(&router_id)
-            .map(super::RouterAdapterState::mapped_session_count_for_test)
+            .map(super::RouterAdapterState::mapped_session_count)
     }
 
-    #[must_use]
-    pub fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
+    pub(crate) fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
         self.sessions
             .active(user_id)
             .map(|session| session.placement.router)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl RoutingTopology {
+    #[must_use]
+    pub fn router_count(&self) -> usize {
+        self.routers.len()
     }
 }
 
@@ -54,8 +57,8 @@ pub mod proof {
         let receiver_user_id = UserId::Integer(20);
         let source_router_id = RouterId(9);
         let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id.clone());
-        let producer = RoutedProducerId::new(source_router_id, ProducerId(1));
-        let consumer = RoutedConsumerId::new(source_router_id, ConsumerId(1));
+        let producer = RoutedProducerId::for_test(source_router_id, ProducerId(1));
+        let consumer = RoutedConsumerId::for_test(source_router_id, ConsumerId(1));
         let mut tracker = ShadowSessionTracker::default();
 
         tracker.register_producer(producer, source_user_id);
@@ -73,8 +76,8 @@ pub mod proof {
         let receiver_user_id = UserId::Integer(20);
         let source_router_id = RouterId(9);
         let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id.clone());
-        let producer = RoutedProducerId::new(source_router_id, ProducerId(1));
-        let consumer = RoutedConsumerId::new(source_router_id, ConsumerId(1));
+        let producer = RoutedProducerId::for_test(source_router_id, ProducerId(1));
+        let consumer = RoutedConsumerId::for_test(source_router_id, ConsumerId(1));
         let mut tracker = ShadowSessionTracker::default();
 
         tracker.register_producer(producer, source_user_id);

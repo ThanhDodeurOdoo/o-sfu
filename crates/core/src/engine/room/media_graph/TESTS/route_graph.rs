@@ -38,7 +38,7 @@ fn target(
         stream_id: UserStreamId::from("camera"),
         media_kind: MediaKind::Video,
         consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
-        routed_producer_id: RoutedProducerId::new(RouterId(1), ProducerId(10)),
+        routed_producer_id: RoutedProducerId::for_test(RouterId(1), ProducerId(10)),
         transport_media_id: Some(transport_media_id),
         active: true,
     };
@@ -64,7 +64,7 @@ fn session_key(user: UserId, connection: ConnectionId) -> TransportSessionKey {
 
 fn consumer_state(id: u64) -> ConsumerState {
     ConsumerState {
-        routed_consumer_id: RoutedConsumerId::new(RouterId(1), ConsumerId(id)),
+        routed_consumer_id: RoutedConsumerId::for_test(RouterId(1), ConsumerId(id)),
         consumer_connection_id: ConnectionId::from_raw(20 + id),
         source_connection_id: ConnectionId::from_raw(10),
         source_media: TransportMediaId::new(50),

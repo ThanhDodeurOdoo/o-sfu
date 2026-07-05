@@ -352,9 +352,9 @@ fn install_test_consumer_state(
     assert!(state.topology.commit_consumer_route_for_test(
         key.clone(),
         ConsumerState {
-            routed_consumer_id: RoutedConsumerId::new(
+            routed_consumer_id: RoutedConsumerId::for_test(
                 RouterId(1),
-                ConsumerId(consumer_media.as_u64()),
+                ConsumerId(consumer_media.as_u64())
             ),
             consumer_connection_id,
             source_connection_id,
@@ -487,16 +487,14 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     let user_id = UserId::Integer(1);
     let connection_id = join_test_user(&mut state, &user_id);
 
-    let routed_producer_id = RoutedProducerId::new(RouterId(1), ProducerId(777));
-    let transport_media_id = TransportMediaId::default();
     let (producer_id, _source_id) = install_test_published_producer_with_route(
         &mut state,
         &user_id,
         connection_id,
         TestSourceKind::ScalableVideo,
-        routed_producer_id,
+        RoutedProducerId::for_test(RouterId(1), ProducerId(777)),
         sample_video_rtp_parameters(None, 77_777),
-        transport_media_id,
+        TransportMediaId::default(),
     );
 
     let producer_target = state
@@ -732,7 +730,7 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_route_graph_rejection(
         state
             .topology
             .routing_mut_for_test()
-            .remove_consumer(RoutedConsumerId::new(RouterId(1), ConsumerId(1)))
+            .remove_consumer(RoutedConsumerId::for_test(RouterId(1), ConsumerId(1)))
             .is_err(),
         "routed consumer created before route graph rejection must be rolled back"
     );
