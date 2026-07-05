@@ -171,15 +171,63 @@ infrastructure that tracks commit-level container packages
 for Docker Compose, publish the same UDP range as the RTC env range:
 
 ```yaml
+x-logging: &bounded-logs
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   o-sfu:
     image: ghcr.io/<owner>/o-sfu:<tag>
     restart: unless-stopped
+    logging: *bounded-logs
     env_file: /etc/o-sfu/o-sfu.env
     expose:
       - "8070"
     ports:
       - "40000-40099:40000-40099/udp"
+```
+
+the `logging` block bounds the container stdout/stderr log store at the source
+with the Docker `local` driver
+
+use `TELEMETRY_LOG_FORMAT=json` for the telemetry stack
+
+`o-sfu` does not choose a `.jsonl` path and does not write one itself
+the deployment layer must route stdout/stderr to a rotated JSONL source when the
+telemetry collector should ingest logs
+
+for the reference `o-sfu-telemetry` stack, the collector side reads `*.jsonl`
+files from the directory configured by `O_SFU_LOG_DIR`
+
+the VPS profile can feed that source by mounting the telemetry log directory
+into the SFU container and appending stdout/stderr with `tee`
+
+```yaml
+services:
+  o-sfu:
+    volumes:
+      - /opt/o-sfu-telemetry/data/logs:/var/log/o-sfu
+    command:
+      - sh
+      - -lc
+      - o-sfu 2>&1 | tee -a /var/log/o-sfu/o-sfu.jsonl
+```
+
+bound that JSONL file with logrotate, because `tee -a` does not rotate files
+
+```conf
+/opt/o-sfu-telemetry/data/logs/o-sfu.jsonl {
+    size 20M
+    rotate 5
+    missingok
+    notifempty
+    copytruncate
+    compress
+    delaycompress
+    su root root
+}
 ```
 
 when `o-sfu` runs under systemd without a container, make sure the same UDP range is allowed by the cloud and host firewalls
@@ -295,6 +343,7 @@ runtime:
 - `PUBLIC_IP` is the VM public IP
 - `PUBLIC_IP` is not the NGINX domain
 - `PUBLIC_IP` is not `0.0.0.0`
+- Docker Compose logging uses explicit `max-size` and `max-file` limits
 - `PROXY=true` is set only behind the trusted NGINX edge
 - `AUTH_KEY` matches the Odoo caller configuration
 - `AUTH_KEY` is generated with cryptographically safe randomness
