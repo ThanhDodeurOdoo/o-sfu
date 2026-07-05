@@ -2,34 +2,23 @@ use o_sfu_router::MediaKind;
 
 use super::{
     super::action::{BudgetSolverOutcomes, ConsumerPacketSelectionUpdate},
-    receiver::{PlannedReceiverRoute, RouteOutcome},
-    selection::{AdaptationCounts, ReceiverRouteSelection},
+    solver::{AdaptationCounts, PlannedReceiverRoute, ReceiverRouteSelection, RouteOutcome},
 };
 use crate::engine::{
     media_transport::SourcePacketGate,
     source_model::{PublishedSourceDescriptor, ReceiverVideoBudgetDiagnostics, SourceSelector},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SourcePacketGateProjectionError {
-    MissingEncoding,
-    MissingRid,
-}
-
 pub(super) fn source_packet_gate_for_selector(
     source: &PublishedSourceDescriptor,
     selector: SourceSelector,
-) -> Result<SourcePacketGate, SourcePacketGateProjectionError> {
+) -> Option<SourcePacketGate> {
     match selector {
-        SourceSelector::Open => Ok(SourcePacketGate::Open),
+        SourceSelector::Open => Some(SourcePacketGate::Open),
         SourceSelector::Encoding(encoding_id) => {
-            let encoding = source
-                .encoding(encoding_id)
-                .ok_or(SourcePacketGateProjectionError::MissingEncoding)?;
-            let rid = encoding
-                .rid()
-                .ok_or(SourcePacketGateProjectionError::MissingRid)?;
-            Ok(SourcePacketGate::Rid(rid.as_str().to_owned()))
+            let encoding = source.encoding(encoding_id)?;
+            let rid = encoding.rid()?;
+            Some(SourcePacketGate::Rid(rid.as_str().to_owned()))
         }
     }
 }
@@ -51,7 +40,10 @@ pub(super) fn consumer_packet_selection_update(
     let packet_gate = if selection.selector == current_selection.selector() {
         None
     } else {
-        Some(source_packet_gate_for_selector(input.source, selection.selector).ok()?)
+        Some(source_packet_gate_for_selector(
+            input.source,
+            selection.selector,
+        )?)
     };
     let route_activity_changed =
         selection.policy_pause_reason != current_selection.policy_pause_reason();
@@ -88,16 +80,10 @@ fn route_outcomes(
         (Some(reason), current_reason) if current_reason != Some(reason) => {
             BudgetSolverOutcomes::paused()
         }
-        _ => route.outcome.into(),
-    }
-}
-
-impl From<RouteOutcome> for BudgetSolverOutcomes {
-    fn from(outcome: RouteOutcome) -> Self {
-        match outcome {
-            RouteOutcome::Neutral => Self::default(),
-            RouteOutcome::Degraded => Self::degraded(),
-            RouteOutcome::Paused => Self::paused(),
-        }
+        _ => match route.outcome {
+            RouteOutcome::Neutral => BudgetSolverOutcomes::default(),
+            RouteOutcome::Degraded => BudgetSolverOutcomes::degraded(),
+            RouteOutcome::Paused => BudgetSolverOutcomes::paused(),
+        },
     }
 }
