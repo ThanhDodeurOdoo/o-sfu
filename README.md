@@ -19,9 +19,6 @@
 [![Formal Verification](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/formal-verification.yml)
 [![UB Tests](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/ub-tests.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/ub-tests.yml)
 [![Sanitizer](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/sanitizer.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/sanitizer.yml)
-[![Cargo Deny](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml)
-[![Dependency Review](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/dependency-review.yml)
-[![CodeQL](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/github-code-scanning/codeql)
 
 </div>
 
