@@ -521,26 +521,6 @@ impl fmt::Display for DtlsFingerprintAlgorithm {
     }
 }
 
-/// DTLS-SRTP protection profile identifiers for `use_srtp`.
-///
-/// Reference: RFC 5764 section 4.1.2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum DtlsSrtpProtectionProfile {
-    Aes128CmHmacSha1_80 = 0x0001,
-    Aes128CmHmacSha1_32 = 0x0002,
-}
-
-impl DtlsSrtpProtectionProfile {
-    #[must_use]
-    pub const fn as_u16(self) -> u16 {
-        match self {
-            Self::Aes128CmHmacSha1_80 => 0x0001,
-            Self::Aes128CmHmacSha1_32 => 0x0002,
-        }
-    }
-}
-
 /// SCTP transport dictionary defaults preserved by the current WebRTC bootstrap payload.
 pub mod data_channel {
     pub const SCTP_PORT: u16 = 5_000;
