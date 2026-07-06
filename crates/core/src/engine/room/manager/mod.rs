@@ -12,8 +12,6 @@
 //! directory-current rooms accept manager mutations. empty-room removal waits
 //! for accepted leases to finish before the directory row is forgotten
 
-#[cfg(not(test))]
-use std::future::ready;
 #[cfg(test)]
 use std::sync::Mutex;
 use std::{collections::BTreeSet, future::Future, sync::Arc};
@@ -22,7 +20,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
 
 #[cfg(test)]
-pub use self::test_support::JoinPlacementTestGate;
+pub use super::placement::JoinPlacementTestGate;
 use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
     RoomUserStatsSnapshot,
@@ -30,7 +28,7 @@ use super::{
     effects::batch::RoomEffectContext,
     factory::RoomFactory,
     membership::JoinUserRequest,
-    placement::WorkerLoadIndex,
+    placement::{JoinAdmissionTurn, WorkerLoadIndex},
     source_policy::SourcePolicyTurn,
 };
 use crate::engine::{
@@ -336,19 +334,13 @@ impl RoomManager {
             .run_current_room_mutation(
                 room_id,
                 |room| async move {
-                    #[cfg(test)]
-                    let after_planning = self.wait_after_join_placement_for_test();
-                    #[cfg(not(test))]
-                    let after_planning = ready(());
                     let worker_loads = self.worker_load_index(media_transport).await;
-                    room.admit_session(
-                        request,
-                        worker_loads,
-                        RoomEffectContext::runtime(media_transport),
-                        after_planning,
-                        || self.factory.allocate_spillover_router(),
-                    )
-                    .await
+                    let admission =
+                        JoinAdmissionTurn::from_factory(request, worker_loads, &self.factory);
+                    #[cfg(test)]
+                    let admission = admission.with_gate(self.join_placement_gate_for_test());
+                    room.admit_session(admission, RoomEffectContext::runtime(media_transport))
+                        .await
                 },
                 |_| false,
             )

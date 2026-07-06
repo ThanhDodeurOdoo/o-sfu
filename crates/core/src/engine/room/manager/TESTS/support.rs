@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 #[cfg(test)]
-use {crate::engine::sync::lock_unpoisoned, std::fmt, tokio::sync::Barrier};
-
+use super::JoinPlacementTestGate;
 use super::{
     super::{RoomAdmissionPolicy, RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities},
     RoomManager, RoomManagerConfig, RoomManagerDeps,
 };
+#[cfg(test)]
+use crate::engine::sync::lock_unpoisoned;
 use crate::{
     MediaCodecFlags, RoomMediaLimits, RuntimeFeatureFlags,
     engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
@@ -57,11 +58,8 @@ impl RoomManager {
     }
 
     #[cfg(test)]
-    pub(super) async fn wait_after_join_placement_for_test(&self) {
-        let gate = lock_unpoisoned(&self.join_placement_gate).as_ref().cloned();
-        if let Some(gate) = gate {
-            gate.wait_after_planning().await;
-        }
+    pub(super) fn join_placement_gate_for_test(&self) -> Option<Arc<JoinPlacementTestGate>> {
+        lock_unpoisoned(&self.join_placement_gate).clone()
     }
 }
 
@@ -71,42 +69,4 @@ fn test_runtime_policy(admission_policy: RoomAdmissionPolicy) -> RoomRuntimePoli
         RuntimeFeatureFlags::default(),
         router_rtp_capabilities(MediaCodecFlags::default()),
     )
-}
-
-#[cfg(test)]
-pub struct JoinPlacementTestGate {
-    planned: Barrier,
-    release: Barrier,
-}
-
-#[cfg(test)]
-impl JoinPlacementTestGate {
-    pub fn new(expected: usize) -> Self {
-        Self {
-            planned: Barrier::new(expected + 1),
-            release: Barrier::new(expected + 1),
-        }
-    }
-
-    async fn wait_after_planning(&self) {
-        self.planned.wait().await;
-        self.release.wait().await;
-    }
-
-    pub async fn hold_all_planned(&self) {
-        self.planned.wait().await;
-    }
-
-    pub async fn release_all(&self) {
-        self.release.wait().await;
-    }
-}
-
-#[cfg(test)]
-impl fmt::Debug for JoinPlacementTestGate {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("JoinPlacementTestGate")
-            .finish_non_exhaustive()
-    }
 }
