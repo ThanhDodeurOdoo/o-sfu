@@ -11,7 +11,7 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, ProducerActivity, TransportSessionKey,
+            ConsumerActivity, TransportSessionKey,
             test_support::{
                 DebugRouteEntry, test_media_transport_config, test_media_transport_deps,
                 test_rtc_port_range,
@@ -24,7 +24,7 @@ use crate::{
 };
 
 #[tokio::test]
-async fn route_control_executor_applies_room_finish_work() -> Result<(), Box<dyn Error>> {
+async fn room_route_effects_execute_finish_work() -> Result<(), Box<dyn Error>> {
     let fixture = RouteFixture::new().await?;
     fixture.request_standalone_keyframe().await;
     fixture.pause_route_activity().await?;
@@ -102,65 +102,52 @@ impl RouteFixture {
     }
 
     async fn request_standalone_keyframe(&self) {
-        let mut routes = RoomRouteEffects::new();
-        routes.push_consumer(
-            keyframe_control(&self.target),
-            ConsumerRouteFinish::Keyframe(self.target.clone()),
-        );
-        execute_route_control(routes, &self.media_transport).await;
+        let mut routes = RoomRouteEffects::default();
+        routes.keyframe(self.target.clone());
+        routes.execute(&self.media_transport).await;
         assert_eq!(self.metrics.snapshot().rtc_keyframe_requests_forwarded(), 1);
     }
 
     async fn pause_route_activity(&self) -> Result<(), io::Error> {
-        let activity = ReceiverRouteActivity::new(self.target.clone(), false);
-        let mut routes = RoomRouteEffects::new();
-        routes.push_producer(
+        let mut routes = RoomRouteEffects::default();
+        routes.producer_activity(
             self.route.source().clone(),
-            ProducerActivity::Inactive,
-            self.producer_finish(ProducerActivity::Inactive),
+            false,
+            diagnostics(self.route.source_session_key(), "producer.activity"),
         );
-        routes.push_consumer(
-            activity_control(&activity),
-            ConsumerRouteFinish::Activity(
-                activity,
-                diagnostics(self.route.consumer_session_key(), "consumer.activity"),
-            ),
+        routes.receiver_activity(
+            ReceiverRouteActivity::new(self.target.clone(), false),
+            diagnostics(self.route.consumer_session_key(), "consumer.activity"),
         );
 
-        let outcome = execute_route_control(routes, &self.media_transport).await;
+        let outcome = routes.execute(&self.media_transport).await;
 
         assert_eq!(outcome.diagnostics.len(), 2);
         let has_event = |name| outcome.diagnostics.iter().any(|event| event.event == name);
         assert!(has_event("producer.activity"));
         assert!(has_event("consumer.activity"));
-        self.assert_route_state(false, 0, false).await?;
+        self.assert_route_state(0, false).await?;
         Ok(())
     }
 
     async fn apply_setup_activity_correction(&self, active: bool) -> Result<(), io::Error> {
         let keyframes = self.keyframe_request_count();
-        execute_setup_activity_correction(
-            self.route.clone(),
-            MediaKind::Video,
-            active,
-            &self.media_transport,
-        )
-        .await;
+        let mut routes = RoomRouteEffects::default();
+        routes.setup_activity(self.route.clone(), MediaKind::Video, active);
+        routes.execute(&self.media_transport).await;
 
         let expected_keyframes = if active { keyframes + 1 } else { keyframes };
         assert_eq!(self.keyframe_request_count(), expected_keyframes);
-        self.assert_route_state(false, usize::from(active), active)
-            .await
+        self.assert_route_state(usize::from(active), active).await
     }
 
     async fn assert_route_state(
         &self,
-        source_active: bool,
         active_destination_count: usize,
         destination_active: bool,
     ) -> Result<(), io::Error> {
         let route = self.route_entry().await?;
-        assert_eq!(route.source_active, source_active);
+        assert!(!route.source_active);
         assert_eq!(route.active_destination_count, active_destination_count);
         assert!(route.destinations.iter().any(|destination| {
             destination.dest_transport_media_id == self.route.consumer_transport_media_id()
@@ -175,14 +162,6 @@ impl RouteFixture {
             .route_entry_by_media_id(self.route.source_transport_media_id())
             .await
             .ok_or_else(|| io::Error::other("video route should exist"))
-    }
-
-    fn producer_finish(&self, activity: ProducerActivity) -> ProducerRouteFinish {
-        ProducerRouteFinish {
-            source: self.route.source().clone(),
-            activity,
-            diagnostics: diagnostics(self.route.source_session_key(), "producer.activity"),
-        }
     }
 
     fn keyframe_request_count(&self) -> u64 {
