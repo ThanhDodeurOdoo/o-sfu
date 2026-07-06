@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem,
+    sync::Arc,
 };
 
 use o_sfu_router::{
@@ -8,7 +9,7 @@ use o_sfu_router::{
     state::{
         ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, ProducerRouteState,
     },
-    topology::{RoutedConsumerId, RoutingError, RoutingPlacementCommit, RoutingTopology},
+    topology::{RoutedConsumerId, RoutingError, RoutingTopology},
 };
 use tracing::{error, warn};
 
@@ -49,7 +50,6 @@ pub struct RoomTopology {
     sources: SourceIndex,
     route_graph: RouteGraph,
     routing: RoutingTopology,
-    transport_session_by_connection: BTreeMap<ConnectionId, TransportSessionKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,7 +91,6 @@ impl RoomTopology {
                 runtime_context.initial_router_placements().cloned(),
                 router_rtp_capabilities,
             ),
-            transport_session_by_connection: BTreeMap::new(),
         }
     }
 
@@ -102,14 +101,14 @@ impl RoomTopology {
     #[must_use]
     pub fn committed_transport_user_key(
         &self,
-        user_id: &UserId,
+        user_id: impl Into<Arc<UserId>>,
         connection_id: ConnectionId,
     ) -> Option<TransportSessionKey> {
-        self.routing
-            .committed_media_worker_id(user_id, connection_id)?;
-        self.transport_session_by_connection
-            .get(&connection_id)
-            .cloned()
+        let user_id = user_id.into();
+        let worker = self
+            .routing
+            .committed_media_worker_id(user_id.as_ref(), connection_id)?;
+        Some(self.transport_session_key(user_id, connection_id, worker))
     }
 
     /// requires committed placement for `user_id` and `connection_id`
@@ -125,27 +124,26 @@ impl RoomTopology {
     )]
     pub fn transport_user_key(
         &self,
-        user_id: &UserId,
+        user_id: impl Into<Arc<UserId>>,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        let Some(session_key) = self.committed_transport_user_key(user_id, connection_id) else {
+        let user_id = user_id.into();
+        let Some(worker) = self
+            .routing
+            .committed_media_worker_id(user_id.as_ref(), connection_id)
+        else {
             unreachable!("transport session key lookup requires committed connection placement");
         };
-        session_key
+        self.transport_session_key(user_id, connection_id, worker)
     }
 
     fn transport_session_key(
         &self,
-        user_id: &UserId,
+        user_id: Arc<UserId>,
         connection_id: ConnectionId,
         media_worker_id: MediaWorkerId,
     ) -> TransportSessionKey {
-        TransportSessionKey::new(
-            self.instance,
-            media_worker_id,
-            connection_id,
-            user_id.clone(),
-        )
+        TransportSessionKey::new(self.instance, media_worker_id, connection_id, user_id)
     }
 
     pub fn retire_committed_placement(
@@ -153,11 +151,10 @@ impl RoomTopology {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<TransportSessionKey> {
-        let retired_id = self
+        let media_worker = self
             .routing
-            .retire_committed_placement(user_id, connection_id)?
-            .connection_id;
-        self.transport_session_by_connection.remove(&retired_id)
+            .retire_committed_placement(user_id, connection_id)?;
+        Some(self.transport_session_key(user_id.clone().into(), connection_id, media_worker))
     }
 
     pub fn reconcile_spillover_routers(
@@ -384,9 +381,10 @@ impl RoomTopology {
         let Some(media) = producer.transport_media_id else {
             return Vec::new();
         };
-        let Some(producer_session) = self
-            .committed_transport_user_key(&producer.owner_user_id, producer.owner_connection_id)
-        else {
+        let Some(producer_session) = self.committed_transport_user_key(
+            producer.owner_user_id.clone(),
+            producer.owner_connection_id,
+        ) else {
             return Vec::new();
         };
         receivers
@@ -420,7 +418,7 @@ impl RoomTopology {
         if self.has_consumer_setup_or_route(&key) {
             return None;
         }
-        let consumer_session = self.committed_transport_user_key(user_id, connection_id)?;
+        let consumer_session = self.committed_transport_user_key(user_id.clone(), connection_id)?;
         Some(ConsumerSetupTarget::new(
             user_id.clone(),
             connection_id,
@@ -446,7 +444,7 @@ impl RoomTopology {
                 }
                 let media = producer.transport_media_id?;
                 let session = self.committed_transport_user_key(
-                    &producer.owner_user_id,
+                    producer.owner_user_id.clone(),
                     producer.owner_connection_id,
                 )?;
                 self.consumer_target(
@@ -508,8 +506,6 @@ impl RoomTopology {
                 let Some(media_worker) = self
                     .routing
                     .committed_media_worker_id(&key.consumer_user_id, connection_id)
-                    .and_then(|_| self.transport_session_by_connection.get(&connection_id))
-                    .map(TransportSessionKey::media_worker_id)
                 else {
                     continue;
                 };
@@ -672,10 +668,10 @@ impl RoomTopology {
         source: &PublishedSourceDescriptor,
     ) -> ConsumerRouteTarget {
         let transport_route = TransportConsumerRoute::new(
-            self.transport_user_key(&route.consumer_user_id, route.consumer_connection_id),
+            self.transport_user_key(route.consumer_user_id.clone(), route.consumer_connection_id),
             route.consumer_media,
             TransportSourceKey::new(
-                self.transport_user_key(&route.source_user_id, route.source_connection_id),
+                self.transport_user_key(route.source_user_id.clone(), route.source_connection_id),
                 route.source_media,
             ),
         );
@@ -694,7 +690,7 @@ impl RoomTopology {
         removals
             .into_iter()
             .map(|removal| TransportCleanupOperation::RemoveMedia {
-                session_key: self.transport_user_key(&removal.user, removal.connection),
+                session_key: self.transport_user_key(removal.user, removal.connection),
                 transport_media_id: removal.transport_media,
             })
             .collect()
@@ -707,8 +703,10 @@ impl RoomTopology {
         effects
             .into_iter()
             .map(|effect| ResolvedRelayRouteEffect {
-                source_session_key: self
-                    .transport_user_key(&effect.route.source_user, effect.route.source_connection),
+                source_session_key: self.transport_user_key(
+                    effect.route.source_user.clone(),
+                    effect.route.source_connection,
+                ),
                 route: effect.route,
                 action: effect.action,
             })
@@ -730,7 +728,7 @@ impl RoomTopology {
                     session_key.clone()
                 } else {
                     self.transport_user_key(
-                        &effect.route.source_user,
+                        effect.route.source_user.clone(),
                         effect.route.source_connection,
                     )
                 };
@@ -807,7 +805,8 @@ impl RoomTopology {
         home_placement: RouterPlacement,
     ) -> Result<SessionPlacementCommit, SessionPlacementRejection> {
         let previous_session_key = if let Some(previous_connection) = previous_connection {
-            let Some(key) = self.committed_transport_user_key(user_id, previous_connection) else {
+            let Some(key) = self.committed_transport_user_key(user_id.clone(), previous_connection)
+            else {
                 return Err(SessionPlacementRejection::MissingPreviousSession {
                     previous_connection,
                 });
@@ -816,25 +815,14 @@ impl RoomTopology {
         } else {
             None
         };
-        let RoutingPlacementCommit {
-            receipt: router_receipt,
-            displaced_connection,
-        } = self
+        let media_worker = self
             .routing
             .commit_session_placement(user_id, connection_id, home_placement)
             .map_err(SessionPlacementRejection::Router)?;
-        let session_key = self.transport_session_key(
-            user_id,
-            router_receipt.connection_id,
-            router_receipt.media_worker_id,
-        );
-        if let Some(connection_id) = displaced_connection {
-            self.transport_session_by_connection.remove(&connection_id);
-        }
-        self.transport_session_by_connection
-            .insert(router_receipt.connection_id, session_key.clone());
+        let session_key =
+            self.transport_session_key(user_id.clone().into(), connection_id, media_worker);
         let receipt = CommittedTransportReceipt {
-            connection_id: router_receipt.connection_id,
+            connection_id,
             transport_session_key: session_key,
         };
         let replacement_transport_plan = previous_session_key.as_ref().map_or_else(
@@ -858,16 +846,11 @@ impl RoomTopology {
         })
     }
 
-    pub fn remove_session(
-        &mut self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-    ) -> RoomTransportPlan {
+    pub fn remove_session(&mut self, user_id: &UserId) -> RoomTransportPlan {
         let transport_removals = self.transport_removals_for_user(user_id);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         let relay_effects = self.remove_user_media(user_id);
         let relay_effects = self.resolved_relay_route_effects(relay_effects);
-        self.transport_session_by_connection.remove(&connection_id);
         let routing_repair = self.routing.remove_session_repairing(user_id);
         if !routing_repair.is_clean() {
             error!(

@@ -69,6 +69,24 @@ fn join_test_user(state: &mut RoomState, user_id: &UserId) -> ConnectionId {
         .connection_id
 }
 
+fn join_test_user_on_placement(
+    state: &mut RoomState,
+    user_id: &UserId,
+    placement: RouterPlacement,
+) -> ConnectionId {
+    state
+        .apply_join_on_placement(
+            user_id,
+            UserPermissions::default(),
+            test_sender(),
+            UserJoinedFanout::Suppress,
+            placement,
+        )
+        .expect("test user should join on placement")
+        .receipt
+        .connection_id
+}
+
 fn install_test_published_producer(
     state: &mut RoomState,
     user_id: &UserId,
@@ -138,23 +156,14 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let publisher = UserId::Integer(1);
     let subscriber = UserId::Integer(2);
     let publisher_connection = join_test_user(state, &publisher);
-    assert!(
-        state
-            .apply_join_on_placement(
-                &subscriber,
-                UserPermissions::default(),
-                test_sender(),
-                UserJoinedFanout::Suppress,
-                RouterPlacement {
-                    router: RouterId(2),
-                    media_worker: MediaWorkerId::from_raw(1),
-                },
-            )
-            .is_ok()
+    let subscriber_connection = join_test_user_on_placement(
+        state,
+        &subscriber,
+        RouterPlacement {
+            router: RouterId(2),
+            media_worker: MediaWorkerId::from_raw(1),
+        },
     );
-    let subscriber_connection = state
-        .user_connection_id(&subscriber)
-        .expect("subscriber should be joined");
     assert!(
         state
             .set_user_negotiated(
@@ -246,7 +255,14 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
 fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
-    let connection_id = join_test_user(&mut state, &user_id);
+    let connection_id = join_test_user_on_placement(
+        &mut state,
+        &user_id,
+        RouterPlacement {
+            router: RouterId(2),
+            media_worker: MediaWorkerId::from_raw(1),
+        },
+    );
     let session_key = state.transport_user_key(&user_id, connection_id);
     state
         .users

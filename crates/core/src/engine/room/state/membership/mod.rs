@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     mem,
+    sync::Arc,
 };
 
 use o_sfu_router::rtp::MediaCapabilities;
@@ -210,6 +211,7 @@ impl RoomState {
         self.users.insert(
             user_id.clone(),
             ActiveUser {
+                user_id: Arc::new(user_id.clone()),
                 permissions,
                 info: UserInfo::default(),
                 server_featured: None,
@@ -264,7 +266,7 @@ impl RoomState {
         };
         source_recipients.remove(user_id);
         let placement = self.apply_join_routing(user_id, connection_id, is_new, home_placement)?;
-        let routing_receipt = placement.receipt;
+        let receipt = placement.receipt;
         let mut transport_plan = placement.replacement_transport_plan;
         if let Some(previous_connection) = previous_connection {
             transport_plan.extend_cleanup(
@@ -310,14 +312,14 @@ impl RoomState {
         Ok(JoinCommit {
             counts: self.membership_delta(users_before, media_before),
             effects,
-            receipt: routing_receipt,
+            receipt,
             transport_plan,
         })
     }
 
     fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
         let user = self.users.remove(user_id)?;
-        let mut transport_plan = self.topology.remove_session(user_id, user.connection_id);
+        let mut transport_plan = self.topology.remove_session(user_id);
         transport_plan.extend_cleanup(
             self.staged_publishes
                 .cleanup_operations_for_connection(user_id, user.connection_id),

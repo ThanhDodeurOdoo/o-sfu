@@ -32,13 +32,13 @@ impl TransportSessionKey {
         room_instance_id: RoomInstanceId,
         media_worker_id: MediaWorkerId,
         connection_id: ConnectionId,
-        user_id: UserId,
+        user_id: impl Into<Arc<UserId>>,
     ) -> Self {
         Self {
             room_instance: room_instance_id,
             media_worker: media_worker_id,
             connection: connection_id,
-            user: Arc::new(user_id),
+            user: user_id.into(),
         }
     }
 
