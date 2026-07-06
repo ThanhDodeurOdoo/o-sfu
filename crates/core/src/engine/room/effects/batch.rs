@@ -14,7 +14,7 @@ use crate::engine::{
             ConsumerSetupOrigin, ProducerActivityCommit, PublishCommit, ReceiverRouteCommit,
             ReceiverRouteWork, UnpublishCommit,
         },
-        source_policy::SourcePolicyWakeups,
+        source_policy::SourcePolicyTurn,
         state::{
             ConnectionCloseCommit, DisconnectCommit, JoinCommit, PresenceCommit, UserJoinedFanout,
         },
@@ -88,7 +88,7 @@ pub struct RoomEffects {
     observability: RoomObservabilityPlan,
     transport: RoomTransportPlan,
     output: RoomOutputPlan,
-    source_policy: SourcePolicyWakeups,
+    source_policy: SourcePolicyTurn,
 }
 
 pub(in crate::engine::room) enum RoomCommit {
@@ -357,14 +357,12 @@ impl RoomEffects {
             .await;
         observability.extend_gauges(transport_outcome.gauges);
         observability.extend_records(transport_outcome.diagnostics);
-        source_policy.extend(transport_outcome.source_policy);
+        source_policy.extend(&transport_outcome.source_policy);
         observability.record_gauges(room);
         output.emit_before_policy();
-        let media_transport = context.media_transport();
-        let transaction = source_policy.plan(room, media_transport).await;
-        if let Some((transaction, media_transport)) = transaction.zip(media_transport) {
-            transaction.execute(room, media_transport).await;
-        }
+        source_policy
+            .execute(room, context.media_transport(), None)
+            .await;
         output.emit_after_policy();
         observability.record_diagnostics(room);
     }

@@ -23,14 +23,14 @@ use crate::engine::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourcePolicyTrigger {
+enum SourcePolicyTrigger {
     RouteGraph,
     PacketSelection,
     FanoutPressure,
 }
 
 impl SourcePolicyTrigger {
-    pub const fn merge(self, next: Self) -> Self {
+    const fn merge(self, next: Self) -> Self {
         use SourcePolicyTrigger::{FanoutPressure, PacketSelection, RouteGraph};
 
         match (self, next) {
@@ -44,17 +44,21 @@ impl SourcePolicyTrigger {
     }
 }
 
-/// deferred source-policy trigger emitted by room state transitions
+/// deferred source-policy turn executed after route effects and pre-policy output
 ///
-/// multiple wakeups collapse to one strongest trigger
-/// [`Self::plan`] runs policy planning after route effects and pre-policy output
-/// drain, then the transaction applies route effects before committing accepted state updates
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SourcePolicyWakeups {
+/// multiple triggers collapse to one strongest trigger
+#[derive(Debug, Default)]
+pub struct SourcePolicyTurn {
     trigger: Option<SourcePolicyTrigger>,
 }
 
-impl SourcePolicyWakeups {
+impl SourcePolicyTurn {
+    pub const fn packet_selection() -> Self {
+        Self {
+            trigger: Some(SourcePolicyTrigger::PacketSelection),
+        }
+    }
+
     pub fn route_graph_changed(&mut self) {
         self.push(SourcePolicyTrigger::RouteGraph);
     }
@@ -67,18 +71,53 @@ impl SourcePolicyWakeups {
         self.push(SourcePolicyTrigger::FanoutPressure);
     }
 
-    pub fn extend(&mut self, wakeups: Self) {
-        if let Some(trigger) = wakeups.trigger {
+    pub fn extend(&mut self, other: &Self) {
+        if let Some(trigger) = other.trigger {
             self.push(trigger);
         }
     }
 
-    pub async fn plan(
+    pub async fn execute(
         self,
         room: &Room,
         media_transport: Option<&MediaTransport>,
-    ) -> Option<SourcePolicyTransaction> {
-        plan(room, self.trigger?, media_transport, None).await
+        active_speaker_sources: Option<&[ActiveSpeakerSource]>,
+    ) {
+        let Some(trigger) = self.trigger else {
+            return;
+        };
+        match trigger {
+            SourcePolicyTrigger::RouteGraph => room.observe_source_fanout_pressure().await,
+            SourcePolicyTrigger::FanoutPressure => {
+                room.observe_source_fanout_pressure().await;
+                return;
+            }
+            SourcePolicyTrigger::PacketSelection => {}
+        }
+        let Some(media_transport) = media_transport else {
+            return;
+        };
+        let transaction = if let Some(sources) = active_speaker_sources {
+            run_packet_selection(room, sources, media_transport).await
+        } else {
+            let sources = media_transport.active_speaker_source_snapshot().await;
+            run_packet_selection(room, &sources, media_transport).await
+        };
+        if let Some(SourcePolicyTransaction {
+            route_effects,
+            mut state_updates,
+            featured_users,
+        }) = transaction
+        {
+            if !route_effects.is_empty() {
+                state_updates.extend(
+                    execute_route_control(route_effects, media_transport)
+                        .await
+                        .accepted_policy_updates,
+                );
+            }
+            commit_accepted_updates(room, &state_updates, &featured_users).await;
+        }
     }
 
     fn push(&mut self, trigger: SourcePolicyTrigger) {
@@ -86,30 +125,6 @@ impl SourcePolicyWakeups {
             self.trigger
                 .map_or(trigger, |current| current.merge(trigger)),
         );
-    }
-}
-
-pub async fn plan(
-    room: &Room,
-    trigger: SourcePolicyTrigger,
-    media_transport: Option<&MediaTransport>,
-    active_speakers: Option<&[ActiveSpeakerSource]>,
-) -> Option<SourcePolicyTransaction> {
-    if matches!(
-        trigger,
-        SourcePolicyTrigger::RouteGraph | SourcePolicyTrigger::FanoutPressure
-    ) {
-        room.observe_source_fanout_pressure().await;
-    }
-    let media_transport = media_transport?;
-    if trigger == SourcePolicyTrigger::FanoutPressure {
-        return None;
-    }
-    if let Some(sources) = active_speakers {
-        run_packet_selection(room, sources, media_transport).await
-    } else {
-        let sources = media_transport.active_speaker_source_snapshot().await;
-        run_packet_selection(room, &sources, media_transport).await
     }
 }
 
@@ -169,6 +184,7 @@ impl SourcePolicyTransaction {
         self.route_effects.set_receiver_bwe_targets(targets);
     }
 
+    #[cfg(test)]
     pub(in crate::engine::room) async fn execute(
         self,
         room: &Room,

@@ -17,7 +17,7 @@ use crate::engine::{
             ConsumerRouteTarget, ConsumerSetupOrigin, ReceiverRouteActivity, ReceiverRouteWork,
             ResolvedRelayRouteEffect,
         },
-        source_policy::{ConsumerPacketSelectionUpdate, SourcePolicyWakeups},
+        source_policy::{ConsumerPacketSelectionUpdate, SourcePolicyTurn},
     },
 };
 
@@ -159,7 +159,7 @@ impl RoomTransportPlan {
 pub(super) struct RoomTransportOutcome {
     pub(super) gauges: Vec<RoomGaugeDelta>,
     pub(super) diagnostics: Vec<DiagnosticsEventData>,
-    pub(super) source_policy: SourcePolicyWakeups,
+    pub(super) source_policy: SourcePolicyTurn,
 }
 
 #[derive(Debug, Default)]
