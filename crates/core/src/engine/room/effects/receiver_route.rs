@@ -2,9 +2,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 
 use super::{
     RoomGaugeDelta,
-    transport::{
-        RoomTransportOutcome, execute_relay_route_effects, execute_setup_activity_correction,
-    },
+    transport::{RoomRouteEffects, RoomTransportOutcome, execute_relay_route_effects},
 };
 use crate::engine::{
     diagnostics::DiagnosticsEventData,
@@ -67,8 +65,9 @@ impl ReceiverSetupTurn {
                     .diagnostics
                     .push(setup_diagnostics(room.uuid(), &target, origin, &route));
                 if let Some(active) = transport_activity_update {
-                    execute_setup_activity_correction(route, target.kind, active, media_transport)
-                        .await;
+                    let mut route_effects = RoomRouteEffects::default();
+                    route_effects.setup_activity(route, target.kind, active);
+                    route_effects.execute(media_transport).await;
                 }
                 let _ = sender.send(UserOutbound::RemoteSources(snapshot));
             }

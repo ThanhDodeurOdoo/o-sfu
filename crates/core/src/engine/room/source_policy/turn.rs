@@ -14,11 +14,8 @@ use crate::engine::{
     },
     metrics::{self, BudgetSolverOutcome},
     room::{
-        Room, RoomEventMessage,
-        effects::transport::{RoomRouteEffects, execute_route_control, push_source_policy_route},
-        media_graph::ConsumerRouteTarget,
-        outbound::MessageFanout,
-        state::RoomState,
+        Room, RoomEventMessage, effects::transport::RoomRouteEffects,
+        media_graph::ConsumerRouteTarget, outbound::MessageFanout, state::RoomState,
     },
 };
 
@@ -103,20 +100,8 @@ impl SourcePolicyTurn {
             let sources = media_transport.active_speaker_source_snapshot().await;
             run_packet_selection(room, &sources, media_transport).await
         };
-        if let Some(SourcePolicyTransaction {
-            route_effects,
-            mut state_updates,
-            featured_users,
-        }) = transaction
-        {
-            if !route_effects.is_empty() {
-                state_updates.extend(
-                    execute_route_control(route_effects, media_transport)
-                        .await
-                        .accepted_policy_updates,
-                );
-            }
-            commit_accepted_updates(room, &state_updates, &featured_users).await;
+        if let Some(transaction) = transaction {
+            transaction.commit(room, media_transport).await;
         }
     }
 
@@ -174,14 +159,27 @@ impl SourcePolicyTransaction {
 
     pub(super) fn push_route_update(
         &mut self,
-        selection: ConsumerPacketSelectionUpdate,
+        update: ConsumerPacketSelectionUpdate,
         target: &ConsumerRouteTarget,
     ) {
-        push_source_policy_route(&mut self.route_effects, selection, target);
+        self.route_effects.source_policy_update(update, target);
     }
 
     pub(super) fn set_receiver_bwe_targets(&mut self, targets: Vec<ReceiverBweTargetUpdate>) {
         self.route_effects.set_receiver_bwe_targets(targets);
+    }
+
+    async fn commit(self, room: &Room, media_transport: &MediaTransport) {
+        let mut state_updates = self.state_updates;
+        if !self.route_effects.is_empty() {
+            state_updates.extend(
+                self.route_effects
+                    .execute(media_transport)
+                    .await
+                    .accepted_policy_updates,
+            );
+        }
+        commit_accepted_updates(room, &state_updates, &self.featured_users).await;
     }
 
     #[cfg(test)]
@@ -190,19 +188,7 @@ impl SourcePolicyTransaction {
         room: &Room,
         media_transport: &MediaTransport,
     ) {
-        let Self {
-            route_effects,
-            mut state_updates,
-            featured_users,
-        } = self;
-        if !route_effects.is_empty() {
-            state_updates.extend(
-                execute_route_control(route_effects, media_transport)
-                    .await
-                    .accepted_policy_updates,
-            );
-        }
-        commit_accepted_updates(room, &state_updates, &featured_users).await;
+        self.commit(room, media_transport).await;
     }
 
     fn is_empty(&self) -> bool {
