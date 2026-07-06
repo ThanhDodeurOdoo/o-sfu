@@ -4,9 +4,12 @@ use o_sfu_router::RouterId;
 pub use o_sfu_router::topology::{
     RouterPlacement, RouterPlacements, RouterPlacementsError, RoutingPlacementSnapshot,
 };
+#[cfg(test)]
+use {std::sync::Arc, tokio::sync::Barrier};
 
 use super::{
     Room, RoomJoinError,
+    factory::RoomFactory,
     membership::JoinUserRequest,
     state::{JoinCommit, RoomState, UserJoinedFanout},
 };
@@ -87,8 +90,15 @@ pub enum RoomPlacementDecision {
     AllocateSpillover { media_worker_id: MediaWorkerId },
 }
 
-#[derive(Debug)]
-pub(super) struct JoinAdmission {
+pub(super) struct JoinAdmissionTurn<A = fn() -> RouterId> {
+    request: JoinUserRequest,
+    loads: WorkerLoadIndex,
+    allocate_spillover_router: A,
+    #[cfg(test)]
+    gate: Option<Arc<JoinPlacementTestGate>>,
+}
+
+struct JoinPlacementPlan {
     decision: RoomPlacementDecision,
     loads: WorkerLoadIndex,
     policy: RoomWorkerPolicy,
@@ -178,8 +188,72 @@ impl RoomState {
     }
 }
 
-impl JoinAdmission {
-    pub(super) async fn plan(room: &Room, loads: WorkerLoadIndex) -> Self {
+impl JoinAdmissionTurn {
+    pub(super) fn from_factory(
+        request: JoinUserRequest,
+        loads: WorkerLoadIndex,
+        factory: &RoomFactory,
+    ) -> JoinAdmissionTurn<impl FnOnce() -> RouterId + '_> {
+        JoinAdmissionTurn {
+            request,
+            loads,
+            allocate_spillover_router: move || factory.allocate_spillover_router(),
+            #[cfg(test)]
+            gate: None,
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(super) fn for_test(
+        request: JoinUserRequest,
+        loads: WorkerLoadIndex,
+        spillover_router_id: RouterId,
+    ) -> JoinAdmissionTurn<impl FnOnce() -> RouterId> {
+        JoinAdmissionTurn {
+            request,
+            loads,
+            allocate_spillover_router: move || spillover_router_id,
+            #[cfg(test)]
+            gate: None,
+        }
+    }
+}
+
+impl<A: FnOnce() -> RouterId> JoinAdmissionTurn<A> {
+    #[cfg(test)]
+    pub(super) fn with_gate(mut self, gate: Option<Arc<JoinPlacementTestGate>>) -> Self {
+        self.gate = gate;
+        self
+    }
+
+    pub(super) async fn commit(
+        self,
+        room: &Room,
+        joined_fanout: UserJoinedFanout,
+    ) -> Result<JoinCommit, RoomJoinError> {
+        let plan = JoinPlacementPlan::plan(room, self.loads).await;
+        #[cfg(test)]
+        if let Some(gate) = self.gate {
+            gate.wait_after_planning().await;
+        }
+        let request = self.request;
+        let mut state = room.state.write().await;
+        let placement = plan.resolve(
+            &state.placement_usage_snapshot(),
+            self.allocate_spillover_router,
+        );
+        state.apply_join_on_placement(
+            &request.user_id,
+            request.permissions,
+            request.sender,
+            joined_fanout,
+            placement,
+        )
+    }
+}
+
+impl JoinPlacementPlan {
+    async fn plan(room: &Room, loads: WorkerLoadIndex) -> Self {
         let snapshot = room.placement_usage_snapshot().await;
         let policy = room.room_worker_policy();
         let planner = RoomPlacementPlanner::new(policy);
@@ -200,25 +274,7 @@ impl JoinAdmission {
         }
     }
 
-    pub(super) fn commit(
-        self,
-        state: &mut RoomState,
-        request: JoinUserRequest,
-        joined_fanout: UserJoinedFanout,
-        allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> Result<JoinCommit, RoomJoinError> {
-        let placement =
-            self.resolve_placement(&state.placement_usage_snapshot(), allocate_spillover_router);
-        state.apply_join_on_placement(
-            &request.user_id,
-            request.permissions,
-            request.sender,
-            joined_fanout,
-            placement,
-        )
-    }
-
-    fn resolve_placement(
+    fn resolve(
         self,
         placement_usage: &RoutingPlacementSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
@@ -231,16 +287,14 @@ impl JoinAdmission {
         let assigned_placements = placement_usage.assigned_placements();
         let score_policy = score_policy(policy);
         let Some(first_assigned) = assigned_placements.first().copied() else {
-            return match decision {
+            let media_worker = match decision {
                 RoomPlacementDecision::AssignPrimary { media_worker_id }
-                | RoomPlacementDecision::AllocateSpillover { media_worker_id } => RouterPlacement {
-                    router: placement_usage.primary_router(),
-                    media_worker: media_worker_id,
-                },
-                RoomPlacementDecision::UseExisting(placement) => RouterPlacement {
-                    router: placement_usage.primary_router(),
-                    media_worker: placement.media_worker,
-                },
+                | RoomPlacementDecision::AllocateSpillover { media_worker_id } => media_worker_id,
+                RoomPlacementDecision::UseExisting(placement) => placement.media_worker,
+            };
+            return RouterPlacement {
+                router: placement_usage.primary_router(),
+                media_worker,
             };
         };
         match decision {
@@ -265,14 +319,42 @@ impl JoinAdmission {
                         score_policy,
                     );
                 }
-                // router allocation stays in final resolution so stale plans do
-                // not reserve spillover the room no longer needs
                 RouterPlacement {
                     router: allocate_spillover_router(),
                     media_worker: loads.least_loaded_worker(assigned_placements, score_policy),
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub struct JoinPlacementTestGate {
+    planned: Barrier,
+    release: Barrier,
+}
+
+#[cfg(test)]
+impl JoinPlacementTestGate {
+    pub fn new(expected: usize) -> Self {
+        Self {
+            planned: Barrier::new(expected + 1),
+            release: Barrier::new(expected + 1),
+        }
+    }
+
+    async fn wait_after_planning(&self) {
+        self.planned.wait().await;
+        self.release.wait().await;
+    }
+
+    pub async fn hold_all_planned(&self) {
+        self.planned.wait().await;
+    }
+
+    pub async fn release_all(&self) {
+        self.release.wait().await;
     }
 }
 

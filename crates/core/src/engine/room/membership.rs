@@ -1,6 +1,3 @@
-use std::future::Future;
-
-use o_sfu_router::RouterId;
 #[cfg(any(test, feature = "testing-transport"))]
 use o_sfu_router::rtp::MediaCapabilities;
 use tracing::warn;
@@ -9,7 +6,7 @@ use super::{
     BroadcastPayloadError, Room, RoomJoinError, UserOutboundSender,
     effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
     media_graph::CommittedTransportReceipt,
-    placement::{JoinAdmission, WorkerLoadIndex},
+    placement::JoinAdmissionTurn,
     state::{ConnectionCloseCommit, RemoteSourceRefresh},
 };
 use crate::engine::{
@@ -41,24 +38,11 @@ pub struct JoinUserRequest {
 impl Room {
     pub(super) async fn admit_session(
         &self,
-        request: JoinUserRequest,
-        worker_loads: WorkerLoadIndex,
+        admission: JoinAdmissionTurn<impl FnOnce() -> o_sfu_router::RouterId>,
         context: RoomEffectContext<'_>,
-        after_planning: impl Future<Output = ()>,
-        allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> Result<CommittedTransportReceipt, RoomJoinError> {
         let joined_fanout = context.user_joined_fanout();
-        let admission = JoinAdmission::plan(self, worker_loads).await;
-        after_planning.await;
-        let commit = {
-            let mut state = self.state.write().await;
-            admission.commit(
-                &mut state,
-                request,
-                joined_fanout,
-                allocate_spillover_router,
-            )?
-        };
+        let commit = admission.commit(self, joined_fanout).await?;
         let receipt = commit.receipt.clone();
         RoomEffects::from_commit(self, RoomCommit::Join(commit))
             .execute(self, context)

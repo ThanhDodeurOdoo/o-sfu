@@ -1,12 +1,10 @@
-use std::future::ready;
-
 use o_sfu_router::{
     RouterId, rtp::MediaCapabilities, test_support::rtp_samples::sample_client_rtp_capabilities,
 };
 
 use super::super::super::{
     JoinUserRequest, Room, RoomEffectContext, RoomJoinError, UserOutboundSender,
-    placement::WorkerLoadIndex,
+    placement::{JoinAdmissionTurn, WorkerLoadIndex},
 };
 use crate::engine::{
     ConnectionId, UserId, UserPermissions,
@@ -30,18 +28,16 @@ impl RoomTestLifecycle<'_> {
         sender: UserOutboundSender,
     ) -> Result<ConnectionId, RoomJoinError> {
         let (loads, spillover_router_id) = join_placement_inputs(self.room, Vec::new()).await;
+        let request = JoinUserRequest {
+            user_id,
+            label,
+            permissions,
+            sender,
+        };
         self.room
             .admit_session(
-                JoinUserRequest {
-                    user_id,
-                    label,
-                    permissions,
-                    sender,
-                },
-                loads,
+                JoinAdmissionTurn::for_test(request, loads, spillover_router_id),
                 RoomEffectContext::state_only(None),
-                ready(()),
-                || spillover_router_id,
             )
             .await
             .map(|receipt| receipt.connection_id)
@@ -60,18 +56,16 @@ impl RoomTestLifecycle<'_> {
     ) -> Result<ConnectionId, RoomJoinError> {
         let (loads, spillover_router_id) =
             join_placement_inputs(self.room, media_transport.worker_pressure_snapshots()).await;
+        let request = JoinUserRequest {
+            user_id,
+            label,
+            permissions,
+            sender,
+        };
         self.room
             .admit_session(
-                JoinUserRequest {
-                    user_id,
-                    label,
-                    permissions,
-                    sender,
-                },
-                loads,
+                JoinAdmissionTurn::for_test(request, loads, spillover_router_id),
                 RoomEffectContext::state_only(Some(media_transport)),
-                ready(()),
-                || spillover_router_id,
             )
             .await
             .map(|receipt| receipt.connection_id)
