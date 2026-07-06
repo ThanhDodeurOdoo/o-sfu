@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 //! o-sfu is a Selective Forwading Unit for audio/video calls
 //!
 //! This handles room admission, routing topology, media policy, packet
