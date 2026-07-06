@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use o_sfu_router::rtp::{MediaCapabilities, MediaCapabilities as RouterRtpCapabilities};
 
@@ -37,6 +40,7 @@ pub struct RoomState {
 
 #[derive(Debug)]
 pub struct ActiveUser {
+    pub(super) user_id: Arc<UserId>,
     pub(super) permissions: RoomUserPermissions,
     pub(super) info: UserInfo,
     pub(super) server_featured: Option<bool>,
@@ -146,7 +150,13 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> TransportSessionKey {
-        self.topology.transport_user_key(user_id, connection_id)
+        if let Some(user) = self.user_for_connection(user_id, connection_id) {
+            return self
+                .topology
+                .transport_user_key(Arc::clone(&user.user_id), connection_id);
+        }
+        self.topology
+            .transport_user_key(user_id.clone(), connection_id)
     }
 
     pub fn committed_transport_user_key(
@@ -154,8 +164,13 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<TransportSessionKey> {
+        if let Some(user) = self.user_for_connection(user_id, connection_id) {
+            return self
+                .topology
+                .committed_transport_user_key(Arc::clone(&user.user_id), connection_id);
+        }
         self.topology
-            .committed_transport_user_key(user_id, connection_id)
+            .committed_transport_user_key(user_id.clone(), connection_id)
     }
 
     pub fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {

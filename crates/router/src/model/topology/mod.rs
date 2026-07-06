@@ -245,18 +245,6 @@ pub struct RoutingTopology {
     shadow_sessions: ShadowSessionTracker,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoutingCommitReceipt {
-    pub connection_id: ConnectionId,
-    pub media_worker_id: MediaWorkerId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoutingPlacementCommit {
-    pub receipt: RoutingCommitReceipt,
-    pub displaced_connection: Option<ConnectionId>,
-}
-
 #[derive(Debug, Clone)]
 struct CommittedSessionPlacement {
     connection_id: ConnectionId,
@@ -355,11 +343,11 @@ impl RoutingTopology {
         user_id: &UserId,
         connection_id: ConnectionId,
         placement: RouterPlacement,
-    ) -> Result<RoutingPlacementCommit, RoutingError> {
+    ) -> Result<MediaWorkerId, RoutingError> {
         let mut next = self.clone();
-        let commit = next.apply_session_placement(user_id, connection_id, placement)?;
+        let media_worker = next.apply_session_placement(user_id, connection_id, placement)?;
         *self = next;
-        Ok(commit)
+        Ok(media_worker)
     }
 
     fn apply_session_placement(
@@ -367,12 +355,8 @@ impl RoutingTopology {
         user_id: &UserId,
         connection_id: ConnectionId,
         placement: RouterPlacement,
-    ) -> Result<RoutingPlacementCommit, RoutingError> {
-        let displaced_connection = self
-            .sessions
-            .active(user_id)
-            .map(|session| session.connection_id);
-        if displaced_connection.is_some() {
+    ) -> Result<MediaWorkerId, RoutingError> {
+        if self.sessions.active(user_id).is_some() {
             self.remove_session(user_id)?;
         }
         self.attach_placement(placement);
@@ -386,25 +370,16 @@ impl RoutingTopology {
             placement,
         };
         self.sessions.insert(user_id.clone(), session);
-        Ok(RoutingPlacementCommit {
-            receipt: RoutingCommitReceipt {
-                connection_id,
-                media_worker_id: placement.media_worker,
-            },
-            displaced_connection,
-        })
+        Ok(placement.media_worker)
     }
 
     pub fn retire_committed_placement(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Option<RoutingCommitReceipt> {
+    ) -> Option<MediaWorkerId> {
         let session = self.sessions.remove_if_active(user_id, connection_id)?;
-        Some(RoutingCommitReceipt {
-            connection_id: session.connection_id,
-            media_worker_id: session.placement.media_worker,
-        })
+        Some(session.placement.media_worker)
     }
 
     #[expect(
