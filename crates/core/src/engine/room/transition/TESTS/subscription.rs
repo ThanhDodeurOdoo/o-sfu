@@ -20,7 +20,7 @@ use crate::{
     engine::{
         ConnectionId, TestSourceKind, UserId, UserPermissions,
         media_transport::{
-            AppliedSessionAnswer, MediaTransport, TransportMediaId,
+            AppliedSessionAnswer, MediaTransport, TransportMediaId, TransportRelayRouteAction,
             test_support::{test_media_transport_builder, test_rtc_port_range},
         },
         metrics::RuntimeMetrics,
@@ -546,7 +546,7 @@ async fn relay_setup_failure_releases_pending_setup_for_retry() {
     .await;
 
     assert_eq!(room.test_api().inspect().consumer_count().await, 0);
-    let retry_relays = {
+    let release_relays = {
         let mut state = room.state.write().await;
         let mut setups = state
             .refresh_consumer_readiness(&subscriber_id, subscriber_connection_id)
@@ -558,7 +558,11 @@ async fn relay_setup_failure_releases_pending_setup_for_retry() {
         let (_, _, relays) = state.release_pending_consumer_setup(setup);
         relays
     };
-    assert_eq!(retry_relays.len(), 1);
+    assert_eq!(release_relays.len(), 1);
+    assert_eq!(
+        release_relays.first().map(|effect| effect.action),
+        Some(TransportRelayRouteAction::Release)
+    );
 }
 
 #[tokio::test]

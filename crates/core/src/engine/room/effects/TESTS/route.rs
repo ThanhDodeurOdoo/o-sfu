@@ -11,17 +11,62 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, TransportSessionKey,
+            ConsumerActivity, RelayRouteActivity, TransportMediaId, TransportRelayRouteAction,
+            TransportSessionKey,
             test_support::{
                 DebugRouteEntry, test_media_transport_config, test_media_transport_deps,
                 test_rtc_port_range,
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
-        room::media_graph::ConsumerRouteTransportRef,
+        room::media_graph::{ConsumerRouteTransportRef, RelayRouteKey},
         source_model::UserStreamId,
     },
 };
+
+#[test]
+fn room_transport_plan_moves_relay_release_to_cleanup() {
+    let source_session = session_key(3, UserId::Integer(3));
+    let route = RelayRouteKey {
+        source_user: UserId::Integer(3),
+        source_connection: source_session.connection_id(),
+        source_media: TransportMediaId::new(31),
+        target_worker: MediaWorkerId::from_raw(2),
+    };
+    let activity = TransportRelayRouteAction::SetActivity(RelayRouteActivity::Inactive);
+    let plan = RoomTransportPlan::from_relays_and_cleanup(
+        vec![
+            ResolvedRelayRouteEffect {
+                source_session_key: source_session.clone(),
+                route: route.clone(),
+                action: TransportRelayRouteAction::Release,
+            },
+            ResolvedRelayRouteEffect {
+                source_session_key: source_session.clone(),
+                route: route.clone(),
+                action: activity,
+            },
+        ],
+        [],
+    );
+    let (relays, cleanup) = plan.relays_and_cleanup();
+
+    assert_eq!(
+        relays,
+        [ResolvedRelayRouteEffect {
+            source_session_key: source_session.clone(),
+            route: route.clone(),
+            action: activity,
+        }]
+    );
+    assert_eq!(
+        cleanup,
+        [TransportCleanupOperation::ReleaseRelayRoute {
+            source_session_key: source_session,
+            route,
+        }]
+    );
+}
 
 #[tokio::test]
 async fn room_route_effects_execute_finish_work() -> Result<(), Box<dyn Error>> {

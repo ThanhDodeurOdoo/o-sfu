@@ -205,13 +205,11 @@ impl RoomEffects {
                 batch.observability.record(diagnostics);
                 batch.observability.forget_user(user_id);
                 batch.source_policy.route_graph_changed();
-                if let Some(cleanup) = cleanup {
-                    batch.transport.push_cleanup(cleanup);
-                }
+                batch.transport.extend_cleanup(cleanup);
             }
             ConnectionCloseCommit::StalePlacement { counts, cleanup } => {
                 batch.observability.push_gauge(counts);
-                batch.transport.push_cleanup(cleanup);
+                batch.transport.extend_cleanup([cleanup]);
             }
         }
         batch
@@ -234,7 +232,7 @@ impl RoomEffects {
                 .event_data(room, telemetry_event::USER_DISCONNECTED),
             );
             batch.observability.forget_user(session.user_id().clone());
-            batch.transport.push_cleanup(close_operation);
+            batch.transport.extend_cleanup([close_operation]);
         }
         batch
     }

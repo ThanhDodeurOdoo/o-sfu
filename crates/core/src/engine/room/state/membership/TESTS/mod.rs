@@ -21,13 +21,13 @@ use crate::{
     MediaCodecFlags, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
-        media_transport::{TransportMediaId, TransportRelayRouteAction, TransportSessionKey},
+        media_transport::{TransportMediaId, TransportSessionKey},
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
             media_graph::{
                 ConsumerKey, ConsumerSetupOutcome, ConsumerState, ProducerRuntimeId,
-                PublishedProducer, PublishedSourceInstall, ResolvedRelayRouteEffect,
+                PublishedProducer, PublishedSourceInstall, RelayRouteKey,
             },
             rtp_capabilities::router_rtp_capabilities,
         },
@@ -146,22 +146,21 @@ fn install_test_published_producer(
 
 #[derive(Debug)]
 struct RelayedSource {
-    publisher: UserId,
-    publisher_connection: ConnectionId,
     publisher_session: TransportSessionKey,
-    source_media: TransportMediaId,
+    route: RelayRouteKey,
 }
 
 fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let publisher = UserId::Integer(1);
     let subscriber = UserId::Integer(2);
     let publisher_connection = join_test_user(state, &publisher);
+    let target_worker = MediaWorkerId::from_raw(1);
     let subscriber_connection = join_test_user_on_placement(
         state,
         &subscriber,
         RouterPlacement {
             router: RouterId(2),
-            media_worker: MediaWorkerId::from_raw(1),
+            media_worker: target_worker,
         },
     );
     assert!(
@@ -197,12 +196,6 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
         .pop()
         .expect("relay consumer setup should be planned");
     assert!(setups.is_empty());
-    assert!(
-        setup
-            .relays()
-            .iter()
-            .any(|effect| effect.action == TransportRelayRouteAction::Install)
-    );
     let setup = setup.declared(consumer_media, None);
     let (_, _, setup_outcome) = state.commit_declared_consumer_setup(setup);
     assert!(matches!(
@@ -210,21 +203,33 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
         ConsumerSetupOutcome::Committed { .. }
     ));
     RelayedSource {
-        publisher,
-        publisher_connection,
         publisher_session,
-        source_media,
+        route: RelayRouteKey {
+            source_user: publisher.clone(),
+            source_connection: publisher_connection,
+            source_media,
+            target_worker,
+        },
     }
 }
 
-fn has_source_relay_release(effects: &[ResolvedRelayRouteEffect], relay: &RelayedSource) -> bool {
-    effects.iter().any(|effect| {
-        effect.source_session_key == relay.publisher_session
-            && effect.route.source_user == relay.publisher
-            && effect.route.source_connection == relay.publisher_connection
-            && effect.route.source_media == relay.source_media
-            && effect.action == TransportRelayRouteAction::Release
-    })
+fn source_relay_cleanup_count(
+    cleanup: &[TransportCleanupOperation],
+    relay: &RelayedSource,
+) -> usize {
+    cleanup
+        .iter()
+        .filter(|operation| {
+            matches!(
+                operation,
+                TransportCleanupOperation::ReleaseRelayRoute {
+                    source_session_key,
+                    route,
+                } if source_session_key == &relay.publisher_session
+                    && route == &relay.route
+            )
+        })
+        .count()
 }
 
 #[test]
@@ -371,11 +376,16 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
     let relay = install_relayed_source(&mut state);
 
     let outcome = state
-        .apply_join(&relay.publisher, UserPermissions::default(), test_sender())
+        .apply_join(
+            &relay.route.source_user,
+            UserPermissions::default(),
+            test_sender(),
+        )
         .expect("replacement join should succeed");
     let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
 
-    assert!(has_source_relay_release(relays, &relay));
+    assert!(relays.is_empty());
+    assert_eq!(source_relay_cleanup_count(cleanup, &relay), 1);
     assert!(cleanup.iter().any(|operation| {
         matches!(
             operation,
@@ -399,14 +409,15 @@ fn leave_releases_relay_before_forgetting_source_session() {
     let relay = install_relayed_source(&mut state);
 
     let outcome = state
-        .close_connection(&relay.publisher, relay.publisher_connection)
+        .close_connection(&relay.route.source_user, relay.route.source_connection)
         .expect("publisher leave should succeed");
     let ConnectionCloseCommit::Current { transport_plan, .. } = outcome else {
         panic!("publisher leave should remove the current user");
     };
-    let (relays, _) = transport_plan.relays_and_cleanup();
+    let (relays, cleanup) = transport_plan.relays_and_cleanup();
 
-    assert!(has_source_relay_release(relays, &relay));
+    assert!(relays.is_empty());
+    assert_eq!(source_relay_cleanup_count(cleanup, &relay), 1);
 }
 
 #[test]
@@ -414,8 +425,9 @@ fn disconnect_releases_relay_before_forgetting_source_session() {
     let mut state = test_state();
     let relay = install_relayed_source(&mut state);
 
-    let outcome = state.apply_disconnect_users(from_ref(&relay.publisher));
-    let (relays, _) = outcome.transport_plan.relays_and_cleanup();
+    let outcome = state.apply_disconnect_users(from_ref(&relay.route.source_user));
+    let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
 
-    assert!(has_source_relay_release(relays, &relay));
+    assert!(relays.is_empty());
+    assert_eq!(source_relay_cleanup_count(cleanup, &relay), 1);
 }

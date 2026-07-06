@@ -2,7 +2,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 
 use super::{
     RoomGaugeDelta,
-    transport::{RoomRouteEffects, RoomTransportOutcome, execute_relay_route_effects},
+    transport::{RoomRouteEffects, RoomTransportOutcome, execute_relays_and_cleanup},
 };
 use crate::engine::{
     diagnostics::DiagnosticsEventData,
@@ -34,10 +34,10 @@ impl ReceiverSetupTurn {
         outcome: &mut RoomTransportOutcome,
     ) {
         let Self {
-            setup: pending,
+            setup: mut pending,
             origin,
         } = self;
-        if !execute_relay_route_effects(room, media_transport, pending.relays()).await {
+        if !execute_relays_and_cleanup(room, media_transport, pending.take_relays(), []).await {
             Self::release_pending_setup(room, pending, media_transport, outcome).await;
             return;
         }
@@ -72,13 +72,11 @@ impl ReceiverSetupTurn {
                 let _ = sender.send(UserOutbound::RemoteSources(snapshot));
             }
             ConsumerSetupOutcome::Released(route, relays) => {
-                execute_relay_route_effects(room, media_transport, &relays).await;
                 let cleanup = [TransportCleanupOperation::RemoveMedia {
                     session_key: route.consumer_session_key().clone(),
                     transport_media_id: route.consumer_transport_media_id(),
                 }];
-                room.execute_transport_cleanup_operations(media_transport, &cleanup)
-                    .await;
+                execute_relays_and_cleanup(room, media_transport, relays, cleanup).await;
                 outcome.source_policy.fanout_pressure_changed();
             }
         }
@@ -94,7 +92,7 @@ impl ReceiverSetupTurn {
             let mut state = room.state.write().await;
             state.release_pending_consumer_setup(setup)
         };
-        execute_relay_route_effects(room, media_transport, &relays).await;
+        execute_relays_and_cleanup(room, media_transport, relays, []).await;
         outcome.gauges.push(RoomGaugeDelta::media(before, after));
         outcome.source_policy.fanout_pressure_changed();
     }
