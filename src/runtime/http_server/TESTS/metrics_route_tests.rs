@@ -82,7 +82,7 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() -> TestRes
 
     route_status(
         &state,
-        Request::get(NOOP_PATH),
+        Request::get(route::v1::NOOP),
         Body::empty(),
         StatusCode::OK,
         "noop request should complete",
@@ -91,7 +91,7 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() -> TestRes
 
     route_status(
         &state,
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from("invalid-token"),
         StatusCode::UNPROCESSABLE_ENTITY,
         "invalid disconnect request should complete",
@@ -100,7 +100,7 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() -> TestRes
 
     let metrics_response = route_response(
         &state,
-        Request::get(METRICS_PATH),
+        Request::get(route::METRICS),
         Body::empty(),
         StatusCode::OK,
         "metrics request should complete",

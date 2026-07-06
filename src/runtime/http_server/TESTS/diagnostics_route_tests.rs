@@ -34,16 +34,24 @@ use crate::{
     },
 };
 
-const DIAGNOSTICS_ROUTE_PATHS: &[&str] = &[
-    DIAGNOSTICS_SUMMARY_PATH,
-    DIAGNOSTICS_ROOMS_PATH,
-    DIAGNOSTICS_WORKERS_PATH,
-    "/internal/diagnostics/rooms/test-room",
-    "/internal/diagnostics/rooms/test-room/users",
-    "/internal/diagnostics/node-graph/rooms/test-room",
-    "/internal/diagnostics/node-graph/rooms/test-room/users/1",
-    "/internal/diagnostics/users/1",
-];
+const TEST_DIAGNOSTICS_ROOM: &str = "test-room";
+const TEST_DIAGNOSTICS_USER: i64 = 1;
+
+fn diagnostics_route_paths() -> [String; 8] {
+    let user_id = TEST_DIAGNOSTICS_USER.to_string();
+    [
+        route::diagnostics::SUMMARY.to_owned(),
+        route::diagnostics::ROOMS.to_owned(),
+        route::diagnostics::WORKERS.to_owned(),
+        route::diagnostics::ROOM.replace("{uuid}", TEST_DIAGNOSTICS_ROOM),
+        route::diagnostics::ROOM_USERS.replace("{uuid}", TEST_DIAGNOSTICS_ROOM),
+        route::diagnostics::ROOM_GRAPH.replace("{uuid}", TEST_DIAGNOSTICS_ROOM),
+        route::diagnostics::USER_GRAPH
+            .replace("{uuid}", TEST_DIAGNOSTICS_ROOM)
+            .replace("{id}", &user_id),
+        route::diagnostics::USER.replace("{id}", &user_id),
+    ]
+}
 
 fn test_simulcast_video_rtp_parameters() -> MediaStream {
     sample_simulcast_video_rtp_parameters(None)
@@ -171,8 +179,8 @@ async fn diagnostics_routes_are_forbidden_without_token_on_public_listener() -> 
     let mut state = test_state();
     state.config.http.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
 
-    for path in DIAGNOSTICS_ROUTE_PATHS {
-        diagnostics_status(&state, path, None, StatusCode::FORBIDDEN).await?;
+    for path in diagnostics_route_paths() {
+        diagnostics_status(&state, &path, None, StatusCode::FORBIDDEN).await?;
     }
     Ok(())
 }
@@ -183,18 +191,18 @@ async fn diagnostics_routes_require_the_configured_bearer_token() -> TestResult 
     state.config.http.bind_address = SocketAddr::from(([0, 0, 0, 0], 8070));
     state.config.diagnostics.auth_token = Some(String::from("operator-secret"));
 
-    for path in DIAGNOSTICS_ROUTE_PATHS {
-        diagnostics_status(&state, path, None, StatusCode::UNAUTHORIZED).await?;
+    for path in diagnostics_route_paths() {
+        diagnostics_status(&state, &path, None, StatusCode::UNAUTHORIZED).await?;
         diagnostics_status(
             &state,
-            path,
+            &path,
             Some("Basic operator-secret"),
             StatusCode::UNAUTHORIZED,
         )
         .await?;
         diagnostics_status(
             &state,
-            path,
+            &path,
             Some("jwt operator-secret"),
             StatusCode::UNAUTHORIZED,
         )
@@ -203,7 +211,7 @@ async fn diagnostics_routes_require_the_configured_bearer_token() -> TestResult 
 
     diagnostics_status(
         &state,
-        DIAGNOSTICS_SUMMARY_PATH,
+        route::diagnostics::SUMMARY,
         Some("Bearer operator-secret"),
         StatusCode::OK,
     )
@@ -254,7 +262,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
     }
 
     let room_summaries: Vec<DiagnosticsRoomSummary> =
-        diagnostics_json(&test_state.state, DIAGNOSTICS_ROOMS_PATH).await?;
+        diagnostics_json(&test_state.state, route::diagnostics::ROOMS).await?;
     assert_eq!(room_summaries.len(), 1);
     assert_eq!(room_summaries[0].user_count, 3);
     assert_eq!(room_summaries[0].source_count, 1);
@@ -263,7 +271,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let room_users: Vec<DiagnosticsUserSummary> = diagnostics_json(
         &test_state.state,
-        format!("/internal/diagnostics/rooms/{}/users", room.uuid()),
+        route::diagnostics::ROOM_USERS.replace("{uuid}", room.uuid()),
     )
     .await?;
     assert_eq!(room_users.len(), 3);
@@ -277,7 +285,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
     assert_eq!(alice_summary.media_worker_id, 0);
 
     let worker_summaries: Vec<DiagnosticsWorkerSummary> =
-        diagnostics_json(&test_state.state, DIAGNOSTICS_WORKERS_PATH).await?;
+        diagnostics_json(&test_state.state, route::diagnostics::WORKERS).await?;
     assert_eq!(worker_summaries.len(), 1);
     let worker_summary = &worker_summaries[0];
     assert_eq!(worker_summary.media_worker_id, 0);
@@ -293,7 +301,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let detail: DiagnosticsRoomDetail = diagnostics_json(
         &test_state.state,
-        format!("/internal/diagnostics/rooms/{}", room.uuid()),
+        route::diagnostics::ROOM.replace("{uuid}", room.uuid()),
     )
     .await?;
     assert_eq!(detail.summary.uuid, room.uuid());
@@ -321,7 +329,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let room_graph: Value = diagnostics_json(
         &test_state.state,
-        format!("/internal/diagnostics/node-graph/rooms/{}", room.uuid()),
+        route::diagnostics::ROOM_GRAPH.replace("{uuid}", room.uuid()),
     )
     .await?;
     assert!(room_graph["nodes"].as_array().is_some_and(|nodes| {
@@ -340,11 +348,9 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let alice_graph: Value = diagnostics_json(
         &test_state.state,
-        format!(
-            "/internal/diagnostics/node-graph/rooms/{}/users/{}",
-            room.uuid(),
-            alice_user_id.clone().into_integer_string()
-        ),
+        route::diagnostics::USER_GRAPH
+            .replace("{uuid}", room.uuid())
+            .replace("{id}", &alice_user_id.clone().into_integer_string()),
     )
     .await?;
     assert!(
@@ -363,11 +369,9 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let bob_graph: Value = diagnostics_json(
         &test_state.state,
-        format!(
-            "/internal/diagnostics/node-graph/rooms/{}/users/{}",
-            room.uuid(),
-            bob_user_id.clone().into_integer_string()
-        ),
+        route::diagnostics::USER_GRAPH
+            .replace("{uuid}", room.uuid())
+            .replace("{id}", &bob_user_id.clone().into_integer_string()),
     )
     .await?;
     assert!(
@@ -381,10 +385,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let session_detail: DiagnosticsUserDetail = diagnostics_json(
         &test_state.state,
-        format!(
-            "/internal/diagnostics/users/{}",
-            alice_user_id.clone().into_integer_string()
-        ),
+        route::diagnostics::USER.replace("{id}", &alice_user_id.clone().into_integer_string()),
     )
     .await?;
     assert_eq!(session_detail.room_id, room.uuid());
@@ -401,10 +402,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let bob_session_detail: DiagnosticsUserDetail = diagnostics_json(
         &test_state.state,
-        format!(
-            "/internal/diagnostics/users/{}",
-            bob_user_id.clone().into_integer_string()
-        ),
+        route::diagnostics::USER.replace("{id}", &bob_user_id.clone().into_integer_string()),
     )
     .await?;
     assert_eq!(bob_session_detail.user.subscriptions.len(), 1);
@@ -436,7 +434,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
     assert_eq!(subscription.selection.over_budget_exception_reason, None);
 
     let summary: DiagnosticsSummaryResponse =
-        diagnostics_json(&test_state.state, DIAGNOSTICS_SUMMARY_PATH).await?;
+        diagnostics_json(&test_state.state, route::diagnostics::SUMMARY).await?;
     assert_eq!(summary.rooms_active, 1);
     assert_eq!(summary.users_active, 3);
     assert_eq!(summary.publications_active, 1);
@@ -467,7 +465,7 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() -> TestResult {
 
     let response = route_response(
         &test_state.state,
-        Request::get("/internal/diagnostics/users/7"),
+        Request::get(route::diagnostics::USER.replace("{id}", "7")),
         Body::empty(),
         StatusCode::CONFLICT,
         "ambiguous diagnostics lookup should complete",
@@ -483,13 +481,8 @@ async fn diagnostics_user_lookup_reports_ambiguous_matches() -> TestResult {
 #[tokio::test]
 async fn diagnostics_user_lookup_reports_missing_index_matches() -> TestResult {
     let test_state = test_state_with_handles();
-    diagnostics_status(
-        &test_state.state,
-        "/internal/diagnostics/users/404",
-        None,
-        StatusCode::NOT_FOUND,
-    )
-    .await
+    let path = route::diagnostics::USER.replace("{id}", "404");
+    diagnostics_status(&test_state.state, &path, None, StatusCode::NOT_FOUND).await
 }
 
 #[tokio::test]
@@ -518,8 +511,11 @@ async fn diagnostics_user_lookup_survives_user_replacement_without_conflict() ->
         "replacement user should join",
     )?;
 
-    let detail: DiagnosticsUserDetail =
-        diagnostics_json(&test_state.state, "/internal/diagnostics/users/9").await?;
+    let detail: DiagnosticsUserDetail = diagnostics_json(
+        &test_state.state,
+        route::diagnostics::USER.replace("{id}", "9"),
+    )
+    .await?;
     assert_eq!(detail.room_id, room.uuid());
     assert_eq!(detail.user.user_id, user_id);
     Ok(())
@@ -562,7 +558,7 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() -> TestResult {
 
     diagnostics_status(
         &test_state.state,
-        "/internal/diagnostics/users/11",
+        &route::diagnostics::USER.replace("{id}", "11"),
         None,
         StatusCode::NOT_FOUND,
     )

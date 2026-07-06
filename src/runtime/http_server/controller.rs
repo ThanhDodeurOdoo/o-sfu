@@ -21,10 +21,8 @@ use crate::{
         diagnostics::DiagnosticsUserLookup,
         http_server::{
             contract::{
-                CHANNEL_PATH, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-                DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, IncomingBitRateStatsResponse,
-                METRICS_PATH, NOOP_PATH, NoopResponse, RoomResponse, RoomStatsResponse, STATS_PATH,
-                UsersStatsResponse,
+                IncomingBitRateStatsResponse, NoopResponse, RoomResponse, RoomStatsResponse,
+                UsersStatsResponse, route,
             },
             extractors::{
                 DiagnosticsAccess, DiagnosticsServices, RoomServices, VerifiedDisconnectClaims,
@@ -71,50 +69,37 @@ pub(crate) async fn serve_http_on(
     Ok(())
 }
 
-/// Builds the Axum router for the HTTP control plane and WebSocket listener.
+/// builds the Axum router for the HTTP control plane and WebSocket listener
 pub(crate) fn app(state: RuntimeState) -> Router {
     Router::new()
-        .route("/", get(websocket_server::upgrade))
-        .route(NOOP_PATH, get(noop))
-        .route(STATS_PATH, get(stats))
-        .route(CHANNEL_PATH, get(room))
+        .route(route::WEBSOCKET, get(websocket_server::upgrade))
+        .route(route::v1::NOOP, get(noop))
+        .route(route::v1::STATS, get(stats))
+        .route(route::v1::CHANNEL, get(room))
         .route(
-            DISCONNECT_PATH,
+            route::v1::DISCONNECT,
             post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
         )
-        .route(METRICS_PATH, get(metrics))
+        .route(route::METRICS, get(metrics))
         .merge(diagnostics_router(state.clone()))
         .with_state(state)
 }
 
+/// diagnostics route group protected by [`DiagnosticsAccess`]
 fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
     Router::new()
-        .route(DIAGNOSTICS_SUMMARY_PATH, get(diagnostics_summary))
-        .route(DIAGNOSTICS_ROOMS_PATH, get(diagnostics_rooms))
-        .route(DIAGNOSTICS_WORKERS_PATH, get(diagnostics_workers))
-        .route(
-            "/internal/diagnostics/rooms/{uuid}",
-            get(diagnostics_room_detail),
-        )
-        .route(
-            "/internal/diagnostics/rooms/{uuid}/users",
-            get(diagnostics_room_users),
-        )
-        .route(
-            "/internal/diagnostics/node-graph/rooms/{uuid}",
-            get(diagnostics_room_graph),
-        )
-        .route(
-            "/internal/diagnostics/node-graph/rooms/{uuid}/users/{id}",
-            get(diagnostics_user_graph),
-        )
-        .route(
-            "/internal/diagnostics/users/{id}",
-            get(diagnostics_user_detail),
-        )
+        .route(route::diagnostics::SUMMARY, get(diagnostics_summary))
+        .route(route::diagnostics::ROOMS, get(diagnostics_rooms))
+        .route(route::diagnostics::WORKERS, get(diagnostics_workers))
+        .route(route::diagnostics::ROOM, get(diagnostics_room_detail))
+        .route(route::diagnostics::ROOM_USERS, get(diagnostics_room_users))
+        .route(route::diagnostics::ROOM_GRAPH, get(diagnostics_room_graph))
+        .route(route::diagnostics::USER_GRAPH, get(diagnostics_user_graph))
+        .route(route::diagnostics::USER, get(diagnostics_user_detail))
         .route_layer(middleware::from_extractor_with_state::<DiagnosticsAccess, _>(state))
 }
 
+/// liveness endpoint for a cheap control-plane round trip
 #[o_sfu_telemetry::measure_http_request(
     metrics = "metrics",
     request = "record_http_noop_request",
@@ -126,6 +111,7 @@ async fn noop(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoResponse {
         .await
 }
 
+/// compatibility room-stat endpoint consumed by Odoo's SFU control plane
 #[o_sfu_telemetry::measure_http_request(
     metrics = "services.metrics",
     request = "record_http_stats_request",
@@ -147,6 +133,7 @@ async fn stats(State(services): State<RoomServices>) -> impl IntoResponse {
     .await
 }
 
+/// prometheus scrape endpoint for process, HTTP and media-transport metrics
 #[o_sfu_telemetry::measure_http_request(
     metrics = "metrics",
     request = "record_http_metrics_request",
@@ -163,13 +150,9 @@ async fn metrics(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoRespons
     .await
 }
 
-/// This is the entry point for the Odoo server to request a room.
+/// room creation endpoint used by Odoo to bind a channel key to an SFU room
 ///
-/// The bearer token is decoded through `auth::verify`, so JWT header, payload, and signature
-/// segments must use the JOSE base64url alphabet without padding.
-///
-/// Query parameters specify whether the room should have WebRTC enabled and
-/// optional webhook endpoints for recordings.
+/// `VerifiedRoomRequest` owns JWT verification and request-origin projection
 #[o_sfu_telemetry::measure_http_request(
     metrics = "services.metrics",
     request = "record_http_room_request",
@@ -200,13 +183,9 @@ async fn room(State(services): State<RoomServices>, request: VerifiedRoomRequest
     .await
 }
 
-/// Authorized bulk-disconnect route.
+/// bulk-disconnect endpoint used by Odoo to remove users from active rooms
 ///
-/// Disconnects multiple users from a room. This is used by the Odoo server to
-/// forcefully kick users out or clean up abandoned users.
-///
-/// The request body is decoded through `auth::verify`, so JWT header, payload, and signature
-/// segments must use the JOSE base64url alphabet without padding.
+/// `VerifiedDisconnectClaims` owns JWT verification and request-body decoding
 #[o_sfu_telemetry::measure_http_request(
     metrics = "services.metrics",
     request = "record_http_disconnect_request",
@@ -230,6 +209,7 @@ async fn disconnect(
     .await
 }
 
+/// diagnostics overview for room, user and publication totals
 async fn diagnostics_summary(State(services): State<DiagnosticsServices>) -> Response {
     axum::Json(
         diagnostics::summary_response(
@@ -242,6 +222,7 @@ async fn diagnostics_summary(State(services): State<DiagnosticsServices>) -> Res
     .into_response()
 }
 
+/// diagnostics inventory for active rooms
 async fn diagnostics_rooms(State(services): State<DiagnosticsServices>) -> Response {
     axum::Json(
         diagnostics::rooms_response(
@@ -254,6 +235,7 @@ async fn diagnostics_rooms(State(services): State<DiagnosticsServices>) -> Respo
     .into_response()
 }
 
+/// diagnostics inventory for media workers and load pressure
 async fn diagnostics_workers(State(services): State<DiagnosticsServices>) -> Response {
     axum::Json(
         diagnostics::workers_response(&services.room_manager, &services.media_transport).await,
@@ -261,6 +243,7 @@ async fn diagnostics_workers(State(services): State<DiagnosticsServices>) -> Res
     .into_response()
 }
 
+/// live room diagnostics with users, sources and recent events
 async fn diagnostics_room_detail(
     State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
@@ -275,6 +258,7 @@ async fn diagnostics_room_detail(
     diagnostics_optional_response(payload)
 }
 
+/// live user rows for one room
 async fn diagnostics_room_users(
     State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
@@ -289,6 +273,7 @@ async fn diagnostics_room_users(
     diagnostics_optional_response(payload)
 }
 
+/// node-graph projection for one room diagnostics payload
 async fn diagnostics_room_graph(
     State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
@@ -304,6 +289,7 @@ async fn diagnostics_room_graph(
     diagnostics_optional_response(payload)
 }
 
+/// node-graph projection rooted at one user in one room
 async fn diagnostics_user_graph(
     State(services): State<DiagnosticsServices>,
     Path((room_id, user_id)): Path<(String, String)>,
@@ -329,6 +315,7 @@ where
     )
 }
 
+/// global diagnostics lookup for a user id across rooms
 async fn diagnostics_user_detail(
     State(services): State<DiagnosticsServices>,
     Path(user_id): Path<String>,

@@ -4,16 +4,31 @@
 //! runtime stats
 
 use serde::{Deserialize, Serialize};
-pub const METRICS_PATH: &str = "/metrics";
-pub const NOOP_PATH: &str = "/v1/noop";
-pub const STATS_PATH: &str = "/v1/stats";
-pub const CHANNEL_PATH: &str = "/v1/channel";
-pub const DISCONNECT_PATH: &str = "/v1/disconnect";
-pub const DIAGNOSTICS_SUMMARY_PATH: &str = "/internal/diagnostics/summary";
-pub const DIAGNOSTICS_ROOMS_PATH: &str = "/internal/diagnostics/rooms";
-pub const DIAGNOSTICS_WORKERS_PATH: &str = "/internal/diagnostics/workers";
 
-/// `/v1/noop` response payload
+pub mod route {
+    pub const WEBSOCKET: &str = "/";
+    pub const METRICS: &str = "/metrics";
+
+    pub mod v1 {
+        pub const NOOP: &str = "/v1/noop";
+        pub const STATS: &str = "/v1/stats";
+        pub const CHANNEL: &str = "/v1/channel";
+        pub const DISCONNECT: &str = "/v1/disconnect";
+    }
+
+    pub mod diagnostics {
+        pub const SUMMARY: &str = "/internal/diagnostics/summary";
+        pub const ROOMS: &str = "/internal/diagnostics/rooms";
+        pub const WORKERS: &str = "/internal/diagnostics/workers";
+        pub const ROOM: &str = "/internal/diagnostics/rooms/{uuid}";
+        pub const ROOM_USERS: &str = "/internal/diagnostics/rooms/{uuid}/users";
+        pub const ROOM_GRAPH: &str = "/internal/diagnostics/node-graph/rooms/{uuid}";
+        pub const USER_GRAPH: &str = "/internal/diagnostics/node-graph/rooms/{uuid}/users/{id}";
+        pub const USER: &str = "/internal/diagnostics/users/{id}";
+    }
+}
+
+/// noop response payload
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoopResponse {
     pub result: String,
@@ -28,7 +43,7 @@ impl NoopResponse {
     }
 }
 
-/// `/v1/channel` query parameters
+/// channel creation query parameters
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateRoomQuery {
     #[serde(rename = "webRTC", skip_serializing_if = "Option::is_none")]
@@ -72,7 +87,7 @@ pub struct UsersStatsResponse {
     pub screen_count: u64,
 }
 
-/// `/v1/stats` entry for one active room
+/// stats entry for one active room
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoomStatsResponse {
@@ -84,7 +99,7 @@ pub struct RoomStatsResponse {
     pub web_rtc_enabled: bool,
 }
 
-/// `/v1/stats` response payload
+/// stats response payload
 pub type StatsResponse = Vec<RoomStatsResponse>;
 
 #[cfg(test)]
