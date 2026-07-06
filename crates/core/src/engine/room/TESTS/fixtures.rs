@@ -12,9 +12,7 @@ pub(super) use o_sfu_router::{
 pub(super) use super::super::{
     JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
     RoomJoinError, RoomManager, UserCloseReason, UserOutbound, UserOutboundReceiver,
-    UserOutboundSender,
-    cleanup::TransportEffectOutcome,
-    source_policy::{self, SourcePolicyTrigger},
+    UserOutboundSender, cleanup::TransportEffectOutcome, source_policy::SourcePolicyTurn,
     transition::PublishStageOutcome,
 };
 pub(super) use crate::{
@@ -39,16 +37,9 @@ pub(super) use crate::{
 };
 
 pub(super) async fn refresh_source_policy(room: &Room, adapter: &MediaTransport) {
-    if let Some(transaction) = source_policy::plan(
-        room,
-        SourcePolicyTrigger::PacketSelection,
-        Some(adapter),
-        None,
-    )
-    .await
-    {
-        transaction.execute(room, adapter).await;
-    }
+    SourcePolicyTurn::packet_selection()
+        .execute(room, Some(adapter), None)
+        .await;
 }
 
 pub(super) const TEST_ROOM_KEY: &str = "Y2hhbm5lbC1rZXk=";
