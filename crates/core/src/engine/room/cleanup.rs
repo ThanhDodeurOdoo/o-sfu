@@ -1,26 +1,4 @@
-//! Room-side reconciliation for transport cleanup effects.
-//!
-//! Room state is authoritative for membership and media attachments. Transport
-//! cleanup is an async effect that runs after that state has already moved on.
-//! This module contains the small amount of retry state needed when the effect
-//! fails after the room can no longer derive it from `RoomState`.
-//!
-//! Cleanup operations run outside room-state locks. Recoverable failures enter
-//! the bounded room retry queue. Terminal failures, retry exhaustion, queue
-//! pressure and room shutdown are recorded as explicit cleanup failures.
-//!
-//! # Invariants
-//!
-//! Each pending operation is keyed by the runtime-local transport identity that
-//! the adapter understands. A media cleanup retry is keyed by the resolved
-//! transport session key plus transport media id. A user close retry is keyed
-//! by the resolved transport session key. A relay release retry is keyed by its
-//! resolved source session key plus route.
-//!
-//! The queue is bounded because cleanup recovery is a cold-path safety net, not
-//! an unbounded task system. If the queue fills, room cleanup must
-//! escalate through metrics and worker-level cleanup instead of
-//! retaining more state here.
+//! Cleanup retries retain resolved transport identity after room state moves on.
 
 use std::{
     collections::{BTreeMap, btree_map::Entry},
@@ -243,6 +221,9 @@ impl Room {
         media_transport: &MediaTransport,
         operations: &[TransportCleanupOperation],
     ) -> TransportEffectOutcome {
+        if operations.is_empty() {
+            return TransportEffectOutcome::Applied;
+        }
         let mut cleanup = TransportEffectOutcome::Applied;
         for operation in operations {
             match self

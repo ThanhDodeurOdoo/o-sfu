@@ -1,3 +1,5 @@
+use std::mem;
+
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::MediaStream as RouterRtpParameters,
@@ -150,8 +152,8 @@ impl RoomState {
 }
 
 impl PendingConsumerSetup {
-    pub(in crate::engine::room) fn relays(&self) -> &[ResolvedRelayRouteEffect] {
-        &self.relays
+    pub(in crate::engine::room) fn take_relays(&mut self) -> Vec<ResolvedRelayRouteEffect> {
+        mem::take(&mut self.relays)
     }
 
     pub(in crate::engine::room) async fn declare(

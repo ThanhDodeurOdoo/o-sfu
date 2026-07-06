@@ -12,7 +12,7 @@ use crate::engine::{
     },
     room::{
         Room,
-        cleanup::{TransportCleanupOperation, TransportEffectOutcome},
+        cleanup::TransportCleanupOperation,
         media_graph::{
             ConsumerRouteTarget, ConsumerSetupOrigin, ReceiverRouteActivity, ReceiverRouteWork,
             ResolvedRelayRouteEffect,
@@ -32,9 +32,12 @@ pub(in crate::engine::room) struct RoomTransportPlan {
 
 impl RoomTransportPlan {
     pub(in crate::engine::room) fn from_relays_and_cleanup(
-        relays: Vec<ResolvedRelayRouteEffect>,
-        cleanup: Vec<TransportCleanupOperation>,
+        mut relays: Vec<ResolvedRelayRouteEffect>,
+        extra_cleanup: impl IntoIterator<Item = TransportCleanupOperation>,
     ) -> Self {
+        let mut cleanup = Vec::new();
+        extend_relay_release_cleanup(&mut relays, &mut cleanup);
+        cleanup.extend(extra_cleanup);
         Self {
             relays,
             cleanup,
@@ -54,13 +57,9 @@ impl RoomTransportPlan {
 
     pub(in crate::engine::room) fn extend_cleanup(
         &mut self,
-        cleanup: Vec<TransportCleanupOperation>,
+        cleanup: impl IntoIterator<Item = TransportCleanupOperation>,
     ) {
         self.cleanup.extend(cleanup);
-    }
-
-    pub(super) fn push_cleanup(&mut self, operation: TransportCleanupOperation) {
-        self.cleanup.push(operation);
     }
 
     pub(super) fn push_producer(
@@ -75,10 +74,11 @@ impl RoomTransportPlan {
 
     pub(super) fn push_receiver_work(
         &mut self,
-        work: ReceiverRouteWork,
+        mut work: ReceiverRouteWork,
         origin: ConsumerSetupOrigin,
         mut diagnostics: impl FnMut(&ReceiverRouteActivity) -> DiagnosticsEventData,
     ) {
+        extend_relay_release_cleanup(&mut work.relays, &mut self.cleanup);
         self.relays.extend(work.relays);
         for activity in work.activities {
             let event = diagnostics(&activity);
@@ -106,13 +106,15 @@ impl RoomTransportPlan {
             return RoomTransportOutcome::default();
         };
         let mut outcome = RoomTransportOutcome::default();
-        execute_relay_route_effects(room, media_transport, &self.relays).await;
+        execute_relay_route_effects(
+            media_transport,
+            self.relays.iter().map(transport_relay_effect),
+        )
+        .await;
         let route_outcome = self.route_control.execute(media_transport).await;
         outcome.diagnostics.extend(route_outcome.diagnostics);
-        if !self.cleanup.is_empty() {
-            room.execute_transport_cleanup_operations(media_transport, &self.cleanup)
-                .await;
-        }
+        room.execute_transport_cleanup_operations(media_transport, &self.cleanup)
+            .await;
         for turn in self.setup_turns {
             turn.execute(room, media_transport, &mut outcome).await;
         }
@@ -348,39 +350,57 @@ impl ConsumerRouteFinish {
     }
 }
 
-pub(super) async fn execute_relay_route_effects(
+pub(super) async fn execute_relays_and_cleanup(
     room: &Room,
     media_transport: &MediaTransport,
-    effects: &[ResolvedRelayRouteEffect],
+    mut relays: Vec<ResolvedRelayRouteEffect>,
+    extra_cleanup: impl IntoIterator<Item = TransportCleanupOperation>,
+) -> bool {
+    let mut cleanup = Vec::new();
+    extend_relay_release_cleanup(&mut relays, &mut cleanup);
+    cleanup.extend(extra_cleanup);
+    let relays_applied =
+        execute_relay_route_effects(media_transport, relays.iter().map(transport_relay_effect))
+            .await;
+    room.execute_transport_cleanup_operations(media_transport, &cleanup)
+        .await;
+    relays_applied
+}
+
+fn extend_relay_release_cleanup(
+    relays: &mut Vec<ResolvedRelayRouteEffect>,
+    cleanup: &mut Vec<TransportCleanupOperation>,
+) {
+    cleanup.extend(
+        relays
+            .extract_if(.., |effect| {
+                effect.action == TransportRelayRouteAction::Release
+            })
+            .map(|effect| TransportCleanupOperation::ReleaseRelayRoute {
+                source_session_key: effect.source_session_key,
+                route: effect.route,
+            }),
+    );
+}
+
+fn transport_relay_effect(effect: &ResolvedRelayRouteEffect) -> TransportRelayRouteEffect {
+    TransportRelayRouteEffect {
+        source: TransportSourceKey::new(
+            effect.source_session_key.clone(),
+            effect.route.source_media,
+        ),
+        target_media_worker_id: effect.route.target_worker,
+        action: effect.action,
+    }
+}
+
+async fn execute_relay_route_effects(
+    media_transport: &MediaTransport,
+    effects: impl IntoIterator<Item = TransportRelayRouteEffect>,
 ) -> bool {
     let mut applied = true;
     for effect in effects {
-        if effect.action == TransportRelayRouteAction::Release {
-            let operation = [TransportCleanupOperation::ReleaseRelayRoute {
-                source_session_key: effect.source_session_key.clone(),
-                route: effect.route.clone(),
-            }];
-            if room
-                .execute_transport_cleanup_operations(media_transport, &operation)
-                .await
-                == TransportEffectOutcome::Failed
-            {
-                applied = false;
-            }
-            continue;
-        }
-        let transport_effect = TransportRelayRouteEffect {
-            source: TransportSourceKey::new(
-                effect.source_session_key.clone(),
-                effect.route.source_media,
-            ),
-            target_media_worker_id: effect.route.target_worker,
-            action: effect.action,
-        };
-        if let Err(error) = media_transport
-            .apply_relay_route_effect(&transport_effect)
-            .await
-        {
+        if let Err(error) = media_transport.apply_relay_route_effect(&effect).await {
             applied = false;
             warn!(
                 ?effect,
