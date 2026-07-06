@@ -19,11 +19,7 @@ pub(super) use crate::runtime::{
         DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserLookupConflict,
         DiagnosticsUserSummary, DiagnosticsWorkerSummary,
     },
-    http_server::contract::{
-        CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-        DIAGNOSTICS_WORKERS_PATH, DISCONNECT_PATH, METRICS_PATH, NOOP_PATH, NoopResponse,
-        RoomResponse, STATS_PATH, StatsResponse,
-    },
+    http_server::contract::{CreateRoomQuery, NoopResponse, RoomResponse, StatsResponse, route},
     media_transport::MediaTransport,
     room::{Room, RoomConfig, UserOutboundReceiver},
     test_support::{

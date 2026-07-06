@@ -5,7 +5,7 @@ fn room_token(issuer: Option<&str>, key: Option<&str>) -> TestResult<String> {
 }
 
 fn room_builder(token: &str, scheme: &str) -> HttpRequestBuilder {
-    Request::get(CHANNEL_PATH)
+    Request::get(route::v1::CHANNEL)
         .header(header::HOST, "sfu.example.com")
         .header(header::AUTHORIZATION, format!("{scheme} {token}"))
 }
@@ -24,7 +24,7 @@ async fn assert_room_status(builder: HttpRequestBuilder, expected: StatusCode) -
 async fn stats_first_remote_address(state: &RuntimeState) -> TestResult<String> {
     let payload: StatsResponse = route_json(
         state,
-        Request::get(STATS_PATH),
+        Request::get(route::v1::STATS),
         Body::empty(),
         StatusCode::OK,
         "stats request should succeed",
@@ -41,7 +41,7 @@ async fn stats_first_remote_address(state: &RuntimeState) -> TestResult<String> 
 #[tokio::test]
 async fn room_requires_authorization_header() -> TestResult {
     assert_room_status(
-        Request::get(CHANNEL_PATH).header(header::HOST, "sfu.example.com"),
+        Request::get(route::v1::CHANNEL).header(header::HOST, "sfu.example.com"),
         StatusCode::UNAUTHORIZED,
     )
     .await
@@ -101,7 +101,8 @@ async fn room_route_persists_query_config() -> TestResult {
     let payload: RoomResponse = route_json(
         &test_state.state,
         Request::get(format!(
-            "{CHANNEL_PATH}?webRTC=false&recordingAddress=https%3A%2F%2Frecord.example.com%2Fhook"
+            "{}?webRTC=false&recordingAddress=https%3A%2F%2Frecord.example.com%2Fhook",
+            route::v1::CHANNEL
         ))
         .header(header::HOST, "sfu.example.com")
         .header(header::AUTHORIZATION, format!("Bearer {token}")),
@@ -122,7 +123,7 @@ async fn room_route_persists_query_config() -> TestResult {
     );
     let stats: StatsResponse = route_json(
         &test_state.state,
-        Request::get(STATS_PATH),
+        Request::get(route::v1::STATS),
         Body::empty(),
         StatusCode::OK,
         "stats request should succeed",
@@ -179,7 +180,7 @@ async fn room_route_updates_metrics_for_unauthorized_and_success_paths() -> Test
     let state = test_state();
     route_status(
         &state,
-        Request::get(CHANNEL_PATH).header(header::HOST, "sfu.example.com"),
+        Request::get(route::v1::CHANNEL).header(header::HOST, "sfu.example.com"),
         Body::empty(),
         StatusCode::UNAUTHORIZED,
         "unauthorized room request should complete",

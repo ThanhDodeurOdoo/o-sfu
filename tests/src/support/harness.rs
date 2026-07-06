@@ -25,10 +25,7 @@ use o_sfu::{
     core::server::room::{
         DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
     },
-    http::{
-        CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DISCONNECT_PATH, METRICS_PATH,
-        RoomResponse, STATS_PATH, StatsResponse,
-    },
+    http::{CreateRoomQuery, RoomResponse, StatsResponse, route},
 };
 use o_sfu_core::server::transport::test_support::test_rtc_port_range;
 use o_sfu_protocol::wire::{
@@ -217,8 +214,10 @@ impl TestServer {
     async fn room_absent(&self, room_id: &str) -> bool {
         reqwest::Client::new()
             .get(format!(
-                "{}{DIAGNOSTICS_ROOMS_PATH}/{room_id}",
-                self.http_base_url()
+                "{}{}/{}",
+                self.http_base_url(),
+                route::diagnostics::ROOMS,
+                room_id
             ))
             .send()
             .await
@@ -228,8 +227,10 @@ impl TestServer {
     async fn room_detail(&self, room_id: &str) -> Option<DiagnosticsRoomDetail> {
         let response = reqwest::Client::new()
             .get(format!(
-                "{}{DIAGNOSTICS_ROOMS_PATH}/{room_id}",
-                self.http_base_url()
+                "{}{}/{}",
+                self.http_base_url(),
+                route::diagnostics::ROOMS,
+                room_id
             ))
             .send()
             .await
@@ -491,7 +492,7 @@ pub fn signed_disconnect_claims(user_ids_by_room: BTreeMap<String, Vec<UserId>>)
 pub async fn create_room(server: &TestServer, issuer: &str, key: &str) -> Option<String> {
     let token = signed_room_claims(issuer, key)?;
     let response = reqwest::Client::new()
-        .get(format!("{}{CHANNEL_PATH}", server.http_base_url()))
+        .get(format!("{}{}", server.http_base_url(), route::v1::CHANNEL))
         .bearer_auth(token)
         .header("x-forwarded-for", "127.0.0.1")
         .query(&CreateRoomQuery::default())
@@ -511,7 +512,11 @@ pub async fn disconnect_sessions_via_http(
 ) -> Option<StatusCode> {
     let token = signed_disconnect_claims(user_ids_by_room)?;
     let response = reqwest::Client::new()
-        .post(format!("{}{DISCONNECT_PATH}", server.http_base_url()))
+        .post(format!(
+            "{}{}",
+            server.http_base_url(),
+            route::v1::DISCONNECT
+        ))
         .body(token)
         .send()
         .await
@@ -521,7 +526,7 @@ pub async fn disconnect_sessions_via_http(
 
 pub async fn metrics_text(server: &TestServer) -> Option<String> {
     let response = reqwest::Client::new()
-        .get(format!("{}{METRICS_PATH}", server.http_base_url()))
+        .get(format!("{}{}", server.http_base_url(), route::METRICS))
         .send()
         .await
         .ok()?;
@@ -530,7 +535,7 @@ pub async fn metrics_text(server: &TestServer) -> Option<String> {
 
 pub async fn stats(server: &TestServer) -> Option<StatsResponse> {
     let response = reqwest::Client::new()
-        .get(format!("{}{STATS_PATH}", server.http_base_url()))
+        .get(format!("{}{}", server.http_base_url(), route::v1::STATS))
         .send()
         .await
         .ok()?;

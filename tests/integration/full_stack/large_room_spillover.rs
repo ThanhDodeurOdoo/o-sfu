@@ -1,4 +1,4 @@
-use o_sfu::http::DIAGNOSTICS_ROOMS_PATH;
+use o_sfu::http::route;
 use o_sfu_telemetry::diagnostics::{DiagnosticsRoomDetail, DiagnosticsRouteState};
 
 use super::support::{self as s, media as m, setup as st, spillover as sp};
@@ -528,8 +528,10 @@ async fn diagnostics_room(
 ) -> Option<DiagnosticsRoomDetail> {
     let response = client
         .get(format!(
-            "{}{DIAGNOSTICS_ROOMS_PATH}/{room}",
-            server.http_base_url()
+            "{}{}/{}",
+            server.http_base_url(),
+            route::diagnostics::ROOMS,
+            room
         ))
         .send()
         .await

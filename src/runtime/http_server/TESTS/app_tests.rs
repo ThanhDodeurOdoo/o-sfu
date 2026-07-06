@@ -53,7 +53,7 @@ async fn publish_video_stream(
 async fn noop_returns_ok_response() -> TestResult {
     let payload: NoopResponse = route_json(
         &test_state(),
-        Request::get(NOOP_PATH),
+        Request::get(route::v1::NOOP),
         Body::empty(),
         StatusCode::OK,
         "noop request should succeed",
@@ -119,7 +119,7 @@ async fn stats_returns_live_room_data() -> TestResult {
 
     let payload: StatsResponse = route_json(
         &test_state.state,
-        Request::get(STATS_PATH),
+        Request::get(route::v1::STATS),
         Body::empty(),
         StatusCode::OK,
         "stats request should succeed",

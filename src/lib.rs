@@ -299,9 +299,8 @@ pub mod auth {
 pub mod http {
     pub use crate::runtime::{
         http_server::contract::{
-            CHANNEL_PATH, CreateRoomQuery, DIAGNOSTICS_ROOMS_PATH, DIAGNOSTICS_SUMMARY_PATH,
-            DISCONNECT_PATH, IncomingBitRateStatsResponse, METRICS_PATH, NOOP_PATH, NoopResponse,
-            RoomResponse, STATS_PATH, StatsResponse,
+            CreateRoomQuery, IncomingBitRateStatsResponse, NoopResponse, RoomResponse,
+            StatsResponse, route,
         },
         request_origin::{RequestOrigin, resolve_request_origin},
     };

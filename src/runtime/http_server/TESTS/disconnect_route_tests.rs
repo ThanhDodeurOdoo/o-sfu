@@ -8,7 +8,7 @@ use crate::core::server::{
 async fn disconnect_rejects_invalid_utf8_body() -> TestResult {
     route_status(
         &test_state(),
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from(vec![0xF0_u8, 0x28, 0x8C, 0x28]),
         StatusCode::BAD_REQUEST,
         "invalid UTF-8 disconnect request should complete",
@@ -20,7 +20,7 @@ async fn disconnect_rejects_invalid_utf8_body() -> TestResult {
 async fn disconnect_requires_valid_jwt() -> TestResult {
     route_status(
         &test_state(),
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from("invalid-token"),
         StatusCode::UNPROCESSABLE_ENTITY,
         "invalid-token disconnect request should complete",
@@ -33,7 +33,7 @@ async fn disconnect_rejects_oversized_body_before_auth_decode() -> TestResult {
     let oversized_body = "x".repeat(auth::MAX_JWT_TOKEN_BYTES + 1);
     route_status(
         &test_state(),
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from(oversized_body),
         StatusCode::PAYLOAD_TOO_LARGE,
         "oversized disconnect request should complete",
@@ -49,7 +49,7 @@ async fn disconnect_accepts_valid_jwt() -> TestResult {
     )?;
     route_status(
         &test_state(),
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from(token),
         StatusCode::OK,
         "disconnect request should complete",
@@ -98,7 +98,7 @@ async fn disconnect_route_kicks_live_users() -> TestResult {
     )?;
     route_status(
         &test_state.state,
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from(token),
         StatusCode::OK,
         "disconnect request should complete",
@@ -132,7 +132,7 @@ async fn disconnect_route_updates_metrics_for_all_outcomes() -> TestResult {
 
     route_status(
         &state,
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from(vec![0xF0_u8, 0x28, 0x8C, 0x28]),
         StatusCode::BAD_REQUEST,
         "invalid UTF-8 disconnect request should complete",
@@ -141,7 +141,7 @@ async fn disconnect_route_updates_metrics_for_all_outcomes() -> TestResult {
 
     route_status(
         &state,
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from("invalid-token"),
         StatusCode::UNPROCESSABLE_ENTITY,
         "invalid-token disconnect request should complete",
@@ -154,7 +154,7 @@ async fn disconnect_route_updates_metrics_for_all_outcomes() -> TestResult {
     )?;
     route_status(
         &state,
-        Request::post(DISCONNECT_PATH),
+        Request::post(route::v1::DISCONNECT),
         Body::from(token),
         StatusCode::OK,
         "valid disconnect request should complete",
