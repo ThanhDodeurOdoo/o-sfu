@@ -9,11 +9,9 @@
 use std::{slice::from_ref, sync::Arc};
 
 use o_sfu_router::{
-    MediaKind, RouterId,
-    ids::{ConsumerId, ProducerId},
+    RouterId,
     rtp::MediaStream,
     test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
-    topology::{RoutedConsumerId, RoutedProducerId},
 };
 
 use super::*;
@@ -26,16 +24,14 @@ use crate::{
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
             media_graph::{
-                ConsumerKey, ConsumerSetupOutcome, ConsumerState, ProducerRuntimeId,
-                PublishedProducer, PublishedSourceInstall, RelayRouteKey,
+                ConsumerSetupOutcome, ProducerRuntimeId, RelayRouteKey, ValidatedPublish,
             },
             rtp_capabilities::router_rtp_capabilities,
         },
         source_model::{
-            ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceDescriptorParts,
-            PublishedSourceId, PublishedSourceOwner, SourceEncodingDescriptor,
-            SourceEncodingDescriptorParts, SourceEncodingId,
-            test_support::{source_publish_intent_for_source, stream_id_for_source},
+            PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
+            PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
+            SourceEncodingId, test_support::source_publish_intent_for_source,
         },
     },
 };
@@ -92,10 +88,9 @@ fn install_test_published_producer(
     user_id: &UserId,
     connection_id: ConnectionId,
     stream_type: TestSourceKind,
-    routed_producer_id: RoutedProducerId,
     transport_media_id: TransportMediaId,
     consumable_rtp_parameters: MediaStream,
-) -> (ProducerRuntimeId, PublishedSourceId) {
+) -> PublishedSourceId {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
     let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
@@ -125,23 +120,23 @@ fn install_test_published_producer(
     .expect("test source graph should be valid");
     state
         .topology
-        .install_source_for_test(PublishedSourceInstall {
-            source_descriptor: source,
-            producer_id,
-            producer: PublishedProducer {
-                source_id,
+        .publish_source(
+            ValidatedPublish {
                 owner_user_id: user_id.clone(),
                 owner_connection_id: connection_id,
-                stream_id: stream_id_for_source(stream_type),
-                media_kind: MediaKind::Video,
-                consumable_rtp_parameters,
-                routed_producer_id,
-                transport_media_id: Some(transport_media_id),
-                active: true,
+                session_key: state.transport_user_key(user_id, connection_id),
+                stream_id: source.stream_id().clone(),
+                media_kind: source.media_kind(),
+                policy: source.policy(),
+                presence: None,
             },
+            producer_id,
+            source,
+            consumable_rtp_parameters,
             transport_media_id,
-        });
-    (producer_id, source_id)
+        )
+        .expect("test producer route should be published");
+    source_id
 }
 
 #[derive(Debug)]
@@ -175,17 +170,11 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let publisher_session = state.transport_user_key(&publisher, publisher_connection);
     let source_media = TransportMediaId::new(11);
     let consumer_media = TransportMediaId::new(21);
-    let routed_producer_id = state
-        .topology
-        .routing_mut_for_test()
-        .add_producer(&publisher, MediaKind::Video)
-        .expect("relayed source producer route should be added");
     install_test_published_producer(
         state,
         &publisher,
         publisher_connection,
         TestSourceKind::ScalableVideo,
-        routed_producer_id,
         source_media,
         sample_video_rtp_parameters(None, 77_777),
     );
@@ -298,27 +287,33 @@ fn leave_removes_consumer_routes_for_departed_session() {
     let mut state = test_state();
     let producer_connection_id = join_test_user(&mut state, &UserId::Integer(1));
     let consumer_connection_id = join_test_user(&mut state, &UserId::Integer(2));
-    let (_, source_id) = install_test_published_producer(
+    assert!(
+        state
+            .set_user_negotiated(
+                &UserId::Integer(2),
+                consumer_connection_id,
+                sample_client_rtp_capabilities()
+            )
+            .is_some()
+    );
+    let source_id = install_test_published_producer(
         &mut state,
         &UserId::Integer(1),
         producer_connection_id,
         TestSourceKind::ScalableVideo,
-        RoutedProducerId::for_test(RouterId(1), ProducerId(10)),
         TransportMediaId::new(11),
-        MediaStream::new(vec![], vec![], vec![]),
+        sample_video_rtp_parameters(None, 77_777),
     );
-    let consumer_key = ConsumerKey::new(&UserId::Integer(2), source_id);
-    assert!(state.topology.commit_consumer_route_for_test(
-        consumer_key,
-        ConsumerState {
-            routed_consumer_id: RoutedConsumerId::for_test(RouterId(1), ConsumerId(20)),
-            consumer_connection_id,
-            source_connection_id: producer_connection_id,
-            source_media: TransportMediaId::new(11),
-            consumer_media: TransportMediaId::new(21),
-            consumer_mid: "camera-down".to_owned(),
-        },
-        ConsumerSourceSelection::open(true),
+    let mut setups = state
+        .plan_missing_consumers(&UserId::Integer(2), consumer_connection_id)
+        .expect("consumer should still be current");
+    assert_eq!(setups.len(), 1);
+    let setup = setups.pop().expect("consumer setup should be planned");
+    let setup = setup.declared(TransportMediaId::new(21), Some(String::from("camera-down")));
+    let (_, _, setup_outcome) = state.commit_declared_consumer_setup(setup);
+    assert!(matches!(
+        setup_outcome,
+        ConsumerSetupOutcome::Committed { .. }
     ));
 
     let outcome = state.close_connection(&UserId::Integer(2), consumer_connection_id);

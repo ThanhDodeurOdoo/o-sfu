@@ -109,17 +109,4 @@ impl RoomState {
                 .collect()
         })
     }
-
-    #[cfg(test)]
-    pub fn inspect_producer_owner_connection_id_for_transport_media_id(
-        &self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<ConnectionId> {
-        let source_id = self
-            .source_transport_media_entry(transport_media_id)?
-            .source;
-        self.topology
-            .producer_for_source(source_id)
-            .map(|producer| producer.owner_connection_id)
-    }
 }

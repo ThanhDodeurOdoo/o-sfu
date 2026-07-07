@@ -253,14 +253,6 @@ impl SourceIndex {
             .collect()
     }
 
-    #[cfg(test)]
-    pub(super) fn producer_for_source(
-        &self,
-        source_id: PublishedSourceId,
-    ) -> Option<&PublishedProducer> {
-        self.records.get(&source_id).map(|record| &record.producer)
-    }
-
     pub(super) fn producer(&self, producer_id: ProducerRuntimeId) -> Option<&PublishedProducer> {
         self.records
             .get(self.source_by_producer.get(&producer_id)?)

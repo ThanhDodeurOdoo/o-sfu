@@ -6,25 +6,24 @@
     reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 use o_sfu_router::{
     MediaKind as RouterMediaKind, RouterId,
-    ids::{ConsumerId, ProducerId},
+    ids::ProducerId,
     negotiation::derive_consumable_rtp_parameters,
     rtp::{MediaStream, Mid, Rid, Ssrc},
-    state::{ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState},
     test_support::rtp_samples::{
         sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
         sample_video_rtp_parameters,
     },
-    topology::{RoutedConsumerId, RoutedProducerId},
+    topology::RoutedProducerId,
 };
 
 use super::{
     ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerRouteTransportRef,
-    ConsumerSetupOutcome, ConsumerState, DeclaredConsumerSetup, PendingConsumerSetup,
-    ProducerRuntimeId, PublishedProducer, PublishedSourceInstall,
+    ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup, ProducerRuntimeId,
+    ValidatedPublish,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -34,7 +33,8 @@ use crate::{
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
-            rtp_capabilities::router_rtp_capabilities, state::RoomState,
+            cleanup::TransportCleanupOperation, rtp_capabilities::router_rtp_capabilities,
+            state::RoomState,
         },
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
@@ -167,50 +167,27 @@ fn install_test_consumer_route(
     producer_user_id: &UserId,
     consumer_user_id: &UserId,
 ) -> (ConsumerKey, ConnectionId) {
-    let producer_connection_id = state
-        .user_connection_id(producer_user_id)
-        .expect("producer user should have a connection id");
-    let consumer_connection_id = state
-        .user_connection_id(consumer_user_id)
-        .expect("consumer user should have a connection id");
-    let routed_producer_id = state
-        .topology
-        .routing_mut_for_test()
-        .add_producer(producer_user_id, RouterMediaKind::Video)
-        .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
-    let routed_consumer_id = state
-        .topology
-        .routing_mut_for_test()
-        .add_consumer_with_route_state(
-            consumer_user_id,
-            routed_producer_id,
-            ConsumerCapability::Compatible,
-            RouterConsumerRouteState::Active,
-        )
-        .unwrap_or_else(|error| panic!("failed to create test consumer route: {error:?}"));
-    let source_id = install_test_published_producer_with_route(
+    let consumer_connection_id = set_test_user_ready(state, consumer_user_id);
+    let source_id = install_test_published_producer(
         state,
         producer_user_id,
-        producer_connection_id,
         TestSourceKind::ScalableVideo,
-        routed_producer_id,
-        sample_video_rtp_parameters(None, 77_777),
         TransportMediaId::new(1),
-    )
-    .1;
+    );
     let route_key = ConsumerKey::new(consumer_user_id, source_id);
-    let consumer = ConsumerState {
-        routed_consumer_id,
-        consumer_connection_id,
-        source_connection_id: producer_connection_id,
-        source_media: TransportMediaId::new(1),
-        consumer_media: TransportMediaId::new(2),
-        consumer_mid: "camera-down".to_owned(),
-    };
-    assert!(state.topology.commit_consumer_route_for_test(
-        route_key.clone(),
-        consumer,
-        ConsumerSourceSelection::open(true),
+    let mut setups = state
+        .plan_missing_consumers(consumer_user_id, consumer_connection_id)
+        .expect("consumer session should exist");
+    assert_eq!(setups.len(), 1);
+    let setup = setups.pop().expect("consumer setup should be planned");
+    assert!(matches!(
+        commit_setup_with_media(
+            state,
+            setup,
+            TransportMediaId::new(2),
+            Some(String::from("camera-down")),
+        ),
+        ConsumerSetupOutcome::Committed { .. }
     ));
     (route_key, consumer_connection_id)
 }
@@ -248,7 +225,39 @@ fn test_source_descriptor(
     .expect("test source graph should be valid")
 }
 
-fn install_test_published_producer_with_route(
+fn install_test_published_producer_with_rtp(
+    state: &mut RoomState,
+    user_id: &UserId,
+    connection_id: ConnectionId,
+    stream_type: TestSourceKind,
+    consumable_rtp_parameters: MediaStream,
+    transport_media_id: TransportMediaId,
+) -> PublishedSourceId {
+    let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+    let source_descriptor = test_source_descriptor(state, user_id, stream_type);
+    let source_id = source_descriptor.source_id();
+    state
+        .topology
+        .publish_source(
+            ValidatedPublish {
+                owner_user_id: user_id.clone(),
+                owner_connection_id: connection_id,
+                session_key: state.transport_user_key(user_id, connection_id),
+                stream_id: source_descriptor.stream_id().clone(),
+                media_kind: source_descriptor.media_kind(),
+                policy: source_descriptor.policy(),
+                presence: None,
+            },
+            producer_id,
+            source_descriptor,
+            consumable_rtp_parameters,
+            transport_media_id,
+        )
+        .expect("test producer route should be published");
+    source_id
+}
+
+fn install_missing_router_producer(
     state: &mut RoomState,
     user_id: &UserId,
     connection_id: ConnectionId,
@@ -256,29 +265,18 @@ fn install_test_published_producer_with_route(
     routed_producer_id: RoutedProducerId,
     consumable_rtp_parameters: MediaStream,
     transport_media_id: TransportMediaId,
-) -> (ProducerRuntimeId, PublishedSourceId) {
+) -> ProducerRuntimeId {
     let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
     let source_descriptor = test_source_descriptor(state, user_id, stream_type);
-    let source_id = source_descriptor.source_id();
-    state
-        .topology
-        .install_source_for_test(PublishedSourceInstall {
-            source_descriptor,
-            producer_id,
-            producer: PublishedProducer {
-                source_id,
-                owner_user_id: user_id.clone(),
-                owner_connection_id: connection_id,
-                stream_id: stream_id_for_source(stream_type),
-                media_kind: RouterMediaKind::Video,
-                consumable_rtp_parameters,
-                routed_producer_id,
-                transport_media_id: Some(transport_media_id),
-                active: true,
-            },
-            transport_media_id,
-        });
-    (producer_id, source_id)
+    state.topology.install_missing_router_producer_for_test(
+        source_descriptor,
+        producer_id,
+        connection_id,
+        routed_producer_id,
+        consumable_rtp_parameters,
+        transport_media_id,
+    );
+    producer_id
 }
 
 fn install_test_published_producer(
@@ -286,21 +284,15 @@ fn install_test_published_producer(
     user_id: &UserId,
     stream_type: TestSourceKind,
     transport_media_id: TransportMediaId,
-) -> (ProducerRuntimeId, PublishedSourceId) {
+) -> PublishedSourceId {
     let connection_id = state
         .user_connection_id(user_id)
         .expect("publisher user should have a connection id");
-    let routed_producer_id = state
-        .topology
-        .routing_mut_for_test()
-        .add_producer(user_id, RouterMediaKind::Video)
-        .unwrap_or_else(|error| panic!("failed to create test producer route: {error:?}"));
-    install_test_published_producer_with_route(
+    install_test_published_producer_with_rtp(
         state,
         user_id,
         connection_id,
         stream_type,
-        routed_producer_id,
         sample_video_rtp_parameters(None, 77_777),
         transport_media_id,
     )
@@ -312,59 +304,23 @@ fn install_test_consumable_video_producer(
     stream_type: TestSourceKind,
     transport_media_id: TransportMediaId,
     ssrc: u32,
-) -> (ProducerRuntimeId, PublishedSourceId) {
+) -> PublishedSourceId {
     let connection_id = state
         .user_connection_id(user_id)
         .expect("publisher should have a connection id");
-    let routed_producer_id = state
-        .topology
-        .routing_mut_for_test()
-        .add_producer(user_id, RouterMediaKind::Video)
-        .expect("publisher route should be added");
     let consumable_rtp_parameters = derive_consumable_rtp_parameters(
         &sample_video_rtp_parameters(None, ssrc),
         &state.router_rtp_capabilities(),
     )
     .expect("publisher RTP parameters should derive consumable router parameters");
-    install_test_published_producer_with_route(
+    install_test_published_producer_with_rtp(
         state,
         user_id,
         connection_id,
         stream_type,
-        routed_producer_id,
         consumable_rtp_parameters,
         transport_media_id,
     )
-}
-
-fn install_test_consumer_state(
-    state: &mut RoomState,
-    consumer_user_id: &UserId,
-    source_id: PublishedSourceId,
-    source_connection_id: ConnectionId,
-    source_media: TransportMediaId,
-    consumer_media: TransportMediaId,
-) -> ConsumerKey {
-    let consumer_connection_id = state
-        .user_connection_id(consumer_user_id)
-        .expect("consumer user should have a connection id");
-    let key = ConsumerKey::new(consumer_user_id, source_id);
-    assert!(state.topology.commit_consumer_route_for_test(
-        key.clone(),
-        ConsumerState {
-            routed_consumer_id: RoutedConsumerId::for_test(
-                RouterId(1),
-                ConsumerId(consumer_media.as_u64())
-            ),
-            consumer_connection_id,
-            source_connection_id,
-            source_media,
-            consumer_media,
-            consumer_mid: format!("mid-{}", consumer_media.as_u64()),
-        },
-        ConsumerSourceSelection::open(true),
-    ));
-    key
 }
 
 fn set_test_consumer_policy_pause(state: &mut RoomState, key: &ConsumerKey) {
@@ -441,10 +397,24 @@ fn pending_consumer_setup() -> (
     )
 }
 
-fn commit_setup(state: &mut RoomState, setup: PendingConsumerSetup) -> ConsumerSetupOutcome {
-    let setup = setup.declared(TransportMediaId::new(20), Some(String::from("m0")));
+fn commit_setup_with_media(
+    state: &mut RoomState,
+    setup: PendingConsumerSetup,
+    media: TransportMediaId,
+    mid: Option<String>,
+) -> ConsumerSetupOutcome {
+    let setup = setup.declared(media, mid);
     let (_, _, outcome) = state.commit_declared_consumer_setup(setup);
     outcome
+}
+
+fn commit_setup(state: &mut RoomState, setup: PendingConsumerSetup) -> ConsumerSetupOutcome {
+    commit_setup_with_media(
+        state,
+        setup,
+        TransportMediaId::new(20),
+        Some(String::from("m0")),
+    )
 }
 
 #[test]
@@ -487,7 +457,7 @@ fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
     let user_id = UserId::Integer(1);
     let connection_id = join_test_user(&mut state, &user_id);
 
-    let (producer_id, _source_id) = install_test_published_producer_with_route(
+    let producer_id = install_missing_router_producer(
         &mut state,
         &user_id,
         connection_id,
@@ -565,7 +535,7 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
     join_test_user(&mut state, &subscriber_user_id);
 
     let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
-    let (_, source_id) = install_test_consumable_video_producer(
+    let source_id = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ScalableVideo,
@@ -726,12 +696,9 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_route_graph_rejection(
 
     assert_eq!(state.consumer_count(), 0);
     assert_eq!(state.media_counts().subscriptions, 0);
-    assert!(
-        state
-            .topology
-            .routing_mut_for_test()
-            .remove_consumer(RoutedConsumerId::for_test(RouterId(1), ConsumerId(1)))
-            .is_err(),
+    assert_eq!(
+        state.topology.routed_consumer_count_for_test(),
+        0,
         "routed consumer created before route graph rejection must be rolled back"
     );
 }
@@ -746,14 +713,14 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
     join_test_user(&mut state, &subscriber_user_id);
 
     let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
-    let (_, scalable_source_id) = install_test_consumable_video_producer(
+    let scalable_source_id = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ScalableVideo,
         TransportMediaId::new(10),
         22_222,
     );
-    let (_, readable_source_id) = install_test_consumable_video_producer(
+    let readable_source_id = install_test_consumable_video_producer(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ReadableVideo,
@@ -869,41 +836,48 @@ fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_route
     join_test_user(&mut state, &publisher_id);
     join_test_user(&mut state, &subscriber_id);
 
-    let publisher_connection_id = state
-        .user_connection_id(&publisher_id)
-        .expect("publisher should have a connection id");
-    let (_, source_id) = install_test_published_producer(
+    let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_id);
+    install_test_published_producer(
         &mut state,
         &publisher_id,
         TestSourceKind::ScalableVideo,
         source_media,
     );
-    install_test_consumer_state(
-        &mut state,
-        &subscriber_id,
-        source_id,
-        publisher_connection_id,
-        source_media,
-        consumer_media,
-    );
+    let mut setups = state
+        .plan_missing_consumers(&subscriber_id, subscriber_connection_id)
+        .expect("subscriber should still be current");
+    assert_eq!(setups.len(), 1);
+    let setup = setups.pop().expect("consumer setup should be planned");
+    assert!(matches!(
+        commit_setup_with_media(
+            &mut state,
+            setup,
+            consumer_media,
+            Some(String::from("camera-down")),
+        ),
+        ConsumerSetupOutcome::Committed { .. }
+    ));
 
-    let transport_removals = state
-        .topology
-        .transport_removals_for_users_for_test(&BTreeSet::from([
-            publisher_id.clone(),
-            subscriber_id.clone(),
-        ]));
+    let outcome = state.apply_disconnect_users(&[publisher_id.clone(), subscriber_id.clone()]);
+    let (_, cleanup) = outcome.transport_plan.relays_and_cleanup();
 
-    let mut removed_media = transport_removals
+    let mut removed_media = cleanup
         .iter()
-        .map(|removal| (removal.user.clone(), removal.transport_media))
+        .filter_map(|operation| match operation {
+            TransportCleanupOperation::RemoveMedia {
+                session_key,
+                transport_media_id,
+            } => Some((session_key.user_id(), *transport_media_id)),
+            TransportCleanupOperation::CloseUser { .. }
+            | TransportCleanupOperation::ReleaseRelayRoute { .. } => None,
+        })
         .collect::<Vec<_>>();
     removed_media.sort_unstable();
     assert_eq!(
         removed_media,
         vec![
-            (publisher_id, source_media),
-            (subscriber_id, consumer_media)
+            (&publisher_id, source_media),
+            (&subscriber_id, consumer_media)
         ]
     );
 }

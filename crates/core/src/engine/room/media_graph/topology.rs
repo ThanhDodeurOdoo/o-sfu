@@ -44,6 +44,10 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+#[path = "TESTS/topology_support.rs"]
+mod topology_support;
+
 #[derive(Debug)]
 pub struct RoomTopology {
     instance: RoomInstanceId,
@@ -1046,64 +1050,5 @@ impl RoomTopology {
             relay_effects,
             routing_error,
         })
-    }
-}
-
-#[cfg(test)]
-impl RoomTopology {
-    pub(in crate::engine::room) fn ensure_selection_for_test(
-        &mut self,
-        key: &ConsumerKey,
-        selection: ConsumerSourceSelection,
-    ) {
-        self.route_graph.ensure_selection(key, selection);
-    }
-
-    pub(in crate::engine::room) fn commit_consumer_route_for_test(
-        &mut self,
-        key: ConsumerKey,
-        state: super::ConsumerState,
-        selection: ConsumerSourceSelection,
-    ) -> bool {
-        let Some(reservation) = self.route_graph.reserve_consumer_setup(key, selection) else {
-            return false;
-        };
-        self.route_graph.commit(&reservation, state, selection)
-    }
-
-    pub(in crate::engine::room) fn remove_source_for_test(
-        &mut self,
-        source_id: PublishedSourceId,
-    ) -> bool {
-        self.remove_source(source_id).is_some()
-    }
-
-    pub(in crate::engine::room) fn remove_route_graph_entry_for_test(&mut self, key: &ConsumerKey) {
-        self.route_graph.remove_key_state(key);
-    }
-
-    pub(in crate::engine::room) fn transport_removals_for_users_for_test(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        self.transport_removals_for_users(departing_user_ids)
-    }
-
-    pub(in crate::engine::room) fn producer_for_source(
-        &self,
-        source_id: PublishedSourceId,
-    ) -> Option<&PublishedProducer> {
-        self.sources.producer_for_source(source_id)
-    }
-
-    pub(in crate::engine::room) fn install_source_for_test(
-        &mut self,
-        install: PublishedSourceInstall,
-    ) {
-        self.sources.install_source(install);
-    }
-
-    pub(in crate::engine::room) fn routing_mut_for_test(&mut self) -> &mut RoutingTopology {
-        &mut self.routing
     }
 }

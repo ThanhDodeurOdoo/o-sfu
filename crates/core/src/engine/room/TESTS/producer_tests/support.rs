@@ -98,13 +98,9 @@ pub(super) async fn assert_transport_media_owner_mapping_is_missing(
     let user_mapping_exists = state
         .inspect_producer_owner_user_id_for_transport_media_id(transport_media_id)
         .is_some();
-    let connection_mapping_exists = state
-        .inspect_producer_owner_connection_id_for_transport_media_id(transport_media_id)
-        .is_some();
     drop(state);
 
     assert!(!user_mapping_exists);
-    assert!(!connection_mapping_exists);
 }
 
 pub(super) async fn assert_user_has_no_producer_route_target(
