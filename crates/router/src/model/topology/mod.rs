@@ -1,10 +1,4 @@
-//! multi-router topology over pure router instances
-//!
-//! the topology owns committed connection placement, session homes, source-router
-//! producer ids, source-router consumer ids and cross-router shadow sessions.
-//! it does not own transports or packet forwarding.
-//! consumers are routed on the source producer router even when their receiver
-//! transport lives on another local media worker
+//! room-local topology over pure router instances
 
 #[cfg(not(kani))]
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,29 +40,18 @@ pub enum RoutingError {
     Router(RouterError),
 }
 
-/// teardown repair sentinel returned after best-effort router cleanup
-///
-/// errors are preserved for diagnostics
-/// callers may still finish room-state cleanup that no longer depends on router
-/// consistency
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RoutingRepairReport {
-    errors: Vec<RoutingError>,
-}
+pub struct RoutingRepairReport(Vec<RoutingError>);
 
 impl RoutingRepairReport {
-    fn record(&mut self, error: RoutingError) {
-        self.errors.push(error);
-    }
-
     #[must_use]
     pub fn errors(&self) -> &[RoutingError] {
-        &self.errors
+        &self.0
     }
 
     #[must_use]
     pub fn is_clean(&self) -> bool {
-        self.errors.is_empty()
+        self.0.is_empty()
     }
 }
 
@@ -331,23 +314,44 @@ impl RoutingTopology {
 
     /// commit one user connection to a resolved router placement
     ///
-    /// the routing state is unchanged when the selected placement is rejected
+    /// the routing state is unchanged when placement is rejected
     ///
     /// # Errors
     ///
-    /// returns [`RoutingError::MissingRouterForSession`] if the selected router
-    /// is absent or [`RoutingError::Router`] if the pure router rejects the
-    /// session or transport mutation
+    /// returns [`RoutingError::MissingRouterForSession`] for an absent home
+    /// router or [`RoutingError::Router`] for rejected router setup
     pub fn commit_session_placement(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
         placement: RouterPlacement,
     ) -> Result<MediaWorkerId, RoutingError> {
-        let mut next = self.clone();
-        let media_worker = next.apply_session_placement(user_id, connection_id, placement)?;
-        *self = next;
-        Ok(media_worker)
+        let old_placements = self.router_placements.clone();
+        let old_session = self.sessions.active(user_id).cloned();
+        let old_router = self.routers.get(&placement.router).cloned();
+        let mut old_routers = vec![(placement.router, old_router)];
+        for (router_id, router) in &self.routers {
+            if *router_id != placement.router && router.has_user(user_id) {
+                old_routers.push((*router_id, Some(router.clone())));
+            }
+        }
+        let error = match self.apply_session_placement(user_id, connection_id, placement) {
+            Ok(media_worker) => return Ok(media_worker),
+            Err(error) => error,
+        };
+        self.router_placements = old_placements;
+        self.sessions.remove(user_id);
+        if let Some(old_session) = old_session {
+            self.sessions.insert(user_id.clone(), old_session);
+        }
+        for (router_id, router) in old_routers {
+            if let Some(router) = router {
+                self.routers.insert(router_id, router);
+            } else {
+                self.routers.remove(&router_id);
+            }
+        }
+        Err(error)
     }
 
     fn apply_session_placement(
@@ -356,8 +360,12 @@ impl RoutingTopology {
         connection_id: ConnectionId,
         placement: RouterPlacement,
     ) -> Result<MediaWorkerId, RoutingError> {
-        if self.sessions.active(user_id).is_some() {
-            self.remove_session(user_id)?;
+        let replacing = self.sessions.active(user_id).is_some();
+        if replacing {
+            self.remove_session_from_routers(user_id)?;
+            let shadow_sessions = self.shadow_sessions.prunable_for_user(user_id);
+            self.prune_shadow_sessions(shadow_sessions)?;
+            self.sessions.remove(user_id);
         }
         self.attach_placement(placement);
         let router_session_seed = connection_id.as_u64();
@@ -370,6 +378,9 @@ impl RoutingTopology {
             placement,
         };
         self.sessions.insert(user_id.clone(), session);
+        if replacing {
+            let _ = self.shadow_sessions.unregister_user(user_id);
+        }
         Ok(placement.media_worker)
     }
 
@@ -457,16 +468,11 @@ impl RoutingTopology {
 
     /// create a routed consumer on the producer's source router
     ///
-    /// cross-router receivers get a temporary shadow session before consumer insertion
-    /// if insertion fails, only a newly created untracked shadow is removed
-    /// existing shadows stay live because another routed consumer may still need them
+    /// cross-router receivers get a rollback-safe shadow session
     ///
     /// # Errors
     ///
-    /// returns [`RoutingError::MissingSessionPlacement`] when the receiver has
-    /// no committed home placement, [`RoutingError::MissingRouter`] when the
-    /// producer router is absent or [`RoutingError::Router`] when the pure
-    /// router rejects shadow setup or consumer insertion
+    /// returns missing placement, missing router or router rejection errors
     pub fn add_consumer_with_route_state(
         &mut self,
         consumer_user_id: &UserId,
@@ -507,8 +513,7 @@ impl RoutingTopology {
     ///
     /// # Errors
     ///
-    /// returns [`RoutingError::MissingRouter`] when the producer router is absent
-    /// or [`RoutingError::Router`] when the pure router rejects the update
+    /// returns missing router or router rejection errors
     pub fn set_producer_route_state(
         &mut self,
         producer_id: RoutedProducerId,
@@ -523,8 +528,7 @@ impl RoutingTopology {
     ///
     /// # Errors
     ///
-    /// returns [`RoutingError::MissingRouter`] when the consumer router is absent
-    /// or [`RoutingError::Router`] when the pure router rejects the update
+    /// returns missing router or router rejection errors
     pub fn set_consumer_route_state(
         &mut self,
         consumer_id: RoutedConsumerId,
@@ -539,8 +543,7 @@ impl RoutingTopology {
     ///
     /// # Errors
     ///
-    /// returns [`RoutingError::MissingRouter`] when the consumer router is absent
-    /// or [`RoutingError::Router`] when the pure router rejects teardown
+    /// returns missing router or router rejection errors
     pub fn remove_consumer(&mut self, consumer_id: RoutedConsumerId) -> Result<(), RoutingError> {
         self.router_mut(consumer_id.router_id())?
             .remove_consumer(consumer_id.consumer_id())?;
@@ -553,8 +556,7 @@ impl RoutingTopology {
     ///
     /// # Errors
     ///
-    /// returns [`RoutingError::MissingRouter`] when the producer router is absent
-    /// or [`RoutingError::Router`] when the pure router rejects teardown
+    /// returns missing router or router rejection errors
     pub fn remove_producer(&mut self, producer_id: RoutedProducerId) -> Result<(), RoutingError> {
         self.router_mut(producer_id.router_id())?
             .remove_producer(producer_id.producer_id())?;
@@ -567,11 +569,16 @@ impl RoutingTopology {
     ///
     /// # Errors
     ///
-    /// returns [`RoutingError::MissingSessionPlacement`] when the user has no
-    /// home placement, [`RoutingError::MissingRouterForSession`] when the home
-    /// router was detached or [`RoutingError::Router`] when a pure router
-    /// rejects teardown
+    /// returns missing placement, missing home router or router rejection errors
     pub fn remove_session(&mut self, user_id: &UserId) -> Result<(), RoutingError> {
+        self.remove_session_from_routers(user_id)?;
+        let shadow_sessions = self.shadow_sessions.unregister_user(user_id);
+        self.prune_shadow_sessions(shadow_sessions)?;
+        self.sessions.remove(user_id);
+        Ok(())
+    }
+
+    fn remove_session_from_routers(&mut self, user_id: &UserId) -> Result<(), RoutingError> {
         let home_router_id = self.require_session(user_id)?.placement.router;
         if !self.routers.contains_key(&home_router_id) {
             return Err(RoutingError::MissingRouterForSession {
@@ -582,9 +589,6 @@ impl RoutingTopology {
         for router in self.routers.values_mut() {
             router.remove_session(user_id)?;
         }
-        let shadow_sessions = self.shadow_sessions.unregister_user(user_id);
-        self.prune_shadow_sessions(shadow_sessions)?;
-        self.sessions.remove(user_id);
         Ok(())
     }
 
@@ -595,12 +599,12 @@ impl RoutingTopology {
             .map(|session| session.placement.router)
         {
             Ok(home_router_id) if !self.routers.contains_key(&home_router_id) => {
-                report.record(RoutingError::MissingRouterForSession {
+                report.0.push(RoutingError::MissingRouterForSession {
                     user_id: user_id.clone(),
                     router_id: home_router_id,
                 });
             }
-            Err(error) => report.record(error),
+            Err(error) => report.0.push(error),
             Ok(_) => {}
         }
         for router in self.routers.values_mut() {
@@ -608,7 +612,7 @@ impl RoutingTopology {
                 .remove_session_repairing(user_id)
                 .map_err(RoutingError::from);
             if let Err(error) = removal {
-                report.record(error);
+                report.0.push(error);
             }
         }
         let shadow_sessions = self.shadow_sessions.unregister_user(user_id);
@@ -681,7 +685,7 @@ impl RoutingTopology {
                         .map_err(Into::into)
                 });
             if let Err(error) = removal {
-                report.record(error);
+                report.0.push(error);
             }
         }
     }
