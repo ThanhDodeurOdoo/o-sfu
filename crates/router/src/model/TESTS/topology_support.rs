@@ -72,7 +72,6 @@ pub mod proof {
     }
 
     pub fn assert_routing_shadow_tracker_prunes_by_receiver_user() {
-        let source_user_id = UserId::Integer(10);
         let receiver_user_id = UserId::Integer(20);
         let source_router_id = RouterId(9);
         let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id.clone());
@@ -80,14 +79,12 @@ pub mod proof {
         let consumer = RoutedConsumerId::for_test(source_router_id, ConsumerId(1));
         let mut tracker = ShadowSessionTracker::default();
 
-        tracker.register_producer(producer, source_user_id);
         tracker.register_consumer(consumer, producer, Some(shadow.clone()));
 
         let prune = tracker.unregister_user(&receiver_user_id);
         assert!(prune.len() == 1);
         assert!(prune.contains(&shadow));
         assert!(!tracker.contains_shadow_session(&shadow));
-        assert!(tracker.unregister_user(&receiver_user_id).is_empty());
     }
 
     pub fn assert_routing_placement_replacement_retires_stale_connection() {

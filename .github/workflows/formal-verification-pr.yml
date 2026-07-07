@@ -40,7 +40,7 @@ jobs:
           - shard: router-topology
             command: >-
               cargo kani -p o-sfu-proofs
-              --harness routing_shadow_refcounts_prune_after_last_consumer
+              --harness routing_shadow_tracker_prunes_by_receiver_user
               --harness routing_placement_replacement_retires_stale_connection
           - shard: protocol-recovery-backoff-reset
             command: >-

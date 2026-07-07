@@ -1,15 +1,4 @@
-//! Cross-router receiver shadow ownership for routing topology.
-//!
-//! `RoutingTopology` creates a receiver shadow session on a producer's source
-//! router when a receiver's home router is different. The pure router owns the
-//! real session, transport, producer and consumer maps. This module contains only
-//! the derived question that the pure router cannot answer by itself:
-//! Which receiver shadows are still justified by live routed consumer edges?
-//!
-//! The tracker is cold-path. Packet forwarding never consults it.
-//! It returns shadow sessions that should be pruned after a topology mutation
-//! removes the last routed consumer edge for that receiver on that source
-//! router.
+//! cross-router receiver shadow refcounts
 
 #[cfg(not(kani))]
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,17 +10,9 @@ use crate::model::RouterId;
 #[cfg(kani)]
 use crate::model::proof_storage::{BTreeMap, BTreeSet};
 
-/// Identity of one receiver shadow session on one source router.
-///
-/// The router id is the source router that hosts the consumer edge. The user id
-/// is the receiver whose real home session may live on a different router. This
-/// key is not a placement decision. It is a cleanup target that becomes valid
-/// only after the last routed edge using the shadow has been released.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ShadowSessionKey {
-    /// Source router that owns the shadow session.
     router_id: RouterId,
-    /// Receiver user represented by the shadow on the source router.
     user_id: UserId,
 }
 
@@ -52,21 +33,7 @@ impl ShadowSessionKey {
     }
 }
 
-/// Tracks which routed consumer edges keep cross-router shadows alive.
-///
-/// The tracker does not call into `RouterAdapterState` and it does not decide
-/// placement. `RoutingTopology` registers routed producers and consumers after the
-/// pure router accepts them. On teardown, the tracker releases its derived
-/// ownership and returns the shadow sessions whose reference count reached
-/// zero. The caller then removes those sessions from the relevant router.
-///
-/// # Invariants
-///
-/// Only cross-router consumers are tracked. A same-router consumer has no
-/// shadow session and is ignored here. Each tracked consumer points to exactly
-/// one producer and one receiver shadow. Each shadow reference count is the
-/// number of live routed consumers that still need that receiver session on the
-/// source router.
+/// Tracks routed consumer edges that keep cross-router shadows alive.
 #[derive(Debug, Clone, Default)]
 pub(super) struct ShadowSessionTracker {
     consumer_edges: BTreeMap<RoutedConsumerId, ShadowConsumerEdge>,
@@ -88,11 +55,7 @@ impl ShadowSessionTracker {
         let Some(shadow_key) = shadow_key else {
             return;
         };
-        if let Some(count) = self.shadow_refcounts.get_mut(&shadow_key) {
-            *count = count.saturating_add(1);
-        } else {
-            self.shadow_refcounts.insert(shadow_key.clone(), 1);
-        }
+        Self::increment_refcount(&mut self.shadow_refcounts, &shadow_key);
         self.consumer_edges.insert(
             consumer_id,
             ShadowConsumerEdge {
@@ -118,18 +81,48 @@ impl ShadowSessionTracker {
 
     #[must_use]
     pub(super) fn unregister_user(&mut self, user_id: &UserId) -> BTreeSet<ShadowSessionKey> {
-        let mut producers = BTreeSet::new();
-        for (producer_id, owner) in &self.producer_owners {
-            if owner == user_id {
-                producers.insert(*producer_id);
-            }
-        }
+        let producers = self.producers_for(user_id);
         for producer_id in &producers {
             self.producer_owners.remove(producer_id);
         }
         self.release_matching(|consumer| {
             consumer.shadow_key.user_id() == user_id || producers.contains(&consumer.producer_id)
         })
+    }
+
+    #[must_use]
+    pub(super) fn prunable_for_user(&self, user_id: &UserId) -> BTreeSet<ShadowSessionKey> {
+        let producers = self.producers_for(user_id);
+        let mut released_counts = BTreeMap::new();
+        for consumer in self.consumer_edges.values() {
+            if consumer.shadow_key.user_id() == user_id || producers.contains(&consumer.producer_id)
+            {
+                Self::increment_refcount(&mut released_counts, &consumer.shadow_key);
+            }
+        }
+        released_counts
+            .iter()
+            .filter_map(|(key, released_count)| {
+                self.shadow_refcounts
+                    .get(key)
+                    .filter(|count| **count <= *released_count)
+                    .map(|_| key.clone())
+            })
+            .collect()
+    }
+
+    fn increment_refcount(counts: &mut BTreeMap<ShadowSessionKey, usize>, key: &ShadowSessionKey) {
+        match counts.get_mut(key) {
+            Some(count) => *count = count.saturating_add(1),
+            None => _ = counts.insert(key.clone(), 1),
+        }
+    }
+
+    fn producers_for(&self, user_id: &UserId) -> BTreeSet<RoutedProducerId> {
+        self.producer_owners
+            .iter()
+            .filter_map(|(producer_id, owner)| (owner == user_id).then_some(*producer_id))
+            .collect()
     }
 
     #[must_use]

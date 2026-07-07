@@ -69,15 +69,15 @@ impl RouterAdapterState {
         self.sessions_by_user.len()
     }
 
+    pub(super) fn has_user(&self, user_id: &UserId) -> bool {
+        self.sessions_by_user.contains_key(user_id)
+    }
+
     /// Ensure the pure router contains a user matching the signaling-layer user.
     ///
     /// The runtime still accepts integer and string signaling user IDs, so this
     /// adapter-local map keeps that compatibility at the edge while the pure
     /// router continues to use compact numeric identifiers internally.
-    ///
-    /// TODO: once Discuss only sends database-backed numeric user IDs, remove
-    /// the string compatibility branch and use one identity type across the
-    /// signaling boundary.
     ///
     /// # Errors
     ///

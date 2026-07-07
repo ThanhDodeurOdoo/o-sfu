@@ -179,12 +179,21 @@ fn topology_rolls_back_replacement_after_duplicate_session_failure() {
 
     assert!(join_on_router(&mut topology, &first_user_id, colliding_connection, 9, 0).is_ok());
     assert!(join_on_router(&mut topology, &second_user_id, 2, 10, 1).is_ok());
-
+    let producer = topology
+        .add_producer(&first_user_id, RouterMediaKind::Audio)
+        .expect("producer should be routed");
+    add_active_consumer(
+        &mut topology,
+        &second_user_id,
+        producer,
+        ConsumerCapability::Compatible,
+    )
+    .expect("consumer shadow should be routed");
     assert_eq!(
         topology.commit_session_placement(
             &second_user_id,
             ConnectionId::from_raw(colliding_connection),
-            placement(9, 0),
+            placement(9, 3),
         ),
         Err(RoutingError::Router(RouterError::DuplicateSession(
             SessionId(colliding_connection),
@@ -200,13 +209,23 @@ fn topology_rolls_back_replacement_after_duplicate_session_failure() {
     );
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(9)),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         topology.mapped_session_count_for_router(RouterId(10)),
         Some(1)
     );
     assert_eq!(topology.user_count(), 2);
+    assert_eq!(
+        topology.assigned_primary_media_worker_id(),
+        Some(MediaWorkerId::from_raw(0))
+    );
+
+    assert!(topology.remove_producer(producer).is_ok());
+    assert_eq!(
+        topology.mapped_session_count_for_router(RouterId(9)),
+        Some(1)
+    );
 }
 
 #[test]
