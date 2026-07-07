@@ -1,6 +1,7 @@
 # o-sfu deployment
 
 this document is the operator contract for running `o-sfu` as the Odoo Discuss SFU
+For Odoo development, refer to [Odoo SFU Dev Deployment Guide](./.github/odoo_setup.md).
 
 ## traffic model
 

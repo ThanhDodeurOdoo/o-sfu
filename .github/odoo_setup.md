@@ -1,0 +1,147 @@
+# Odoo SFU Dev Deployment Guide
+
+This document explains how to set up the SFU server for development to work with Odoo. It is not intended as a general deployment guide. For general deployment guide, see [DEPLOYMENT](../DEPLOYMENT.md).
+
+## Prerequisites
+
+1. Install the [Rust toolchain](https://rust-lang.org/tools/install/):
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+2. Install [`wasm-pack`](https://wasm-bindgen.github.io/wasm-pack/installer/) (required to build the SFU Client):
+    ```bash
+    cargo install wasm-pack
+    ```
+
+> [!TIP]
+> * [**`cargo`**](https://doc.rust-lang.org/cargo/index.html) is the Rust package manager, which is downloaded automatically with the rest of the toolchain.
+> * **`wasm`** is short for WebAssembly. Part of the SFU Client is written in Rust and compiled to `wasm` using `wasm-pack`.
+
+---
+
+## Build The SFU Server
+
+1. Clone the repository:
+    ```bash
+    git clone git@github.com:ThanhDodeurOdoo/o-sfu.git
+    ```
+
+2. Navigate to the root of the repository and run the build command:
+    ```bash
+    cd o-sfu
+    cargo build
+    ```
+
+---
+
+## Build The SFU Client
+
+1. Go to the root of the client crate:
+    ```bash
+    cd crates/client
+    ```
+
+2. Install dependencies using npm:
+    ```bash
+    npm ci
+    ```
+> [!TIP]
+> `ci` stands for **c**lean **i**nstall, ensuring you get exactly what is in the lockfile.
+
+3. Build the SFU Client:
+    ```bash
+    npm run build:odoo
+    ```
+
+4. Move the generated bundle (`crates/client/dist/odoo_sfu.js`) to the corresponding directory in your Odoo source code (`community/addons/mail/static/lib/odoo_sfu`).
+
+---
+
+## Configure The Environment
+
+The SFU uses meaningful defaults for almost everything. However, you must provide two specific configurations: `AUTH_KEY` and `PUBLIC_IP`. 
+
+### 1. Generate your `AUTH_KEY`
+This key authenticates client requests to the SFU server. It must be a 32-byte, base64-encoded, cryptographically safe hash. You can generate one with:
+```bash
+openssl rand -base64 32
+```
+
+### 2. Determine your `PUBLIC_IP`
+
+This is the IP address where the SFU can be reached. It must be routable from the client's perspective and cannot be the loopback address (`127.0.0.1` aka localhost).
+
+For a dev environment, you will likely use your machine's local network address. You can retrieve it using the following commands:
+
+Linux:
+```bash
+ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}'
+```
+
+macOS:
+```bash
+ipconfig getifaddr "$(route -n get default | awk '/interface:/{print $2; exit}')"
+```
+
+> [!TIP]
+> Even though the variable is named `PUBLIC_IP`, a local network address (like `10.x.x.x`) is perfectly fine for development.
+
+### 3. Apply the Configurations
+
+Now that you have your `AUTH_KEY` and `PUBLIC_IP`, you need to configure both the SFU server and Odoo:
+
+1. For the SFU Server: Define `AUTH_KEY` and `PUBLIC_IP` as environment variables before running the server.
+
+2. For Odoo:
+    - Navigate to **Settings**, locate the Discuss section, and check both **Custom Call Servers** and **Custom SFU Server**.
+    - Under **Custom SFU Server**, set the URL to `http://{PUBLIC_IP}:8070` (replacing `{PUBLIC_IP}` with your actual IP).
+    - Set the **Key** field to the value of your `AUTH_KEY`.
+
+> [!TIP]
+> Alternatively, you can provide these variables directly to Odoo via the environment variables `ODOO_SFU_KEY` and `ODOO_SFU_URL`.
+
+> [!NOTE]
+> By default, the SFU server uses port 8070 unless you override it via the `PORT` environment variable.
+
+---
+
+## Run The Whole Thing
+
+1. Start the SFU server (ensure your environment variables are set):
+    ```bash
+    cargo run
+    ```
+2. Start Odoo
+
+> [!TIP]
+> Set the `RUST_LOG` environment variable for more detailed debug logs.
+> ```bash
+> RUST_LOG=debug cargo run
+> ```
+
+### Testing the Setup
+
+To test the deployment, start a call in Discuss with **at least three members**.
+
+You can add participants by joining as guests through the invite link (found via the **Add People** button). In the channel's settings under the **Privacy** tab, ensure that the **Authorized Group** field is empty; otherwise, guests will not be able to join.
+
+> [!IMPORTANT]
+> With fewer than three participants, communication is peer-to-peer (P2P), and the SFU server is bypassed entirely.
+
+#### How to verify Odoo is using the SFU:
+Enable debug mode, start your call (with 3+ people), and hover over your profile picture in the call UI. Click the arrow that appears and check the connection type:
+- If it says `server`, your setup is working.
+- If it says `p2p`, something went wrong. (Double-check that you have at least three active participants).
+
+> [!TIP]
+> Press <kbd>Ctrl</kbd> + <kbd>K</kbd>, then type "debug" to quickly switch to debug mode
+
+---
+
+## Troubleshooting
+
+If you have carefully followed the instructions above and the connection is still failing, check the following:
+- [ ] Ensure your browser allows insecure connections (if you are running HTTP on local network IPs).
+- [ ] Ensure you don't have a browser extension (e.g., Port Authority) blocking port scanning or WebRTC connections.
+- [ ] Ensure you aren't behind a VPN.
