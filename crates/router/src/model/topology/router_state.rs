@@ -69,6 +69,11 @@ impl RouterAdapterState {
         self.sessions_by_user.len()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn consumer_count_for_test(&self) -> usize {
+        self.router.consumers.len()
+    }
+
     pub(super) fn has_user(&self, user_id: &UserId) -> bool {
         self.sessions_by_user.contains_key(user_id)
     }

@@ -39,6 +39,14 @@ impl RoutingTopology {
     pub fn router_count(&self) -> usize {
         self.routers.len()
     }
+
+    #[must_use]
+    pub fn consumer_count_for_test(&self) -> usize {
+        self.routers
+            .values()
+            .map(super::RouterAdapterState::consumer_count_for_test)
+            .sum()
+    }
 }
 
 #[cfg(kani)]
