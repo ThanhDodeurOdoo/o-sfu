@@ -22,3 +22,9 @@ test-results
 #.idea/
 
 .env
+
+# vim
+*.swp
+
+# macOS
+.DS_Store
