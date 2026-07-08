@@ -24,10 +24,9 @@
 //!   ingress, source route facts, fanout planning, local sends, recording
 //!   packet sinks and zero-copy payload ownership.
 //! - `media_registry`, `relay_registry`, `route_control`, `routing_miss`,
-//!   `bitrate` and `negotiated_capabilities`: transport media ownership,
+//!   `bitrate`, `negotiated_capabilities` and `rtp_projection`: transport media ownership,
 //!   relay mailbox and target primitives, packet gates, active-speaker observations,
-//!   unknown-source recovery, observability snapshots plus answer-derived RTP
-//!   capability projection.
+//!   unknown-source recovery, observability snapshots plus answer-derived router RTP projection.
 //! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
 #[cfg(test)]
@@ -56,6 +55,7 @@ mod relay_registry;
 mod route_control;
 mod route_table;
 mod routing_miss;
+mod rtp_projection;
 mod simulcast;
 mod slots;
 mod source_route;

@@ -10,13 +10,13 @@ use std::{
     mem,
 };
 
-use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
+use o_sfu_rfc::webrtc as rfc_webrtc;
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{
         HeaderExtension as RouterHeaderExtension, HeaderExtensionId,
         MediaFormat as RouterMediaFormat, MediaStream as RouterRtpParameters, PayloadType,
-        RtcpFeedback, RtcpFeedbackKind, StreamBinding,
+        StreamBinding,
     },
 };
 use str0m::{
@@ -33,7 +33,7 @@ use {
 
 use super::{
     super::super::{
-        simulcast,
+        rtp_projection, simulcast,
         state::{PacketLoopState, RtcSessionState},
     },
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
@@ -116,7 +116,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
             let Some(primary_payload) = media_line.payload_params.first() else {
                 continue;
             };
-            let primary_payload_type = router_payload_type(*primary_payload.pt())?;
+            let primary_payload_type = rtp_projection::router_payload_type(*primary_payload.pt())?;
             let formats = project_media_formats(media_kind, &media_line.payload_params)?;
             let rids = rids_by_mid.get(&mid).map(Vec::as_slice).unwrap_or_default();
             let bindings = project_bindings(
@@ -236,83 +236,18 @@ pub(super) fn worker_resolve_negotiated_producer_parameters(
     result
 }
 
-fn project_media_format(
-    media_kind: RouterMediaKind,
-    payload_params: &PayloadParams,
-) -> Result<RouterMediaFormat, TransportAdapterError> {
-    let spec = payload_params.spec();
-    let pt = router_payload_type(*payload_params.pt())?;
-    let mut format = RouterMediaFormat::new(
-        media_kind,
-        spec.codec.to_string(),
-        pt,
-        spec.clock_rate.get(),
-    );
-    if let Some(channels) = spec.channels {
-        format = format.with_channels(u16::from(channels));
-    }
-    format = apply_codec_parameters(format, &spec.format.to_string());
-    for feedback in rtcp_feedback(payload_params) {
-        format = format.with_rtcp_feedback(feedback);
-    }
-    Ok(format)
-}
-
 fn project_media_formats(
     media_kind: RouterMediaKind,
     payload_params: &[PayloadParams],
 ) -> Result<Vec<RouterMediaFormat>, TransportAdapterError> {
     let mut formats = Vec::with_capacity(payload_params.len().saturating_mul(2));
     for params in payload_params {
-        formats.push(project_media_format(media_kind, params)?);
-        if let Some(resend_payload_type) = params.resend() {
-            let pt = router_payload_type(*resend_payload_type)?;
-            formats.push(
-                RouterMediaFormat::new(
-                    media_kind,
-                    rfc_rtp::codec_name::RTX,
-                    pt,
-                    params.spec().clock_rate.get(),
-                )
-                .with_parameter(rfc_rtp::fmtp::RTX_ASSOCIATION, params.pt().to_string()),
-            );
+        formats.push(rtp_projection::media_format(media_kind, params)?);
+        if let Some(rtx) = rtp_projection::rtx_format(media_kind, params)? {
+            formats.push(rtx);
         }
     }
     Ok(formats)
-}
-
-fn apply_codec_parameters(mut format: RouterMediaFormat, format_params: &str) -> RouterMediaFormat {
-    for entry in format_params
-        .split(';')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-    {
-        let Some((key, value)) = entry.split_once('=') else {
-            continue;
-        };
-        format = format.with_parameter(key.trim(), value.trim());
-    }
-    format
-}
-
-fn rtcp_feedback(payload_params: &PayloadParams) -> Vec<RtcpFeedback> {
-    let mut feedback = Vec::with_capacity(5);
-    if payload_params.fb_transport_cc() {
-        feedback.push(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None));
-    }
-    if payload_params.fb_nack() {
-        feedback.push(RtcpFeedback::new(RtcpFeedbackKind::Nack, None));
-    }
-    if payload_params.fb_pli() {
-        feedback.push(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None));
-    }
-    if payload_params.fb_fir() {
-        feedback.push(RtcpFeedback::new(RtcpFeedbackKind::CcmFir, None));
-    }
-    if payload_params.fb_remb() {
-        feedback.push(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None));
-    }
-    feedback
 }
 
 fn project_header_extension(
@@ -396,8 +331,4 @@ fn to_router_media_kind(media_kind: Str0mMediaKind) -> RouterMediaKind {
         Str0mMediaKind::Audio => RouterMediaKind::Audio,
         Str0mMediaKind::Video => RouterMediaKind::Video,
     }
-}
-
-fn router_payload_type(value: u8) -> Result<PayloadType, TransportAdapterError> {
-    PayloadType::try_new(value).ok_or(TransportAdapterError::InvalidInput)
 }
