@@ -301,28 +301,6 @@ async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() {
     );
 }
 
-async fn wait_for_session_cleanup(room: &Room, user_id: &UserId) -> Option<()> {
-    timeout(Duration::from_secs(1), async {
-        loop {
-            if !room.test_api().inspect().has_session(user_id).await {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .ok()
-}
-
-async fn close_socket_and_wait_for_session_cleanup(
-    websocket: &mut TestWebSocket,
-    room: &Room,
-    user_id: &UserId,
-) -> Option<()> {
-    websocket.close(None).await.ok()?;
-    wait_for_session_cleanup(room, user_id).await
-}
-
 async fn wait_for_active_transport_users(server: &TestServer, expected: i64) -> Option<()> {
     timeout(Duration::from_secs(1), async {
         loop {

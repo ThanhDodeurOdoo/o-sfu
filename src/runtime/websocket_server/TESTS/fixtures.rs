@@ -476,6 +476,28 @@ pub(super) async fn setup_negotiated_session(
     Some(websocket)
 }
 
+pub(super) async fn close_socket_and_wait_for_session_cleanup(
+    websocket: &mut TestWebSocket,
+    room: &Room,
+    user_id: &UserId,
+) -> Option<()> {
+    websocket.close(None).await.ok()?;
+    wait_for_session_cleanup(room, user_id).await
+}
+
+pub(super) async fn wait_for_session_cleanup(room: &Room, user_id: &UserId) -> Option<()> {
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if !room.test_api().inspect().has_session(user_id).await {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .ok()
+}
+
 pub(super) async fn read_welcome(websocket: &mut TestWebSocket) -> Option<WelcomePayload> {
     let payload = read_text_message(websocket).await?;
     decode_protocol_welcome_batch(&payload)
@@ -542,7 +564,7 @@ pub(super) async fn wait_for_silent_protocol_server_request(
 pub(super) fn first_protocol_server_request(
     batch: &EnvelopeBatch,
 ) -> Option<(RequestId, ServerRequest)> {
-    for envelope in batch.clone() {
+    for envelope in batch.iter().cloned() {
         if let ServerEnvelope::Request {
             request_id,
             request,
