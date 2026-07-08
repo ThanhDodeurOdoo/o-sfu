@@ -49,11 +49,14 @@ RTC_MIN_PORT=40000
 RTC_MAX_PORT=40099
 RTC_UDP_IO_BACKEND=io_uring # needs unconfined docker, otherwise run 'tokio'
 TELEMETRY_LOG_FORMAT=json
+TELEMETRY_DEPLOYMENT_ENVIRONMENT=production
 ```
 
 `PROXY=true` is valid only when the trusted public proxy overwrites forwarded headers before requests reach `o-sfu`
 
 `RTC_MIN_PORT` and `RTC_MAX_PORT` must match the cloud firewall, host firewall and container or service binding
+
+`TELEMETRY_DEPLOYMENT_ENVIRONMENT=production` setting it to `production` makes the tracing switch to ratio-based sampling so only a subset of traces is captured to reduce load on the tracing system
 
 > [!WARNING]
 > IO_URING
