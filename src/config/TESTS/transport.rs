@@ -4,9 +4,14 @@ use anyhow::Result;
 use o_sfu_core::prelude::{LocalSpilloverPolicy, RoomSpilloverMode};
 
 use super::{
-    Bitrate, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, TransportConfig,
-    VideoBitrateLimits, default_rtc_media_worker_count, load_transport_config,
+    Bitrate, Env, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
+    TransportConfig, VideoBitrateLimits, default_rtc_media_worker_count,
 };
+
+fn load_transport_config(get_var: impl Fn(&str) -> Option<String>) -> Result<TransportConfig> {
+    let env = Env::new(get_var);
+    TransportConfig::from_env(&env)
+}
 
 fn load_transport_config_with_defaults(overrides: &[(&str, &str)]) -> Result<TransportConfig> {
     load_transport_config(|key| {
@@ -279,6 +284,11 @@ fn load_transport_config_rejects_invalid_room_policy_values() {
             message: "ROOM_SPILLOVER_MODE must be one of strict, load, load-triggered or bounded, got invalid",
         },
         InvalidTransportCase {
+            name: "invalid spillover mode with default router cap",
+            overrides: &[("ROOM_SPILLOVER_MODE", "invalid")],
+            message: "ROOM_SPILLOVER_MODE must be one of strict, load, load-triggered or bounded, got invalid",
+        },
+        InvalidTransportCase {
             name: "zero spillover activation window",
             overrides: &[
                 ("RTC_MEDIA_WORKER_COUNT", "2"),
@@ -382,51 +392,37 @@ fn load_transport_config_preserves_legacy_error_precedence() {
 }
 
 #[test]
-fn load_transport_config_ignores_spillover_mode_for_strict_single_router() -> Result<()> {
-    let config = load_transport_config_with_defaults(&[("ROOM_SPILLOVER_MODE", "invalid")])?;
-
-    assert_eq!(
-        config.room_worker_policy,
-        RoomWorkerPolicy::strict_single_router()
-    );
-    Ok(())
-}
-
-#[test]
 fn load_transport_config_preserves_numeric_parse_errors() {
-    let cases = [
-        ("RTC_MIN_PORT", "abc", "RTC_MIN_PORT must be a valid u16"),
-        (
-            "MAX_BITRATE_IN",
-            "abc",
-            "MAX_BITRATE_IN must be a valid u64",
-        ),
-        (
-            "ROOM_MAX_LOCAL_ROUTERS",
-            "abc",
-            "ROOM_MAX_LOCAL_ROUTERS must be a valid usize",
-        ),
-        (
-            "ROOM_SPILLOVER_WORKER_PRESSURE",
-            "abc",
-            "ROOM_SPILLOVER_WORKER_PRESSURE must be a valid u8",
-        ),
-        (
-            "ROOM_MAX_ACTIVE_AUDIO_SPEAKERS",
-            "abc",
-            "ROOM_MAX_ACTIVE_AUDIO_SPEAKERS must be a valid usize",
-        ),
-        (
-            "ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER",
-            "abc",
-            "ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER must be a valid usize",
-        ),
-    ];
-
-    for (key, value, message) in cases {
-        let error = load_transport_config_with_defaults(&[(key, value)])
-            .err()
-            .map(|error| error.to_string());
-        assert_eq!(error.as_deref(), Some(message), "{key}");
-    }
+    assert_invalid_transport_cases(&[
+        InvalidTransportCase {
+            name: "invalid RTC min port",
+            overrides: &[("RTC_MIN_PORT", "abc")],
+            message: "RTC_MIN_PORT must be a valid u16",
+        },
+        InvalidTransportCase {
+            name: "invalid max incoming bitrate",
+            overrides: &[("MAX_BITRATE_IN", "abc")],
+            message: "MAX_BITRATE_IN must be a valid u64",
+        },
+        InvalidTransportCase {
+            name: "invalid room router cap",
+            overrides: &[("ROOM_MAX_LOCAL_ROUTERS", "abc")],
+            message: "ROOM_MAX_LOCAL_ROUTERS must be a valid usize",
+        },
+        InvalidTransportCase {
+            name: "invalid spillover worker pressure",
+            overrides: &[("ROOM_SPILLOVER_WORKER_PRESSURE", "abc")],
+            message: "ROOM_SPILLOVER_WORKER_PRESSURE must be a valid u8",
+        },
+        InvalidTransportCase {
+            name: "invalid active audio speaker limit",
+            overrides: &[("ROOM_MAX_ACTIVE_AUDIO_SPEAKERS", "abc")],
+            message: "ROOM_MAX_ACTIVE_AUDIO_SPEAKERS must be a valid usize",
+        },
+        InvalidTransportCase {
+            name: "invalid video download limit",
+            overrides: &[("ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER", "abc")],
+            message: "ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER must be a valid usize",
+        },
+    ]);
 }

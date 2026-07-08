@@ -3,10 +3,10 @@ use std::env;
 use anyhow::Result;
 
 use super::{
-    CodecConfig, auth::load_auth_config, codec_flags::load_media_codec_flags,
-    codec_preferences::load_codec_preferences, diagnostics::load_diagnostics_config,
-    feature_flags::load_runtime_feature_flags, http::load_http_config, settings::Config,
-    telemetry::load_telemetry_config, transport::load_transport_config, user::load_user_config,
+    AuthConfig, CodecConfig, HttpConfig, TransportConfig, UserConfig,
+    codec_flags::load_media_codec_flags, codec_preferences::load_codec_preferences,
+    diagnostics::DiagnosticsConfig, env::Env, feature_flags::load_runtime_feature_flags,
+    settings::Config, telemetry::load_telemetry_config,
 };
 
 impl Config {
@@ -21,16 +21,17 @@ impl Config {
         Self::from_var_lookup(|key| env::var(key).ok())
     }
 
-    fn from_var_lookup(mut get_var: impl FnMut(&str) -> Option<String>) -> Result<Self> {
-        let http = load_http_config(&mut get_var)?;
-        let auth = load_auth_config(&mut get_var)?;
-        let user = load_user_config(&mut get_var)?;
-        let feature_flags = load_runtime_feature_flags(&mut get_var)?;
-        let codec_flags = load_media_codec_flags(&mut get_var)?;
-        let codec_preferences = load_codec_preferences(&mut get_var)?;
-        let diagnostics = load_diagnostics_config(&mut get_var)?;
-        let telemetry = load_telemetry_config(&mut get_var)?;
-        let transport = load_transport_config(&mut get_var)?;
+    fn from_var_lookup(get_var: impl Fn(&str) -> Option<String>) -> Result<Self> {
+        let env = Env::new(get_var);
+        let http = HttpConfig::from_env(&env)?;
+        let auth = AuthConfig::from_env(&env)?;
+        let user = UserConfig::from_env(&env)?;
+        let feature_flags = load_runtime_feature_flags(&env)?;
+        let codec_flags = load_media_codec_flags(&env)?;
+        let codec_preferences = load_codec_preferences(&env)?;
+        let diagnostics = DiagnosticsConfig::from_env(&env)?;
+        let telemetry = load_telemetry_config(&env)?;
+        let transport = TransportConfig::from_env(&env)?;
         Ok(Self {
             auth,
             http,

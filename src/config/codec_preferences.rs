@@ -1,24 +1,14 @@
 use anyhow::{Result, anyhow, ensure};
 use o_sfu_core::prelude::{AudioCodecPreference, CodecPreferences, VideoCodecPreference};
 
-use super::env::env_block;
+use super::env::Env;
 
-env_block! {
-    struct CodecPreferenceEnv {
-        audio: Option<String> = optional("CODEC_AUDIO_PREFERENCE");
-        video: Option<String> = optional("CODEC_VIDEO_PREFERENCE");
-    }
-}
-
-pub(super) fn load_codec_preferences(
-    get_var: impl FnMut(&str) -> Option<String>,
-) -> Result<CodecPreferences> {
-    let env = CodecPreferenceEnv::load(get_var)?;
-    let audio = match env.audio {
+pub(super) fn load_codec_preferences(env: &Env<'_>) -> Result<CodecPreferences> {
+    let audio = match env.var::<String>("CODEC_AUDIO_PREFERENCE").optional()? {
         Some(value) => parse_codec_list(&value, "CODEC_AUDIO_PREFERENCE", audio_codec_preference)?,
         None => Vec::new(),
     };
-    let video = match env.video {
+    let video = match env.var::<String>("CODEC_VIDEO_PREFERENCE").optional()? {
         Some(value) => parse_codec_list(&value, "CODEC_VIDEO_PREFERENCE", video_codec_preference)?,
         None => Vec::new(),
     };

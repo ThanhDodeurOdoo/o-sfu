@@ -8,171 +8,208 @@ use o_sfu_core::prelude::{
 
 use super::{
     TransportConfig,
-    env::{env_block, positive},
+    env::{Env, EnvParse, EnvValue, positive},
 };
 
-pub(super) fn load_transport_config(
-    mut get_var: impl FnMut(&str) -> Option<String>,
-) -> Result<TransportConfig> {
-    if get_var("TRANSPORT_BACKEND").is_some() {
-        return Err(anyhow!(
-            "TRANSPORT_BACKEND is no longer supported; o-sfu always boots the RTC transport"
-        ));
-    }
-    let env = TransportEnv::load(&mut get_var)?;
-    let local_spillover_policy = LocalSpilloverEnv::load(&mut get_var)?.into_policy()?;
-    let media_env = RoomMediaLimitsEnv::load(&mut get_var)?;
-    let room_media_limits = RoomMediaLimits::try_new(
-        media_env.active_audio_speakers,
-        media_env.video_downloads_per_receiver,
-    )?;
-    let rtc_port_range = RtcPortRange::new(env.rtc_min_port, env.rtc_max_port);
-    validate_transport_config(&env, rtc_port_range)?;
-    let room_worker_policy = room_worker_policy(
-        env.room_max_local_routers,
-        env.room_spillover_mode.as_deref(),
-        local_spillover_policy,
-    )?;
-    Ok(TransportConfig {
-        public_ip: env.public_ip,
-        max_bitrate_in: Bitrate::from_bps(env.max_bitrate_in_bps),
-        max_bitrate_out: Bitrate::from_bps(env.max_bitrate_out_bps),
-        video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_bps(env.max_video_bitrate_bps)),
-        rtc_port_range,
-        rtc_udp_io_backend: rtc_udp_io_backend(env.rtc_udp_io_backend.as_deref())?,
-        rtc_media_worker_count: env.rtc_media_worker_count,
-        room_worker_policy,
-        room_media_limits,
-    })
+enum RoomSpilloverSetting {
+    Strict,
+    LoadTriggered,
+    Bounded,
 }
 
-env_block! {
-    struct TransportEnv {
-        public_ip: IpAddr = required("PUBLIC_IP");
-        rtc_min_port: u16 = default("RTC_MIN_PORT", 40_000);
-        max_bitrate_in_bps: u64 = default("MAX_BITRATE_IN", 8_000_000).check(positive);
-        max_bitrate_out_bps: u64 = default("MAX_BITRATE_OUT", 10_000_000).check(positive);
-        max_video_bitrate_bps: u64 = default(
-            "MAX_VIDEO_BITRATE",
-            VideoBitrateLimits::DEFAULT_MAX_VIDEO_BITRATE.as_bps()
-        ).check(positive);
-        rtc_max_port: u16 = default("RTC_MAX_PORT", 49_999);
-        rtc_udp_io_backend: Option<String> = optional("RTC_UDP_IO_BACKEND");
-        rtc_media_worker_count: usize = default(
-            "RTC_MEDIA_WORKER_COUNT",
-            default_rtc_media_worker_count()
-        ).check(positive);
-        room_max_local_routers: usize = default("ROOM_MAX_LOCAL_ROUTERS", 1).check(positive);
-        room_spillover_mode: Option<String> = optional("ROOM_SPILLOVER_MODE");
+impl EnvParse for RoomSpilloverSetting {
+    fn parse(value: EnvValue) -> Result<Self> {
+        let key = value.key();
+        match value.as_str() {
+            "strict" => Ok(Self::Strict),
+            "load" | "load-triggered" => Ok(Self::LoadTriggered),
+            "bounded" => Ok(Self::Bounded),
+            other => Err(anyhow!(
+                "{key} must be one of strict, load, load-triggered or bounded, got {other}"
+            )),
+        }
     }
 }
 
-env_block! {
-    struct LocalSpilloverEnv {
-        min_receivers: usize = default(
-            "ROOM_SPILLOVER_MIN_RECEIVERS",
-            LocalSpilloverPolicy::DEFAULT_MIN_RECEIVER_COUNT
-        ).check(positive);
-        max_consumers_per_router: usize = default(
-            "ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER",
-            LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER
-        ).check(positive);
-        max_fanout_per_source: usize = default(
-            "ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE",
-            LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE
-        ).check(positive);
-        egress_bitrate_bps: u64 = default(
-            "ROOM_SPILLOVER_EGRESS_BITRATE_BPS",
-            LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD.as_bps()
-        );
-        packet_loop_lag_ms: u64 = default(
-            "ROOM_SPILLOVER_PACKET_LOOP_LAG_MS",
-            LocalSpilloverPolicy::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS
-        );
-        command_backlog: usize = default(
-            "ROOM_SPILLOVER_COMMAND_BACKLOG",
-            LocalSpilloverPolicy::DEFAULT_COMMAND_BACKLOG_THRESHOLD
-        );
-        relay_mailbox_depth: usize = default(
-            "ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH",
-            LocalSpilloverPolicy::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD
-        );
-        worker_pressure: u8 = default(
-            "ROOM_SPILLOVER_WORKER_PRESSURE",
-            LocalSpilloverPolicy::DEFAULT_WORKER_PRESSURE_THRESHOLD
-        );
-        activation_window: usize = default(
-            "ROOM_SPILLOVER_ACTIVATION_WINDOW",
-            LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW
-        ).check(positive);
-        cooldown_window: usize = default(
-            "ROOM_SPILLOVER_COOLDOWN_WINDOW",
-            LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW
-        ).check(positive);
+impl EnvParse for RtcUdpIoBackend {
+    fn parse(value: EnvValue) -> Result<Self> {
+        let key = value.key();
+        match value.as_str() {
+            "tokio" => Ok(Self::Tokio),
+            "io_uring" => {
+                ensure!(
+                    cfg!(target_os = "linux"),
+                    "{key}=io_uring is only supported on Linux"
+                );
+                Ok(Self::IoUring)
+            }
+            other => Err(anyhow!(
+                "{key} must be one of tokio or io_uring, got {other}"
+            )),
+        }
     }
 }
 
-env_block! {
-    struct RoomMediaLimitsEnv {
-        active_audio_speakers: usize = default(
-            "ROOM_MAX_ACTIVE_AUDIO_SPEAKERS",
-            RoomMediaLimits::DEFAULT_MAX_ACTIVE_AUDIO_SPEAKERS
-        ).check(positive);
-        video_downloads_per_receiver: usize = default(
-            "ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER",
-            RoomMediaLimits::DEFAULT_MAX_VIDEO_DOWNLOADS_PER_RECEIVER
-        ).check(positive);
+impl TransportConfig {
+    pub(super) fn from_env(env: &Env<'_>) -> Result<Self> {
+        if env.var::<String>("TRANSPORT_BACKEND").optional()?.is_some() {
+            return Err(anyhow!(
+                "TRANSPORT_BACKEND is no longer supported; o-sfu always boots the RTC transport"
+            ));
+        }
+        let public_ip = env.var::<IpAddr>("PUBLIC_IP").required()?;
+        let rtc_min_port = env.var("RTC_MIN_PORT").default(40_000)?;
+        let max_bitrate_in_bps = env
+            .var("MAX_BITRATE_IN")
+            .check(positive)
+            .default(8_000_000)?;
+        let max_bitrate_out_bps = env
+            .var("MAX_BITRATE_OUT")
+            .check(positive)
+            .default(10_000_000)?;
+        let max_video_bitrate_bps = env
+            .var("MAX_VIDEO_BITRATE")
+            .check(positive)
+            .default(VideoBitrateLimits::DEFAULT_MAX_VIDEO_BITRATE.as_bps())?;
+        let rtc_max_port = env.var("RTC_MAX_PORT").default(49_999)?;
+        let rtc_udp_io_backend = env
+            .var("RTC_UDP_IO_BACKEND")
+            .default(RtcUdpIoBackend::Tokio)?;
+        let rtc_media_worker_count = env
+            .var("RTC_MEDIA_WORKER_COUNT")
+            .check(positive)
+            .default(default_rtc_media_worker_count())?;
+        let room_max_local_routers = env
+            .var("ROOM_MAX_LOCAL_ROUTERS")
+            .check(positive)
+            .default(1)?;
+        let room_spillover_mode = env.var("ROOM_SPILLOVER_MODE").optional()?;
+        let local_spillover_policy = local_spillover_policy_from_env(env)?;
+        let room_media_limits = room_media_limits_from_env(env)?;
+        let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
+        ensure!(
+            rtc_port_range.min() <= rtc_port_range.max(),
+            "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
+        );
+        ensure!(
+            rtc_media_worker_count <= usize::from(rtc_port_range.port_count()),
+            "RTC_MEDIA_WORKER_COUNT must be less than or equal to the available RTC port count"
+        );
+        ensure!(
+            room_max_local_routers <= rtc_media_worker_count,
+            "ROOM_MAX_LOCAL_ROUTERS must be less than or equal to RTC_MEDIA_WORKER_COUNT"
+        );
+        ensure!(
+            !public_ip.is_unspecified(),
+            "PUBLIC_IP must be a concrete advertised address"
+        );
+        ensure!(
+            !public_ip.is_multicast(),
+            "PUBLIC_IP cannot be a multicast address"
+        );
+        let room_worker_policy = select_room_worker_policy(
+            room_max_local_routers,
+            room_spillover_mode,
+            local_spillover_policy,
+        );
+        Ok(Self {
+            public_ip,
+            max_bitrate_in: Bitrate::from_bps(max_bitrate_in_bps),
+            max_bitrate_out: Bitrate::from_bps(max_bitrate_out_bps),
+            video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_bps(max_video_bitrate_bps)),
+            rtc_port_range,
+            rtc_udp_io_backend,
+            rtc_media_worker_count,
+            room_worker_policy,
+            room_media_limits,
+        })
     }
 }
 
-impl LocalSpilloverEnv {
-    fn into_policy(self) -> Result<LocalSpilloverPolicy> {
-        let parts = LocalSpilloverPolicyParts {
-            min_receiver_count: self.min_receivers,
-            max_active_consumers_per_router: self.max_consumers_per_router,
-            max_fanout_per_source: self.max_fanout_per_source,
-            egress_bitrate_threshold: Bitrate::from_bps(self.egress_bitrate_bps),
-            packet_loop_lag_threshold_ms: self.packet_loop_lag_ms,
-            command_backlog_threshold: self.command_backlog,
-            relay_mailbox_depth_threshold: self.relay_mailbox_depth,
-            worker_pressure_threshold: self.worker_pressure,
-            activation_window: self.activation_window,
-            cooldown_window: self.cooldown_window,
-        };
-        LocalSpilloverPolicy::try_new(parts).map_err(local_spillover_policy_error)
-    }
+fn local_spillover_policy_from_env(env: &Env<'_>) -> Result<LocalSpilloverPolicy> {
+    let parts = LocalSpilloverPolicyParts {
+        min_receiver_count: env
+            .var("ROOM_SPILLOVER_MIN_RECEIVERS")
+            .check(positive)
+            .default(LocalSpilloverPolicy::DEFAULT_MIN_RECEIVER_COUNT)?,
+        max_active_consumers_per_router: env
+            .var("ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER")
+            .check(positive)
+            .default(LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER)?,
+        max_fanout_per_source: env
+            .var("ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE")
+            .check(positive)
+            .default(LocalSpilloverPolicy::DEFAULT_MAX_FANOUT_PER_SOURCE)?,
+        egress_bitrate_threshold: Bitrate::from_bps(
+            env.var("ROOM_SPILLOVER_EGRESS_BITRATE_BPS")
+                .default(LocalSpilloverPolicy::DEFAULT_EGRESS_BITRATE_THRESHOLD.as_bps())?,
+        ),
+        packet_loop_lag_threshold_ms: env
+            .var("ROOM_SPILLOVER_PACKET_LOOP_LAG_MS")
+            .default(LocalSpilloverPolicy::DEFAULT_PACKET_LOOP_LAG_THRESHOLD_MS)?,
+        command_backlog_threshold: env
+            .var("ROOM_SPILLOVER_COMMAND_BACKLOG")
+            .default(LocalSpilloverPolicy::DEFAULT_COMMAND_BACKLOG_THRESHOLD)?,
+        relay_mailbox_depth_threshold: env
+            .var("ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH")
+            .default(LocalSpilloverPolicy::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD)?,
+        worker_pressure_threshold: env
+            .var("ROOM_SPILLOVER_WORKER_PRESSURE")
+            .default(LocalSpilloverPolicy::DEFAULT_WORKER_PRESSURE_THRESHOLD)?,
+        activation_window: env
+            .var("ROOM_SPILLOVER_ACTIVATION_WINDOW")
+            .check(positive)
+            .default(LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW)?,
+        cooldown_window: env
+            .var("ROOM_SPILLOVER_COOLDOWN_WINDOW")
+            .check(positive)
+            .default(LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW)?,
+    };
+    LocalSpilloverPolicy::try_new(parts).map_err(local_spillover_policy_error)
+}
+
+fn room_media_limits_from_env(env: &Env<'_>) -> Result<RoomMediaLimits> {
+    let active_audio_speakers = env
+        .var("ROOM_MAX_ACTIVE_AUDIO_SPEAKERS")
+        .check(positive)
+        .default(RoomMediaLimits::DEFAULT_MAX_ACTIVE_AUDIO_SPEAKERS)?;
+    let video_downloads_per_receiver = env
+        .var("ROOM_MAX_VIDEO_DOWNLOADS_PER_RECEIVER")
+        .check(positive)
+        .default(RoomMediaLimits::DEFAULT_MAX_VIDEO_DOWNLOADS_PER_RECEIVER)?;
+    Ok(RoomMediaLimits::try_new(
+        active_audio_speakers,
+        video_downloads_per_receiver,
+    )?)
 }
 
 pub fn default_rtc_media_worker_count() -> usize {
     thread::available_parallelism().map_or(1, NonZeroUsize::get)
 }
 
-/// Translate the operator local-router cap into the core room policy.
+/// Translate operator spillover settings into the core room policy.
 ///
-/// `ROOM_MAX_LOCAL_ROUTERS=1` keeps the strict historical topology. Any larger
-/// value uses the load-triggered production policy unless
-/// `ROOM_SPILLOVER_MODE=bounded` explicitly requests the deterministic topology
-/// exercise mode.
-fn room_worker_policy(
+/// `ROOM_MAX_LOCAL_ROUTERS=1` keeps the strict historical topology for every
+/// valid mode. `strict` also forces that topology when the cap is larger.
+fn select_room_worker_policy(
     room_max_local_routers: usize,
-    mode: Option<&str>,
+    spillover_mode: Option<RoomSpilloverSetting>,
     local_spillover_policy: LocalSpilloverPolicy,
-) -> Result<RoomWorkerPolicy> {
-    match mode {
-        _ if room_max_local_routers == 1 => Ok(RoomWorkerPolicy::strict_single_router()),
-        None | Some("load" | "load-triggered") => {
-            Ok(RoomWorkerPolicy::load_triggered_local_spillover(
+) -> RoomWorkerPolicy {
+    match (
+        room_max_local_routers,
+        spillover_mode.unwrap_or(RoomSpilloverSetting::LoadTriggered),
+    ) {
+        (1, _) | (_, RoomSpilloverSetting::Strict) => RoomWorkerPolicy::strict_single_router(),
+        (_, RoomSpilloverSetting::LoadTriggered) => {
+            RoomWorkerPolicy::load_triggered_local_spillover(
                 room_max_local_routers,
                 local_spillover_policy,
-            ))
+            )
         }
-        Some("bounded") => Ok(RoomWorkerPolicy::bounded_local_spillover(
-            room_max_local_routers,
-        )),
-        Some("strict") => Ok(RoomWorkerPolicy::strict_single_router()),
-        Some(other) => Err(anyhow!(
-            "ROOM_SPILLOVER_MODE must be one of strict, load, load-triggered or bounded, got {other}"
-        )),
+        (_, RoomSpilloverSetting::Bounded) => {
+            RoomWorkerPolicy::bounded_local_spillover(room_max_local_routers)
+        }
     }
 }
 
@@ -197,46 +234,6 @@ fn local_spillover_policy_error(error: LocalSpilloverPolicyError) -> anyhow::Err
             anyhow!("ROOM_SPILLOVER_COOLDOWN_WINDOW must be greater than zero")
         }
     }
-}
-
-fn rtc_udp_io_backend(value: Option<&str>) -> Result<RtcUdpIoBackend> {
-    match value {
-        None | Some("tokio") => Ok(RtcUdpIoBackend::Tokio),
-        Some("io_uring") => {
-            ensure!(
-                cfg!(target_os = "linux"),
-                "RTC_UDP_IO_BACKEND=io_uring is only supported on Linux"
-            );
-            Ok(RtcUdpIoBackend::IoUring)
-        }
-        Some(other) => Err(anyhow!(
-            "RTC_UDP_IO_BACKEND must be one of tokio or io_uring, got {other}"
-        )),
-    }
-}
-
-fn validate_transport_config(env: &TransportEnv, rtc_port_range: RtcPortRange) -> Result<()> {
-    ensure!(
-        env.rtc_min_port <= env.rtc_max_port,
-        "RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT"
-    );
-    ensure!(
-        env.rtc_media_worker_count <= usize::from(rtc_port_range.port_count()),
-        "RTC_MEDIA_WORKER_COUNT must be less than or equal to the available RTC port count"
-    );
-    ensure!(
-        env.room_max_local_routers <= env.rtc_media_worker_count,
-        "ROOM_MAX_LOCAL_ROUTERS must be less than or equal to RTC_MEDIA_WORKER_COUNT"
-    );
-    ensure!(
-        !env.public_ip.is_unspecified(),
-        "PUBLIC_IP must be a concrete advertised address"
-    );
-    ensure!(
-        !env.public_ip.is_multicast(),
-        "PUBLIC_IP cannot be a multicast address"
-    );
-    Ok(())
 }
 
 #[cfg(test)]

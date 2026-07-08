@@ -2,22 +2,15 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 
-use super::{HttpConfig, env::env_block};
+use super::{HttpConfig, env::Env};
 
-env_block! {
-    struct HttpEnv {
-        bind_address: SocketAddr = default(
-            "BIND_ADDRESS",
-            SocketAddr::from(([0, 0, 0, 0], 8070))
-        );
-        trust_proxy_headers: bool = default("PROXY", false);
+impl HttpConfig {
+    pub(super) fn from_env(env: &Env<'_>) -> Result<Self> {
+        Ok(Self {
+            bind_address: env
+                .var("BIND_ADDRESS")
+                .default(SocketAddr::from(([0, 0, 0, 0], 8070)))?,
+            trust_proxy_headers: env.var("PROXY").default(false)?,
+        })
     }
-}
-
-pub(super) fn load_http_config(get_var: impl FnMut(&str) -> Option<String>) -> Result<HttpConfig> {
-    let env = HttpEnv::load(get_var)?;
-    Ok(HttpConfig {
-        bind_address: env.bind_address,
-        trust_proxy_headers: env.trust_proxy_headers,
-    })
 }
