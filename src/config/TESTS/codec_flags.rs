@@ -1,20 +1,20 @@
-use super::{MediaCodecFlags, load_media_codec_flags};
+use super::{Env, MediaCodecFlags, load_media_codec_flags};
 
 #[test]
 fn load_media_codec_flags_defaults_to_opus_and_vp8() {
     assert_eq!(
-        load_media_codec_flags(|_| None).ok(),
+        load_media_codec_flags(&Env::new(|_| None)).ok(),
         Some(MediaCodecFlags::default())
     );
 }
 
 #[test]
 fn load_media_codec_flags_applies_per_codec_overrides() {
-    let flags = load_media_codec_flags(|key| match key {
+    let flags = load_media_codec_flags(&Env::new(|key| match key {
         "CODEC_OPUS" => Some("false".to_owned()),
         "CODEC_H264" | "CODEC_AV1" => Some("true".to_owned()),
         _ => None,
-    });
+    }));
     assert_eq!(
         flags.ok(),
         Some(
@@ -28,10 +28,10 @@ fn load_media_codec_flags_applies_per_codec_overrides() {
 
 #[test]
 fn load_media_codec_flags_rejects_invalid_bool() {
-    let error = load_media_codec_flags(|key| match key {
+    let error = load_media_codec_flags(&Env::new(|key| match key {
         "CODEC_VP8" => Some("enabled".to_owned()),
         _ => None,
-    })
+    }))
     .err()
     .map(|error| error.to_string());
 

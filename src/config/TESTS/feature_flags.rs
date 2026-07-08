@@ -1,19 +1,19 @@
-use super::{RuntimeFeatureFlags, load_runtime_feature_flags};
+use super::{Env, RuntimeFeatureFlags, load_runtime_feature_flags};
 
 #[test]
 fn load_runtime_feature_flags_defaults_to_all_disabled() {
-    let config = load_runtime_feature_flags(|_| None);
+    let config = load_runtime_feature_flags(&Env::new(|_| None));
     assert_eq!(config.ok(), Some(RuntimeFeatureFlags::default()));
 }
 
 #[test]
 fn load_runtime_feature_flags_accepts_explicit_flags() {
-    let config = load_runtime_feature_flags(|key| match key {
+    let config = load_runtime_feature_flags(&Env::new(|key| match key {
         "FEATURE_TRANSCRIPTION" | "FEATURE_AUDIO_RECORDING" | "FEATURE_VIDEO_RECORDING" => {
             Some("true".to_owned())
         }
         _ => None,
-    });
+    }));
     assert_eq!(
         config.ok(),
         Some(RuntimeFeatureFlags {
@@ -26,10 +26,10 @@ fn load_runtime_feature_flags_accepts_explicit_flags() {
 
 #[test]
 fn load_runtime_feature_flags_rejects_invalid_bool() {
-    let error = load_runtime_feature_flags(|key| match key {
+    let error = load_runtime_feature_flags(&Env::new(|key| match key {
         "FEATURE_TRANSCRIPTION" => Some("enabled".to_owned()),
         _ => None,
-    })
+    }))
     .err()
     .map(|error| error.to_string());
 

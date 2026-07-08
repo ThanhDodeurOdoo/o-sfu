@@ -1,16 +1,135 @@
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    fmt,
+    net::{IpAddr, SocketAddr},
+};
 
 use anyhow::{Context, Result, anyhow, ensure};
 
-pub trait EnvParse: Sized {
-    fn parse(key: &'static str, value: String) -> Result<Self>;
+type Lookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
+
+#[derive(Clone, Copy)]
+pub(super) struct EnvKey(&'static str);
+
+impl EnvKey {
+    fn new(key: &'static str) -> Self {
+        Self(key)
+    }
+
+    fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for EnvKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+pub(super) struct EnvValue {
+    key: EnvKey,
+    raw: String,
+}
+
+impl EnvValue {
+    pub(super) fn key(&self) -> EnvKey {
+        self.key
+    }
+
+    pub(super) fn as_str(&self) -> &str {
+        &self.raw
+    }
+
+    fn into_raw(self) -> String {
+        self.raw
+    }
+}
+
+pub(super) struct Env<'a> {
+    lookup: Box<Lookup<'a>>,
+}
+
+impl<'a> Env<'a> {
+    pub(super) fn new(get_var: impl Fn(&str) -> Option<String> + 'a) -> Self {
+        Self {
+            lookup: Box::new(get_var),
+        }
+    }
+
+    pub(super) fn var<T>(&self, key: &'static str) -> Var<'a, '_, T> {
+        Var {
+            lookup: self.lookup.as_ref(),
+            key: EnvKey::new(key),
+            checks: Vec::new(),
+        }
+    }
+}
+
+pub(super) struct Var<'env, 'lookup, T> {
+    lookup: &'lookup Lookup<'env>,
+    key: EnvKey,
+    checks: Vec<fn(EnvKey, T) -> Result<T>>,
+}
+
+impl<T> Var<'_, '_, T>
+where
+    T: EnvParse,
+{
+    pub(super) fn check(mut self, check: fn(EnvKey, T) -> Result<T>) -> Self {
+        self.checks.push(check);
+        self
+    }
+
+    pub(super) fn required(self) -> Result<T> {
+        let value = self
+            .load()
+            .with_context(|| format!("{} env variable is required", self.key))?;
+        self.parse(value)
+    }
+
+    pub(super) fn default(self, default: T) -> Result<T> {
+        let Some(value) = self.load() else {
+            return self.validate(self.key, default);
+        };
+        self.parse(value)
+    }
+
+    pub(super) fn optional(self) -> Result<Option<T>> {
+        self.load().map(|value| self.parse(value)).transpose()
+    }
+
+    fn load(&self) -> Option<EnvValue> {
+        self.load_key(self.key)
+    }
+
+    fn load_key(&self, key: EnvKey) -> Option<EnvValue> {
+        (self.lookup)(key.as_str()).map(|raw| EnvValue { key, raw })
+    }
+
+    fn parse(&self, value: EnvValue) -> Result<T> {
+        let key = value.key();
+        self.validate(key, T::parse(value)?)
+    }
+
+    fn validate(&self, key: EnvKey, mut value: T) -> Result<T> {
+        for check in &self.checks {
+            value = check(key, value)?;
+        }
+        Ok(value)
+    }
+}
+
+pub(super) trait EnvParse: Sized {
+    fn parse(value: EnvValue) -> Result<Self>;
 }
 
 macro_rules! parse_from_str {
     ($type:ty, $name:literal) => {
         impl EnvParse for $type {
-            fn parse(key: &'static str, value: String) -> Result<Self> {
+            fn parse(value: EnvValue) -> Result<Self> {
+                let key = value.key();
                 value
+                    .into_raw()
                     .parse()
                     .map_err(|_error| anyhow!("{key} must be a valid {}", $name))
             }
@@ -26,52 +145,22 @@ parse_from_str!(u64, "u64");
 parse_from_str!(usize, "usize");
 
 impl EnvParse for bool {
-    fn parse(key: &'static str, value: String) -> Result<Self> {
+    fn parse(value: EnvValue) -> Result<Self> {
+        let key = value.key();
         value
+            .into_raw()
             .parse()
             .map_err(|_error| anyhow!("{key} must be either `true` or `false`"))
     }
 }
 
 impl EnvParse for String {
-    fn parse(_key: &'static str, value: String) -> Result<Self> {
-        Ok(value)
+    fn parse(value: EnvValue) -> Result<Self> {
+        Ok(value.into_raw())
     }
 }
 
-pub fn required<T>(get_var: &mut impl FnMut(&str) -> Option<String>, key: &'static str) -> Result<T>
-where
-    T: EnvParse,
-{
-    let value = get_var(key).with_context(|| format!("{key} env variable is required"))?;
-    T::parse(key, value)
-}
-
-pub fn default<T>(
-    get_var: &mut impl FnMut(&str) -> Option<String>,
-    key: &'static str,
-    default: T,
-) -> Result<T>
-where
-    T: EnvParse,
-{
-    let Some(value) = get_var(key) else {
-        return Ok(default);
-    };
-    T::parse(key, value)
-}
-
-pub fn optional<T>(
-    get_var: &mut impl FnMut(&str) -> Option<String>,
-    key: &'static str,
-) -> Result<Option<T>>
-where
-    T: EnvParse,
-{
-    get_var(key).map(|value| T::parse(key, value)).transpose()
-}
-
-pub fn positive<T>(key: &'static str, value: T) -> Result<T>
+pub(super) fn positive<T>(key: EnvKey, value: T) -> Result<T>
 where
     T: From<u8> + PartialOrd,
 {
@@ -79,80 +168,15 @@ where
     Ok(value)
 }
 
-pub fn non_empty(key: &'static str, value: Option<String>) -> Result<Option<String>> {
-    match value {
-        Some(value) => {
-            let trimmed = value.trim();
-            ensure!(!trimmed.is_empty(), "{key} must not be empty");
-            if trimmed.len() == value.len() {
-                Ok(Some(value))
-            } else {
-                Ok(Some(trimmed.to_owned()))
-            }
-        }
-        None => Ok(None),
+pub(super) fn non_empty(key: EnvKey, value: String) -> Result<String> {
+    let trimmed = value.trim();
+    ensure!(!trimmed.is_empty(), "{key} must not be empty");
+    if trimmed.len() == value.len() {
+        Ok(value)
+    } else {
+        Ok(trimmed.to_owned())
     }
 }
-
-macro_rules! env_block {
-    (
-        $(#[$meta:meta])*
-        $vis:vis struct $name:ident {
-            $(
-                $field:ident : $ty:ty = $kind:ident ($($args:tt)*) $(.check($check:path))*;
-            )+
-        }
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, PartialEq, Eq)]
-        $vis struct $name {
-            $(
-                $field: $ty,
-            )+
-        }
-
-        impl $name {
-            fn load(mut get_var: impl FnMut(&str) -> Option<String>) -> anyhow::Result<Self> {
-                Ok(Self {
-                    $(
-                        $field: {
-                            let _key = env_block!(@key $kind($($args)*));
-                            let value = env_block!(@read &mut get_var, $ty, $kind($($args)*))?;
-                            env_block!(@checks value, _key, $($check),*)
-                        },
-                    )+
-                })
-            }
-        }
-    };
-    (@key required($key:expr)) => {
-        $key
-    };
-    (@key default($key:expr, $default:expr)) => {
-        $key
-    };
-    (@key optional($key:expr)) => {
-        $key
-    };
-    (@read $get:expr, $ty:ty, required($key:expr)) => {
-        crate::config::env::required::<$ty>($get, $key)
-    };
-    (@read $get:expr, $ty:ty, default($key:expr, $default:expr)) => {
-        crate::config::env::default::<$ty>($get, $key, $default)
-    };
-    (@read $get:expr, $ty:ty, optional($key:expr)) => {
-        crate::config::env::optional($get, $key)
-    };
-    (@checks $value:expr, $key:expr,) => {
-        $value
-    };
-    (@checks $value:expr, $key:expr, $check:path $(, $tail:path)*) => {{
-        let value = $check($key, $value)?;
-        env_block!(@checks value, $key, $($tail),*)
-    }};
-}
-
-pub(super) use env_block;
 
 #[cfg(test)]
 #[path = "TESTS/env.rs"]
