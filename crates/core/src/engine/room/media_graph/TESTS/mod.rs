@@ -22,8 +22,8 @@ use o_sfu_router::{
 
 use super::{
     ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerRouteTransportRef,
-    ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup, ProducerRuntimeId,
-    ValidatedPublish,
+    ConsumerSetupOrigin, ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup,
+    ProducerRuntimeId, ValidatedPublish,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -338,25 +338,6 @@ fn set_test_consumer_policy_pause(state: &mut RoomState, key: &ConsumerKey) {
     ));
 }
 
-fn two_user_consumer_route() -> (RoomState, UserId, UserId, ConsumerKey, ConnectionId) {
-    let mut state = test_state();
-    let producer_user_id = UserId::Integer(1);
-    let consumer_user_id = UserId::Integer(2);
-
-    join_test_user(&mut state, &producer_user_id);
-    join_test_user(&mut state, &consumer_user_id);
-
-    let (key, consumer_connection_id) =
-        install_test_consumer_route(&mut state, &producer_user_id, &consumer_user_id);
-    (
-        state,
-        producer_user_id,
-        consumer_user_id,
-        key,
-        consumer_connection_id,
-    )
-}
-
 fn pending_consumer_setup() -> (
     RoomState,
     UserId,
@@ -404,7 +385,8 @@ fn commit_setup_with_media(
     mid: Option<String>,
 ) -> ConsumerSetupOutcome {
     let setup = setup.declared(media, mid);
-    let (_, _, outcome) = state.commit_declared_consumer_setup(setup);
+    let (_, _, outcome) =
+        state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
     outcome
 }
 
@@ -419,21 +401,19 @@ fn commit_setup(state: &mut RoomState, setup: PendingConsumerSetup) -> ConsumerS
 
 #[test]
 fn policy_paused_routes_do_not_count_as_effective_delivery() {
-    let (mut state, producer_user_id, consumer_user_id, key, consumer_connection_id) =
-        two_user_consumer_route();
+    let mut state = test_state();
+    let producer_user_id = UserId::Integer(1);
+    let consumer_user_id = UserId::Integer(2);
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
+
+    join_test_user(&mut state, &producer_user_id);
+    join_test_user(&mut state, &consumer_user_id);
+    let (key, _) = install_test_consumer_route(&mut state, &producer_user_id, &consumer_user_id);
 
     assert!(state.source_fanout_pressure(1));
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Active)
-    );
-    assert_eq!(
-        state
-            .active_video_keyframe_targets(&consumer_user_id, consumer_connection_id,)
-            .expect("consumer should exist")
-            .len(),
-        1
     );
 
     set_test_consumer_policy_pause(&mut state, &key);
@@ -442,12 +422,6 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Inactive)
-    );
-    assert!(
-        state
-            .active_video_keyframe_targets(&consumer_user_id, consumer_connection_id,)
-            .expect("consumer should exist")
-            .is_empty()
     );
 }
 

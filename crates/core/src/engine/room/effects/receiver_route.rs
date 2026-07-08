@@ -50,7 +50,7 @@ impl ReceiverSetupTurn {
         };
         let (before, after, setup_outcome) = {
             let mut state = room.state.write().await;
-            state.commit_declared_consumer_setup(setup)
+            state.commit_declared_consumer_setup(setup, origin)
         };
         outcome.gauges.push(RoomGaugeDelta::media(before, after));
         match setup_outcome {
@@ -60,13 +60,19 @@ impl ReceiverSetupTurn {
                 sender,
                 snapshot,
                 transport_activity_update,
+                readiness_keyframe,
             } => {
                 outcome
                     .diagnostics
                     .push(setup_diagnostics(room.uuid(), &target, origin, &route));
+                let mut route_effects = RoomRouteEffects::default();
                 if let Some(active) = transport_activity_update {
-                    let mut route_effects = RoomRouteEffects::default();
                     route_effects.setup_activity(route, target.kind, active);
+                }
+                if let Some(kf_target) = readiness_keyframe {
+                    route_effects.keyframe(kf_target);
+                }
+                if !route_effects.is_empty() {
                     route_effects.execute(media_transport).await;
                 }
                 let _ = sender.send(UserOutbound::RemoteSources(snapshot));
