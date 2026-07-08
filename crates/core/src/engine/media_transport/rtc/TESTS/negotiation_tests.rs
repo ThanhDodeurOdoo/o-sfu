@@ -668,9 +668,12 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
         .await
         .expect("answered producer negotiation should project router RTP parameters");
     assert_eq!(negotiated_parameters.mid(), Some(&*negotiated_mid));
+    let formats = negotiated_parameters.formats().collect::<Vec<_>>();
+    assert!(!formats.is_empty());
     assert!(
-        negotiated_parameters.formats().next().is_some(),
-        "projected producer parameters should include negotiated media formats"
+        formats
+            .iter()
+            .any(|format| format.rtcp_feedback().next().is_some())
     );
     assert!(
         negotiated_parameters.bindings().next().is_some(),
