@@ -19,15 +19,17 @@ async fn protocol_user_does_not_overlap_topology_renegotiations() {
             .is_some(),
         "publisher should be ready"
     );
-    let first_snapshot_request = assert_track_snapshot(
+    let Some(first_snapshot_renegotiation) = assert_track_snapshot(
         &mut subscriber_socket,
         vec![track_binding("cam-queue", StreamType::Camera)],
     )
-    .await;
-    assert!(first_snapshot_request.is_some());
+    .await
+    else {
+        panic!("subscriber should receive the first track snapshot");
+    };
     let (first_renegotiation_id, first_renegotiation_request) =
-        if let Some(request) = first_snapshot_request.flatten() {
-            request
+        if let Some(renegotiation) = first_snapshot_renegotiation {
+            renegotiation
         } else {
             let Some(request) = expect_renegotiation_request(&mut subscriber_socket).await else {
                 panic!("subscriber should receive the first renegotiation request");
@@ -54,7 +56,26 @@ async fn protocol_user_does_not_overlap_topology_renegotiations() {
         .is_some()
     );
 
-    let _ = publisher_socket.close(None).await;
+    assert!(
+        close_socket_and_wait_for_session_cleanup(
+            &mut subscriber_socket,
+            &room,
+            &UserId::Integer(82),
+        )
+        .await
+        .is_some(),
+        "subscriber session should clean up after explicit close"
+    );
+    assert!(
+        close_socket_and_wait_for_session_cleanup(
+            &mut publisher_socket,
+            &room,
+            &UserId::Integer(81),
+        )
+        .await
+        .is_some(),
+        "publisher session should clean up after explicit close"
+    );
 }
 
 async fn assert_no_protocol_request_before_idle(websocket: &mut TestWebSocket) {
@@ -139,14 +160,19 @@ async fn publish_until_ready(
 
 async fn assert_track_snapshot(
     websocket: &mut TestWebSocket,
-    bindings: Vec<TrackBinding>,
+    expected_bindings: Vec<TrackBinding>,
 ) -> Option<Option<(RequestId, ServerRequest)>> {
-    let batch = read_protocol_server_batch(websocket).await?;
-    let request = first_protocol_server_request(&batch);
-    let (actual_bindings, actual_sources) = media_snapshots_in_batch(batch)?;
-    assert_eq!(actual_bindings.len(), bindings.len());
-    assert_eq!(actual_sources.len(), bindings.len());
-    for expected in &bindings {
+    let mut pre_snapshot_renegotiation = None;
+    let (actual_bindings, actual_sources) = loop {
+        let batch = read_protocol_server_batch(websocket).await?;
+        capture_pre_snapshot_renegotiation(&mut pre_snapshot_renegotiation, &batch);
+        if let Some(snapshot) = complete_media_snapshot_in_batch(batch) {
+            break snapshot;
+        }
+    };
+    assert_eq!(actual_bindings.len(), expected_bindings.len());
+    assert_eq!(actual_sources.len(), expected_bindings.len());
+    for expected in &expected_bindings {
         let Some(actual) = actual_bindings.iter().find(|binding| {
             binding.user_id == expected.user_id && binding.stream_type == expected.stream_type
         }) else {
@@ -171,7 +197,60 @@ async fn assert_track_snapshot(
             vec!["lo", "hi"],
         );
     }
-    Some(request)
+    Some(pre_snapshot_renegotiation)
+}
+
+#[test]
+fn request_only_batch_retains_pre_snapshot_renegotiation() -> TestResult {
+    let request_id = "server-0";
+    let request_batch = vec![
+        ServerEnvelope::Request {
+            request_id: RequestId::new(request_id),
+            request: ServerRequest::Renegotiate(SessionDescriptionPayload {
+                sdp: "v=0\r\ns=renegotiate\r\n".to_owned(),
+                upload_slots: Vec::new(),
+            }),
+        }
+        .into_envelope()?,
+    ];
+    let snapshot_batch = vec![
+        ServerEnvelope::Message(ServerMessage::Tracks(Vec::new())).into_envelope()?,
+        ServerEnvelope::Message(ServerMessage::Sources(Vec::new())).into_envelope()?,
+    ];
+
+    let mut pre_snapshot_renegotiation = None;
+    capture_pre_snapshot_renegotiation(&mut pre_snapshot_renegotiation, &request_batch);
+    assert!(complete_media_snapshot_in_batch(request_batch).is_none());
+    assert_eq!(
+        complete_media_snapshot_in_batch(snapshot_batch),
+        Some((Vec::new(), Vec::new()))
+    );
+    assert!(
+        matches!(
+            pre_snapshot_renegotiation,
+            Some((id, ServerRequest::Renegotiate(_))) if id.as_str() == request_id
+        ),
+        "reader should keep the request id until the snapshot arrives"
+    );
+    Ok(())
+}
+
+fn capture_pre_snapshot_renegotiation(
+    pending_renegotiation: &mut Option<(RequestId, ServerRequest)>,
+    batch: &EnvelopeBatch,
+) {
+    let Some(batch_request) = first_protocol_server_request(batch) else {
+        return;
+    };
+    assert!(
+        matches!(&batch_request.1, ServerRequest::Renegotiate(_)),
+        "subscriber should receive a renegotiation request before the first track snapshot"
+    );
+    assert!(
+        pending_renegotiation.is_none(),
+        "subscriber should not receive overlapping renegotiation requests before the first answer"
+    );
+    *pending_renegotiation = Some(batch_request);
 }
 
 async fn expect_renegotiation_request(
@@ -183,31 +262,33 @@ async fn expect_renegotiation_request(
     Some((request_id, request))
 }
 
-fn media_snapshots_in_batch(
+fn complete_media_snapshot_in_batch(
     batch: EnvelopeBatch,
 ) -> Option<(Vec<TrackBinding>, Vec<SourceDescriptor>)> {
     let mut tracks = None;
     let mut sources = None;
     for envelope in batch {
-        match ServerEnvelope::decode(envelope).ok()? {
-            ServerEnvelope::Message(ServerMessage::Tracks(track_bindings)) => {
+        match ServerEnvelope::decode(envelope) {
+            Ok(ServerEnvelope::Message(ServerMessage::Tracks(track_bindings))) => {
                 assert!(tracks.replace(track_bindings).is_none());
             }
-            ServerEnvelope::Message(ServerMessage::Sources(snapshot)) => {
+            Ok(ServerEnvelope::Message(ServerMessage::Sources(snapshot))) => {
                 assert!(sources.replace(snapshot).is_none());
             }
-            ServerEnvelope::Message(_)
-            | ServerEnvelope::Request { .. }
-            | ServerEnvelope::Response { .. } => {}
+            Ok(
+                ServerEnvelope::Message(_)
+                | ServerEnvelope::Request { .. }
+                | ServerEnvelope::Response { .. },
+            ) => {}
+            Err(error) => panic!("server envelope should decode: {error:?}"),
         }
     }
-    let Some(tracks) = tracks else {
-        panic!("expected track snapshot");
-    };
-    let Some(sources) = sources else {
-        panic!("expected source snapshot");
-    };
-    Some((tracks, sources))
+    match (tracks, sources) {
+        (Some(tracks), Some(sources)) => Some((tracks, sources)),
+        (None, None) => None,
+        (None, Some(_)) => panic!("expected track snapshot"),
+        (Some(_), None) => panic!("expected source snapshot"),
+    }
 }
 
 fn track_binding(mid: &str, stream_type: StreamType) -> TrackBinding {
