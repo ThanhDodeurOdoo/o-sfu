@@ -3,7 +3,6 @@ use tracing::warn;
 
 use super::{RoomGaugeDelta, receiver_route::ReceiverSetupTurn};
 use crate::engine::{
-    ConnectionId, UserId,
     diagnostics::DiagnosticsEventData,
     media_transport::{
         ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaTransport,
@@ -27,7 +26,6 @@ pub(in crate::engine::room) struct RoomTransportPlan {
     cleanup: Vec<TransportCleanupOperation>,
     route_control: RoomRouteEffects,
     setup_turns: Vec<ReceiverSetupTurn>,
-    readiness_keyframe_refresh: Option<(UserId, ConnectionId)>,
 }
 
 impl RoomTransportPlan {
@@ -50,9 +48,6 @@ impl RoomTransportPlan {
         self.cleanup.extend(other.cleanup);
         self.route_control.append(other.route_control);
         self.setup_turns.extend(other.setup_turns);
-        if let Some(refresh) = other.readiness_keyframe_refresh {
-            self.readiness_keyframe_refresh = Some(refresh);
-        }
     }
 
     pub(in crate::engine::room) fn extend_cleanup(
@@ -89,14 +84,6 @@ impl RoomTransportPlan {
         }
     }
 
-    pub(super) fn defer_readiness_keyframe_refresh(
-        &mut self,
-        user_id: UserId,
-        connection_id: ConnectionId,
-    ) {
-        self.readiness_keyframe_refresh = Some((user_id, connection_id));
-    }
-
     pub(super) async fn execute(
         self,
         room: &Room,
@@ -117,19 +104,6 @@ impl RoomTransportPlan {
             .await;
         for turn in self.setup_turns {
             turn.execute(room, media_transport, &mut outcome).await;
-        }
-        if let Some((user_id, connection_id)) = self.readiness_keyframe_refresh {
-            let targets = {
-                let state = room.state.read().await;
-                state.active_video_keyframe_targets(&user_id, connection_id)
-            };
-            if let Some(targets) = targets.filter(|targets| !targets.is_empty()) {
-                let mut route_control = RoomRouteEffects::default();
-                for target in targets {
-                    route_control.keyframe(target);
-                }
-                route_control.execute(media_transport).await;
-            }
         }
         outcome
     }
@@ -209,7 +183,7 @@ impl RoomRouteEffects {
         );
     }
 
-    fn keyframe(&mut self, target: ConsumerRouteTarget) {
+    pub(super) fn keyframe(&mut self, target: ConsumerRouteTarget) {
         self.0.push_consumer(
             ConsumerRouteControl::new(target.transport_route().clone()).request_keyframe(true),
             ConsumerRouteFinish::Keyframe(target),

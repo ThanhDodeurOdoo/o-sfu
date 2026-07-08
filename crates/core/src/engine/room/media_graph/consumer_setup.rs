@@ -13,7 +13,8 @@ use super::{
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::RoomState,
     },
-    ConsumerKey, ConsumerState, ProducerRuntimeId, PublishedProducer,
+    ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerState, ProducerRuntimeId,
+    PublishedProducer,
     route_graph::{ConsumerRouteReservation, RelayRouteKey, ResolvedRelayRouteEffect},
 };
 use crate::engine::{
@@ -78,6 +79,7 @@ pub enum ConsumerSetupOutcome {
         sender: OutboundSender,
         snapshot: RemoteSourceSnapshot,
         transport_activity_update: Option<bool>,
+        readiness_keyframe: Option<ConsumerRouteTarget>,
     },
     Released(TransportConsumerRoute, Vec<ResolvedRelayRouteEffect>),
 }
@@ -103,6 +105,7 @@ impl RoomState {
     pub fn commit_declared_consumer_setup(
         &mut self,
         setup: DeclaredConsumerSetup,
+        origin: ConsumerSetupOrigin,
     ) -> (RoomMediaCounts, RoomMediaCounts, ConsumerSetupOutcome) {
         let before = self.media_counts();
         let target = &setup.pending.target;
@@ -115,15 +118,29 @@ impl RoomState {
             .map(|producer| producer.active)
         {
             let selection = self.setup_selection(target, producer_active);
+            let delivery_active = selection.delivery_active();
             match self.topology.commit_consumer_setup(setup, selection) {
                 Ok(commit) => {
                     let snapshot = self.remote_source_snapshot_for_user(&commit.target.user, true);
+                    let readiness_keyframe = match origin {
+                        ConsumerSetupOrigin::Readiness
+                            if delivery_active
+                                && commit.transport_activity_update != Some(true)
+                                && commit.target.kind == RouterMediaKind::Video =>
+                        {
+                            Some(commit.target.route_target(commit.route.clone()))
+                        }
+                        ConsumerSetupOrigin::Readiness
+                        | ConsumerSetupOrigin::Publish
+                        | ConsumerSetupOrigin::Subscribe => None,
+                    };
                     ConsumerSetupOutcome::Committed {
                         target: commit.target,
                         route: commit.route,
                         sender: commit.sender,
                         snapshot,
                         transport_activity_update: commit.transport_activity_update,
+                        readiness_keyframe,
                     }
                 }
                 Err((route, relays)) => ConsumerSetupOutcome::Released(route, relays),
@@ -256,6 +273,22 @@ impl ConsumerSetupTarget {
             self.user_session.clone(),
             consumer_media,
             TransportSourceKey::new(self.producer_session.clone(), self.media),
+        )
+    }
+
+    fn route_target(&self, route: TransportConsumerRoute) -> ConsumerRouteTarget {
+        ConsumerRouteTarget::new(
+            ConsumerRouteTransportRef::from_parts(
+                self.user.clone(),
+                self.connection,
+                route.consumer_transport_media_id(),
+                self.producer_user.clone(),
+                self.producer_connection,
+                self.media,
+            ),
+            route,
+            self.stream.clone(),
+            self.kind,
         )
     }
 

@@ -467,34 +467,4 @@ impl RoomState {
             ConsumerRouteState::Inactive
         })
     }
-
-    pub fn active_video_keyframe_targets(
-        &self,
-        consumer_user_id: &UserId,
-        consumer_connection_id: ConnectionId,
-    ) -> Option<Vec<ConsumerRouteTarget>> {
-        let user = self.users.get(consumer_user_id)?;
-        if user.connection_id != consumer_connection_id {
-            return None;
-        }
-        Some(
-            self.topology
-                .committed_consumer_routes_for_user(consumer_user_id)
-                .filter_map(|route| {
-                    if route.state.consumer_connection_id != consumer_connection_id
-                        || route.source.media_kind() != RouterMediaKind::Video
-                    {
-                        return None;
-                    }
-                    if !route.producer.active || !route.selection_or_open(true).delivery_active() {
-                        return None;
-                    }
-                    Some(
-                        self.topology
-                            .consumer_route_target_for_source(route.transport_ref(), route.source),
-                    )
-                })
-                .collect(),
-        )
-    }
 }

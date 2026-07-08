@@ -79,9 +79,10 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
 
     let requests_before_refresh = keyframe_request_count(&scenario);
     settle_refresh_offer(&mut scenario, first_refresh_offer).await;
-    assert!(
-        keyframe_request_count(&scenario) >= requests_before_refresh + 2,
-        "refresh answer should keyframe every active video route after setup"
+    assert_eq!(
+        keyframe_request_count(&scenario),
+        requests_before_refresh + 1,
+        "refresh answer should keyframe only the newly committed active video route"
     );
 
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 2);

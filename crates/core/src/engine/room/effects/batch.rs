@@ -141,13 +141,8 @@ impl RoomEffects {
                 batch
             }
             RoomCommit::ConsumerReadiness(commit) => {
-                let receiver_user_id = commit.receiver_user_id.clone();
-                let receiver_connection_id = commit.receiver_connection_id;
                 let mut batch =
                     Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Readiness);
-                batch
-                    .transport
-                    .defer_readiness_keyframe_refresh(receiver_user_id, receiver_connection_id);
                 batch.source_policy.route_graph_changed();
                 batch
             }

@@ -24,7 +24,8 @@ use crate::{
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
             media_graph::{
-                ConsumerSetupOutcome, ProducerRuntimeId, RelayRouteKey, ValidatedPublish,
+                ConsumerSetupOrigin, ConsumerSetupOutcome, ProducerRuntimeId, RelayRouteKey,
+                ValidatedPublish,
             },
             rtp_capabilities::router_rtp_capabilities,
         },
@@ -186,7 +187,8 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
         .expect("relay consumer setup should be planned");
     assert!(setups.is_empty());
     let setup = setup.declared(consumer_media, None);
-    let (_, _, setup_outcome) = state.commit_declared_consumer_setup(setup);
+    let (_, _, setup_outcome) =
+        state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
     assert!(matches!(
         setup_outcome,
         ConsumerSetupOutcome::Committed { .. }
@@ -310,7 +312,8 @@ fn leave_removes_consumer_routes_for_departed_session() {
     assert_eq!(setups.len(), 1);
     let setup = setups.pop().expect("consumer setup should be planned");
     let setup = setup.declared(TransportMediaId::new(21), Some(String::from("camera-down")));
-    let (_, _, setup_outcome) = state.commit_declared_consumer_setup(setup);
+    let (_, _, setup_outcome) =
+        state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
     assert!(matches!(
         setup_outcome,
         ConsumerSetupOutcome::Committed { .. }
