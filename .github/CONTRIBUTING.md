@@ -61,5 +61,5 @@ Verification commands and the `tests/` layout are at [tests/README.md](https://g
 
 ## Deployment
 
-Deployment and local container usage are covered in [DEPLOYMENT.md](../DEPLOYMENT.md).
-For Odoo development, refer to [Odoo SFU Dev Deployment Guide](./odoo_setup.md).
+Deployment and local container usage are covered in [DEPLOYMENT.md](/DEPLOYMENT.md).
+For Odoo development, refer to [Odoo SFU Dev Deployment Guide](/.github/odoo_setup.md).
