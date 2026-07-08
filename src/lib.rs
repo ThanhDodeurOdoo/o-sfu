@@ -1,16 +1,14 @@
 //! o-sfu is a Selective Forwading Unit for audio/video calls
 //!
 //! This handles room admission, routing topology, media policy, packet
-//! forwarding, diagnostics and verification for applications that need a dedicated SFU server.
+//! forwarding, signaling and telemetry for applications that need a dedicated SFU server.
 //!
 //! root crate (`o-sfu/src`) contains:
 //!
 //! - configuration loading through [`config::Config`] and [`Runtime`]
 //!   construction through [`Runtime::new`]
-//! - room provisioning, bulk disconnect, statistics, metrics and diagnostics
+//! - room provisioning, disconnect, statistics, metrics and diagnostics
 //!   through [`http`]
-//! - browser bundle orchestration for Odoo through `SfuClient`,
-//!   `BrowserRuntime` and [`o_sfu_protocol::host::ProtocolCore`]
 //! - room admission through [`core::prelude::SfuCore`] and user-session
 //!   orchestration through [`core::prelude::MediaSession`]
 //! - process lifecycle through [`run`], [`Runtime::serve_listener`],
@@ -92,14 +90,9 @@
 //! read `crates/client/API.md` for the public TypeScript surface and
 //! `crates/client/README.md` for the client file map
 //!
-//! the idea is that room and router state approve topology
-//! before packet-loop workers forward media,
-//! hot packet code applies verififid route state, packet gates and
-//! recording taps rather than making room-level policy decisions
-//!
 //! # runtime
 //!
-//! [`Runtime`] owns the full process lifecycle,
+//! [`Runtime`] manages the full process lifecycle,
 //! request handlers receive a smaller internal state handle so HTTP extractors
 //! and WebSocket loops cannot depend on boot details or shutdown ownership
 //!
@@ -135,7 +128,7 @@
 //!
 //! # HTTP and WebSocket admission
 //!
-//! applications create rooms through HTTP and clients join through
+//! applications create rooms through HTTP while clients join through
 //! the WebSocket,
 //! both paths are authenticated before they reach room state
 //!
@@ -167,10 +160,10 @@
 //! +--------------------------------+    +------------------------------+
 //! ```
 //!
-//! [`o_sfu_router::Router`] is pure and synchronous,
-//! it owns router topology facts such as sessions, receive transports,
+//! [`o_sfu_router::Router`] is a pure, sans-I/O, synchronous state machine.
+//! it owns topology state such as sessions, receive transports,
 //! producers, send transports, consumers, reverse indexes and cross-router
-//! receiver shadows
+//! receiver shadows.
 //!
 //! [`o_sfu_router::topology::RoutingTopology`] composes routers into room-local placement,
 //! [`core::prelude::SfuCore`] owns admitted media-session construction and
@@ -219,8 +212,7 @@
 //!
 //! # observability
 //!
-//! observability is part of the architecture, not an adapter around it
-//! runtime and media code emit typed observations into [`o_sfu_telemetry`]
+//! managed by the [`o_sfu_telemetry`] sub crate.
 //!
 //! the telemetry crate owns:
 //!
@@ -248,7 +240,8 @@
 //!
 //! the root package has a small feature surface,
 //! the default feature enables `otel-tracing`, which turns on OpenTelemetry
-//! tracing support through [`o_sfu_telemetry::TraceExportConfig`]
+//! tracing support through [`o_sfu_telemetry::TraceExportConfig`].
+//! other features are for tests/bemchanarking.
 //! core media behavior is configured at runtime through [`config`], not cargo
 //! features
 //!
