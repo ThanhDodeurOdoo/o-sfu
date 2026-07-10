@@ -1357,7 +1357,6 @@ version = "0.7.0"
 dependencies = [
  "o-sfu-protocol",
  "o-sfu-rfc",
- "o-sfu-router",
 ]
 
 [[package]]

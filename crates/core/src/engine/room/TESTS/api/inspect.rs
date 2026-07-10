@@ -148,19 +148,19 @@ impl RoomTestInspect<'_> {
         self.room.definition.recording_address()
     }
 
-    pub async fn routing_home_media_worker_id(self, user_id: &UserId) -> Option<usize> {
+    pub async fn home_media_worker_id(self, user_id: &UserId) -> Option<usize> {
         let state = self.room.state.read().await;
         let connection_id = state.user_connection_id(user_id)?;
         Some(
             state
                 .topology
-                .routing()
+                .router()
                 .media_worker_id_for_connection(connection_id)
                 .as_usize(),
         )
     }
 
-    pub async fn routing_router_count(self) -> usize {
-        self.room.state.read().await.routing_router_count()
+    pub async fn router_count(self) -> usize {
+        self.room.state.read().await.router_count()
     }
 }

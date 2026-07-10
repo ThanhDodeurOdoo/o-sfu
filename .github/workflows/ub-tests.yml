@@ -46,7 +46,6 @@ jobs:
 
       - name: Run host-target UB-oriented tests
         run: |
-          cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_router_protocol
           MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_auth_codec
           cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_protocol_core
           cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_rtp_negotiation

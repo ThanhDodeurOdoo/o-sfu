@@ -9,7 +9,7 @@
 use std::{slice::from_ref, sync::Arc};
 
 use o_sfu_router::{
-    RouterId,
+    ProducerId, RouterId,
     rtp::MediaStream,
     test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
 };
@@ -24,8 +24,7 @@ use crate::{
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
             media_graph::{
-                ConsumerSetupOrigin, ConsumerSetupOutcome, ProducerRuntimeId, RelayRouteKey,
-                ValidatedPublish,
+                ConsumerSetupOrigin, ConsumerSetupOutcome, RelayRouteKey, ValidatedPublish,
             },
             rtp_capabilities::router_rtp_capabilities,
         },
@@ -92,7 +91,7 @@ fn install_test_published_producer(
     transport_media_id: TransportMediaId,
     consumable_rtp_parameters: MediaStream,
 ) -> PublishedSourceId {
-    let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+    let producer_id = ProducerId::allocate(&mut state.next_producer_id);
     let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
     let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
     let intent = source_publish_intent_for_source(stream_type);

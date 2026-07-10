@@ -1,23 +1,20 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    mem,
     sync::Arc,
 };
 
 use o_sfu_router::{
+    Router, RouterError,
     rtp::{MediaCapabilities, MediaStream as RouterRtpParameters},
-    state::{
-        ConsumerCapability, ConsumerRouteState as RouterConsumerRouteState, ProducerRouteState,
-    },
-    topology::{RoutedConsumerId, RoutingError, RoutingTopology},
+    topology::RoutedConsumerId,
 };
 use tracing::{error, warn};
 
 use super::{
-    CommittedConsumerSetup, ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef,
-    ConsumerRouteView, ConsumerSetupTarget, DeclaredConsumerSetup, PendingConsumerRouteView,
-    PendingConsumerSetup, ProducerRouteTarget, ProducerRuntimeId, PublishedProducer,
-    PublishedSourceInstall, ReceiverRouteActivity, ResolvedRelayRouteEffect,
+    CommittedConsumerSetup, ConsumerId, ConsumerKey, ConsumerRouteTarget,
+    ConsumerRouteTransportRef, ConsumerRouteView, ConsumerSetupTarget, DeclaredConsumerSetup,
+    PendingConsumerRouteView, PendingConsumerSetup, ProducerId, ProducerRouteTarget,
+    PublishedProducer, PublishedSourceInstall, ReceiverRouteActivity, ResolvedRelayRouteEffect,
     SourceTransportMediaIndexEntry, SourceView, TransportMediaRemoval, ValidatedPublish,
     route_graph::{RelayRouteEffect, RouteGraph},
     source_index::SourceIndex,
@@ -53,7 +50,7 @@ pub struct RoomTopology {
     instance: RoomInstanceId,
     sources: SourceIndex,
     route_graph: RouteGraph,
-    routing: RoutingTopology,
+    router: Router,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,13 +69,12 @@ pub struct SessionPlacementCommit {
 pub(super) struct ConsumerActivityCommit {
     pub(super) update: Option<ReceiverRouteActivity>,
     pub(super) relay_effects: Vec<ResolvedRelayRouteEffect>,
-    pub(super) routing_error: Option<RoutingError>,
 }
 
 #[derive(Debug)]
 pub enum SessionPlacementRejection {
     MissingPreviousSession { previous_connection: ConnectionId },
-    Router(RoutingError),
+    Router(RouterError),
 }
 
 impl RoomTopology {
@@ -86,20 +82,22 @@ impl RoomTopology {
         runtime_context: &RoomRuntimeContext,
         router_rtp_capabilities: MediaCapabilities,
     ) -> Self {
+        let router = match runtime_context.initial_router_placements() {
+            Some(placements) => {
+                Router::with_placements(placements.clone(), router_rtp_capabilities)
+            }
+            None => Router::new(runtime_context.primary_router(), router_rtp_capabilities),
+        };
         Self {
             instance: runtime_context.instance(),
             sources: SourceIndex::default(),
             route_graph: RouteGraph::default(),
-            routing: RoutingTopology::new(
-                runtime_context.primary_router(),
-                runtime_context.initial_router_placements().cloned(),
-                router_rtp_capabilities,
-            ),
+            router,
         }
     }
 
-    pub(in crate::engine::room) fn routing(&self) -> &RoutingTopology {
-        &self.routing
+    pub(in crate::engine::room) fn router(&self) -> &Router {
+        &self.router
     }
 
     #[must_use]
@@ -110,7 +108,7 @@ impl RoomTopology {
     ) -> Option<TransportSessionKey> {
         let user_id = user_id.into();
         let worker = self
-            .routing
+            .router
             .committed_media_worker_id(user_id.as_ref(), connection_id)?;
         Some(self.transport_session_key(user_id, connection_id, worker))
     }
@@ -133,7 +131,7 @@ impl RoomTopology {
     ) -> TransportSessionKey {
         let user_id = user_id.into();
         let Some(worker) = self
-            .routing
+            .router
             .committed_media_worker_id(user_id.as_ref(), connection_id)
         else {
             unreachable!("transport session key lookup requires committed connection placement");
@@ -156,7 +154,7 @@ impl RoomTopology {
         connection_id: ConnectionId,
     ) -> Option<TransportSessionKey> {
         let media_worker = self
-            .routing
+            .router
             .retire_committed_placement(user_id, connection_id)?;
         Some(self.transport_session_key(user_id.clone().into(), connection_id, media_worker))
     }
@@ -169,16 +167,16 @@ impl RoomTopology {
         match spillover {
             RoomSpilloverMode::StrictSingleRouter => {}
             RoomSpilloverMode::BoundedLocalSpillover => {
-                let idle_router_ids = self.routing.idle_spillover_routers();
-                self.routing.detach_spillover_routers(&idle_router_ids);
+                let idle_router_ids = self.router.idle_spillover_routers();
+                self.router.detach_spillover_routers(&idle_router_ids);
                 placement.clear_cooldowns(&idle_router_ids);
             }
             RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
-                let idle_router_ids = self.routing.idle_spillover_routers();
+                let idle_router_ids = self.router.idle_spillover_routers();
                 let policy = policy.parts();
                 let detachments =
                     placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window);
-                self.routing.detach_spillover_routers(&detachments);
+                self.router.detach_spillover_routers(&detachments);
             }
         }
     }
@@ -369,14 +367,14 @@ impl RoomTopology {
     #[must_use]
     pub(in crate::engine::room) fn producer(
         &self,
-        producer_id: ProducerRuntimeId,
+        producer_id: ProducerId,
     ) -> Option<&PublishedProducer> {
         self.sources.producer(producer_id)
     }
 
     pub(super) fn missing_consumer_targets_for_producer<'a>(
         &self,
-        producer_id: ProducerRuntimeId,
+        producer_id: ProducerId,
         receivers: impl IntoIterator<Item = (&'a UserId, ConnectionId)>,
     ) -> Vec<ConsumerSetupTarget> {
         let Some(producer) = self.producer(producer_id) else {
@@ -394,14 +392,7 @@ impl RoomTopology {
         receivers
             .into_iter()
             .filter_map(|(user, connection)| {
-                self.consumer_target(
-                    user,
-                    connection,
-                    producer_id,
-                    producer,
-                    media,
-                    &producer_session,
-                )
+                self.consumer_target(user, connection, producer, media, &producer_session)
             })
             .collect()
     }
@@ -410,7 +401,6 @@ impl RoomTopology {
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
-        producer_id: ProducerRuntimeId,
         producer: &PublishedProducer,
         transport_media_id: TransportMediaId,
         producer_session: &TransportSessionKey,
@@ -428,7 +418,6 @@ impl RoomTopology {
             connection_id,
             consumer_session,
             producer_session.clone(),
-            producer_id,
             producer,
             transport_media_id,
         ))
@@ -442,7 +431,7 @@ impl RoomTopology {
     ) -> Vec<ConsumerSetupTarget> {
         self.sources
             .producers()
-            .filter_map(|(producer_id, producer)| {
+            .filter_map(|producer| {
                 if !include_producer(producer) {
                     return None;
                 }
@@ -451,14 +440,7 @@ impl RoomTopology {
                     producer.owner_user_id.clone(),
                     producer.owner_connection_id,
                 )?;
-                self.consumer_target(
-                    user_id,
-                    connection_id,
-                    producer_id,
-                    producer,
-                    media,
-                    &session,
-                )
+                self.consumer_target(user_id, connection_id, producer, media, &session)
             })
             .collect()
     }
@@ -469,13 +451,13 @@ impl RoomTopology {
         current_connection_id: impl Fn(&UserId) -> Option<ConnectionId>,
     ) {
         for connection_id in self.route_graph.committed_consumer_connection_ids() {
-            loads.record_consumer(self.routing.media_worker_id_for_connection(connection_id));
+            loads.record_consumer(self.router.media_worker_id_for_connection(connection_id));
         }
         for user_id in self.route_graph.pending_consumer_user_ids() {
             let Some(connection_id) = current_connection_id(user_id) else {
                 continue;
             };
-            loads.record_consumer(self.routing.media_worker_id_for_connection(connection_id));
+            loads.record_consumer(self.router.media_worker_id_for_connection(connection_id));
         }
     }
 
@@ -508,7 +490,7 @@ impl RoomTopology {
                     continue;
                 };
                 let Some(media_worker) = self
-                    .routing
+                    .router
                     .committed_media_worker_id(&key.consumer_user_id, connection_id)
                 else {
                     continue;
@@ -637,14 +619,14 @@ impl RoomTopology {
     pub fn publish_source(
         &mut self,
         publish: ValidatedPublish,
-        producer_id: ProducerRuntimeId,
+        producer_id: ProducerId,
         source_descriptor: PublishedSourceDescriptor,
         consumable_rtp_parameters: RouterRtpParameters,
         transport_media_id: TransportMediaId,
-    ) -> Result<(), RoutingError> {
+    ) -> Result<(), RouterError> {
         let routed_producer_id = self
-            .routing
-            .add_producer(&publish.owner_user_id, publish.media_kind)?;
+            .router
+            .add_producer(&publish.owner_user_id, producer_id)?;
         let source_id = source_descriptor.source_id();
         let producer = PublishedProducer {
             source_id,
@@ -659,7 +641,6 @@ impl RoomTopology {
         };
         self.sources.install_source(PublishedSourceInstall {
             source_descriptor,
-            producer_id,
             producer,
             transport_media_id,
         });
@@ -752,11 +733,7 @@ impl RoomTopology {
     ) -> Option<RoomTransportPlan> {
         let transport_removals = self.transport_removals_for_producer_target(user_id, target);
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
-        if let Some(error) = self
-            .routing
-            .remove_producer(target.routed_producer_id)
-            .err()
-        {
+        if let Some(error) = self.router.remove_producer(target.routed_producer_id).err() {
             error!(
                 ?user_id,
                 ?target,
@@ -777,25 +754,18 @@ impl RoomTopology {
         target: &ProducerRouteTarget,
         current_connection_id: Option<ConnectionId>,
         active: bool,
-    ) -> Result<bool, RoutingError> {
+    ) -> bool {
         let Some(producer) = self
             .sources
             .producer_for_route_target(target, current_connection_id)
         else {
-            return Ok(false);
+            return false;
         };
         if producer.active == active {
-            return Ok(false);
+            return false;
         }
-        let route_state = if active {
-            ProducerRouteState::Active
-        } else {
-            ProducerRouteState::Paused
-        };
-        self.routing
-            .set_producer_route_state(target.routed_producer_id, route_state)?;
         self.sources.set_producer_active(target, active);
-        Ok(true)
+        true
     }
 
     /// commits the new connection before returning cleanup for displaced placement
@@ -820,7 +790,7 @@ impl RoomTopology {
             None
         };
         let media_worker = self
-            .routing
+            .router
             .commit_session_placement(user_id, connection_id, home_placement)
             .map_err(SessionPlacementRejection::Router)?;
         let session_key =
@@ -855,13 +825,8 @@ impl RoomTopology {
         let transport_cleanup = self.transport_cleanup_operations(transport_removals);
         let relay_effects = self.remove_user_media(user_id);
         let relay_effects = self.resolved_relay_route_effects(relay_effects);
-        let routing_repair = self.routing.remove_session_repairing(user_id);
-        if !routing_repair.is_clean() {
-            error!(
-                ?user_id,
-                errors = ?routing_repair.errors(),
-                "repaired user topology during room teardown"
-            );
+        if let Some(error) = self.router.remove_session(user_id).err() {
+            error!(?user_id, ?error, "failed to remove user from room router");
         }
         RoomTransportPlan::from_relays_and_cleanup(relay_effects, transport_cleanup)
     }
@@ -873,7 +838,7 @@ impl RoomTopology {
     ) -> Result<CommittedConsumerSetup, (TransportConsumerRoute, Vec<ResolvedRelayRouteEffect>)>
     {
         let DeclaredConsumerSetup {
-            mut pending,
+            pending,
             route,
             mid,
         } = setup;
@@ -884,17 +849,21 @@ impl RoomTopology {
             return Err((route, self.release_consumer_setup(pending)));
         }
         let active = selection.delivery_active();
-        let Some(routed_consumer_id) = self.add_consumer_route(&pending.target, active) else {
+        let Some(routed_consumer_id) = self.add_consumer_route(&pending.target, pending.consumer)
+        else {
             return Err((route, self.release_consumer_setup(pending)));
         };
-        let committed_mid = mid.unwrap_or_else(|| mem::take(&mut pending.fallback_mid));
+        let committed_mid = mid.unwrap_or_else(|| {
+            pending
+                .rtp
+                .mid()
+                .map_or_else(|| pending.consumer.to_string(), ToOwned::to_owned)
+        });
         if self.route_graph.commit(
             &pending.reservation,
-            pending.target.consumer_state(
-                routed_consumer_id,
-                route.consumer_transport_media_id(),
-                committed_mid,
-            ),
+            pending
+                .target
+                .consumer_state(route.consumer_transport_media_id(), committed_mid),
             selection,
         ) {
             let transport_activity_update =
@@ -910,22 +879,15 @@ impl RoomTopology {
         Err((route, self.release_consumer_setup(pending)))
     }
 
-    fn add_consumer_route(
+    pub(super) fn add_consumer_route(
         &mut self,
         target: &ConsumerSetupTarget,
-        active: bool,
+        consumer: ConsumerId,
     ) -> Option<RoutedConsumerId> {
-        let route_state = if active {
-            RouterConsumerRouteState::Active
-        } else {
-            RouterConsumerRouteState::Paused
-        };
-        match self.routing.add_consumer_with_route_state(
-            &target.user,
-            target.routed,
-            ConsumerCapability::Compatible,
-            route_state,
-        ) {
+        match self
+            .router
+            .add_consumer(&target.user, consumer, target.routed)
+        {
             Ok(routed_consumer_id) => Some(routed_consumer_id),
             Err(error) => {
                 warn!(
@@ -939,12 +901,12 @@ impl RoomTopology {
         }
     }
 
-    fn rollback_consumer_route(
+    pub(super) fn rollback_consumer_route(
         &mut self,
         target: &ConsumerSetupTarget,
         routed_consumer_id: RoutedConsumerId,
     ) {
-        if let Some(error) = self.routing.remove_consumer(routed_consumer_id).err() {
+        if let Some(error) = self.router.remove_consumer(routed_consumer_id).err() {
             warn!(
                 consumer_user_id = ?target.user,
                 ?routed_consumer_id,
@@ -963,9 +925,9 @@ impl RoomTopology {
     pub(super) fn reserve_consumer_setup(
         &mut self,
         target: ConsumerSetupTarget,
+        consumer: ConsumerId,
         selection: ConsumerSourceSelection,
         sender: OutboundSender,
-        fallback_mid: String,
         rtp: RouterRtpParameters,
     ) -> Option<PendingConsumerSetup> {
         let key = target.consumer_key();
@@ -983,9 +945,9 @@ impl RoomTopology {
         };
         Some(PendingConsumerSetup {
             target,
+            consumer,
             reservation,
             sender,
-            fallback_mid,
             rtp,
             relays,
         })
@@ -1021,34 +983,18 @@ impl RoomTopology {
             return Some(ConsumerActivityCommit {
                 update: None,
                 relay_effects,
-                routing_error: None,
             });
         };
         if route.state.consumer_connection_id != connection_id {
             return Some(ConsumerActivityCommit {
                 update: None,
                 relay_effects,
-                routing_error: None,
             });
         }
-        let routed = route.state.routed_consumer_id;
         let target = self.consumer_route_target_for_source(route.transport_ref(), route.source);
-        let route_state = if active {
-            RouterConsumerRouteState::Active
-        } else {
-            RouterConsumerRouteState::Paused
-        };
-        let routing_error = self
-            .routing
-            .set_consumer_route_state(routed, route_state)
-            .err();
-        let update = routing_error
-            .is_none()
-            .then_some(ReceiverRouteActivity::new(target, active));
         Some(ConsumerActivityCommit {
-            update,
+            update: Some(ReceiverRouteActivity::new(target, active)),
             relay_effects,
-            routing_error,
         })
     }
 }

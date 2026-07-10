@@ -187,7 +187,7 @@ impl RoomState {
     #[cfg(test)]
     fn fallback_join_placement(&self) -> RouterPlacement {
         RouterPlacement {
-            router: self.topology.routing().usage_snapshot().primary_router(),
+            router: self.topology.router().placement_snapshot().primary(),
             media_worker: MediaWorkerId::from_raw(0),
         }
     }

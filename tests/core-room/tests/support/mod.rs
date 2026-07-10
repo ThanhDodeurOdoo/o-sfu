@@ -265,12 +265,12 @@ pub async fn user_connection_id(room: &Room, user_id: &UserId) -> Result<Connect
 pub async fn home_worker(room: &Room, raw_user_id: i64) -> Option<usize> {
     room.test_api()
         .inspect()
-        .routing_home_media_worker_id(&UserId::Integer(raw_user_id))
+        .home_media_worker_id(&UserId::Integer(raw_user_id))
         .await
 }
 
 pub async fn router_count(room: &Room) -> usize {
-    room.test_api().inspect().routing_router_count().await
+    room.test_api().inspect().router_count().await
 }
 
 pub fn test_video_rtp_parameters() -> MediaStream {

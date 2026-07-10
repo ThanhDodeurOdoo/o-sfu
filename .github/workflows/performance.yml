@@ -125,7 +125,7 @@ jobs:
           shared-key: rust-1.95-gungraun
 
       - name: Install Gungraun runner
-        run: cargo install gungraun-runner --version 0.19.2 --locked
+        run: cargo install gungraun-runner --version 0.19.3 --locked
 
       - name: Configure manual investigation options
         id: investigation

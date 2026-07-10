@@ -1,13 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{MediaKind as RouterMediaKind, negotiation::negotiate_consumer_rtp_parameters};
-use tracing::error;
 
 #[cfg(any(test, feature = "testing-transport"))]
 use super::ConsumerKey;
 use super::{
     super::{effects::RoomGaugeDelta, state::RoomState},
-    ConsumerRouteTarget, ConsumerRuntimeId, ProducerRuntimeId,
+    ConsumerId, ConsumerRouteTarget, ProducerId,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
     route_graph::ResolvedRelayRouteEffect,
 };
@@ -73,7 +72,7 @@ pub struct ReceiverRouteCommit {
 
 #[derive(Clone, Copy)]
 pub(super) enum ReceiverRouteScope<'a> {
-    Producer(ProducerRuntimeId),
+    Producer(ProducerId),
     Receiver(&'a UserId, ConnectionId),
     SourceUser(&'a UserId, ConnectionId, &'a UserId),
 }
@@ -90,7 +89,7 @@ impl RoomState {
         let before = self.media_counts();
         let media_worker_id = self
             .topology
-            .routing()
+            .router()
             .media_worker_id_for_connection(connection_id);
         let work =
             self.plan_receiver_intent_change(user_id, connection_id, target_user_id, intents);
@@ -186,7 +185,7 @@ impl RoomState {
             counts: RoomGaugeDelta::media(before, self.media_counts()),
             media_worker_id: self
                 .topology
-                .routing()
+                .router()
                 .media_worker_id_for_connection(connection_id),
             work,
         })
@@ -282,16 +281,6 @@ impl RoomState {
                 continue;
             };
             relays.extend(commit.relay_effects);
-            if let Some(error) = commit.routing_error {
-                error!(
-                    ?user_id,
-                    ?target_user_id,
-                    stream_id = %stream_id,
-                    ?error,
-                    "failed to set consumer pause state in room router"
-                );
-                continue;
-            }
             if let Some(update) = commit.update {
                 updates.push(update);
             }
@@ -337,7 +326,7 @@ impl RoomState {
             )
         };
         let (producer_rtp, producer_active) = {
-            let producer = self.topology.producer(target.producer_id)?;
+            let producer = self.topology.producer(target.routed.producer_id())?;
             if !target.matches_identity(producer) {
                 return None;
             }
@@ -345,12 +334,9 @@ impl RoomState {
         };
         let selection = self.setup_selection(&target, producer_active);
         let rtp = negotiate_consumer_rtp_parameters(producer_rtp, client_caps).ok()?;
-        let consumer = ConsumerRuntimeId::allocate(&mut self.next_consumer_id);
-        let fallback_mid = rtp
-            .mid()
-            .map_or_else(|| consumer.into_wire_id(), ToOwned::to_owned);
+        let consumer = ConsumerId::allocate(&mut self.next_consumer_id);
         self.topology
-            .reserve_consumer_setup(target, selection, sender, fallback_mid, rtp)
+            .reserve_consumer_setup(target, consumer, selection, sender, rtp)
     }
 
     pub(super) fn setup_selection(

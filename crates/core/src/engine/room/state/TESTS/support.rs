@@ -34,8 +34,8 @@ impl RoomState {
         self.users.contains_key(user_id)
     }
 
-    pub fn routing_router_count(&self) -> usize {
-        self.topology.routing().router_count()
+    pub fn router_count(&self) -> usize {
+        self.topology.router().router_count()
     }
 
     pub fn first_published_transport_media_id(&self) -> Option<TransportMediaId> {

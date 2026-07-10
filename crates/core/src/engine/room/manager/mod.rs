@@ -348,14 +348,14 @@ impl RoomManager {
         else {
             return Err(RoomManagerJoinError::MissingRoom);
         };
-        let routing_receipt = join_result.map_err(|error| match error {
+        let receipt = join_result.map_err(|error| match error {
             RoomJoinError::RoomFull => RoomManagerJoinError::RoomFull,
             RoomJoinError::RouterState => RoomManagerJoinError::RouterState,
         })?;
         Ok(RoomUserAdmission {
             room,
-            connection_id: routing_receipt.connection_id,
-            transport_session_key: routing_receipt.transport_session_key,
+            connection_id: receipt.connection_id,
+            transport_session_key: receipt.transport_session_key,
         })
     }
 

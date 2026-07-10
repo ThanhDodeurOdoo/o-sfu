@@ -13,7 +13,7 @@ use super::{
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::{PresenceCommit, RemoteSourceRefresh, RoomState},
     },
-    ProducerRouteTarget, ProducerRuntimeId, ReceiverRouteWork, SourceTransportMediaIndexEntry,
+    ProducerId, ProducerRouteTarget, ReceiverRouteWork, SourceTransportMediaIndexEntry,
     subscription::ReceiverRouteScope,
 };
 use crate::{
@@ -209,7 +209,7 @@ impl RoomState {
             })
             .ok()?;
         let publish_before = self.media_counts();
-        let producer_id = ProducerRuntimeId::allocate(&mut self.next_producer_id);
+        let producer_id = ProducerId::allocate(&mut self.next_producer_id);
         if let Err(error) = self.topology.publish_source(
             publish,
             producer_id,
@@ -412,26 +412,14 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         producer_target: &ProducerRouteTarget,
-        stream_id: &UserStreamId,
         active: bool,
     ) -> Option<BTreeSet<UserId>> {
         let current_connection_id = self.user_connection_id(user_id);
-        let changed = match self.topology.set_published_source_activity(
+        let changed = self.topology.set_published_source_activity(
             producer_target,
             current_connection_id,
             active,
-        ) {
-            Ok(changed) => changed,
-            Err(error) => {
-                error!(
-                    ?user_id,
-                    stream_id = %stream_id,
-                    ?error,
-                    "failed to set producer pause state in room router"
-                );
-                return None;
-            }
-        };
+        );
         if !changed {
             return None;
         }
@@ -458,7 +446,7 @@ impl RoomState {
             return Err(ProducerActivityRejection::MissingPublication);
         };
         let Some(source_recipients) =
-            self.apply_producer_activity(user_id, &producer_target, stream_id, active)
+            self.apply_producer_activity(user_id, &producer_target, active)
         else {
             return Err(ProducerActivityRejection::StalePublication);
         };

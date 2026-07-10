@@ -17,7 +17,7 @@ use crate::{
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
         media_transport::TransportSessionKey,
-        room::placement::{LoadTriggeredPlacementState, RoutingPlacementSnapshot},
+        room::placement::{LoadTriggeredPlacementState, PlacementSnapshot},
         source_model::{SourceSubscriptionIntent, UserStreamId},
     },
 };
@@ -135,7 +135,7 @@ impl RoomState {
 
     #[cfg(any(test, feature = "testing-transport"))]
     pub fn router_rtp_capabilities(&self) -> MediaCapabilities {
-        self.topology.routing().rtp_capabilities().clone()
+        self.topology.router().rtp_capabilities().clone()
     }
 
     pub fn transport_user_entries(&self) -> Vec<(UserId, ConnectionId)> {
@@ -173,12 +173,12 @@ impl RoomState {
             .committed_transport_user_key(user_id.clone(), connection_id)
     }
 
-    pub fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {
-        self.topology.routing().usage_snapshot()
+    pub fn placement_usage_snapshot(&self) -> PlacementSnapshot {
+        self.topology.router().placement_snapshot()
     }
 
     pub fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
-        self.topology.routing().assigned_primary_media_worker_id()
+        self.topology.router().primary_worker()
     }
 
     pub(in crate::engine::room) fn live_consumer_routes(

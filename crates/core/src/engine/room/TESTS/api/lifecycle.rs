@@ -136,8 +136,5 @@ async fn join_placement_inputs(
 ) -> (WorkerLoadIndex, RouterId) {
     let mut loads = WorkerLoadIndex::new(room.room_worker_policy().max_local_routers(), pressure);
     room.record_worker_load(&mut loads).await;
-    (
-        loads,
-        room.placement_usage_snapshot().await.next_router_id(),
-    )
+    (loads, room.placement_usage_snapshot().await.next_router())
 }

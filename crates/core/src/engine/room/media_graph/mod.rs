@@ -1,9 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::{
-    MediaKind, rtp,
-    topology::{RoutedConsumerId, RoutedProducerId},
-};
+use o_sfu_router::{ConsumerId, MediaKind, ProducerId, rtp, topology::RoutedProducerId};
 
 use crate::engine::{
     ConnectionId, UserId,
@@ -14,7 +11,6 @@ use crate::engine::{
 };
 
 mod consumer_setup;
-mod ids;
 mod producer;
 mod route_graph;
 mod source_index;
@@ -35,7 +31,6 @@ pub(super) use self::{
         CommittedConsumerSetup, ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget,
         DeclaredConsumerSetup, PendingConsumerSetup,
     },
-    ids::{ConsumerRuntimeId, ProducerRuntimeId},
     producer::{
         ProducerActivityCommit, PublishCommit, PublishIntentPlan, UnpublishCommit, ValidatedPublish,
     },
@@ -83,7 +78,6 @@ pub(super) struct PublishedProducer {
 #[derive(Debug)]
 pub(super) struct PublishedSourceInstall {
     pub source_descriptor: PublishedSourceDescriptor,
-    pub producer_id: ProducerRuntimeId,
     pub producer: PublishedProducer,
     pub transport_media_id: TransportMediaId,
 }
@@ -102,7 +96,6 @@ pub(super) struct SourceTransportMediaIndexEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProducerRouteTarget {
     pub source_id: PublishedSourceId,
-    producer_id: ProducerRuntimeId,
     pub owner_connection_id: ConnectionId,
     pub routed_producer_id: RoutedProducerId,
     pub transport_media_id: TransportMediaId,
@@ -117,7 +110,6 @@ pub(super) struct TransportMediaRemoval {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ConsumerState {
-    pub routed_consumer_id: RoutedConsumerId,
     pub consumer_connection_id: ConnectionId,
     pub source_connection_id: ConnectionId,
     pub source_media: TransportMediaId,
