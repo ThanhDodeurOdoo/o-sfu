@@ -37,7 +37,7 @@ pub(super) fn append_audio_route_activity(
         ) {
             let target = state
                 .topology
-                .consumer_route_target_for_source(update.transport_ref.clone(), route.source);
+                .consumer_route_target_for_source(&update.transport_ref, route.source);
             tx.push_route_update(update, &target);
         }
     }

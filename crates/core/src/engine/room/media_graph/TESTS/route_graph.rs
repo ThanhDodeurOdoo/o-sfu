@@ -14,6 +14,7 @@ use crate::engine::{
     ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
     media_transport::{
         RelayRouteActivity, TransportMediaId, TransportRelayRouteAction, TransportSessionKey,
+        TransportSourceKey,
     },
     source_model::{PublishedSourceId, UserStreamId},
 };
@@ -39,14 +40,11 @@ fn target(
         transport_media_id: Some(transport_media_id),
         active: true,
     };
-    ConsumerSetupTarget::new(
-        consumer.clone(),
-        connection,
-        session_key(consumer, connection),
+    let source = TransportSourceKey::new(
         session_key(producer.owner_user_id.clone(), producer.owner_connection_id),
-        &producer,
         transport_media_id,
-    )
+    );
+    ConsumerSetupTarget::new(session_key(consumer, connection), source, &producer)
 }
 
 fn session_key(user: UserId, connection: ConnectionId) -> TransportSessionKey {
@@ -106,11 +104,14 @@ fn subscription_count_tracks_route_state_transitions() {
     let committed_route = graph
         .reserve_consumer_setup(committed.clone(), ConsumerSourceSelection::open(true))
         .expect("committed route should start as pending");
-    assert!(graph.commit(
-        &committed_route,
-        consumer_state(1),
-        ConsumerSourceSelection::open(true),
-    ));
+    graph
+        .commit(
+            committed_route,
+            consumer_state(1),
+            ConsumerSourceSelection::open(true),
+            || true,
+        )
+        .expect("pending route should commit");
     assert_eq!(graph.subscription_count(), 2);
     assert_eq!(
         graph
@@ -133,11 +134,14 @@ fn subscription_count_tracks_route_state_transitions() {
     assert!(graph.release_consumer_setup(released_route).is_empty());
     assert_eq!(graph.subscription_count(), 2);
 
-    assert!(graph.commit(
-        &pending_route,
-        consumer_state(2),
-        ConsumerSourceSelection::open(true),
-    ));
+    graph
+        .commit(
+            pending_route,
+            consumer_state(2),
+            ConsumerSourceSelection::open(true),
+            || true,
+        )
+        .expect("pending route should commit");
     assert_eq!(graph.subscription_count(), 2);
 
     graph.remove_key_state(&pending);
@@ -182,17 +186,31 @@ fn stale_reservation_cannot_mutate_new_pending_route() {
 
     let mut graph = RouteGraph::default();
     let (stale, fresh) = replacement_routes(&mut graph, &key);
-    assert!(!graph.commit(
-        &stale,
-        consumer_state(1),
-        ConsumerSourceSelection::open(true)
-    ));
+    let mut router_called = false;
+    assert!(
+        graph
+            .commit(
+                stale,
+                consumer_state(1),
+                ConsumerSourceSelection::open(true),
+                || {
+                    router_called = true;
+                    true
+                },
+            )
+            .expect_err("stale reservation should be rejected")
+            .is_empty()
+    );
+    assert!(!router_called);
     assert_eq!(graph.subscription_count(), 1);
-    assert!(graph.commit(
-        &fresh,
-        consumer_state(2),
-        ConsumerSourceSelection::open(true)
-    ));
+    graph
+        .commit(
+            fresh,
+            consumer_state(2),
+            ConsumerSourceSelection::open(true),
+            || true,
+        )
+        .expect("fresh reservation should commit");
     assert_eq!(graph.count(), 1);
 
     let mut graph = RouteGraph::default();
@@ -207,7 +225,7 @@ fn stale_reservation_cannot_mutate_new_pending_route() {
 }
 
 #[test]
-fn relay_route_stays_installed_until_last_owner_is_released() {
+fn router_rejection_preserves_selection_and_shared_relay() {
     let mut graph = RouteGraph::default();
     let source_id = PublishedSourceId::from_raw(1);
     let active_owner = target(UserId::Integer(2), ConnectionId::from_raw(20), source_id);
@@ -215,8 +233,9 @@ fn relay_route_stays_installed_until_last_owner_is_released() {
     let target_worker = MediaWorkerId::from_raw(1);
     let active_key = active_owner.consumer_key();
     let inactive_key = inactive_owner.consumer_key();
+    let active_selection = ConsumerSourceSelection::open(true);
     let active_route = graph
-        .reserve_consumer_setup(active_key, ConsumerSourceSelection::open(true))
+        .reserve_consumer_setup(active_key.clone(), active_selection)
         .expect("active owner should have a pending route");
     let inactive_route = graph
         .reserve_consumer_setup(inactive_key, ConsumerSourceSelection::open(false))
@@ -258,11 +277,19 @@ fn relay_route_stays_installed_until_last_owner_is_released() {
             .is_empty()
     );
 
+    graph.set_selection(&active_key, false);
+    let relay_effects = graph
+        .commit(active_route, consumer_state(1), active_selection, || false)
+        .expect_err("rejected route should release its relay owner");
     assert_eq!(
-        actions(graph.release_consumer_setup(active_route)),
+        actions(relay_effects),
         vec![TransportRelayRouteAction::SetActivity(
             RelayRouteActivity::Inactive
         )]
+    );
+    assert_eq!(
+        graph.selection(&active_key),
+        Some(ConsumerSourceSelection::open(false))
     );
     assert_eq!(
         actions(graph.release_consumer_setup(inactive_route)),

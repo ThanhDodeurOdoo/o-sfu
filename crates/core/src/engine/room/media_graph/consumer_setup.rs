@@ -12,31 +12,25 @@ use super::{
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::RoomState,
     },
-    ConsumerId, ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerState,
-    PublishedProducer,
-    route_graph::{ConsumerRouteReservation, RelayRouteKey, ResolvedRelayRouteEffect},
+    ConsumerId, ConsumerKey, ConsumerRouteTarget, ConsumerState, PublishedProducer,
+    route_graph::{ConsumerRouteReservation, RelayRouteKey},
 };
 use crate::engine::{
-    ConnectionId, MediaWorkerId, UserId,
+    MediaWorkerId,
     media_transport::{
         ConsumerActivity, MediaTransport, TransportConsumerRoute, TransportMediaId,
-        TransportSessionKey, TransportSourceKey,
+        TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
     },
     source_model::{PublishedSourceId, UserStreamId},
 };
 
 #[derive(Debug)]
 pub struct ConsumerSetupTarget {
-    pub user: UserId,
-    pub connection: ConnectionId,
-    pub user_session: TransportSessionKey,
-    pub producer_session: TransportSessionKey,
+    pub session: TransportSessionKey,
+    pub source: TransportSourceKey,
     pub source_id: PublishedSourceId,
-    pub producer_user: UserId,
-    pub producer_connection: ConnectionId,
     pub stream: UserStreamId,
     pub kind: RouterMediaKind,
-    pub media: TransportMediaId,
     pub routed: RoutedProducerId,
 }
 
@@ -49,7 +43,7 @@ pub struct PendingConsumerSetup {
     pub(super) reservation: ConsumerRouteReservation,
     pub(super) sender: OutboundSender,
     pub(super) rtp: RouterRtpParameters,
-    pub(super) relays: Vec<ResolvedRelayRouteEffect>,
+    pub(super) relays: Vec<TransportRelayRouteEffect>,
 }
 
 pub struct DeclaredConsumerSetup {
@@ -79,7 +73,7 @@ pub enum ConsumerSetupOutcome {
         transport_activity_update: Option<bool>,
         readiness_keyframe: Option<ConsumerRouteTarget>,
     },
-    Released(TransportConsumerRoute, Vec<ResolvedRelayRouteEffect>),
+    Released(TransportConsumerRoute, Vec<TransportRelayRouteEffect>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,8 +101,9 @@ impl RoomState {
     ) -> (RoomMediaCounts, RoomMediaCounts, ConsumerSetupOutcome) {
         let before = self.media_counts();
         let target = &setup.pending.target;
-        let outcome = if self.users.get(&target.user).is_some_and(|user| {
-            user.connection_id == target.connection && user.negotiation.can_consume()
+        let session = &target.session;
+        let outcome = if self.users.get(session.user_id()).is_some_and(|user| {
+            user.connection_id == session.connection_id() && user.negotiation.can_consume()
         }) && let Some(producer_active) = self
             .topology
             .producer(target.routed.producer_id())
@@ -119,7 +114,8 @@ impl RoomState {
             let delivery_active = selection.delivery_active();
             match self.topology.commit_consumer_setup(setup, selection) {
                 Ok(commit) => {
-                    let snapshot = self.remote_source_snapshot_for_user(&commit.target.user, true);
+                    let snapshot =
+                        self.remote_source_snapshot_for_user(commit.target.session.user_id(), true);
                     let readiness_keyframe = match origin {
                         ConsumerSetupOrigin::Readiness
                             if delivery_active
@@ -157,7 +153,7 @@ impl RoomState {
     ) -> (
         RoomMediaCounts,
         RoomMediaCounts,
-        Vec<ResolvedRelayRouteEffect>,
+        Vec<TransportRelayRouteEffect>,
     ) {
         let before = self.media_counts();
         let relays = self.topology.release_consumer_setup(setup);
@@ -167,7 +163,7 @@ impl RoomState {
 }
 
 impl PendingConsumerSetup {
-    pub(in crate::engine::room) fn take_relays(&mut self) -> Vec<ResolvedRelayRouteEffect> {
+    pub(in crate::engine::room) fn take_relays(&mut self) -> Vec<TransportRelayRouteEffect> {
         mem::take(&mut self.relays)
     }
 
@@ -180,10 +176,10 @@ impl PendingConsumerSetup {
             ConsumerActivity::from_active(self.reservation.selection().delivery_active());
         match media_transport
             .consume_media(
-                &self.target.user_session,
+                &self.target.session,
                 self.target.kind,
-                &self.target.producer_session,
-                self.target.media,
+                self.target.source.session_key(),
+                self.target.source.transport_media_id(),
                 &self.rtp,
                 activity,
             )
@@ -191,7 +187,7 @@ impl PendingConsumerSetup {
         {
             Ok(media) => {
                 let mid = media_transport
-                    .transport_media_mid(&self.target.user_session, media)
+                    .transport_media_mid(&self.target.session, media)
                     .await;
                 Ok(DeclaredConsumerSetup {
                     route: self.target.transport_consumer_route(media),
@@ -201,11 +197,11 @@ impl PendingConsumerSetup {
             }
             Err(error) => {
                 warn!(
-                    consumer_user_id = ?self.target.user,
-                    consumer_connection_id = ?self.target.connection,
-                    producer_user_id = ?self.target.producer_user,
-                    producer_connection_id = ?self.target.producer_connection,
-                    source_transport_media_id = ?self.target.media,
+                    consumer_user_id = ?self.target.session.user_id(),
+                    consumer_connection_id = ?self.target.session.connection_id(),
+                    producer_user_id = ?self.target.source.session_key().user_id(),
+                    producer_connection_id = ?self.target.source.session_key().connection_id(),
+                    source_transport_media_id = ?self.target.source.transport_media_id(),
                     error = ?error,
                     consumer_mid = self.rtp.mid(),
                     ?origin,
@@ -219,30 +215,22 @@ impl PendingConsumerSetup {
 
 impl ConsumerSetupTarget {
     pub fn new(
-        consumer_user_id: UserId,
-        consumer_connection_id: ConnectionId,
-        consumer_session: TransportSessionKey,
-        producer_session: TransportSessionKey,
+        session: TransportSessionKey,
+        source: TransportSourceKey,
         producer: &PublishedProducer,
-        producer_media: TransportMediaId,
     ) -> Self {
         Self {
-            user: consumer_user_id,
-            connection: consumer_connection_id,
-            user_session: consumer_session,
-            producer_session,
+            session,
+            source,
             source_id: producer.source_id,
-            producer_user: producer.owner_user_id.clone(),
-            producer_connection: producer.owner_connection_id,
             stream: producer.stream_id.clone(),
             kind: producer.media_kind,
-            media: producer_media,
             routed: producer.routed_producer_id,
         }
     }
 
     pub(super) fn consumer_key(&self) -> ConsumerKey {
-        ConsumerKey::new(&self.user, self.source_id)
+        ConsumerKey::new(self.session.user_id(), self.source_id)
     }
 
     pub(super) fn consumer_state(
@@ -251,9 +239,9 @@ impl ConsumerSetupTarget {
         consumer_mid: String,
     ) -> ConsumerState {
         ConsumerState {
-            consumer_connection_id: self.connection,
-            source_connection_id: self.producer_connection,
-            source_media: self.media,
+            consumer_connection_id: self.session.connection_id(),
+            source_connection_id: self.source.session_key().connection_id(),
+            source_media: self.source.transport_media_id(),
             consumer_media,
             consumer_mid,
         }
@@ -263,45 +251,29 @@ impl ConsumerSetupTarget {
         &self,
         consumer_media: TransportMediaId,
     ) -> TransportConsumerRoute {
-        TransportConsumerRoute::new(
-            self.user_session.clone(),
-            consumer_media,
-            TransportSourceKey::new(self.producer_session.clone(), self.media),
-        )
+        TransportConsumerRoute::new(self.session.clone(), consumer_media, self.source.clone())
     }
 
     fn route_target(&self, route: TransportConsumerRoute) -> ConsumerRouteTarget {
-        ConsumerRouteTarget::new(
-            ConsumerRouteTransportRef::from_parts(
-                self.user.clone(),
-                self.connection,
-                route.consumer_transport_media_id(),
-                self.producer_user.clone(),
-                self.producer_connection,
-                self.media,
-            ),
-            route,
-            self.stream.clone(),
-            self.kind,
-        )
+        ConsumerRouteTarget::new(route, self.stream.clone(), self.kind)
     }
 
     pub(super) fn relay_route_key(&self, target_worker: MediaWorkerId) -> RelayRouteKey {
         RelayRouteKey {
-            source_user: self.producer_user.clone(),
-            source_connection: self.producer_connection,
-            source_media: self.media,
+            source_user: self.source.session_key().user_id().clone(),
+            source_connection: self.source.session_key().connection_id(),
+            source_media: self.source.transport_media_id(),
             target_worker,
         }
     }
 
     pub(super) fn matches_identity(&self, producer: &PublishedProducer) -> bool {
         producer.source_id == self.source_id
-            && producer.owner_user_id == self.producer_user
-            && producer.owner_connection_id == self.producer_connection
+            && &producer.owner_user_id == self.source.session_key().user_id()
+            && producer.owner_connection_id == self.source.session_key().connection_id()
             && producer.stream_id == self.stream
             && producer.media_kind == self.kind
-            && producer.transport_media_id == Some(self.media)
+            && producer.transport_media_id == Some(self.source.transport_media_id())
             && producer.routed_producer_id == self.routed
     }
 }

@@ -19,9 +19,9 @@ use o_sfu_router::{
 };
 
 use super::{
-    ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerRouteTransportRef,
-    ConsumerSetupOrigin, ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup,
-    ProducerId, ValidatedPublish,
+    ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerSetupOrigin,
+    ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup, ProducerId,
+    ValidatedPublish,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -65,12 +65,11 @@ impl PendingConsumerSetup {
 
 impl ConsumerRouteTarget {
     pub(in crate::engine::room) fn for_test(
-        transport_ref: ConsumerRouteTransportRef,
         transport_route: TransportConsumerRoute,
         stream_id: UserStreamId,
         kind: RouterMediaKind,
     ) -> Self {
-        Self::new(transport_ref, transport_route, stream_id, kind)
+        Self::new(transport_route, stream_id, kind)
     }
 }
 
@@ -616,7 +615,7 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
 }
 
 #[test]
-fn consumer_setup_releases_route_graph_rejection() {
+fn stale_consumer_setup_retries_original_consumer_id() {
     let (
         mut state,
         publisher_user_id,
@@ -641,23 +640,16 @@ fn consumer_setup_releases_route_graph_rejection() {
         panic!("setup with rejected route graph commit should be released");
     };
 
-    assert_eq!(state.consumer_count(), 0);
-    assert_eq!(state.media_counts().subscriptions, 0);
-
     let mut retries = state
         .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id)
         .expect("subscriber session should exist");
     assert_eq!(retries.len(), 1);
-    let retry = retries.pop().expect("consumer setup should be retried");
-    let routed = state
-        .topology
-        .add_consumer_route(&retry.target, consumer)
-        .expect("router consumer from rejected commit should be rolled back");
-    state
-        .topology
-        .rollback_consumer_route(&retry.target, routed);
-    state.release_pending_consumer_setup(retry);
-    assert_eq!(state.consumer_count(), 0);
+    let mut retry = retries.pop().expect("consumer setup should be retried");
+    retry.consumer = consumer;
+    let ConsumerSetupOutcome::Committed { .. } = commit_setup(&mut state, retry) else {
+        panic!("the original consumer id should remain available after stale rejection");
+    };
+    assert_eq!(state.consumer_count(), 1);
 }
 
 #[test]

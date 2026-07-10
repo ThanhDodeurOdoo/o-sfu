@@ -34,7 +34,6 @@ pub(super) use self::{
     producer::{
         ProducerActivityCommit, PublishCommit, PublishIntentPlan, UnpublishCommit, ValidatedPublish,
     },
-    route_graph::{RelayRouteKey, ResolvedRelayRouteEffect},
     subscription::{ReceiverRouteActivity, ReceiverRouteCommit, ReceiverRouteWork},
     topology::{
         CommittedTransportReceipt, RoomTopology, SessionPlacementCommit, SessionPlacementRejection,
@@ -139,14 +138,14 @@ impl ConsumerRouteView<'_> {
     }
 
     pub fn transport_ref(&self) -> ConsumerRouteTransportRef {
-        ConsumerRouteTransportRef::from_parts(
-            self.consumer_user_id.clone(),
-            self.state.consumer_connection_id,
-            self.state.consumer_media,
-            self.source.owner().user_id().clone(),
-            self.state.source_connection_id,
-            self.state.source_media,
-        )
+        ConsumerRouteTransportRef {
+            consumer_user_id: self.consumer_user_id.clone(),
+            consumer_connection_id: self.state.consumer_connection_id,
+            consumer_media: self.state.consumer_media,
+            source_user_id: self.source.owner().user_id().clone(),
+            source_connection_id: self.state.source_connection_id,
+            source_media: self.state.source_media,
+        }
     }
 
     pub fn matches_transport_ref(&self, route: &ConsumerRouteTransportRef) -> bool {
@@ -178,41 +177,18 @@ pub(super) struct ConsumerRouteTransportRef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumerRouteTarget {
-    transport_ref: ConsumerRouteTransportRef,
     transport_route: TransportConsumerRoute,
     stream_id: UserStreamId,
     kind: MediaKind,
 }
 
-impl ConsumerRouteTransportRef {
-    pub fn from_parts(
-        consumer_user_id: UserId,
-        consumer_connection_id: ConnectionId,
-        consumer_media: TransportMediaId,
-        source_user_id: UserId,
-        source_connection_id: ConnectionId,
-        source_media: TransportMediaId,
-    ) -> Self {
-        Self {
-            consumer_user_id,
-            consumer_connection_id,
-            consumer_media,
-            source_user_id,
-            source_connection_id,
-            source_media,
-        }
-    }
-}
-
 impl ConsumerRouteTarget {
     fn new(
-        transport_ref: ConsumerRouteTransportRef,
         transport_route: TransportConsumerRoute,
         stream_id: UserStreamId,
         kind: MediaKind,
     ) -> Self {
         Self {
-            transport_ref,
             transport_route,
             stream_id,
             kind,
@@ -224,15 +200,15 @@ impl ConsumerRouteTarget {
     }
 
     pub const fn consumer_media_id(&self) -> TransportMediaId {
-        self.transport_ref.consumer_media
+        self.transport_route.consumer_transport_media_id()
     }
 
     pub fn producer_user_id(&self) -> &UserId {
-        &self.transport_ref.source_user_id
+        self.transport_route.source_session_key().user_id()
     }
 
     pub const fn source_media_id(&self) -> TransportMediaId {
-        self.transport_ref.source_media
+        self.transport_route.source_transport_media_id()
     }
 
     pub fn stream_id(&self) -> &UserStreamId {

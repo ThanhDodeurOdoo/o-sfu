@@ -291,7 +291,7 @@ fn append_receiver_policy_updates<'a>(
         };
         if update.requires_media_transport_effect() {
             let target = state.topology.consumer_route_target_for_source(
-                update.transport_ref.clone(),
+                &update.transport_ref,
                 planned_route.input.source,
             );
             tx.push_route_update(update, &target);
