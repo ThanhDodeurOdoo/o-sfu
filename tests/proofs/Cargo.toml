@@ -12,7 +12,6 @@ version.workspace = true
 [dependencies]
 o-sfu-protocol = { path = "../../crates/protocol", features = ["verification-models"] }
 o-sfu-rfc = { path = "../../crates/rfc" }
-o-sfu-router = { path = "../../crates/router", features = ["test-support"] }
 
 [lints]
 workspace = true

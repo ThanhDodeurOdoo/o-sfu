@@ -4,16 +4,40 @@ use std::fmt::{self, Display, Formatter};
 pub struct RouterId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SessionId(pub u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TransportId(pub u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProducerId(pub u64);
+
+impl ProducerId {
+    #[must_use]
+    pub fn allocate(next: &mut u64) -> Self {
+        let id = Self(*next);
+        *next = next.saturating_add(1);
+        id
+    }
+}
+
+impl Display for ProducerId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(formatter, "producer-{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConsumerId(pub u64);
+
+impl ConsumerId {
+    #[must_use]
+    pub fn allocate(next: &mut u64) -> Self {
+        let id = Self(*next);
+        *next = next.saturating_add(1);
+        id
+    }
+}
+
+impl Display for ConsumerId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(formatter, "consumer-{}", self.0)
+    }
+}
 
 /// unique identifier for a user's transport connection within the server process
 ///

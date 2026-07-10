@@ -19,7 +19,7 @@ jobs:
   kani:
     name: Kani (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -28,63 +28,36 @@ jobs:
             command: >-
               cargo kani -p o-sfu-proofs
               --harness h264_profile_level_id_parse_matches_rfc_patterns
-          - shard: router-symbolic-adds
+          - shard: router-flow
+            covers: 2
             command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness bounded_symbolic_router_adds_preserve_invariants
-              --harness concrete_router_adds_write_reverse_index_memberships
-          - shard: router-symbolic-routing
+              cargo kani -p o-sfu-router
+              --no-assertion-reach-checks
+              --harness proofs::flow::cross_router_consumer_forms_valid_graph
+          - shard: router-replacement
+            covers: 1
             command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --output-format terse
-              --harness router::proofs::route_trace
-          - shard: router-symbolic-cleanup
-            command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness bounded_symbolic_router_cleanup_trace_preserves_invariants
-          - shard: router-session-teardown
-            command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness session_teardown_clears_reverse_indices_and_dependents
-          - shard: router-topology
-            command: >-
-              cargo kani -p o-sfu-proofs
-              --harness routing_shadow_tracker_prunes_by_receiver_user
-              --harness routing_placement_replacement_retires_stale_connection
-          - shard: router-producer-removal
-            command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness removing_a_producer_clears_dependents_but_keeps_live_transports
+              cargo kani -p o-sfu-router
+              --no-assertion-reach-checks
+              --harness proofs::replacement::replacement_rehomes_and_retires_graph
           - shard: router-consumer-removal
+            covers: 2
             command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness removing_a_consumer_preserves_other_routes_and_indices
-          - shard: router-consumer-inherit-pause
+              cargo kani -p o-sfu-router
+              --no-assertion-reach-checks
+              --harness proofs::teardown::removing_consumer_preserves_sibling_and_shadow
+          - shard: router-producer-teardown
+            covers: 2
             command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness new_consumers_inherit_their_producer_pause_shadow
-          - shard: router-producer-pause
+              cargo kani -p o-sfu-router
+              --no-assertion-reach-checks
+              --harness proofs::teardown::removing_producer_cascades_only_its_dependents
+          - shard: router-session-teardown
+            covers: 1
             command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness pausing_a_producer_updates_all_dependent_consumers
-          - shard: router-producer-resume
-            command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness resuming_a_producer_clears_dependent_consumer_pause_shadows
-          - shard: router-consumer-local-pause
-            command: >-
-              cargo kani -p o-sfu-proofs
-              -Z unstable-options
-              --harness consumer_local_pause_stays_independent_from_producer_shadow_updates
+              cargo kani -p o-sfu-router
+              --no-assertion-reach-checks
+              --harness proofs::teardown::receiver_teardown_clears_shadow
           - shard: protocol-recovery-close
             command: >-
               cargo kani -p o-sfu-proofs
@@ -168,4 +141,15 @@ jobs:
           cargo-kani setup --use-local-bundle "$RUNNER_TEMP/$bundle"
 
       - name: Run Kani proofs
-        run: ${{ matrix.command }}
+        env:
+          EXPECTED_COVERS: ${{ matrix.covers || 0 }}
+        run: |
+          set -o pipefail
+          output="$(mktemp)"
+          ${{ matrix.command }} 2>&1 | tee "$output"
+          if (( EXPECTED_COVERS > 0 )) && \
+            ! grep -Fq "** $EXPECTED_COVERS of $EXPECTED_COVERS cover properties satisfied" "$output"
+          then
+            echo "Expected $EXPECTED_COVERS satisfied cover properties" >&2
+            exit 1
+          fi

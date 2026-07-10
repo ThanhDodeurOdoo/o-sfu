@@ -79,10 +79,6 @@ name = "telemetry_ui"
 path = "integration/telemetry_ui.rs"
 
 [[test]]
-name = "miri_router_protocol"
-path = "miri/router_protocol.rs"
-
-[[test]]
 name = "miri_auth_codec"
 path = "miri/auth_codec.rs"
 

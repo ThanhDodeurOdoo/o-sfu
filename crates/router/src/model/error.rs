@@ -1,28 +1,36 @@
-use super::{ConsumerId, ProducerId, SessionId, TransportId};
+use o_sfu_model::UserId;
 
-/// Router mutation errors
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+use super::{
+    ConnectionId, ConsumerId, MediaWorkerId, ProducerId, RouterId,
+    topology::{RoutedConsumerId, RoutedProducerId},
+};
+
+/// router mutation errors
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RouterError {
-    #[error("duplicate session {0:?}")]
-    DuplicateSession(SessionId),
-    #[error("duplicate transport {0:?}")]
-    DuplicateTransport(TransportId),
+    #[error("primary router {actual:?} does not match {expected:?}")]
+    PrimaryRouterMismatch {
+        expected: RouterId,
+        actual: RouterId,
+    },
+    #[error("router {router:?} is assigned to media worker {expected:?}, not {actual:?}")]
+    MediaWorkerMismatch {
+        router: RouterId,
+        expected: MediaWorkerId,
+        actual: MediaWorkerId,
+    },
+    #[error("connection {0:?} is already committed")]
+    DuplicateConnection(ConnectionId),
     #[error("duplicate producer {0:?}")]
     DuplicateProducer(ProducerId),
     #[error("duplicate consumer {0:?}")]
     DuplicateConsumer(ConsumerId),
-    #[error("missing session {0:?}")]
-    MissingSession(SessionId),
-    #[error("missing transport {0:?}")]
-    MissingTransport(TransportId),
+    #[error("missing session for {0:?}")]
+    MissingSession(UserId),
+    #[error("missing router {0:?}")]
+    MissingRouter(RouterId),
     #[error("missing producer {0:?}")]
-    MissingProducer(ProducerId),
+    MissingProducer(RoutedProducerId),
     #[error("missing consumer {0:?}")]
-    MissingConsumer(ConsumerId),
-    #[error("producer transport {0:?} is not a receive transport")]
-    ProducerRequiresReceiveTransport(TransportId),
-    #[error("consumer transport {0:?} is not a send transport")]
-    ConsumerRequiresSendTransport(TransportId),
-    #[error("consumer capabilities are incompatible with producer {producer_id:?}")]
-    IncompatibleCapabilities { producer_id: ProducerId },
+    MissingConsumer(RoutedConsumerId),
 }

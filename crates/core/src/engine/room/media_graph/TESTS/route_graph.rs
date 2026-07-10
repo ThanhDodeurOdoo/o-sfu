@@ -3,15 +3,10 @@
     reason = "route graph tests fail loudly when fixed route reservations are invalid"
 )]
 
-use o_sfu_router::{
-    MediaKind, RouterId,
-    ids::{ConsumerId, ProducerId},
-    rtp::MediaStream,
-    topology::{RoutedConsumerId, RoutedProducerId},
-};
+use o_sfu_router::{MediaKind, RouterId, rtp::MediaStream, topology::RoutedProducerId};
 
 use super::{
-    ConsumerKey, ConsumerSourceSelection, ConsumerState, ProducerRuntimeId, PublishedProducer,
+    ConsumerKey, ConsumerSourceSelection, ConsumerState, ProducerId, PublishedProducer,
     consumer_setup::ConsumerSetupTarget,
     route_graph::{ConsumerRouteReservation, RelayRouteEffect, RouteGraph},
 };
@@ -28,8 +23,6 @@ fn target(
     connection: ConnectionId,
     source_id: PublishedSourceId,
 ) -> ConsumerSetupTarget {
-    let mut next_producer_id = 1;
-    let producer_id = ProducerRuntimeId::allocate(&mut next_producer_id);
     let transport_media_id = TransportMediaId::new(50);
     let producer = PublishedProducer {
         source_id,
@@ -38,7 +31,11 @@ fn target(
         stream_id: UserStreamId::from("camera"),
         media_kind: MediaKind::Video,
         consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
-        routed_producer_id: RoutedProducerId::for_test(RouterId(1), ProducerId(10)),
+        routed_producer_id: RoutedProducerId::for_test(
+            RouterId(1),
+            ConnectionId::from_raw(10),
+            ProducerId(10),
+        ),
         transport_media_id: Some(transport_media_id),
         active: true,
     };
@@ -47,7 +44,6 @@ fn target(
         connection,
         session_key(consumer, connection),
         session_key(producer.owner_user_id.clone(), producer.owner_connection_id),
-        producer_id,
         &producer,
         transport_media_id,
     )
@@ -64,7 +60,6 @@ fn session_key(user: UserId, connection: ConnectionId) -> TransportSessionKey {
 
 fn consumer_state(id: u64) -> ConsumerState {
     ConsumerState {
-        routed_consumer_id: RoutedConsumerId::for_test(RouterId(1), ConsumerId(id)),
         consumer_connection_id: ConnectionId::from_raw(20 + id),
         source_connection_id: ConnectionId::from_raw(10),
         source_media: TransportMediaId::new(50),

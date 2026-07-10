@@ -1,232 +1,134 @@
-#[cfg(not(kani))]
-pub(super) use std::collections::{BTreeMap, BTreeSet};
+use std::mem;
 
 #[cfg(kani)]
-const PROOF_STORAGE_CAPACITY: usize = 4;
+pub(super) type BTreeMap<K, V> = ProvableMap<K, V>;
+#[cfg(kani)]
+pub(super) type BTreeSet<V> = ProvableSet<V>;
 
-#[cfg(kani)]
-pub(super) type BTreeMap<K, V> = ProvableMap<K, V, PROOF_STORAGE_CAPACITY>;
-#[cfg(kani)]
-pub(super) type BTreeSet<V> = ProvableSet<V, PROOF_STORAGE_CAPACITY>;
-
-#[cfg(kani)]
-#[derive(Debug, Clone)]
-pub(super) struct ProvableMap<K, V, const CAPACITY: usize> {
-    entries: [Option<(K, V)>; CAPACITY],
-    len: usize,
+#[derive(Debug)]
+pub(super) struct ProvableMap<K, V> {
+    first: Option<(K, V)>,
+    second: Option<(K, V)>,
 }
 
-#[cfg(kani)]
-impl<K, V, const CAPACITY: usize> ProvableMap<K, V, CAPACITY>
-where
-    K: Ord,
-{
-    pub(super) fn new() -> Self {
-        assert!(CAPACITY == PROOF_STORAGE_CAPACITY);
+impl<K: PartialEq, V> ProvableMap<K, V> {
+    pub(super) const fn new() -> Self {
         Self {
-            entries: std::array::from_fn(|_| None),
-            len: 0,
+            first: None,
+            second: None,
         }
     }
 
     pub(super) fn len(&self) -> usize {
-        self.len
+        usize::from(self.first.is_some()) + usize::from(self.second.is_some())
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.first.is_none()
     }
 
     pub(super) fn contains_key(&self, key: &K) -> bool {
-        self.key_index(key).is_some()
+        self.get(key).is_some()
     }
 
     pub(super) fn insert(&mut self, key: K, value: V) -> Option<V> {
-        if let Some(index) = self.key_index(&key) {
-            return Self::replace_entry_value(&mut self.entries[index], value);
+        if let Some((entry_key, entry_value)) = self.first.as_mut()
+            && entry_key == &key
+        {
+            return Some(mem::replace(entry_value, value));
         }
-
-        if let Some(index) = self.empty_index() {
-            self.entries[index] = Some((key, value));
-            self.len += 1;
+        if let Some((entry_key, entry_value)) = self.second.as_mut()
+            && entry_key == &key
+        {
+            return Some(mem::replace(entry_value, value));
+        }
+        if self.first.is_none() {
+            self.first = Some((key, value));
             return None;
         }
-
-        panic!("provable router storage capacity exceeded");
+        assert!(
+            self.second.is_none(),
+            "provable router storage capacity exceeded"
+        );
+        self.second = Some((key, value));
+        None
     }
 
     pub(super) fn get(&self, key: &K) -> Option<&V> {
-        let index = self.key_index(key)?;
-        self.entries[index]
-            .as_ref()
-            .map(|(_entry_key, value)| value)
+        if let Some((entry_key, value)) = self.first.as_ref()
+            && entry_key == key
+        {
+            return Some(value);
+        }
+        if let Some((entry_key, value)) = self.second.as_ref()
+            && entry_key == key
+        {
+            return Some(value);
+        }
+        None
     }
 
     pub(super) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        let index = self.key_index(key)?;
-        self.entries[index]
-            .as_mut()
-            .map(|(_entry_key, value)| value)
-    }
-
-    fn replace_entry_value(entry: &mut Option<(K, V)>, value: V) -> Option<V> {
-        if let Some((_entry_key, entry_value)) = entry {
-            return Some(std::mem::replace(entry_value, value));
+        if let Some((entry_key, value)) = self.first.as_mut()
+            && entry_key == key
+        {
+            return Some(value);
         }
-
-        panic!("provable router storage entry disappeared");
+        if let Some((entry_key, value)) = self.second.as_mut()
+            && entry_key == key
+        {
+            return Some(value);
+        }
+        None
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
-        let index = self.key_index(key)?;
-        Self::remove_entry(&mut self.entries[index], &mut self.len)
-    }
-
-    fn remove_entry(entry: &mut Option<(K, V)>, len: &mut usize) -> Option<V> {
-        if let Some((_entry_key, value)) = entry.take() {
-            *len -= 1;
-            return Some(value);
+        if self
+            .first
+            .as_ref()
+            .is_some_and(|(entry_key, _value)| entry_key == key)
+        {
+            let entry = self.first.take();
+            self.first = self.second.take();
+            return entry.map(|(_key, value)| value);
         }
-
-        panic!("provable router storage entry disappeared");
-    }
-
-    fn key_index(&self, key: &K) -> Option<usize> {
-        let mut index = 0;
-        while index < CAPACITY {
-            if let Some((entry_key, _value)) = &self.entries[index] {
-                if *entry_key == *key {
-                    return Some(index);
-                }
-            }
-            index += 1;
+        if self
+            .second
+            .as_ref()
+            .is_some_and(|(entry_key, _value)| entry_key == key)
+        {
+            return self.second.take().map(|(_key, value)| value);
         }
         None
     }
 
-    fn empty_index(&self) -> Option<usize> {
-        let mut index = 0;
-        while index < CAPACITY {
-            if self.entries[index].is_none() {
-                return Some(index);
-            }
-            index += 1;
-        }
-        None
-    }
-
-    pub(super) fn values(&self) -> ProvableMapValues<'_, K, V, CAPACITY> {
-        ProvableMapValues {
-            entries: &self.entries,
-            index: 0,
+    pub(super) fn values_mut(&mut self) -> Slots<&mut V> {
+        Slots {
+            first: self.first.as_mut().map(|(_key, value)| value),
+            second: self.second.as_mut().map(|(_key, value)| value),
         }
     }
 
-    pub(super) fn values_mut(&mut self) -> ProvableMapValuesMut<'_, K, V, CAPACITY> {
-        ProvableMapValuesMut {
-            entries: self.entries.iter_mut(),
+    pub(super) fn iter(&self) -> Slots<(&K, &V)> {
+        Slots {
+            first: self.first.as_ref().map(|(key, value)| (key, value)),
+            second: self.second.as_ref().map(|(key, value)| (key, value)),
         }
     }
 
-    pub(super) fn iter(&self) -> ProvableMapIter<'_, K, V, CAPACITY> {
-        ProvableMapIter {
-            entries: &self.entries,
-            index: 0,
-        }
+    pub(super) fn keys(&self) -> Keys<Slots<(&K, &V)>> {
+        Keys(self.iter())
     }
 }
 
-#[cfg(kani)]
-impl<K, V, const CAPACITY: usize> Default for ProvableMap<K, V, CAPACITY>
-where
-    K: Ord,
-{
+impl<K: PartialEq, V> Default for ProvableMap<K, V> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(kani)]
-impl<K, V, const CAPACITY: usize> FromIterator<(K, V)> for ProvableMap<K, V, CAPACITY>
-where
-    K: Ord,
-{
-    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
-        let mut map = Self::new();
-        for (key, value) in iter {
-            map.insert(key, value);
-        }
-        map
-    }
-}
-
-#[cfg(kani)]
-pub(super) struct ProvableMapValues<'a, K, V, const CAPACITY: usize> {
-    entries: &'a [Option<(K, V)>; CAPACITY],
-    index: usize,
-}
-
-#[cfg(kani)]
-impl<'a, K, V, const CAPACITY: usize> Iterator for ProvableMapValues<'a, K, V, CAPACITY> {
-    type Item = &'a V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.index < CAPACITY {
-            let entry = &self.entries[self.index];
-            self.index += 1;
-            if let Some((_key, value)) = entry {
-                return Some(value);
-            }
-        }
-        None
-    }
-}
-
-#[cfg(kani)]
-pub(super) struct ProvableMapValuesMut<'a, K, V, const CAPACITY: usize> {
-    entries: std::slice::IterMut<'a, Option<(K, V)>>,
-}
-
-#[cfg(kani)]
-impl<'a, K: 'a, V: 'a, const CAPACITY: usize> Iterator
-    for ProvableMapValuesMut<'a, K, V, CAPACITY>
-{
-    type Item = &'a mut V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        for entry in self.entries.by_ref() {
-            if let Some((_key, value)) = entry {
-                return Some(value);
-            }
-        }
-        None
-    }
-}
-
-#[cfg(kani)]
-pub(super) struct ProvableMapIter<'a, K, V, const CAPACITY: usize> {
-    entries: &'a [Option<(K, V)>; CAPACITY],
-    index: usize,
-}
-
-#[cfg(kani)]
-impl<'a, K, V, const CAPACITY: usize> Iterator for ProvableMapIter<'a, K, V, CAPACITY> {
-    type Item = (&'a K, &'a V);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.index < CAPACITY {
-            let entry = &self.entries[self.index];
-            self.index += 1;
-            if let Some((key, value)) = entry {
-                return Some((key, value));
-            }
-        }
-        None
-    }
-}
-
-#[cfg(kani)]
-impl<'a, K, V, const CAPACITY: usize> IntoIterator for &'a ProvableMap<K, V, CAPACITY>
-where
-    K: Ord,
-{
-    type IntoIter = ProvableMapIter<'a, K, V, CAPACITY>;
+impl<'a, K: PartialEq, V> IntoIterator for &'a ProvableMap<K, V> {
+    type IntoIter = Slots<(&'a K, &'a V)>;
     type Item = (&'a K, &'a V);
 
     fn into_iter(self) -> Self::IntoIter {
@@ -234,23 +136,41 @@ where
     }
 }
 
-#[cfg(kani)]
-#[derive(Debug, Clone)]
-pub(super) struct ProvableSet<V, const CAPACITY: usize> {
-    entries: [Option<V>; CAPACITY],
-    len: usize,
+pub(super) struct Slots<T> {
+    first: Option<T>,
+    second: Option<T>,
 }
 
-#[cfg(kani)]
-impl<V, const CAPACITY: usize> ProvableSet<V, CAPACITY>
+impl<T> Iterator for Slots<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.first.take().or_else(|| self.second.take())
+    }
+}
+
+pub(super) struct Keys<I>(I);
+
+impl<K, V, I> Iterator for Keys<I>
 where
-    V: Ord,
+    I: Iterator<Item = (K, V)>,
 {
-    pub(super) fn new() -> Self {
-        assert!(CAPACITY == PROOF_STORAGE_CAPACITY);
+    type Item = K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(key, _value)| key)
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ProvableSet<V> {
+    values: ProvableMap<V, ()>,
+}
+
+impl<V: PartialEq> ProvableSet<V> {
+    pub(super) const fn new() -> Self {
         Self {
-            entries: std::array::from_fn(|_| None),
-            len: 0,
+            values: ProvableMap::new(),
         }
     }
 
@@ -258,126 +178,35 @@ where
         if self.contains(&value) {
             return false;
         }
-
-        if let Some(index) = self.empty_index() {
-            self.entries[index] = Some(value);
-            self.len += 1;
-            return true;
-        }
-
-        panic!("provable router set capacity exceeded");
+        self.values.insert(value, ());
+        true
     }
 
     pub(super) fn remove(&mut self, value: &V) -> bool {
-        let mut index = 0;
-        while index < CAPACITY {
-            if let Some(entry) = &self.entries[index] {
-                if *entry == *value {
-                    self.entries[index] = None;
-                    self.len -= 1;
-                    return true;
-                }
-            }
-            index += 1;
-        }
-        false
+        self.values.remove(value).is_some()
     }
 
     pub(super) fn len(&self) -> usize {
-        self.len
+        self.values.len()
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub(super) fn iter(&self) -> ProvableSetIter<'_, V, CAPACITY> {
-        ProvableSetIter {
-            entries: &self.entries,
-            index: 0,
-        }
+    pub(super) fn iter(&self) -> Keys<Slots<(&V, &())>> {
+        self.values.keys()
     }
 
     pub(super) fn contains(&self, value: &V) -> bool {
-        let mut index = 0;
-        while index < CAPACITY {
-            if let Some(entry) = &self.entries[index] {
-                if *entry == *value {
-                    return true;
-                }
-            }
-            index += 1;
-        }
-        false
-    }
-
-    fn empty_index(&self) -> Option<usize> {
-        let mut index = 0;
-        while index < CAPACITY {
-            if self.entries[index].is_none() {
-                return Some(index);
-            }
-            index += 1;
-        }
-        None
+        self.values.contains_key(value)
     }
 }
 
-#[cfg(kani)]
-impl<V, const CAPACITY: usize> Default for ProvableSet<V, CAPACITY>
-where
-    V: Ord,
-{
+impl<V: PartialEq> Default for ProvableSet<V> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(kani)]
-impl<V, const CAPACITY: usize> FromIterator<V> for ProvableSet<V, CAPACITY>
-where
-    V: Ord,
-{
-    fn from_iter<T: IntoIterator<Item = V>>(iter: T) -> Self {
-        let mut set = Self::new();
-        for value in iter {
-            set.insert(value);
-        }
-        set
-    }
-}
-
-#[cfg(kani)]
-pub(super) struct ProvableSetIter<'a, V, const CAPACITY: usize> {
-    entries: &'a [Option<V>; CAPACITY],
-    index: usize,
-}
-
-#[cfg(kani)]
-impl<'a, V, const CAPACITY: usize> Iterator for ProvableSetIter<'a, V, CAPACITY>
-where
-    V: Ord,
-{
-    type Item = &'a V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.index < CAPACITY {
-            let entry = &self.entries[self.index];
-            self.index += 1;
-            if let Some(value) = entry {
-                return Some(value);
-            }
-        }
-        None
-    }
-}
-
-#[cfg(kani)]
-impl<'a, V, const CAPACITY: usize> IntoIterator for &'a ProvableSet<V, CAPACITY>
-where
-    V: Ord,
-{
-    type IntoIter = ProvableSetIter<'a, V, CAPACITY>;
+impl<'a, V: PartialEq> IntoIterator for &'a ProvableSet<V> {
+    type IntoIter = Keys<Slots<(&'a V, &'a ())>>;
     type Item = &'a V;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -385,43 +214,18 @@ where
     }
 }
 
-#[cfg(kani)]
-pub(super) struct ProvableSetIntoIter<V, const CAPACITY: usize> {
-    entries: [Option<V>; CAPACITY],
-    index: usize,
-}
-
-#[cfg(kani)]
-impl<V, const CAPACITY: usize> Iterator for ProvableSetIntoIter<V, CAPACITY>
-where
-    V: Ord,
-{
-    type Item = V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.index < CAPACITY {
-            let entry = self.entries[self.index].take();
-            self.index += 1;
-            if let Some(value) = entry {
-                return Some(value);
-            }
-        }
-        None
-    }
-}
-
-#[cfg(kani)]
-impl<V, const CAPACITY: usize> IntoIterator for ProvableSet<V, CAPACITY>
-where
-    V: Ord,
-{
-    type IntoIter = ProvableSetIntoIter<V, CAPACITY>;
+impl<V: PartialEq> IntoIterator for ProvableSet<V> {
+    type IntoIter = Keys<Slots<(V, ())>>;
     type Item = V;
 
     fn into_iter(self) -> Self::IntoIter {
-        ProvableSetIntoIter {
-            entries: self.entries,
-            index: 0,
-        }
+        Keys(Slots {
+            first: self.values.first,
+            second: self.values.second,
+        })
     }
 }
+
+#[cfg(test)]
+#[path = "TESTS/proof_storage.rs"]
+mod tests;

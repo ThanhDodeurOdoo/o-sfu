@@ -6,24 +6,22 @@
     reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 use o_sfu_router::{
     MediaKind as RouterMediaKind, RouterId,
-    ids::ProducerId,
     negotiation::derive_consumable_rtp_parameters,
     rtp::{MediaStream, Mid, Rid, Ssrc},
     test_support::rtp_samples::{
         sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
         sample_video_rtp_parameters,
     },
-    topology::RoutedProducerId,
 };
 
 use super::{
     ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerRouteTransportRef,
     ConsumerSetupOrigin, ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup,
-    ProducerRuntimeId, ValidatedPublish,
+    ProducerId, ValidatedPublish,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -233,7 +231,7 @@ fn install_test_published_producer_with_rtp(
     consumable_rtp_parameters: MediaStream,
     transport_media_id: TransportMediaId,
 ) -> PublishedSourceId {
-    let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
+    let producer_id = ProducerId::allocate(&mut state.next_producer_id);
     let source_descriptor = test_source_descriptor(state, user_id, stream_type);
     let source_id = source_descriptor.source_id();
     state
@@ -255,28 +253,6 @@ fn install_test_published_producer_with_rtp(
         )
         .expect("test producer route should be published");
     source_id
-}
-
-fn install_missing_router_producer(
-    state: &mut RoomState,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    stream_type: TestSourceKind,
-    routed_producer_id: RoutedProducerId,
-    consumable_rtp_parameters: MediaStream,
-    transport_media_id: TransportMediaId,
-) -> ProducerRuntimeId {
-    let producer_id = ProducerRuntimeId::allocate(&mut state.next_producer_id);
-    let source_descriptor = test_source_descriptor(state, user_id, stream_type);
-    state.topology.install_missing_router_producer_for_test(
-        source_descriptor,
-        producer_id,
-        connection_id,
-        routed_producer_id,
-        consumable_rtp_parameters,
-        transport_media_id,
-    );
-    producer_id
 }
 
 fn install_test_published_producer(
@@ -400,6 +376,41 @@ fn commit_setup(state: &mut RoomState, setup: PendingConsumerSetup) -> ConsumerS
 }
 
 #[test]
+fn consumer_setup_mid_uses_transport_then_negotiated_then_id() {
+    for (negotiated, transport, expected) in [
+        (None, None, "consumer-1"),
+        (Some("negotiated-mid"), None, "negotiated-mid"),
+        (
+            Some("negotiated-mid"),
+            Some(String::from("transport-mid")),
+            "transport-mid",
+        ),
+    ] {
+        let (mut state, publisher, subscriber, _, stream, mut setup) = pending_consumer_setup();
+        if let Some(mid) = negotiated {
+            setup.rtp = mem::take(&mut setup.rtp).with_mid(mid);
+        }
+        assert!(matches!(
+            commit_setup_with_media(&mut state, setup, TransportMediaId::new(20), transport),
+            ConsumerSetupOutcome::Committed { .. }
+        ));
+        let source = state
+            .topology
+            .source_id_for_owner_stream(&publisher, &stream)
+            .expect("published source should exist");
+        let key = ConsumerKey::new(&subscriber, source);
+
+        assert_eq!(
+            state
+                .topology
+                .committed_consumer_route_for_key(&key)
+                .map(|route| route.state.consumer_mid.as_str()),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn policy_paused_routes_do_not_count_as_effective_delivery() {
     let mut state = test_state();
     let producer_user_id = UserId::Integer(1);
@@ -422,45 +433,6 @@ fn policy_paused_routes_do_not_count_as_effective_delivery() {
     assert_eq!(
         state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
         Some(ConsumerRouteState::Inactive)
-    );
-}
-
-#[test]
-fn producer_activity_does_not_flip_room_state_when_router_update_fails() {
-    let mut state = test_state();
-    let user_id = UserId::Integer(1);
-    let connection_id = join_test_user(&mut state, &user_id);
-
-    let producer_id = install_missing_router_producer(
-        &mut state,
-        &user_id,
-        connection_id,
-        TestSourceKind::ScalableVideo,
-        RoutedProducerId::for_test(RouterId(1), ProducerId(777)),
-        sample_video_rtp_parameters(None, 77_777),
-        TransportMediaId::default(),
-    );
-
-    let producer_target = state
-        .producer_route_target(
-            &user_id,
-            connection_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-        )
-        .expect("inserted producer should resolve back to a route target");
-    let outcome = state.apply_producer_activity(
-        &user_id,
-        &producer_target,
-        &stream_id_for_source(TestSourceKind::ScalableVideo),
-        false,
-    );
-    assert!(outcome.is_none());
-    assert!(
-        state
-            .topology
-            .producer(producer_id)
-            .is_some_and(|producer| producer.active),
-        "room state must keep the previous activity flag when router pause propagation fails"
     );
 }
 
@@ -559,7 +531,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
         .expect("producer route target should exist");
     assert!(
         state
-            .apply_producer_activity(&publisher_user_id, &producer_target, &stream_id, false)
+            .apply_producer_activity(&publisher_user_id, &producer_target, false)
             .is_some()
     );
 
@@ -644,15 +616,16 @@ fn consumer_setup_commit_releases_stale_producer_plan() {
 }
 
 #[test]
-fn consumer_setup_commit_rolls_back_routed_consumer_after_route_graph_rejection() {
+fn consumer_setup_releases_route_graph_rejection() {
     let (
         mut state,
         publisher_user_id,
         subscriber_user_id,
-        _subscriber_connection_id,
+        subscriber_connection_id,
         stream_id,
         setup,
     ) = pending_consumer_setup();
+    let consumer = setup.consumer;
     assert_eq!(state.media_counts().subscriptions, 1);
 
     let source_id = state
@@ -670,11 +643,21 @@ fn consumer_setup_commit_rolls_back_routed_consumer_after_route_graph_rejection(
 
     assert_eq!(state.consumer_count(), 0);
     assert_eq!(state.media_counts().subscriptions, 0);
-    assert_eq!(
-        state.topology.routed_consumer_count_for_test(),
-        0,
-        "routed consumer created before route graph rejection must be rolled back"
-    );
+
+    let mut retries = state
+        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id)
+        .expect("subscriber session should exist");
+    assert_eq!(retries.len(), 1);
+    let retry = retries.pop().expect("consumer setup should be retried");
+    let routed = state
+        .topology
+        .add_consumer_route(&retry.target, consumer)
+        .expect("router consumer from rejected commit should be rolled back");
+    state
+        .topology
+        .rollback_consumer_route(&retry.target, routed);
+    state.release_pending_consumer_setup(retry);
+    assert_eq!(state.consumer_count(), 0);
 }
 
 #[test]

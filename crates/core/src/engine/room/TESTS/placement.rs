@@ -1,4 +1,4 @@
-use o_sfu_router::RouterId;
+use o_sfu_router::{Router, RouterId, rtp::MediaCapabilities};
 
 use super::*;
 use crate::{
@@ -21,12 +21,20 @@ fn primary_placement() -> RouterPlacement {
     placement(7, 0)
 }
 
-fn room_with(placements: Vec<RouterPlacement>) -> RoutingPlacementSnapshot {
-    RoutingPlacementSnapshot::new(RouterId(7), true, placements)
+fn room_with(primary: RouterPlacement, spillover: Vec<RouterPlacement>) -> PlacementSnapshot {
+    Router::with_placements(
+        RouterPlacements::new(primary, spillover),
+        MediaCapabilities::new(Vec::new(), Vec::new()),
+    )
+    .placement_snapshot()
 }
 
-fn primary_room() -> RoutingPlacementSnapshot {
-    room_with(vec![primary_placement()])
+fn primary_room() -> PlacementSnapshot {
+    room_with(primary_placement(), Vec::new())
+}
+
+fn unassigned_room() -> PlacementSnapshot {
+    Router::new(RouterId(7), MediaCapabilities::new(Vec::new(), Vec::new())).placement_snapshot()
 }
 
 fn hot_loads(workers: impl IntoIterator<Item = usize>) -> WorkerLoadIndex {
@@ -66,7 +74,7 @@ fn resolve_stale_placement(
     decision: RoomPlacementDecision,
     loads: WorkerLoadIndex,
     policy: RoomWorkerPolicy,
-    placement_usage: &RoutingPlacementSnapshot,
+    placement_usage: &PlacementSnapshot,
     allocate_spillover_router: impl FnOnce() -> RouterId,
 ) -> RouterPlacement {
     JoinPlacementPlan {
@@ -82,7 +90,7 @@ fn first_join_uses_lowest_load_worker() {
     let mut loads = WorkerLoadIndex::new(2, Vec::new());
     loads.record_session(worker_id(0));
     let planner = RoomPlacementPlanner::new(RoomWorkerPolicy::strict_single_router());
-    let room = RoutingPlacementSnapshot::new(RouterId(7), false, Vec::new());
+    let room = unassigned_room();
 
     assert_eq!(
         planner.choose(&room, &loads),
@@ -110,7 +118,7 @@ fn bounded_spillover_allocates_unused_worker_until_cap() {
 #[test]
 fn strict_room_reuses_assigned_worker_after_it_becomes_empty() {
     let planner = RoomPlacementPlanner::new(RoomWorkerPolicy::strict_single_router());
-    let room = room_with(vec![placement(7, 2)]);
+    let room = room_with(placement(7, 2), Vec::new());
 
     assert_eq!(
         planner.choose(&room, &WorkerLoadIndex::new(3, Vec::new())),
@@ -230,7 +238,7 @@ fn cap_reached_reuses_existing_placement_after_activation() -> Result<(), LocalS
     let loads = hot_loads([0, 1]);
     let planner = load_planner(egress_policy(1)?);
     let first = primary_placement();
-    let room = room_with(vec![first, placement(8, 1)]);
+    let room = room_with(first, vec![placement(8, 1)]);
     let mut state = LoadTriggeredPlacementState::default();
 
     assert_eq!(
@@ -262,7 +270,7 @@ fn stale_spillover_allocation_reuses_existing_placement_at_cap()
         planner.choose(&stale_room, &hot_loads([0])),
         hot_loads([0]),
         policy,
-        &room_with(vec![primary_placement(), placement(8, 1)]),
+        &room_with(primary_placement(), vec![placement(8, 1)]),
         || {
             spillover_allocations += 1;
             RouterId(9)

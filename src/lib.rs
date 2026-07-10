@@ -31,7 +31,7 @@
 //!                 +----------+------------+
 //!                            |
 //!                            v
-//!                       core::Room <--------> router::RoutingTopology
+//!                       core::Room <--------> router::Router
 //!                            |
 //!                            v
 //!                  core::MediaTransport
@@ -45,7 +45,7 @@
 //!
 //! follow the steps through [`Runtime`],
 //! [`core::server::room::RoomManager`], [`core::prelude::MediaSession`],
-//! [`core::server::room::Room`], [`o_sfu_router::topology::RoutingTopology`]
+//! [`core::server::room::Room`], [`o_sfu_router::Router`]
 //! and [`core::server::transport::MediaTransport`]
 //!
 //! ## sub crates
@@ -54,7 +54,7 @@
 //! | --- | --- |
 //! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC consts/types |
 //! | `o-sfu-model` | shared call data surfaced through [`o_sfu_protocol::wire::UserId`], [`o_sfu_protocol::wire::StreamType`], [`o_sfu_protocol::wire::RecordingState`] and [`o_sfu_protocol::wire::WebSocketCloseCode`] |
-//! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] state for sessions, transports, producers, consumers and [`o_sfu_router::topology::RoutingTopology`] |
+//! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] facade for room placement and routed media lifetimes |
 //! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, cleanup effects and [`core::server::transport::MediaTransport`] projection |
 //! | [`o_sfu_protocol`] | sans-I/O [`o_sfu_protocol::host::ProtocolCore`] and typed [`o_sfu_protocol::host::Command`] values |
 //! | [`o_sfu_telemetry`] | tracing setup, [`o_sfu_telemetry::metrics::RuntimeMetrics`], [`o_sfu_telemetry::diagnostics::DiagnosticsStore`], [`o_sfu_telemetry::prometheus::render_prometheus`] and graph payloads |
@@ -160,12 +160,12 @@
 //! +--------------------------------+    +------------------------------+
 //! ```
 //!
-//! [`o_sfu_router::Router`] is a pure, sans-I/O, synchronous state machine.
-//! it owns topology state such as sessions, receive transports,
-//! producers, send transports, consumers, reverse indexes and cross-router
-//! receiver shadows.
+//! [`o_sfu_router::Router`] is the sole pure, sans-I/O, synchronous router facade.
+//! it owns exact user-to-connection placement plus private local-router graphs
+//! keyed by connection and canonical producer or consumer ids. cross-router
+//! receiver shadows are foreign local sessions derived from live consumer
+//! dependencies and disappear with their final consumer.
 //!
-//! [`o_sfu_router::topology::RoutingTopology`] composes routers into room-local placement,
 //! [`core::prelude::SfuCore`] owns admitted media-session construction and
 //! [`core::prelude::MediaSession`] owns the bridge from room intent to
 //! transport effects,
@@ -231,8 +231,8 @@
 //!
 //! # scaling
 //!
-//! rooms use one local [`o_sfu_router::Router`] by default and can opt into
-//! same-process local spillover through [`config::RoomWorkerPolicy`]
+//! rooms use one [`o_sfu_router::Router`] facade and can opt into additional
+//! same-process local routers through [`config::RoomWorkerPolicy`]
 //!
 //! note: it is later possible to extend the SFU for cross server scaling, but it's not a priority.
 //!
@@ -269,8 +269,7 @@
 //! [`core::prelude::MediaSession`], [`core::prelude::SourcePolicy`],
 //! [`core::server::room::RoomManager`] and
 //! [`core::server::transport::MediaTransport`]
-//! for pure routing invariants, read [`o_sfu_router::Router`] and
-//! [`o_sfu_router::topology::RoutingTopology`]
+//! for pure routing invariants, read [`o_sfu_router::Router`]
 //! for browser signaling, read [`o_sfu_protocol::host::ProtocolCore`],
 //! [`o_sfu_protocol::host::CommandBatch`] and
 //! [`o_sfu_protocol::host::HostCommand`]

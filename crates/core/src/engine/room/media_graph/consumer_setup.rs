@@ -1,9 +1,8 @@
 use std::mem;
 
 use o_sfu_router::{
-    MediaKind as RouterMediaKind,
-    rtp::MediaStream as RouterRtpParameters,
-    topology::{RoutedConsumerId, RoutedProducerId},
+    MediaKind as RouterMediaKind, rtp::MediaStream as RouterRtpParameters,
+    topology::RoutedProducerId,
 };
 use tracing::warn;
 
@@ -13,7 +12,7 @@ use super::{
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::RoomState,
     },
-    ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerState, ProducerRuntimeId,
+    ConsumerId, ConsumerKey, ConsumerRouteTarget, ConsumerRouteTransportRef, ConsumerState,
     PublishedProducer,
     route_graph::{ConsumerRouteReservation, RelayRouteKey, ResolvedRelayRouteEffect},
 };
@@ -35,7 +34,6 @@ pub struct ConsumerSetupTarget {
     pub source_id: PublishedSourceId,
     pub producer_user: UserId,
     pub producer_connection: ConnectionId,
-    pub producer_id: ProducerRuntimeId,
     pub stream: UserStreamId,
     pub kind: RouterMediaKind,
     pub media: TransportMediaId,
@@ -47,9 +45,9 @@ pub struct ConsumerSetupTarget {
 #[must_use = "pending consumer setups reserve route graph state and must be committed or released"]
 pub struct PendingConsumerSetup {
     pub(super) target: ConsumerSetupTarget,
+    pub(super) consumer: ConsumerId,
     pub(super) reservation: ConsumerRouteReservation,
     pub(super) sender: OutboundSender,
-    pub(super) fallback_mid: String,
     pub(super) rtp: RouterRtpParameters,
     pub(super) relays: Vec<ResolvedRelayRouteEffect>,
 }
@@ -113,7 +111,7 @@ impl RoomState {
             user.connection_id == target.connection && user.negotiation.can_consume()
         }) && let Some(producer_active) = self
             .topology
-            .producer(target.producer_id)
+            .producer(target.routed.producer_id())
             .filter(|producer| target.matches_identity(producer))
             .map(|producer| producer.active)
         {
@@ -225,7 +223,6 @@ impl ConsumerSetupTarget {
         consumer_connection_id: ConnectionId,
         consumer_session: TransportSessionKey,
         producer_session: TransportSessionKey,
-        producer_id: ProducerRuntimeId,
         producer: &PublishedProducer,
         producer_media: TransportMediaId,
     ) -> Self {
@@ -237,7 +234,6 @@ impl ConsumerSetupTarget {
             source_id: producer.source_id,
             producer_user: producer.owner_user_id.clone(),
             producer_connection: producer.owner_connection_id,
-            producer_id,
             stream: producer.stream_id.clone(),
             kind: producer.media_kind,
             media: producer_media,
@@ -251,12 +247,10 @@ impl ConsumerSetupTarget {
 
     pub(super) fn consumer_state(
         &self,
-        routed_consumer_id: RoutedConsumerId,
         consumer_media: TransportMediaId,
         consumer_mid: String,
     ) -> ConsumerState {
         ConsumerState {
-            routed_consumer_id,
             consumer_connection_id: self.connection,
             source_connection_id: self.producer_connection,
             source_media: self.media,

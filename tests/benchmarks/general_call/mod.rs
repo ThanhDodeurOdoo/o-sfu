@@ -560,12 +560,12 @@ impl GeneralCallScenario {
         let inspect = self.room.test_api().inspect();
         self.stats.producer_count = inspect.producer_count().await;
         self.stats.consumer_count = inspect.consumer_count().await;
-        self.stats.router_count = inspect.routing_router_count().await;
+        self.stats.router_count = inspect.router_count().await;
 
         let users = self.user_sessions.keys().copied().collect::<Vec<_>>();
         for raw_user_id in users {
             if inspect
-                .routing_home_media_worker_id(&user(raw_user_id))
+                .home_media_worker_id(&user(raw_user_id))
                 .await
                 .is_some()
             {

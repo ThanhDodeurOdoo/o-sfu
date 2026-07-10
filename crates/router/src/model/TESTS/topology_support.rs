@@ -1,144 +1,251 @@
-#[cfg(test)]
 use o_sfu_model::UserId;
 
-#[cfg(any(test, feature = "test-support"))]
-use super::RoutingTopology;
-#[cfg(test)]
-use crate::model::{MediaCapabilities, RouterId};
+use super::{
+    CommittedSession, LocalSession, RoutedConsumerId, RoutedProducerId, Router, RouterPlacement,
+};
+use crate::model::{ConnectionId, RouterId};
 
-#[cfg(test)]
-impl RoutingTopology {
-    pub(crate) fn new_for_test(primary_router_id: RouterId) -> Self {
-        Self::new(
-            primary_router_id,
-            None,
-            MediaCapabilities::new(Vec::new(), Vec::new()),
-        )
+/// verification view over the complete routed graph
+pub struct InvariantView<'a> {
+    router: &'a Router,
+}
+
+impl<'a> InvariantView<'a> {
+    #[must_use]
+    pub const fn new(router: &'a Router) -> Self {
+        Self { router }
     }
 
-    pub(crate) fn user_count(&self) -> usize {
-        self.sessions.active_connection_by_user.len()
+    fn local_session(&self, router: RouterId, connection: ConnectionId) -> Option<&LocalSession> {
+        self.router.routers.get(&router)?.sessions.get(&connection)
     }
 
-    pub(crate) fn mapped_session_count_for_router(&self, router_id: RouterId) -> Option<usize> {
-        self.routers
-            .get(&router_id)
-            .map(super::RouterAdapterState::mapped_session_count)
+    fn committed_session(&self, connection: ConnectionId) -> Option<&CommittedSession> {
+        let user = self.router.users.get(&connection)?;
+        let session = self.router.sessions.get(user)?;
+        (session.connection == connection).then_some(session)
     }
 
-    pub(crate) fn home_router_id_for_user(&self, user_id: &UserId) -> Option<RouterId> {
-        self.sessions
-            .active(user_id)
+    #[cfg(test)]
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        if !self.router.routers.contains_key(&self.router.primary) {
+            return false;
+        }
+        if let Some(placements) = &self.router.placements {
+            if placements.primary().router != self.router.primary {
+                return false;
+            }
+            let mut routers = super::BTreeSet::new();
+            for placement in placements.iter() {
+                if !routers.insert(placement.router) {
+                    return false;
+                }
+            }
+        } else if !self.router.sessions.is_empty() {
+            return false;
+        }
+        for (user, session) in &self.router.sessions {
+            if self.router.users.get(&session.connection) != Some(user) {
+                return false;
+            }
+            if self.router.placements.as_ref().is_none_or(|placements| {
+                !placements
+                    .iter()
+                    .any(|placement| placement == session.placement)
+            }) {
+                return false;
+            }
+            let Some(local) = self.router.routers.get(&session.placement.router) else {
+                return false;
+            };
+            if !local.sessions.contains_key(&session.connection) {
+                return false;
+            }
+        }
+        for (connection, user) in &self.router.users {
+            if self
+                .router
+                .sessions
+                .get(user)
+                .is_none_or(|session| session.connection != *connection)
+            {
+                return false;
+            }
+        }
+        for (router, local) in &self.router.routers {
+            for (connection, session) in &local.sessions {
+                let Some(user) = self.router.users.get(connection) else {
+                    return false;
+                };
+                let Some(committed) = self.router.sessions.get(user) else {
+                    return false;
+                };
+                if committed.connection != *connection {
+                    return false;
+                }
+                let home = committed.placement.router == *router;
+                if !home && (!session.producers.is_empty() || session.consumers.is_empty()) {
+                    return false;
+                }
+                for (producer, consumers) in &session.producers {
+                    let routed = RoutedProducerId(*router, *connection, *producer);
+                    for consumer in consumers {
+                        if consumer.router_id() != *router {
+                            return false;
+                        }
+                        let Some(receiver) = local.sessions.get(&consumer.connection_id()) else {
+                            return false;
+                        };
+                        if receiver.consumers.get(&consumer.consumer_id()) != Some(&routed) {
+                            return false;
+                        }
+                    }
+                }
+                for (consumer, producer) in &session.consumers {
+                    if producer.router_id() != *router {
+                        return false;
+                    }
+                    let routed = RoutedConsumerId(*router, *connection, *consumer);
+                    let Some(source) = local.sessions.get(&producer.connection_id()) else {
+                        return false;
+                    };
+                    if source
+                        .producers
+                        .get(&producer.producer_id())
+                        .is_none_or(|consumers| !consumers.contains(&routed))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    #[must_use]
+    pub fn has_session(&self, user: &UserId, connection: ConnectionId, router: RouterId) -> bool {
+        let Some(session) = self.router.sessions.get(user) else {
+            return false;
+        };
+        if session.connection != connection || session.placement.router != router {
+            return false;
+        }
+        if self.router.users.get(&connection) != Some(user) {
+            return false;
+        }
+        self.local_session(router, connection).is_some()
+    }
+
+    #[must_use]
+    pub fn has_empty_session(
+        &self,
+        user: &UserId,
+        connection: ConnectionId,
+        router: RouterId,
+    ) -> bool {
+        self.has_session(user, connection, router)
+            && self
+                .local_session(router, connection)
+                .is_some_and(LocalSession::is_empty)
+    }
+
+    #[must_use]
+    pub fn has_only_route(&self, producer: RoutedProducerId, consumer: RoutedConsumerId) -> bool {
+        if producer.router_id() != consumer.router_id() {
+            return false;
+        }
+        if self
+            .committed_session(producer.connection_id())
+            .is_none_or(|session| session.placement.router != producer.router_id())
+            || self.committed_session(consumer.connection_id()).is_none()
+        {
+            return false;
+        }
+        let Some(source) = self.local_session(producer.router_id(), producer.connection_id())
+        else {
+            return false;
+        };
+        let Some(dependents) = source.producers.get(&producer.producer_id()) else {
+            return false;
+        };
+        let Some(receiver) = self.local_session(consumer.router_id(), consumer.connection_id())
+        else {
+            return false;
+        };
+        source.producers.len() == 1
+            && source.consumers.is_empty()
+            && dependents.len() == 1
+            && dependents.contains(&consumer)
+            && receiver.producers.is_empty()
+            && receiver.consumers.len() == 1
+            && receiver.consumers.get(&consumer.consumer_id()) == Some(&producer)
+    }
+
+    #[must_use]
+    pub fn has_only_producer(&self, producer: RoutedProducerId) -> bool {
+        self.local_session(producer.router_id(), producer.connection_id())
+            .is_some_and(|session| {
+                session.producers.len() == 1
+                    && session.consumers.is_empty()
+                    && session.producers.contains_key(&producer.producer_id())
+            })
+    }
+
+    #[must_use]
+    pub fn has_committed_sessions(&self, count: usize) -> bool {
+        self.router.sessions.len() == count && self.router.users.len() == count
+    }
+
+    #[must_use]
+    pub fn has_placement_pair(&self, primary: RouterPlacement, spillover: RouterPlacement) -> bool {
+        self.router.primary == primary.router
+            && self.router.placements.as_ref().is_some_and(|placements| {
+                placements.primary == primary
+                    && placements.spillover.len() == 1
+                    && placements.spillover.first() == Some(&spillover)
+            })
+    }
+
+    #[must_use]
+    pub fn session_count(&self, router: RouterId) -> Option<usize> {
+        self.router
+            .routers
+            .get(&router)
+            .map(|local| local.sessions.len())
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn home_router(&self, user: &UserId) -> Option<RouterId> {
+        self.router
+            .sessions
+            .get(user)
             .map(|session| session.placement.router)
     }
-}
 
-#[cfg(any(test, feature = "test-support"))]
-impl RoutingTopology {
     #[must_use]
-    pub fn router_count(&self) -> usize {
-        self.routers.len()
+    pub fn has_connection(&self, connection: ConnectionId) -> bool {
+        self.router.users.contains_key(&connection)
     }
 
     #[must_use]
-    pub fn consumer_count_for_test(&self) -> usize {
-        self.routers
-            .values()
-            .map(super::RouterAdapterState::consumer_count_for_test)
-            .sum()
-    }
-}
-
-#[cfg(kani)]
-pub mod proof {
-    use o_sfu_model::UserId;
-
-    use super::super::{
-        CommittedSessionPlacement, CommittedSessionPlacements, RoutedConsumerId, RoutedProducerId,
-        RouterPlacement,
-        shadow::{ShadowSessionKey, ShadowSessionTracker},
-    };
-    use crate::model::{ConnectionId, ConsumerId, MediaWorkerId, ProducerId, RouterId};
-
-    pub fn assert_routing_shadow_tracker_prunes_by_producer() {
-        let source_user_id = UserId::Integer(10);
-        let receiver_user_id = UserId::Integer(20);
-        let source_router_id = RouterId(9);
-        let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id.clone());
-        let producer = RoutedProducerId::for_test(source_router_id, ProducerId(1));
-        let consumer = RoutedConsumerId::for_test(source_router_id, ConsumerId(1));
-        let mut tracker = ShadowSessionTracker::default();
-
-        tracker.register_producer(producer, source_user_id);
-        tracker.register_consumer(consumer, producer, Some(shadow.clone()));
-
-        let prune = tracker.unregister_producer(producer);
-        assert!(prune.len() == 1);
-        assert!(prune.contains(&shadow));
-        assert!(!tracker.contains_shadow_session(&shadow));
-        assert!(tracker.unregister_producer(producer).is_empty());
+    pub fn has_producer(&self, producer: RoutedProducerId) -> bool {
+        self.local_session(producer.router_id(), producer.connection_id())
+            .is_some_and(|session| session.producers.contains_key(&producer.producer_id()))
     }
 
-    pub fn assert_routing_shadow_tracker_prunes_by_receiver_user() {
-        let receiver_user_id = UserId::Integer(20);
-        let source_router_id = RouterId(9);
-        let shadow = ShadowSessionKey::new(source_router_id, receiver_user_id.clone());
-        let producer = RoutedProducerId::for_test(source_router_id, ProducerId(1));
-        let consumer = RoutedConsumerId::for_test(source_router_id, ConsumerId(1));
-        let mut tracker = ShadowSessionTracker::default();
-
-        tracker.register_consumer(consumer, producer, Some(shadow.clone()));
-
-        let prune = tracker.unregister_user(&receiver_user_id);
-        assert!(prune.len() == 1);
-        assert!(prune.contains(&shadow));
-        assert!(!tracker.contains_shadow_session(&shadow));
+    #[must_use]
+    pub fn has_consumer(&self, consumer: RoutedConsumerId) -> bool {
+        self.local_session(consumer.router_id(), consumer.connection_id())
+            .is_some_and(|session| session.consumers.contains_key(&consumer.consumer_id()))
     }
 
-    pub fn assert_routing_placement_replacement_retires_stale_connection() {
-        let user_id = UserId::Integer(10);
-        let first_connection = ConnectionId::from_raw(1);
-        let second_connection = ConnectionId::from_raw(2);
-        let mut placements = CommittedSessionPlacements::default();
-
-        placements.insert(user_id.clone(), session(first_connection, 9, 0));
-        assert!(placements.active(&user_id).is_some_and(|session| {
-            session.connection_id == first_connection
-                && session.placement.media_worker == MediaWorkerId::from_raw(0)
-        }));
-        assert!(placements.by_connection.contains_key(&first_connection));
-
-        placements.insert(user_id.clone(), session(second_connection, 10, 1));
-        assert!(placements.active(&user_id).is_some_and(|session| {
-            session.connection_id == second_connection
-                && session.placement.router == RouterId(10)
-                && session.placement.media_worker == MediaWorkerId::from_raw(1)
-        }));
-        assert!(!placements.by_connection.contains_key(&first_connection));
-        assert!(placements.by_connection.contains_key(&second_connection));
-
-        let removed = placements.remove(&user_id);
-        assert!(removed.is_some_and(|session| session.connection_id == second_connection));
-        assert!(placements.active(&user_id).is_none());
-        assert!(!placements.by_connection.contains_key(&second_connection));
-    }
-
-    fn session(
-        connection_id: ConnectionId,
-        router: u64,
-        media_worker: usize,
-    ) -> CommittedSessionPlacement {
-        CommittedSessionPlacement {
-            connection_id,
-            router_session_seed: connection_id.as_u64(),
-            placement: placement(router, media_worker),
-        }
-    }
-
-    fn placement(router: u64, media_worker: usize) -> RouterPlacement {
-        RouterPlacement {
-            router: RouterId(router),
-            media_worker: MediaWorkerId::from_raw(media_worker),
-        }
+    #[must_use]
+    pub fn dependent_count(&self, producer: RoutedProducerId) -> Option<usize> {
+        self.local_session(producer.router_id(), producer.connection_id())?
+            .producers
+            .get(&producer.producer_id())
+            .map(super::BTreeSet::len)
     }
 }

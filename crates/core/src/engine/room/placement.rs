@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use o_sfu_router::RouterId;
 pub use o_sfu_router::topology::{
-    RouterPlacement, RouterPlacements, RouterPlacementsError, RoutingPlacementSnapshot,
+    PlacementSnapshot, RouterPlacement, RouterPlacements, RouterPlacementsError,
 };
 #[cfg(test)]
 use {std::sync::Arc, tokio::sync::Barrier};
@@ -154,7 +154,7 @@ impl LoadTriggeredPlacementState {
 }
 
 impl Room {
-    pub(super) async fn placement_usage_snapshot(&self) -> RoutingPlacementSnapshot {
+    pub(super) async fn placement_usage_snapshot(&self) -> PlacementSnapshot {
         self.state.read().await.placement_usage_snapshot()
     }
 
@@ -179,9 +179,9 @@ impl Room {
 
 impl RoomState {
     fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
-        let routing = self.topology.routing();
+        let router = self.topology.router();
         for user in self.users.values() {
-            loads.record_session(routing.media_worker_id_for_connection(user.connection_id));
+            loads.record_session(router.media_worker_id_for_connection(user.connection_id));
         }
         self.topology
             .record_consumer_loads(loads, |user_id| self.user_connection_id(user_id));
@@ -276,7 +276,7 @@ impl JoinPlacementPlan {
 
     fn resolve(
         self,
-        placement_usage: &RoutingPlacementSnapshot,
+        placement_usage: &PlacementSnapshot,
         allocate_spillover_router: impl FnOnce() -> RouterId,
     ) -> RouterPlacement {
         let Self {
@@ -293,7 +293,7 @@ impl JoinPlacementPlan {
                 RoomPlacementDecision::UseExisting(placement) => placement.media_worker,
             };
             return RouterPlacement {
-                router: placement_usage.primary_router(),
+                router: placement_usage.primary(),
                 media_worker,
             };
         };
@@ -555,7 +555,7 @@ impl RoomPlacementPlanner {
     #[must_use]
     pub(super) fn choose(
         &self,
-        room: &RoutingPlacementSnapshot,
+        room: &PlacementSnapshot,
         load_index: &WorkerLoadIndex,
     ) -> RoomPlacementDecision {
         let mut load_state = LoadTriggeredPlacementState::default();
@@ -564,7 +564,7 @@ impl RoomPlacementPlanner {
 
     pub(super) fn choose_with_load_state(
         &self,
-        room: &RoutingPlacementSnapshot,
+        room: &PlacementSnapshot,
         load_index: &WorkerLoadIndex,
         load_state: &mut LoadTriggeredPlacementState,
     ) -> RoomPlacementDecision {

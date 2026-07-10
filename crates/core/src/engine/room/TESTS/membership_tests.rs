@@ -50,8 +50,8 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
         .expect("replacement join should succeed");
 
     assert_ne!(first_connection, second_connection);
-    let (router_user_count, _active_stream_counts) = room.state.read().await.user_stats_counts();
-    assert_eq!(router_user_count, 1);
+    let (user_count, _active_stream_counts) = room.state.read().await.user_stats_counts();
+    assert_eq!(user_count, 1);
     assert!(matches!(
         rx1.try_recv().ok(),
         Some(UserOutbound::Close(UserCloseReason::Replaced))
@@ -165,12 +165,7 @@ async fn mismatched_stale_close_keeps_other_user_routing() {
         inspect.user_connection_id(&bob_id).await,
         Some(bob_connection)
     );
-    assert!(
-        inspect
-            .routing_home_media_worker_id(&bob_id)
-            .await
-            .is_some()
-    );
+    assert!(inspect.home_media_worker_id(&bob_id).await.is_some());
 }
 
 #[tokio::test]
@@ -235,7 +230,7 @@ async fn replacement_join_closes_displaced_transport_user() {
     assert!(
         room.test_api()
             .inspect()
-            .routing_home_media_worker_id(&user_id)
+            .home_media_worker_id(&user_id)
             .await
             .is_some()
     );

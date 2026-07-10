@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    ProducerRouteTarget, ProducerRuntimeId, PublishedProducer, PublishedSourceInstall, SourceKey,
+    ProducerId, ProducerRouteTarget, PublishedProducer, PublishedSourceInstall, SourceKey,
     SourceTransportMediaIndexEntry, SourceView, TransportMediaRemoval, remove_from_index_set,
 };
 use crate::engine::{
@@ -18,14 +18,13 @@ pub(super) struct SourceIndex {
     records: BTreeMap<PublishedSourceId, SourceRecord>,
     id_by_key: BTreeMap<SourceKey, PublishedSourceId>,
     ids_by_owner: BTreeMap<UserId, BTreeSet<PublishedSourceId>>,
-    source_by_producer: BTreeMap<ProducerRuntimeId, PublishedSourceId>,
+    source_by_producer: BTreeMap<ProducerId, PublishedSourceId>,
     by_transport_media: BTreeMap<TransportMediaId, SourceTransportMediaIndexEntry>,
 }
 
 #[derive(Debug)]
 struct SourceRecord {
     descriptor: PublishedSourceDescriptor,
-    producer_id: ProducerRuntimeId,
     producer: PublishedProducer,
 }
 
@@ -48,12 +47,8 @@ impl SourceIndex {
         })
     }
 
-    pub(super) fn producers(
-        &self,
-    ) -> impl Iterator<Item = (ProducerRuntimeId, &PublishedProducer)> {
-        self.records
-            .values()
-            .map(|record| (record.producer_id, &record.producer))
+    pub(super) fn producers(&self) -> impl Iterator<Item = &PublishedProducer> {
+        self.records.values().map(|record| &record.producer)
     }
 
     pub(super) fn source(
@@ -119,7 +114,6 @@ impl SourceIndex {
         }
         Some(ProducerRouteTarget {
             source_id: producer.source_id,
-            producer_id: record.producer_id,
             owner_connection_id: producer.owner_connection_id,
             routed_producer_id: producer.routed_producer_id,
             transport_media_id: producer.transport_media_id?,
@@ -131,7 +125,7 @@ impl SourceIndex {
         target: &ProducerRouteTarget,
         current_connection_id: Option<ConnectionId>,
     ) -> Option<&PublishedProducer> {
-        let producer = self.producer(target.producer_id)?;
+        let producer = self.producer(target.routed_producer_id.producer_id())?;
         if !target.matches_producer(producer)
             || Some(producer.owner_connection_id) != current_connection_id
         {
@@ -145,7 +139,7 @@ impl SourceIndex {
         target: &ProducerRouteTarget,
         active: bool,
     ) -> bool {
-        let Some(producer) = self.producer_mut(target.producer_id) else {
+        let Some(producer) = self.producer_mut(target.routed_producer_id.producer_id()) else {
             return false;
         };
         if !target.matches_producer(producer) {
@@ -172,10 +166,10 @@ impl SourceIndex {
     pub(super) fn install_source(&mut self, install: PublishedSourceInstall) {
         let PublishedSourceInstall {
             source_descriptor,
-            producer_id,
             producer,
             transport_media_id,
         } = install;
+        let producer_id = producer.routed_producer_id.producer_id();
         let source_id = source_descriptor.source_id();
         let source_key = SourceKey::new(
             source_descriptor.owner().user_id(),
@@ -197,7 +191,6 @@ impl SourceIndex {
             source_id,
             SourceRecord {
                 descriptor: source_descriptor,
-                producer_id,
                 producer,
             },
         );
@@ -228,7 +221,8 @@ impl SourceIndex {
             record.descriptor.owner().user_id(),
             &source_id,
         );
-        self.source_by_producer.remove(&record.producer_id);
+        self.source_by_producer
+            .remove(&record.producer.routed_producer_id.producer_id());
         if let Some(transport_media_id) = record.producer.transport_media_id {
             self.by_transport_media.remove(&transport_media_id);
         }
@@ -253,13 +247,13 @@ impl SourceIndex {
             .collect()
     }
 
-    pub(super) fn producer(&self, producer_id: ProducerRuntimeId) -> Option<&PublishedProducer> {
+    pub(super) fn producer(&self, producer_id: ProducerId) -> Option<&PublishedProducer> {
         self.records
             .get(self.source_by_producer.get(&producer_id)?)
             .map(|record| &record.producer)
     }
 
-    fn producer_mut(&mut self, producer_id: ProducerRuntimeId) -> Option<&mut PublishedProducer> {
+    fn producer_mut(&mut self, producer_id: ProducerId) -> Option<&mut PublishedProducer> {
         let source_id = *self.source_by_producer.get(&producer_id)?;
         self.records
             .get_mut(&source_id)

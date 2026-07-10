@@ -84,17 +84,14 @@ async fn assert_home_worker(room: &Arc<TestRoom>, raw_user_id: i64, media_worker
     assert_eq!(
         room.test_api()
             .inspect()
-            .routing_home_media_worker_id(&UserId::Integer(raw_user_id))
+            .home_media_worker_id(&UserId::Integer(raw_user_id))
             .await,
         Some(media_worker)
     );
 }
 
 async fn assert_router_count(room: &Arc<TestRoom>, expected: usize) {
-    assert_eq!(
-        room.test_api().inspect().routing_router_count().await,
-        expected
-    );
+    assert_eq!(room.test_api().inspect().router_count().await, expected);
 }
 
 fn assert_event_worker(
@@ -315,7 +312,7 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
     for join_task in join_tasks {
         join_task.await.expect("join task should not panic");
         assert!(
-            room.test_api().inspect().routing_router_count().await <= LOCAL_ROUTER_CAP,
+            room.test_api().inspect().router_count().await <= LOCAL_ROUTER_CAP,
             "concurrent placement should not exceed the configured local router cap"
         );
     }
