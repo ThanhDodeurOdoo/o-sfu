@@ -7,9 +7,9 @@ use std::{
 
 use tracing::warn;
 
-use super::{Room, media_graph::RelayRouteKey};
+use super::Room;
 use crate::engine::{
-    ConnectionId, UserId,
+    ConnectionId, MediaWorkerId, UserId,
     media_transport::{
         MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
         TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
@@ -47,8 +47,8 @@ pub enum TransportCleanupOperation {
         session_key: TransportSessionKey,
     },
     ReleaseRelayRoute {
-        source_session_key: TransportSessionKey,
-        route: RelayRouteKey,
+        source: TransportSourceKey,
+        target_media_worker_id: MediaWorkerId,
     },
 }
 
@@ -59,17 +59,17 @@ impl TransportCleanupOperation {
             Self::RemoveMedia { session_key, .. } | Self::CloseUser { session_key } => {
                 session_key.user_id()
             }
-            Self::ReleaseRelayRoute { route, .. } => &route.source_user,
+            Self::ReleaseRelayRoute { source, .. } => source.session_key().user_id(),
         }
     }
 
     #[must_use]
-    pub(super) const fn connection_id(&self) -> ConnectionId {
+    pub(super) fn connection_id(&self) -> ConnectionId {
         match self {
             Self::RemoveMedia { session_key, .. } | Self::CloseUser { session_key } => {
                 session_key.connection_id()
             }
-            Self::ReleaseRelayRoute { route, .. } => route.source_connection,
+            Self::ReleaseRelayRoute { source, .. } => source.session_key().connection_id(),
         }
     }
 
@@ -79,20 +79,16 @@ impl TransportCleanupOperation {
             Self::RemoveMedia {
                 transport_media_id, ..
             } => Some(*transport_media_id),
-            Self::ReleaseRelayRoute { route, .. } => Some(route.source_media),
+            Self::ReleaseRelayRoute { source, .. } => Some(source.transport_media_id()),
             Self::CloseUser { .. } => None,
         }
     }
 
     #[must_use]
-    pub(super) const fn session_key(&self) -> &TransportSessionKey {
+    pub(super) fn session_key(&self) -> &TransportSessionKey {
         match self {
-            Self::RemoveMedia { session_key, .. }
-            | Self::CloseUser { session_key }
-            | Self::ReleaseRelayRoute {
-                source_session_key: session_key,
-                ..
-            } => session_key,
+            Self::RemoveMedia { session_key, .. } | Self::CloseUser { session_key } => session_key,
+            Self::ReleaseRelayRoute { source, .. } => source.session_key(),
         }
     }
 
@@ -262,12 +258,12 @@ impl Room {
                 media_transport.close_session(session_key).await
             }
             TransportCleanupOperation::ReleaseRelayRoute {
-                source_session_key,
-                route,
+                source,
+                target_media_worker_id,
             } => {
                 let effect = TransportRelayRouteEffect {
-                    source: TransportSourceKey::new(source_session_key.clone(), route.source_media),
-                    target_media_worker_id: route.target_worker,
+                    source: source.clone(),
+                    target_media_worker_id: *target_media_worker_id,
                     action: TransportRelayRouteAction::Release,
                 };
                 media_transport.apply_relay_route_effect(&effect).await

@@ -110,15 +110,24 @@ fn setup_diagnostics(
     origin: ConsumerSetupOrigin,
     route: &TransportConsumerRoute,
 ) -> DiagnosticsEventData {
-    DiagnosticsEventData::for_user(room_id, &target.user, telemetry_event::SUBSCRIBE_SUCCEEDED)
-        .with_connection_id(target.connection.as_u64())
-        .with_media_worker_id(route.consumer_session_key().media_worker_id().as_usize())
-        .with_transport_media_id(route.consumer_transport_media_id().as_u64())
-        .insert_field(
-            "producer_user_id",
-            serde_json::to_value(&target.producer_user).unwrap_or(serde_json::Value::Null),
-        )
-        .insert_field("source_transport_media_id", target.media.as_u64())
-        .insert_field("stream_id", target.stream.to_string())
-        .insert_field("origin", origin.as_diagnostic_str())
+    let consumer = route.consumer_session_key();
+    let source = route.source();
+    DiagnosticsEventData::for_user(
+        room_id,
+        consumer.user_id(),
+        telemetry_event::SUBSCRIBE_SUCCEEDED,
+    )
+    .with_connection_id(consumer.connection_id().as_u64())
+    .with_media_worker_id(consumer.media_worker_id().as_usize())
+    .with_transport_media_id(route.consumer_transport_media_id().as_u64())
+    .insert_field(
+        "producer_user_id",
+        serde_json::to_value(source.session_key().user_id()).unwrap_or(serde_json::Value::Null),
+    )
+    .insert_field(
+        "source_transport_media_id",
+        source.transport_media_id().as_u64(),
+    )
+    .insert_field("stream_id", target.stream.to_string())
+    .insert_field("origin", origin.as_diagnostic_str())
 }

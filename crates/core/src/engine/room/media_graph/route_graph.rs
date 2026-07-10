@@ -6,9 +6,7 @@ use super::{
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
-    media_transport::{
-        RelayRouteActivity, TransportMediaId, TransportRelayRouteAction, TransportSessionKey,
-    },
+    media_transport::{RelayRouteActivity, TransportMediaId, TransportRelayRouteAction},
     source_model::PublishedSourceId,
 };
 
@@ -63,13 +61,6 @@ struct TakenPendingRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayRouteEffect {
     pub route: RelayRouteKey,
-    pub action: TransportRelayRouteAction,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedRelayRouteEffect {
-    pub route: RelayRouteKey,
-    pub source_session_key: TransportSessionKey,
     pub action: TransportRelayRouteAction,
 }
 
@@ -156,18 +147,26 @@ impl RouteGraph {
 
     pub(super) fn commit(
         &mut self,
-        reservation: &ConsumerRouteReservation,
+        reservation: ConsumerRouteReservation,
         state: ConsumerState,
         selection: ConsumerSourceSelection,
-    ) -> bool {
-        let Some(entry) = self.entries.get_mut(&reservation.key) else {
-            return false;
+        accept: impl FnOnce() -> bool,
+    ) -> Result<(), Vec<RelayRouteEffect>> {
+        let key = reservation.key;
+        let relay = {
+            let Some(entry) = self.entries.get_mut(&key) else {
+                return Err(Vec::new());
+            };
+            let Some(pending) = entry.take_pending(reservation.id) else {
+                return Err(Vec::new());
+            };
+            if accept() {
+                *entry = RouteSlot::Committed(selection, state, pending.relay);
+                return Ok(());
+            }
+            pending.relay
         };
-        let Some(pending) = entry.take_pending(reservation.id) else {
-            return false;
-        };
-        *entry = RouteSlot::Committed(selection, state, pending.relay);
-        true
+        Err(relay.map_or_else(Vec::new, |relay| self.release_relay(&key, &relay)))
     }
 
     pub(super) fn selection(&self, key: &ConsumerKey) -> Option<ConsumerSourceSelection> {
@@ -301,10 +300,6 @@ impl RouteGraph {
             .is_some_and(RouteSlot::has_consumer_setup_or_route)
     }
 
-    pub(super) fn has_committed_consumer_route(&self, key: &ConsumerKey) -> bool {
-        self.entries.get(key).is_some_and(RouteSlot::is_committed)
-    }
-
     pub(super) fn reserve_relay(
         &mut self,
         reservation: &ConsumerRouteReservation,
@@ -325,7 +320,7 @@ impl RouteGraph {
             }
             let relay = RouteRelay {
                 route: target.relay_route_key(target_worker),
-                connection: target.connection,
+                connection: target.session.connection_id(),
                 activity: RelayRouteActivity::from_active(active),
             };
             if pending_relay.as_ref() == Some(&relay) {
@@ -428,10 +423,6 @@ impl RouteGraph {
 }
 
 impl ConsumerRouteReservation {
-    pub(super) const fn key(&self) -> &ConsumerKey {
-        &self.key
-    }
-
     pub const fn selection(&self) -> ConsumerSourceSelection {
         self.selection
     }
@@ -472,6 +463,7 @@ impl RouteSlot {
         Some(TakenPendingRoute { relay })
     }
 
+    #[cfg(any(test, feature = "testing-transport"))]
     const fn is_committed(&self) -> bool {
         matches!(self, Self::Committed(..))
     }

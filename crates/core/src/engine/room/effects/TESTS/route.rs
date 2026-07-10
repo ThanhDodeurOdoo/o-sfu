@@ -19,7 +19,6 @@ use crate::{
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
-        room::media_graph::{ConsumerRouteTransportRef, RelayRouteKey},
         source_model::UserStreamId,
     },
 };
@@ -27,23 +26,19 @@ use crate::{
 #[test]
 fn room_transport_plan_moves_relay_release_to_cleanup() {
     let source_session = session_key(3, UserId::Integer(3));
-    let route = RelayRouteKey {
-        source_user: UserId::Integer(3),
-        source_connection: source_session.connection_id(),
-        source_media: TransportMediaId::new(31),
-        target_worker: MediaWorkerId::from_raw(2),
-    };
+    let source = TransportSourceKey::new(source_session, TransportMediaId::new(31));
+    let target_media_worker_id = MediaWorkerId::from_raw(2);
     let activity = TransportRelayRouteAction::SetActivity(RelayRouteActivity::Inactive);
     let plan = RoomTransportPlan::from_relays_and_cleanup(
         vec![
-            ResolvedRelayRouteEffect {
-                source_session_key: source_session.clone(),
-                route: route.clone(),
+            TransportRelayRouteEffect {
+                source: source.clone(),
+                target_media_worker_id,
                 action: TransportRelayRouteAction::Release,
             },
-            ResolvedRelayRouteEffect {
-                source_session_key: source_session.clone(),
-                route: route.clone(),
+            TransportRelayRouteEffect {
+                source: source.clone(),
+                target_media_worker_id,
                 action: activity,
             },
         ],
@@ -53,17 +48,17 @@ fn room_transport_plan_moves_relay_release_to_cleanup() {
 
     assert_eq!(
         relays,
-        [ResolvedRelayRouteEffect {
-            source_session_key: source_session.clone(),
-            route: route.clone(),
+        [TransportRelayRouteEffect {
+            source: source.clone(),
+            target_media_worker_id,
             action: activity,
         }]
     );
     assert_eq!(
         cleanup,
         [TransportCleanupOperation::ReleaseRelayRoute {
-            source_session_key: source_session,
-            route,
+            source,
+            target_media_worker_id,
         }]
     );
 }
@@ -124,16 +119,7 @@ impl RouteFixture {
             .await?;
         let source = TransportSourceKey::new(source_session.clone(), source_media);
         let route = TransportConsumerRoute::new(consumer_session.clone(), consumer_media, source);
-        let transport_ref = ConsumerRouteTransportRef::from_parts(
-            UserId::Integer(2),
-            consumer_session.connection_id(),
-            consumer_media,
-            UserId::Integer(1),
-            source_session.connection_id(),
-            source_media,
-        );
         let target = ConsumerRouteTarget::for_test(
-            transport_ref,
             route.clone(),
             UserStreamId::from("camera"),
             MediaKind::Video,

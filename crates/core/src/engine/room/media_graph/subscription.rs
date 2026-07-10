@@ -8,10 +8,10 @@ use super::{
     super::{effects::RoomGaugeDelta, state::RoomState},
     ConsumerId, ConsumerRouteTarget, ProducerId,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
-    route_graph::ResolvedRelayRouteEffect,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
+    media_transport::TransportRelayRouteEffect,
     room::source_policy::VideoAdmissionRank,
     source_model::{
         ConsumerSourceSelection, PolicyPauseReason, SourceRoutePriority, SourceSubscriptionIntent,
@@ -52,7 +52,7 @@ pub enum ConsumerRouteState {
 pub struct ReceiverRouteWork {
     pub(in crate::engine::room) activities: Vec<ReceiverRouteActivity>,
     pub(in crate::engine::room) setups: Vec<PendingConsumerSetup>,
-    pub(in crate::engine::room) relays: Vec<ResolvedRelayRouteEffect>,
+    pub(in crate::engine::room) relays: Vec<TransportRelayRouteEffect>,
 }
 
 impl ReceiverRouteWork {
@@ -251,7 +251,7 @@ impl RoomState {
             );
         };
         VideoAdmissionRank::new(
-            self.receiver_video_layout_intent(&target.user, source, active_speakers)
+            self.receiver_video_layout_intent(target.session.user_id(), source, active_speakers)
                 .priority(),
             None,
             target.source_id,
@@ -264,7 +264,7 @@ impl RoomState {
         connection_id: ConnectionId,
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-    ) -> (Vec<ReceiverRouteActivity>, Vec<ResolvedRelayRouteEffect>) {
+    ) -> (Vec<ReceiverRouteActivity>, Vec<TransportRelayRouteEffect>) {
         let mut updates = Vec::new();
         let mut relays = Vec::new();
         for (stream_id, intent) in intents {
@@ -316,8 +316,10 @@ impl RoomState {
 
     fn plan_consumer(&mut self, target: ConsumerSetupTarget) -> Option<PendingConsumerSetup> {
         let (sender, client_caps) = {
-            let user = self.users.get(&target.user)?;
-            if user.connection_id != target.connection || !user.negotiation.can_consume() {
+            let user = self.users.get(target.session.user_id())?;
+            if user.connection_id != target.session.connection_id()
+                || !user.negotiation.can_consume()
+            {
                 return None;
             }
             (
@@ -350,8 +352,8 @@ impl RoomState {
             .consumer_source_selection(&key)
             .unwrap_or_else(|| {
                 ConsumerSourceSelection::open(self.desired_source_active(
-                    &target.user,
-                    &target.producer_user,
+                    target.session.user_id(),
+                    target.source.session_key().user_id(),
                     &target.stream,
                 ))
             });
@@ -367,7 +369,7 @@ impl RoomState {
         if target.kind != RouterMediaKind::Video
             || !producer_active
             || !selection.delivery_active()
-            || self.active_video_count(&target.user)
+            || self.active_video_count(target.session.user_id())
                 < self.media_limits.max_video_downloads_per_receiver()
         {
             return selection;

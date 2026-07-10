@@ -19,13 +19,11 @@ use crate::{
     MediaCodecFlags, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
-        media_transport::{TransportMediaId, TransportSessionKey},
+        media_transport::{TransportMediaId, TransportSourceKey},
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
-            media_graph::{
-                ConsumerSetupOrigin, ConsumerSetupOutcome, RelayRouteKey, ValidatedPublish,
-            },
+            media_graph::{ConsumerSetupOrigin, ConsumerSetupOutcome, ValidatedPublish},
             rtp_capabilities::router_rtp_capabilities,
         },
         source_model::{
@@ -141,8 +139,8 @@ fn install_test_published_producer(
 
 #[derive(Debug)]
 struct RelayedSource {
-    publisher_session: TransportSessionKey,
-    route: RelayRouteKey,
+    source: TransportSourceKey,
+    target_media_worker_id: MediaWorkerId,
 }
 
 fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
@@ -193,13 +191,8 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
         ConsumerSetupOutcome::Committed { .. }
     ));
     RelayedSource {
-        publisher_session,
-        route: RelayRouteKey {
-            source_user: publisher.clone(),
-            source_connection: publisher_connection,
-            source_media,
-            target_worker,
-        },
+        source: TransportSourceKey::new(publisher_session, source_media),
+        target_media_worker_id: target_worker,
     }
 }
 
@@ -207,18 +200,13 @@ fn source_relay_cleanup_count(
     cleanup: &[TransportCleanupOperation],
     relay: &RelayedSource,
 ) -> usize {
+    let expected = TransportCleanupOperation::ReleaseRelayRoute {
+        source: relay.source.clone(),
+        target_media_worker_id: relay.target_media_worker_id,
+    };
     cleanup
         .iter()
-        .filter(|operation| {
-            matches!(
-                operation,
-                TransportCleanupOperation::ReleaseRelayRoute {
-                    source_session_key,
-                    route,
-                } if source_session_key == &relay.publisher_session
-                    && route == &relay.route
-            )
-        })
+        .filter(|operation| *operation == &expected)
         .count()
 }
 
@@ -374,7 +362,7 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
 
     let outcome = state
         .apply_join(
-            &relay.route.source_user,
+            relay.source.session_key().user_id(),
             UserPermissions::default(),
             test_sender(),
         )
@@ -388,14 +376,14 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
             operation,
             TransportCleanupOperation::CloseUser {
                 session_key,
-            } if session_key == &relay.publisher_session
+            } if session_key == relay.source.session_key()
         )
     }));
     assert!(!cleanup.iter().any(|operation| {
         matches!(
             operation,
             TransportCleanupOperation::RemoveMedia { session_key, .. }
-                if session_key == &relay.publisher_session
+                if session_key == relay.source.session_key()
         )
     }));
 }
@@ -406,7 +394,10 @@ fn leave_releases_relay_before_forgetting_source_session() {
     let relay = install_relayed_source(&mut state);
 
     let outcome = state
-        .close_connection(&relay.route.source_user, relay.route.source_connection)
+        .close_connection(
+            relay.source.session_key().user_id(),
+            relay.source.session_key().connection_id(),
+        )
         .expect("publisher leave should succeed");
     let ConnectionCloseCommit::Current { transport_plan, .. } = outcome else {
         panic!("publisher leave should remove the current user");
@@ -422,7 +413,7 @@ fn disconnect_releases_relay_before_forgetting_source_session() {
     let mut state = test_state();
     let relay = install_relayed_source(&mut state);
 
-    let outcome = state.apply_disconnect_users(from_ref(&relay.route.source_user));
+    let outcome = state.apply_disconnect_users(from_ref(relay.source.session_key().user_id()));
     let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
 
     assert!(relays.is_empty());
