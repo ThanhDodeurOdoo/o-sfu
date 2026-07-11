@@ -114,16 +114,35 @@ async fn manager_leave_user_removes_empty_room() -> Result<()> {
     let room = serve_room(&manager, "issuer-leave-empty").await;
     let room_id = room.uuid();
     let connection_id = join_user(&manager, &room, 1, &media_transport).await?;
+    let user_id = UserId::Integer(1);
+    room.test_api()
+        .lifecycle()
+        .make_session_ready(&user_id, &media_transport)
+        .await?;
+    publish_track(
+        &room,
+        &user_id,
+        TestSourceKind::ReadableVideo,
+        test_video_rtp_parameters(),
+        &media_transport,
+    )
+    .await?;
+    let media = room
+        .test_api()
+        .inspect()
+        .first_published_transport_media_id()
+        .await
+        .ok_or_else(|| anyhow!("published track should expose transport media"))?;
 
-    manager
-        .close_session(
-            room_id,
-            &UserId::Integer(1),
-            connection_id,
-            &media_transport,
-        )
-        .await;
+    close_user(&manager, &room, 1, connection_id, &media_transport).await?;
 
+    assert!(
+        media_transport
+            .test_api()
+            .route_entry_by_media_id(media)
+            .await
+            .is_none()
+    );
     assert!(manager.get_by_uuid(room_id).await.is_none());
     Ok(())
 }
@@ -229,9 +248,9 @@ async fn load_triggered_cooldown_delays_idle_spillover_detach() -> Result<()> {
     close_user(&manager, &room, 2, second_connection, &media_transport).await?;
     assert_eq!(router_count(&room).await, 2);
 
-    manager.drain_cleanup_retries(&media_transport).await;
+    manager.advance_spillover_cooldowns().await;
     assert_eq!(router_count(&room).await, 2);
-    manager.drain_cleanup_retries(&media_transport).await;
+    manager.advance_spillover_cooldowns().await;
     assert_eq!(router_count(&room).await, 1);
     Ok(())
 }
@@ -250,7 +269,7 @@ async fn load_triggered_activity_resets_spillover_cooldown() -> Result<()> {
     assert_eq!(home_worker(&room, 3).await, Some(1));
 
     close_user(&manager, &room, 3, third_connection, &media_transport).await?;
-    manager.drain_cleanup_retries(&media_transport).await;
+    manager.advance_spillover_cooldowns().await;
 
     assert_eq!(router_count(&room).await, 2);
     Ok(())

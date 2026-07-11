@@ -5,7 +5,7 @@
 //! ```text
 //! /v1/channel -> serve_room -> directory
 //! websocket   -> join_user  -> RoomEffects
-//! background  -> source policy and cleanup retry drains
+//! background  -> source policy and spillover cooldown
 //! ```
 //!
 //! callers receive cloned [`std::sync::Arc`] handles to [`Room`], but only
@@ -284,28 +284,16 @@ impl RoomManager {
         }
     }
 
-    /// runs one background cleanup-retry drain across current rooms
-    ///
-    /// each room also reconciles spillover routers during the drain. empty
-    /// rooms are removed only after retry state is drained and no pending
-    /// cleanup retries remain
-    pub async fn drain_cleanup_retries(&self, media_transport: &MediaTransport) {
+    /// advances load-triggered spillover cooldowns across current rooms
+    pub async fn advance_spillover_cooldowns(&self) {
         for entry in self.directory_entries().await {
-            let room = entry.room;
-            let room_id = room.uuid().to_owned();
+            let room_id = entry.room.uuid();
             self.run_current_room_mutation(
-                &room_id,
+                room_id,
                 |room| async move {
-                    let had_pending_cleanup_retries = room.has_pending_cleanup_retries();
-                    if had_pending_cleanup_retries {
-                        room.drain_cleanup_retries(media_transport).await;
-                    }
                     room.reconcile_spillover_routers().await;
-                    had_pending_cleanup_retries
-                        && room.is_empty().await
-                        && !room.has_pending_cleanup_retries()
                 },
-                |should_remove| *should_remove,
+                false,
             )
             .await;
         }
@@ -342,7 +330,7 @@ impl RoomManager {
                     room.admit_session(admission, RoomEffectContext::runtime(media_transport))
                         .await
                 },
-                |_| false,
+                false,
             )
             .await
         else {
@@ -374,7 +362,7 @@ impl RoomManager {
     ///
     /// returns `false` when the room is missing or the connection was not
     /// removed by this call. the empty current room can still be removed after
-    /// stale or already-completed cleanup
+    /// stale or already-completed teardown
     pub async fn close_session(
         &self,
         room_id: &str,
@@ -389,7 +377,7 @@ impl RoomManager {
                     room.remove_user(user_id, connection_id, media_transport)
                         .await
                 },
-                |_did_remove_active_session| true,
+                true,
             )
             .await
         else {
@@ -408,18 +396,15 @@ impl RoomManager {
         user_ids: &[UserId],
         media_transport: &MediaTransport,
     ) {
-        let Some((_room, ())) = self
+        let _ = self
             .run_current_room_mutation(
                 room_id,
                 |room| async move {
                     room.disconnect_users(user_ids, media_transport).await;
                 },
-                |()| true,
+                true,
             )
-            .await
-        else {
-            return;
-        };
+            .await;
     }
 
     #[cfg(test)]
@@ -428,11 +413,9 @@ impl RoomManager {
         F: FnOnce(Arc<Room>) -> Fut,
         Fut: Future<Output = T>,
     {
-        let mutation = self.begin_current_room_mutation(room_id).await?;
-        let room = Arc::clone(&mutation.room);
-        let output = action(room).await;
-        self.finish_session_mutation(room_id, mutation, false).await;
-        Some(output)
+        self.run_current_room_mutation(room_id, action, false)
+            .await
+            .map(|(_, output)| output)
     }
 
     /// runs awaited room work under a cancellation-safe lifecycle lease
@@ -440,21 +423,20 @@ impl RoomManager {
     /// the directory lock is not held while `action` runs. concurrent teardown
     /// can finish while another accepted mutation is parked, but directory
     /// removal waits until all leases drain
-    async fn run_current_room_mutation<T, F, Fut, ShouldRemove>(
+    async fn run_current_room_mutation<T, F, Fut>(
         &self,
         room_id: &str,
         action: F,
-        should_remove_if_empty: ShouldRemove,
+        remove_if_empty: bool,
     ) -> Option<(Arc<Room>, T)>
     where
         F: FnOnce(Arc<Room>) -> Fut,
         Fut: Future<Output = T>,
-        ShouldRemove: FnOnce(&T) -> bool,
     {
         let mutation = self.begin_current_room_mutation(room_id).await?;
         let room = Arc::clone(&mutation.room);
         let output = action(Arc::clone(&room)).await;
-        self.finish_session_mutation(room_id, mutation, should_remove_if_empty(&output))
+        self.finish_session_mutation(room_id, mutation, remove_if_empty)
             .await;
         Some((room, output))
     }
@@ -466,9 +448,8 @@ impl RoomManager {
         mutation: CurrentRoomMutation,
         remove_if_empty: bool,
     ) {
-        let room = Arc::clone(&mutation.room);
-        let room_can_be_removed = self.room_can_be_removed(&room).await;
-        if mutation.lease.finish(remove_if_empty, room_can_be_removed) {
+        let CurrentRoomMutation { room, lease } = mutation;
+        if lease.finish(remove_if_empty, room.is_empty().await) {
             self.remove_entry_if_current(room_id, &room).await;
         }
     }
@@ -487,10 +468,6 @@ impl RoomManager {
         }
         lease.cancel();
         None
-    }
-
-    async fn room_can_be_removed(&self, room: &Arc<Room>) -> bool {
-        room.is_empty().await && !room.has_pending_cleanup_retries()
     }
 
     async fn entry(&self, room_id: &str) -> Option<RoomDirectoryEntry> {
@@ -537,15 +514,11 @@ impl RoomManager {
     }
 
     /// forgets a directory row only if it still points at the same room
-    ///
-    /// room cleanup retries are abandoned here because directory removal is the
-    /// manager's terminal room lifecycle event
     async fn remove_entry_if_current(&self, room_id: &str, room: &Arc<Room>) {
         let mut directory = self.directory.write().await;
         let removed = directory.remove_if_current(room_id, room);
         drop(directory);
         if removed {
-            room.abandon_cleanup_retries_for_shutdown();
             self.metrics.add_active_rooms(-1);
             self.diagnostics.forget_room(room_id);
         }

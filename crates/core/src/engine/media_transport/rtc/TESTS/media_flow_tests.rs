@@ -872,7 +872,7 @@ async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
 
     assert!(
         source_adapter
-            .deactivate_relay_route(src_media, &target_adapter)
+            .deactivate_relay_route(&source, &target_adapter)
             .await
             .is_ok()
     );

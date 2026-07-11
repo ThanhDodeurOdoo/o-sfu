@@ -11,7 +11,6 @@ use super::{
     super::{
         BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError, RoomMediaCounts,
         RoomUserPermissions, RouterPlacement, UserCloseReason,
-        cleanup::TransportCleanupOperation,
         effects::{RoomGaugeDelta, transport::RoomTransportPlan},
         media_graph::{
             CommittedTransportReceipt, SessionPlacementCommit, SessionPlacementRejection,
@@ -24,7 +23,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::engine::MediaWorkerId;
-use crate::engine::{ConnectionId, UserId, UserInfo};
+use crate::engine::{ConnectionId, UserId, UserInfo, media_transport::TransportTeardown};
 
 #[cfg(test)]
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
@@ -89,20 +88,20 @@ pub enum ConnectionCloseCommit {
         counts: RoomGaugeDelta,
         user_id: UserId,
         connection_id: ConnectionId,
-        cleanup: Option<TransportCleanupOperation>,
+        session_teardown: Option<TransportTeardown>,
         effects: LifecycleEffects,
         transport_plan: RoomTransportPlan,
     },
     StalePlacement {
         counts: RoomGaugeDelta,
-        cleanup: TransportCleanupOperation,
+        session_teardown: TransportTeardown,
     },
 }
 
 #[derive(Debug)]
 pub struct DisconnectCommit {
     pub counts: RoomGaugeDelta,
-    pub close_operations: Vec<TransportCleanupOperation>,
+    pub session_teardowns: Vec<TransportTeardown>,
     pub effects: LifecycleEffects,
     pub transport_plan: RoomTransportPlan,
 }
@@ -269,9 +268,9 @@ impl RoomState {
         let receipt = placement.receipt;
         let mut transport_plan = placement.replacement_transport_plan;
         if let Some(previous_connection) = previous_connection {
-            transport_plan.extend_cleanup(
+            transport_plan.extend_teardown(
                 self.staged_publishes
-                    .cleanup_operations_for_connection(user_id, previous_connection),
+                    .take_teardowns_for_connection(user_id, previous_connection),
             );
         }
 
@@ -320,9 +319,9 @@ impl RoomState {
     fn remove_runtime_user(&mut self, user_id: &UserId) -> Option<RuntimeUserRemoval> {
         let user = self.users.remove(user_id)?;
         let mut transport_plan = self.topology.remove_session(user_id);
-        transport_plan.extend_cleanup(
+        transport_plan.extend_teardown(
             self.staged_publishes
-                .cleanup_operations_for_connection(user_id, user.connection_id),
+                .take_teardowns_for_connection(user_id, user.connection_id),
         );
         Some((user, transport_plan))
     }
@@ -344,12 +343,12 @@ impl RoomState {
                 .retire_committed_placement(user_id, connection_id)?;
             return Some(ConnectionCloseCommit::StalePlacement {
                 counts: self.membership_delta(users_before, media_before),
-                cleanup: TransportCleanupOperation::CloseUser { session_key },
+                session_teardown: TransportTeardown::CloseSession { session_key },
             });
         }
-        let cleanup = self
+        let session_teardown = self
             .committed_transport_user_key(user_id, connection_id)
-            .map(|session_key| TransportCleanupOperation::CloseUser { session_key });
+            .map(|session_key| TransportTeardown::CloseSession { session_key });
         let mut source_recipients = self
             .topology
             .committed_consumer_user_ids_for_owner_sources(user_id);
@@ -359,7 +358,7 @@ impl RoomState {
             counts: self.membership_delta(users_before, media_before),
             user_id: user_id.clone(),
             connection_id,
-            cleanup,
+            session_teardown,
             effects: LifecycleEffects {
                 close_requests: vec![UserCloseRequest {
                     sender: user.sender,
@@ -454,21 +453,21 @@ impl RoomState {
             source_recipients.remove(user_id);
         }
         let mut close_requests = Vec::new();
-        let mut close_operations = Vec::new();
+        let mut session_teardowns = Vec::new();
         let mut fanouts = Vec::new();
         let mut transport_plan = RoomTransportPlan::default();
         for user_id in user_ids {
             let Some(connection_id) = self.users.get(user_id).map(|user| user.connection_id) else {
                 continue;
             };
-            let close_operation = TransportCleanupOperation::CloseUser {
+            let session_teardown = TransportTeardown::CloseSession {
                 session_key: self.transport_user_key(user_id, connection_id),
             };
             let Some((user, user_transport_plan)) = self.remove_runtime_user(user_id) else {
                 continue;
             };
             transport_plan.extend(user_transport_plan);
-            close_operations.push(close_operation);
+            session_teardowns.push(session_teardown);
             close_requests.push(UserCloseRequest {
                 sender: user.sender,
                 reason: UserCloseReason::RemovedByRuntime,
@@ -479,7 +478,7 @@ impl RoomState {
         }
         DisconnectCommit {
             counts: self.membership_delta(users_before, media_before),
-            close_operations,
+            session_teardowns,
             effects: LifecycleEffects {
                 close_requests,
                 fanouts,

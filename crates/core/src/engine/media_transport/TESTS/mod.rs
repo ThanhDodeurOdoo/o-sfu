@@ -11,7 +11,7 @@ use o_sfu_router::{
 };
 use str0m::media::Mid;
 
-use super::{MediaTransport, MediaTransportBuildError};
+use super::{MediaTransport, MediaTransportBuildError, TransportTeardown};
 use crate::{
     Bitrate, MediaWorkerId, RtcPortRange,
     engine::{
@@ -25,6 +25,7 @@ use crate::{
             rtc::RtcWorker,
             test_support::{DebugPacketGate, test_media_transport_builder, test_rtc_port_range},
         },
+        metrics::MetricName,
     },
 };
 #[cfg(not(target_os = "linux"))]
@@ -267,14 +268,40 @@ async fn expect_initial_offer(
 }
 
 #[tokio::test]
-async fn media_transport_close_session_without_packet_loop_does_not_start_worker() {
-    let adapter = test_media_transport(1, test_rtc_range(1));
-    let session_key = test_session_key(1, 0, 11, UserId::Integer(11));
-    let worker = expect_worker_for_user(&adapter, &session_key);
+async fn media_transport_teardown_does_not_start_idle_workers() {
+    let adapter = test_media_transport(2, test_rtc_range(2));
+    let source_session = test_session_key(1, 0, 11, UserId::Integer(11));
+    let target_session = test_session_key(1, 1, 12, UserId::Integer(12));
+    let source_worker = expect_worker_for_user(&adapter, &source_session);
+    let target_worker = expect_worker_for_user(&adapter, &target_session);
+    let source_media_id = TransportMediaId::new(100);
 
-    assert!(!worker.packet_loop_started());
-    assert!(adapter.close_session(&session_key).await.is_ok());
-    assert!(!worker.packet_loop_started());
+    adapter
+        .teardown([
+            TransportTeardown::CloseSession {
+                session_key: source_session.clone(),
+            },
+            TransportTeardown::RemoveMedia {
+                session_key: source_session.clone(),
+                transport_media_id: source_media_id,
+            },
+            TransportTeardown::ReleaseRelayRoute {
+                source: TransportSourceKey::new(source_session.clone(), source_media_id),
+                target_media_worker_id: target_session.media_worker_id(),
+            },
+        ])
+        .await;
+    apply_relay_route_effect(
+        &adapter,
+        &source_session,
+        source_media_id,
+        &target_session,
+        TransportRelayRouteAction::Release,
+    )
+    .await;
+
+    assert!(!source_worker.packet_loop_started());
+    assert!(!target_worker.packet_loop_started());
 }
 
 #[tokio::test]
@@ -542,10 +569,60 @@ async fn rtc_rejects_stale_session_removal_without_dropping_consumer_handle() {
     );
     assert!(
         adapter
+            .remove_media(&consumer_session, consumer_media_id)
+            .await
+            .is_ok()
+    );
+    assert!(
+        adapter
             .test_api()
             .route_entry_by_media_id(source_media_id)
             .await
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn media_transport_terminal_teardown_falls_back_and_continues_batch() {
+    let adapter = test_media_transport(1, test_rtc_range(1));
+    let source_session = test_session_key(36, 0, 1, UserId::Integer(1));
+    let wrong_owner = test_session_key(36, 0, 2, UserId::Integer(2));
+    let later_session = test_session_key(36, 0, 3, UserId::Integer(3));
+    let source_rtp_parameters = sample_rtp_parameters("first-aud-up", 56_000);
+    let later_rtp_parameters = sample_rtp_parameters("later-aud-up", 57_000);
+
+    prepare_rtc_sessions(&adapter, &[&source_session, &wrong_owner, &later_session]).await;
+    let source_media_id = publish_audio(&adapter, &source_session, &source_rtp_parameters).await;
+    let later_media_id = publish_audio(&adapter, &later_session, &later_rtp_parameters).await;
+    let worker = expect_worker_for_user(&adapter, &source_session);
+
+    adapter
+        .teardown([
+            TransportTeardown::RemoveMedia {
+                session_key: wrong_owner.clone(),
+                transport_media_id: source_media_id,
+            },
+            TransportTeardown::RemoveMedia {
+                session_key: later_session,
+                transport_media_id: later_media_id,
+            },
+        ])
+        .await;
+
+    assert!(worker.debug_resolve_mid(source_media_id).await.is_some());
+    assert!(worker.debug_resolve_mid(later_media_id).await.is_none());
+    assert!(
+        adapter
+            .create_initial_session_offer(&wrong_owner)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        adapter.metrics.snapshot().counter(
+            MetricName::TransportCleanupFailuresTotal,
+            &[("kind", "terminal")],
+        ),
+        Some(1)
     );
 }
 
@@ -641,13 +718,22 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
             .is_ok()
     );
     assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
-    apply_relay_route_effect(
-        &adapter,
-        &source_session,
-        source_media_id,
-        &remote_consumer_session,
-        TransportRelayRouteAction::Release,
-    )
-    .await;
+    let release = |session_key| TransportTeardown::ReleaseRelayRoute {
+        source: TransportSourceKey::new(session_key, source_media_id),
+        target_media_worker_id: remote_consumer_session.media_worker_id(),
+    };
+    adapter
+        .teardown([release(local_consumer_session.clone())])
+        .await;
+    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
+    assert!(
+        adapter
+            .create_initial_session_offer(&local_consumer_session)
+            .await
+            .is_ok()
+    );
+    adapter.teardown([release(source_session.clone())]).await;
+    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 0, 0).await;
+    adapter.teardown([release(source_session)]).await;
     assert_relay_target_counts(source_worker.as_ref(), source_media_id, 0, 0).await;
 }

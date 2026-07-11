@@ -248,10 +248,6 @@ impl<K: Ord + Clone, V, Tag> KeyedSlotStore<K, V, Tag> {
         self.slots.remove(handle).map(|entry| entry.value)
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.by_key.is_empty()
-    }
-
     pub(super) fn len(&self) -> usize {
         self.by_key.len()
     }

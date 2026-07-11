@@ -8,10 +8,10 @@ use crate::engine::{
         ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaTransport,
         ProducerActivity, ReceiverBweTargetUpdate, RouteControlPlan, TransportConsumerRoute,
         TransportRelayRouteAction, TransportRelayRouteEffect, TransportSourceKey,
+        TransportTeardown,
     },
     room::{
         Room,
-        cleanup::TransportCleanupOperation,
         media_graph::{
             ConsumerRouteTarget, ConsumerSetupOrigin, ReceiverRouteActivity, ReceiverRouteWork,
         },
@@ -22,38 +22,38 @@ use crate::engine::{
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct RoomTransportPlan {
     relays: Vec<TransportRelayRouteEffect>,
-    cleanup: Vec<TransportCleanupOperation>,
+    teardown: Vec<TransportTeardown>,
     route_control: RoomRouteEffects,
     setup_turns: Vec<ReceiverSetupTurn>,
 }
 
 impl RoomTransportPlan {
-    pub(in crate::engine::room) fn from_relays_and_cleanup(
+    pub(in crate::engine::room) fn from_relays_and_teardown(
         mut relays: Vec<TransportRelayRouteEffect>,
-        extra_cleanup: impl IntoIterator<Item = TransportCleanupOperation>,
+        additional_teardown: impl IntoIterator<Item = TransportTeardown>,
     ) -> Self {
-        let mut cleanup = Vec::new();
-        extend_relay_release_cleanup(&mut relays, &mut cleanup);
-        cleanup.extend(extra_cleanup);
+        let mut teardown = Vec::new();
+        extract_relay_teardown(&mut relays, &mut teardown);
+        teardown.extend(additional_teardown);
         Self {
             relays,
-            cleanup,
+            teardown,
             ..Self::default()
         }
     }
 
     pub(in crate::engine::room) fn extend(&mut self, other: Self) {
         self.relays.extend(other.relays);
-        self.cleanup.extend(other.cleanup);
+        self.teardown.extend(other.teardown);
         self.route_control.append(other.route_control);
         self.setup_turns.extend(other.setup_turns);
     }
 
-    pub(in crate::engine::room) fn extend_cleanup(
+    pub(in crate::engine::room) fn extend_teardown(
         &mut self,
-        cleanup: impl IntoIterator<Item = TransportCleanupOperation>,
+        teardown: impl IntoIterator<Item = TransportTeardown>,
     ) {
-        self.cleanup.extend(cleanup);
+        self.teardown.extend(teardown);
     }
 
     pub(super) fn push_producer(
@@ -72,7 +72,7 @@ impl RoomTransportPlan {
         origin: ConsumerSetupOrigin,
         mut diagnostics: impl FnMut(&ReceiverRouteActivity) -> DiagnosticsEventData,
     ) {
-        extend_relay_release_cleanup(&mut work.relays, &mut self.cleanup);
+        extract_relay_teardown(&mut work.relays, &mut self.teardown);
         self.relays.extend(work.relays);
         for activity in work.activities {
             let event = diagnostics(&activity);
@@ -95,8 +95,7 @@ impl RoomTransportPlan {
         execute_relay_route_effects(media_transport, self.relays).await;
         let route_outcome = self.route_control.execute(media_transport).await;
         outcome.diagnostics.extend(route_outcome.diagnostics);
-        room.execute_transport_cleanup_operations(media_transport, &self.cleanup)
-            .await;
+        media_transport.teardown(self.teardown).await;
         for turn in self.setup_turns {
             turn.execute(room, media_transport, &mut outcome).await;
         }
@@ -104,10 +103,10 @@ impl RoomTransportPlan {
     }
 
     #[cfg(test)]
-    pub(in crate::engine::room) fn relays_and_cleanup(
+    pub(in crate::engine::room) fn relays_and_teardown(
         &self,
-    ) -> (&[TransportRelayRouteEffect], &[TransportCleanupOperation]) {
-        (&self.relays, &self.cleanup)
+    ) -> (&[TransportRelayRouteEffect], &[TransportTeardown]) {
+        (&self.relays, &self.teardown)
     }
 }
 
@@ -319,31 +318,29 @@ impl ConsumerRouteFinish {
     }
 }
 
-pub(super) async fn execute_relays_and_cleanup(
-    room: &Room,
+pub(super) async fn execute_relays_and_teardown(
     media_transport: &MediaTransport,
     mut relays: Vec<TransportRelayRouteEffect>,
-    extra_cleanup: impl IntoIterator<Item = TransportCleanupOperation>,
+    additional_teardown: impl IntoIterator<Item = TransportTeardown>,
 ) -> bool {
-    let mut cleanup = Vec::new();
-    extend_relay_release_cleanup(&mut relays, &mut cleanup);
-    cleanup.extend(extra_cleanup);
+    let mut teardown = Vec::new();
+    extract_relay_teardown(&mut relays, &mut teardown);
+    teardown.extend(additional_teardown);
     let relays_applied = execute_relay_route_effects(media_transport, relays).await;
-    room.execute_transport_cleanup_operations(media_transport, &cleanup)
-        .await;
+    media_transport.teardown(teardown).await;
     relays_applied
 }
 
-fn extend_relay_release_cleanup(
+fn extract_relay_teardown(
     relays: &mut Vec<TransportRelayRouteEffect>,
-    cleanup: &mut Vec<TransportCleanupOperation>,
+    teardown: &mut Vec<TransportTeardown>,
 ) {
-    cleanup.extend(
+    teardown.extend(
         relays
             .extract_if(.., |effect| {
                 effect.action == TransportRelayRouteAction::Release
             })
-            .map(|effect| TransportCleanupOperation::ReleaseRelayRoute {
+            .map(|effect| TransportTeardown::ReleaseRelayRoute {
                 source: effect.source,
                 target_media_worker_id: effect.target_media_worker_id,
             }),

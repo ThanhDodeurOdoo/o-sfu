@@ -22,6 +22,7 @@ mod config;
 mod policy_invalidation;
 mod route_control;
 mod rtc;
+mod teardown;
 #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
 #[path = "TESTS/test_support/mod.rs"]
 pub mod test_support;
@@ -39,6 +40,7 @@ pub use policy_invalidation::{
 pub(crate) use route_control::{
     ConsumerRouteControl, ConsumerRouteControlOutcome, RouteControlPlan,
 };
+pub(crate) use teardown::TransportTeardown;
 pub(crate) use types::ConsumerPacketGateUpdate;
 #[cfg(feature = "internal-benchmarks")]
 pub mod benchmark_support {
@@ -65,7 +67,7 @@ pub use types::{
 };
 
 use self::workers::signaling_to_str0m_media_kind;
-use crate::engine::RoomInstanceId;
+use crate::engine::{RoomInstanceId, metrics::RuntimeMetrics};
 
 /// Opaque runtime media transport handle.
 ///
@@ -80,6 +82,7 @@ use crate::engine::RoomInstanceId;
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
     workers: Arc<[Arc<RtcWorker>]>,
+    metrics: Arc<RuntimeMetrics>,
     /// Shared wakeup signal used by every worker to notify room-level source
     /// policy tasks about transport-observed changes without polling every room.
     source_policy_signal: Arc<SourcePolicySignal>,
@@ -90,8 +93,6 @@ enum TransportCommandOp {
     CreateInitialSessionOffer,
     CreateSessionRenegotiationOffer,
     ApplySessionAnswer,
-    CloseSession,
-    RemoveMedia,
     PublishMedia,
     ConsumeMedia,
     SetProducerActive,
@@ -234,70 +235,6 @@ impl MediaTransport {
                     ?session_key,
                     op = ?TransportCommandOp::ApplySessionAnswer,
                     answer_len = answer_sdp.len(),
-                    ?error,
-                    "media transport worker command failed"
-                );
-            },
-        )
-        .await
-    }
-
-    /// Closes all backend state for a transport session.
-    ///
-    /// Backends should release producer, consumer and relay state tied to the
-    /// session. The operation is idempotent only when the active backend
-    /// documents that behavior through its returned [`TransportAdapterError`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportAdapterError`] when the session cannot be addressed or
-    /// the active backend cannot release its resources.
-    pub(crate) async fn close_session(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Result<(), TransportAdapterError> {
-        let result = async {
-            let worker = self.require_worker_for_user(session_key)?;
-            let Some(handle) = worker.worker_handle()? else {
-                return Ok(());
-            };
-            worker
-                .send_worker_command(&handle, |response| RtcWorkerCommand::CloseSession {
-                    session_key: session_key.clone(),
-                    response,
-                })
-                .await
-                .map(|_| ())
-        }
-        .await;
-        if let Err(error) = &result {
-            warn_session_command_failed(session_key, TransportCommandOp::CloseSession, *error);
-        }
-        result
-    }
-    /// Removes one producer or consumer handle from a transport session.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TransportAdapterError`] when the session or media id is unknown
-    /// or when the active backend cannot release the resource.
-    pub(crate) async fn remove_media(
-        &self,
-        session_key: &TransportSessionKey,
-        transport_media_id: TransportMediaId,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_session_command(
-            session_key,
-            |response| RtcWorkerCommand::RemoveMedia {
-                session_key: session_key.clone(),
-                transport_media_id,
-                response,
-            },
-            |error| {
-                warn!(
-                    ?session_key,
-                    op = ?TransportCommandOp::RemoveMedia,
-                    ?transport_media_id,
                     ?error,
                     "media transport worker command failed"
                 );

@@ -12,8 +12,7 @@ pub(super) use o_sfu_router::{
 pub(super) use super::super::{
     JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomEffectContext, RoomEventMessage,
     RoomJoinError, RoomManager, UserCloseReason, UserOutbound, UserOutboundReceiver,
-    UserOutboundSender, cleanup::TransportEffectOutcome, source_policy::SourcePolicyTurn,
-    transition::PublishStageOutcome,
+    UserOutboundSender, source_policy::SourcePolicyTurn, transition::PublishStageOutcome,
 };
 pub(super) use crate::{
     RoomMediaLimits,
@@ -104,7 +103,7 @@ pub(super) async fn join_user_with_sender(
         .expect("user should join")
 }
 
-pub(super) async fn join_user_without_transport_cleanup(
+pub(super) async fn join_user_without_transport_teardown(
     room: &Arc<super::super::Room>,
     adapter: &MediaTransport,
     user_id: UserId,
@@ -112,7 +111,7 @@ pub(super) async fn join_user_without_transport_cleanup(
 ) -> ConnectionId {
     room.test_api()
         .lifecycle()
-        .join_session_without_transport_cleanup(
+        .join_session_without_transport_teardown(
             user_id,
             None,
             UserPermissions::default(),
@@ -201,7 +200,7 @@ impl StagedPublishScenario {
         self.stage_source(TestSourceKind::ScalableVideo).await
     }
 
-    pub(super) async fn rollback_scalable_video(&self) -> Option<TransportEffectOutcome> {
+    pub(super) async fn rollback_scalable_video(&self) -> bool {
         self.operation()
             .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
             .await
@@ -404,7 +403,7 @@ pub(super) async fn setup_ready_users_with_transport_and_media_limits(
     for &raw_user_id in user_ids {
         let (sender, _receiver) = test_sender();
         let user_id = UserId::Integer(raw_user_id);
-        join_user_without_transport_cleanup(&room, &adapter, user_id.clone(), sender).await;
+        join_user_without_transport_teardown(&room, &adapter, user_id.clone(), sender).await;
         make_session_ready_with_transport(&room, &user_id, &adapter).await;
     }
     (room, adapter)
@@ -427,7 +426,7 @@ pub(super) async fn setup_ready_users_with_transport_receivers(
         let (sender, receiver) = test_sender();
         receivers.push(receiver);
         let user_id = UserId::Integer(raw_user_id);
-        join_user_without_transport_cleanup(&room, &adapter, user_id.clone(), sender).await;
+        join_user_without_transport_teardown(&room, &adapter, user_id.clone(), sender).await;
         make_session_ready_with_transport(&room, &user_id, &adapter).await;
     }
     (room, adapter, receivers)

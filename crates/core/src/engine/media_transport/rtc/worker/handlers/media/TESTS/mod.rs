@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::{
     AddSendMediaRequest, KeyframeRequestMode, KeyframeRequestTarget, apply_route_control_request,
     control::remove_consumer_route, drain_due_rid_kf_refreshes, request_kf_for_target,
-    respond_set_consumer_pkt_gates, worker_add_send_media,
+    respond_set_consumer_pkt_gates, worker_add_send_media, worker_remove_media,
 };
 use crate::{
     Bitrate, MediaCodecFlags,
@@ -38,7 +38,7 @@ use crate::{
                     RtcMediaControlCommand,
                 },
                 keyframe_tracker::KeyframeRequestDecision,
-                media_registry::ConsumerKeyframeTarget,
+                media_registry::{ConsumerKeyframeTarget, RegisteredMediaHandle},
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
                 source_route::RemoteSourceRegistration,
@@ -57,6 +57,25 @@ use crate::{
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
     },
 };
+
+#[test]
+fn media_removal_rejects_a_registered_handle_without_its_owner_session() {
+    let source_session = test_source_session_key(91);
+    let source_mid = Mid::from("cam-up");
+    let mut state = PacketLoopState::default();
+    let source_media = prepare_source_session(&mut state, &source_session, source_mid, 91_000);
+    state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: source_session.clone(),
+        mid: source_mid,
+    });
+    assert!(state.users.remove(&source_session).is_some());
+
+    assert_eq!(
+        worker_remove_media(&mut state, &Arc::default(), &source_session, source_media),
+        Err(TransportAdapterError::InvalidInput)
+    );
+    assert!(state.media_handle(source_media).is_some());
+}
 
 #[test]
 fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {

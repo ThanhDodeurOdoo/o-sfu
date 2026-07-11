@@ -57,7 +57,7 @@ impl Room {
         connection_id: ConnectionId,
         media_transport: &MediaTransport,
     ) -> bool {
-        self.remove_user_with_cleanup(
+        self.remove_user_with_teardown(
             user_id,
             connection_id,
             RoomEffectContext::runtime(media_transport),
@@ -65,7 +65,7 @@ impl Room {
         .await
     }
 
-    pub async fn remove_user_with_cleanup(
+    pub async fn remove_user_with_teardown(
         &self,
         user_id: &UserId,
         connection_id: ConnectionId,
@@ -153,11 +153,11 @@ impl Room {
         user_ids: &[UserId],
         media_transport: &MediaTransport,
     ) {
-        self.disconnect_users_with_cleanup(user_ids, RoomEffectContext::runtime(media_transport))
+        self.disconnect_users_with_teardown(user_ids, RoomEffectContext::runtime(media_transport))
             .await;
     }
 
-    pub async fn disconnect_users_with_cleanup(
+    pub async fn disconnect_users_with_teardown(
         &self,
         user_ids: &[UserId],
         context: RoomEffectContext<'_>,

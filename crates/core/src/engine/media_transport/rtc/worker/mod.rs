@@ -3,8 +3,8 @@
 //! this module owns lazy packet-loop boot, worker handle publication, relay
 //! request construction, remote-source control handles and observability reads
 //!
-//! production transport operations build `RtcWorkerCommand` values at the
-//! `MediaTransport` boundary and enqueue them through lifecycle command helpers
+//! production transport operations enter through `MediaTransport` and enqueue
+//! worker commands through lifecycle helpers
 //! packet-loop command handling remains explicit inside `handlers::dispatcher`
 //!
 //! cfg-gated tests and benchmarks keep a small direct worker harness for setup
@@ -61,8 +61,6 @@ use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::MediaKind;
 use tokio::sync::mpsc;
 
-#[cfg(any(test, feature = "internal-benchmarks"))]
-use super::commands::CloseSessionState;
 #[cfg(test)]
 use super::commands::{ConsumerPacketGateCommand, RtcMediaControlCommand};
 use super::{
@@ -78,7 +76,7 @@ use crate::engine::media_transport::{
     TransportResult,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
-use crate::engine::media_transport::{SessionOffer, TransportSessionKey};
+use crate::engine::media_transport::{SessionOffer, TransportMediaId, TransportSessionKey};
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
     VideoBitrateLimits,
@@ -86,7 +84,7 @@ use crate::{
         diagnostics::DiagnosticsStore,
         media_transport::{
             MediaTransportConfig, MediaTransportDeps, SourcePolicySignal, TransportAdapterError,
-            TransportMediaId, TransportSourceKey,
+            TransportSourceKey,
         },
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -245,16 +243,13 @@ impl RtcWorker {
         })
         .await
     }
-}
-
-impl RtcWorker {
     #[cfg(any(test, feature = "internal-benchmarks"))]
     pub async fn close_session(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Result<CloseSessionState, TransportAdapterError> {
+    ) -> Result<(), TransportAdapterError> {
         let Some(worker_handle) = self.worker_handle()? else {
-            return Ok(CloseSessionState::SessionClosed);
+            return Ok(());
         };
         self.send_worker_command(&worker_handle, |response| RtcWorkerCommand::CloseSession {
             session_key: session_key.clone(),
@@ -262,9 +257,6 @@ impl RtcWorker {
         })
         .await
     }
-}
-
-impl RtcWorker {
     #[cfg(any(test, feature = "internal-benchmarks"))]
     pub async fn remove_media(
         &self,
@@ -400,10 +392,10 @@ impl RtcWorker {
     #[cfg(test)]
     pub async fn deactivate_relay_route(
         &self,
-        src_media: TransportMediaId,
+        source: &TransportSourceKey,
         target: &Self,
     ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(target.relay_release_request(src_media))
+        self.request_media_control(target.relay_release_request(source.clone()))
             .await
     }
 
@@ -465,9 +457,9 @@ impl RtcWorker {
         })
     }
 
-    pub fn relay_release_request(&self, src_media: TransportMediaId) -> RouteControlRequest {
+    pub fn relay_release_request(&self, source: TransportSourceKey) -> RouteControlRequest {
         RouteControlRequest::RemoveRelayTarget {
-            src_media,
+            source,
             target_id: self.relay_target_id,
         }
     }

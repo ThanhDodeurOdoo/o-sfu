@@ -66,19 +66,13 @@ fn assert_transport_lifecycle_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.transport_user_lifetime_le_300_seconds(), 1);
     assert_eq!(snapshot.transport_user_lifetime_count(), 1);
     assert_eq!(snapshot.transport_user_lifetime_sum_micros(), 1_500_000);
-    assert_eq!(snapshot.transport_cleanup_retries(), 1);
-    assert_eq!(snapshot.transport_cleanup_retry_successes(), 1);
-    for (kind, expected) in [
-        ("retry_exhausted", 1),
-        ("terminal", 0),
-        ("queue_full", 0),
-        ("shutdown", 0),
-    ] {
-        assert_eq!(
-            snapshot.counter_value(MetricName::TransportCleanupFailuresTotal, &[("kind", kind)]),
-            expected
-        );
-    }
+    assert_eq!(
+        snapshot.counter_value(
+            MetricName::TransportCleanupFailuresTotal,
+            &[("kind", "terminal")]
+        ),
+        1
+    );
 }
 
 fn assert_rtp_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -310,9 +304,7 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_transport_ice_state_change(TransportIceState::Connected);
     metrics.record_transport_dtls_connected();
     metrics.record_transport_user_lifetime(Duration::from_millis(1500));
-    metrics.record_transport_cleanup_retry_scheduled();
-    metrics.record_transport_cleanup_retry_succeeded();
-    metrics.record_transport_cleanup_failure(super::TransportCleanupFailureKind::RetryExhausted);
+    metrics.record_transport_cleanup_failure();
     metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
     metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
     metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);

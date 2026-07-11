@@ -12,7 +12,7 @@ use crate::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
             ConsumerActivity, RelayRouteActivity, TransportMediaId, TransportRelayRouteAction,
-            TransportSessionKey,
+            TransportSessionKey, TransportTeardown,
             test_support::{
                 DebugRouteEntry, test_media_transport_config, test_media_transport_deps,
                 test_rtc_port_range,
@@ -24,12 +24,12 @@ use crate::{
 };
 
 #[test]
-fn room_transport_plan_moves_relay_release_to_cleanup() {
+fn room_transport_plan_moves_relay_release_to_teardown() {
     let source_session = session_key(3, UserId::Integer(3));
     let source = TransportSourceKey::new(source_session, TransportMediaId::new(31));
     let target_media_worker_id = MediaWorkerId::from_raw(2);
     let activity = TransportRelayRouteAction::SetActivity(RelayRouteActivity::Inactive);
-    let plan = RoomTransportPlan::from_relays_and_cleanup(
+    let plan = RoomTransportPlan::from_relays_and_teardown(
         vec![
             TransportRelayRouteEffect {
                 source: source.clone(),
@@ -44,7 +44,7 @@ fn room_transport_plan_moves_relay_release_to_cleanup() {
         ],
         [],
     );
-    let (relays, cleanup) = plan.relays_and_cleanup();
+    let (relays, teardown) = plan.relays_and_teardown();
 
     assert_eq!(
         relays,
@@ -54,13 +54,13 @@ fn room_transport_plan_moves_relay_release_to_cleanup() {
             action: activity,
         }]
     );
-    assert_eq!(
-        cleanup,
-        [TransportCleanupOperation::ReleaseRelayRoute {
-            source,
-            target_media_worker_id,
-        }]
-    );
+    assert!(matches!(
+        teardown,
+        [TransportTeardown::ReleaseRelayRoute {
+            source: teardown_source,
+            target_media_worker_id: teardown_target,
+        }] if teardown_source == &source && *teardown_target == target_media_worker_id
+    ));
 }
 
 #[tokio::test]

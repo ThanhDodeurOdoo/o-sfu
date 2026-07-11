@@ -180,7 +180,7 @@ impl RoomEffects {
                 counts,
                 user_id,
                 connection_id,
-                cleanup,
+                session_teardown,
                 effects,
                 transport_plan,
             } => {
@@ -191,20 +191,23 @@ impl RoomEffects {
                     telemetry_event::USER_CLOSED,
                 )
                 .with_connection_id(connection_id.as_u64());
-                if let Some(cleanup) = cleanup.as_ref() {
+                if let Some(teardown) = session_teardown.as_ref() {
                     diagnostics = diagnostics
-                        .with_media_worker_id(cleanup.session_key().media_worker_id().as_usize());
+                        .with_media_worker_id(teardown.session_key().media_worker_id().as_usize());
                 }
                 batch.transport.extend(transport_plan);
                 batch.output.push_lifecycle(effects);
                 batch.observability.record(diagnostics);
                 batch.observability.forget_user(user_id);
                 batch.source_policy.route_graph_changed();
-                batch.transport.extend_cleanup(cleanup);
+                batch.transport.extend_teardown(session_teardown);
             }
-            ConnectionCloseCommit::StalePlacement { counts, cleanup } => {
+            ConnectionCloseCommit::StalePlacement {
+                counts,
+                session_teardown,
+            } => {
                 batch.observability.push_gauge(counts);
-                batch.transport.extend_cleanup([cleanup]);
+                batch.transport.extend_teardown([session_teardown]);
             }
         }
         batch
@@ -216,8 +219,8 @@ impl RoomEffects {
         batch.transport.extend(commit.transport_plan);
         batch.source_policy.route_graph_changed();
         batch.output.push_lifecycle(commit.effects);
-        for close_operation in commit.close_operations {
-            let session = close_operation.session_key();
+        for teardown in &commit.session_teardowns {
+            let session = teardown.session_key();
             batch.observability.record(
                 RoomDiagnosticsContext::new(
                     session.user_id(),
@@ -227,8 +230,8 @@ impl RoomEffects {
                 .event_data(room, telemetry_event::USER_DISCONNECTED),
             );
             batch.observability.forget_user(session.user_id().clone());
-            batch.transport.extend_cleanup([close_operation]);
         }
+        batch.transport.extend_teardown(commit.session_teardowns);
         batch
     }
 

@@ -28,20 +28,6 @@ use crate::engine::{
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
 
-/// result class returned by a close-session command
-///
-/// close requests can remove only one session or leave the worker without live
-/// sessions
-/// the worker lifecycle uses this distinction to decide whether the lazy handle
-/// must be cleared after the command completes
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloseSessionState {
-    /// the requested session is no longer present while the worker can stay live
-    SessionClosed,
-    /// the requested session was the last live session on the worker
-    WorkerIdle,
-}
-
 /// command handle used by remote consumers to push control back to a source worker
 ///
 /// a route that consumes media from another worker keeps this handle beside the
@@ -226,7 +212,7 @@ pub enum RouteControlRequest {
         target: RelayPacketMailbox,
     },
     RemoveRelayTarget {
-        src_media: TransportMediaId,
+        source: TransportSourceKey,
         target_id: RelayTargetId,
     },
     SetRelayTargetActive {
@@ -338,15 +324,13 @@ pub enum RtcWorkerCommand {
         answer_sdp: String,
         response: RtcWorkerResponse<AppliedSessionAnswer>,
     },
-    /// remove a session and report whether the worker has no live sessions
+    /// remove a session from worker state
     ///
-    /// cleanup removes rtc state, media handles, route destinations, demux
+    /// teardown removes rtc state, media handles, route destinations, demux
     /// indexes, bitrate counters and snapshot entries owned by the session
-    /// `WorkerIdle` tells the worker lifecycle that only the idle packet loop
-    /// and its reusable shared socket remain
     CloseSession {
         session_key: TransportSessionKey,
-        response: RtcWorkerResponse<CloseSessionState>,
+        response: RtcWorkerResponse<()>,
     },
     /// remove one producer or consumer media registration owned by a session
     ///

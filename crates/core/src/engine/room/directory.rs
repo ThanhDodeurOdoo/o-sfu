@@ -98,7 +98,6 @@ impl RoomLifecycle {
 /// dropping the lease releases admission without requesting removal
 /// manager
 /// teardown paths call [`Self::finish`] after checking whether the room is empty
-/// with no pending cleanup retries
 #[derive(Debug)]
 pub(crate) struct RoomLifecycleLease {
     /// shared lease state for the directory entry that accepted this work
@@ -120,8 +119,8 @@ impl RoomLifecycleLease {
     ///
     /// returns `true` for the single caller that should remove the directory
     /// entry
-    /// `room_can_be_removed` must be computed after the caller future
-    /// finished, because cleanup retries can change while work is running
+    /// `room_can_be_removed` must be computed after the caller future finishes
+    /// because room membership can change while work is running
     #[must_use]
     pub(crate) fn finish(mut self, remove_if_empty: bool, room_can_be_removed: bool) -> bool {
         self.release(remove_if_empty, room_can_be_removed)

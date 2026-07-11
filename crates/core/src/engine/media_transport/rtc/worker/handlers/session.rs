@@ -14,7 +14,6 @@ use std::{
 use super::{
     super::super::{
         bitrate::BitrateRegistry,
-        commands::CloseSessionState,
         state::{PacketLoopState, RtcSnapshotState},
     },
     media::remove_source_route,
@@ -30,7 +29,7 @@ pub(super) fn worker_close_session(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
     metrics: &RuntimeMetrics,
-) -> CloseSessionState {
+) {
     state.clear_session_schedule(session_key);
     let removed_session = state.users.remove(session_key);
     state.remove_egress_bitrate_counter(session_key);
@@ -67,10 +66,5 @@ pub(super) fn worker_close_session(
             Instant::now().saturating_duration_since(removed_session.started_at),
         );
         metrics.add_active_transport_users(-1);
-    }
-    if state.users.is_empty() {
-        CloseSessionState::WorkerIdle
-    } else {
-        CloseSessionState::SessionClosed
     }
 }

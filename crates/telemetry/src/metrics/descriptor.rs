@@ -475,23 +475,14 @@ metric_catalog! {
         kind: Counter,
         samples: |metrics| vec![unlabeled_counter(metrics.media_quality_jitter_observations.load())]
     },
-    TransportCleanupRetriesTotal {
-        name: "osfu_transport_cleanup_retries_total",
-        help: "Total room-scoped transport cleanup retry attempts scheduled after cleanup failures.",
-        kind: Counter,
-        samples: |metrics| vec![unlabeled_counter(metrics.transport_cleanup_retries.load())]
-    },
-    TransportCleanupRetrySuccessesTotal {
-        name: "osfu_transport_cleanup_retry_successes_total",
-        help: "Total room-scoped transport cleanup retry attempts that eventually succeeded.",
-        kind: Counter,
-        samples: |metrics| vec![unlabeled_counter(metrics.transport_cleanup_retry_successes.load())]
-    },
     TransportCleanupFailuresTotal {
         name: "osfu_transport_cleanup_failures_total",
-        help: "Total room-scoped transport cleanup failures by final handling kind.",
+        help: "Total terminal transport cleanup failures.",
         kind: Counter,
-        samples: |metrics| counter_family_samples(&metrics.transport_cleanup_failures, "kind")
+        samples: |metrics| vec![counter(
+            [("kind", "terminal")],
+            metrics.transport_cleanup_failures.load()
+        )]
     },
     RtcDatagramRoutesTotal {
         name: "osfu_rtc_datagram_routes_total",

@@ -18,7 +18,7 @@ use super::publication;
 use super::{
     super::super::{
         bitrate::BitrateRegistry,
-        commands::{CloseSessionState, RtcMediaControlCommand, RtcWorkerCommand},
+        commands::{RtcMediaControlCommand, RtcWorkerCommand},
         state::{PacketLoopState, RtcSnapshotState},
     },
     bwe, media,
@@ -28,9 +28,7 @@ use super::{
 use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
     engine::{
-        media_transport::{
-            TransportMediaId, TransportResult, TransportSessionKey, TransportSourceActivitySnapshot,
-        },
+        media_transport::{TransportMediaId, TransportResult, TransportSourceActivitySnapshot},
         metrics::RuntimeMetrics,
     },
 };
@@ -146,10 +144,6 @@ pub fn handle_worker_command(
                 &answer_sdp,
             ),
         ),
-        RtcWorkerCommand::CloseSession {
-            session_key,
-            response,
-        } => respond(response, Ok(close_session(state, context, &session_key))),
         #[cfg(test)]
         RtcWorkerCommand::ResolveNegotiatedProducerParameters {
             session_key,
@@ -172,12 +166,11 @@ pub fn handle_worker_command(
                 .resolve_mid(transport_media_id)
                 .map(|mid| mid.to_string())),
         ),
-        RtcWorkerCommand::RemoveMedia { .. }
+        RtcWorkerCommand::CloseSession { .. }
+        | RtcWorkerCommand::RemoveMedia { .. }
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }
-        | RtcWorkerCommand::MediaControl(_) => {
-            handle_media_command(state, context, command);
-        }
+        | RtcWorkerCommand::MediaControl(_) => handle_resource_command(state, context, command),
     }
 }
 
@@ -201,26 +194,25 @@ fn respond_source_activity_snapshot(
     );
 }
 
-fn close_session(
-    state: &mut PacketLoopState,
-    context: &WorkerCommandContext<'_>,
-    session_key: &TransportSessionKey,
-) -> CloseSessionState {
-    session::worker_close_session(
-        state,
-        context.bitrate_registry,
-        context.snapshot_state,
-        session_key,
-        context.metrics,
-    )
-}
-
-fn handle_media_command(
+fn handle_resource_command(
     state: &mut PacketLoopState,
     context: &WorkerCommandContext<'_>,
     command: RtcWorkerCommand,
 ) {
     match command {
+        RtcWorkerCommand::CloseSession {
+            session_key,
+            response,
+        } => {
+            session::worker_close_session(
+                state,
+                context.bitrate_registry,
+                context.snapshot_state,
+                &session_key,
+                context.metrics,
+            );
+            respond(response, Ok(()));
+        }
         RtcWorkerCommand::RemoveMedia {
             session_key,
             transport_media_id,

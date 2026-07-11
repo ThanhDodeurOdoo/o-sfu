@@ -1,8 +1,4 @@
-use super::{
-    super::cleanup::{CLEANUP_RETRY_CAPACITY, TransportCleanupOperation},
-    fixtures::*,
-};
-use crate::{MediaWorkerId, RoomInstanceId, engine::media_transport::TransportSessionKey};
+use super::fixtures::*;
 
 #[tokio::test]
 async fn join_user_enforces_capacity() {
@@ -58,7 +54,7 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     ));
     assert!(
         !room
-            .remove_user_with_cleanup(
+            .remove_user_with_teardown(
                 &UserId::Integer(1),
                 first_connection,
                 RoomEffectContext::state_only(None),
@@ -85,7 +81,7 @@ async fn leave_user_sends_departure_to_remaining_peers() {
     join_user_with_sender(&room, UserId::Integer(1), tx1).await;
     let bob_connection = join_user_with_sender(&room, UserId::Integer(2), tx2).await;
 
-    room.remove_user_with_cleanup(
+    room.remove_user_with_teardown(
         &UserId::Integer(2),
         bob_connection,
         RoomEffectContext::state_only(None),
@@ -112,7 +108,7 @@ async fn negotiated_session_rejects_stale_connection() {
     let (tx, _rx) = test_sender();
     let connection_id = join_user_with_sender(&room, UserId::Integer(1), tx).await;
     assert!(
-        room.remove_user_with_cleanup(
+        room.remove_user_with_teardown(
             &UserId::Integer(1),
             connection_id,
             RoomEffectContext::state_only(Some(&media_transport)),
@@ -148,7 +144,7 @@ async fn mismatched_stale_close_keeps_other_user_routing() {
 
     assert!(
         !room
-            .remove_user_with_cleanup(
+            .remove_user_with_teardown(
                 &alice_id,
                 bob_connection,
                 RoomEffectContext::state_only(None),
@@ -260,7 +256,7 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
         .expect("published camera should expose transport media");
 
     assert!(
-        room.remove_user_with_cleanup(
+        room.remove_user_with_teardown(
             &UserId::Integer(1),
             connection_id,
             RoomEffectContext::runtime(&media_transport),
@@ -290,32 +286,4 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
             .await
             .is_none()
     );
-    assert!(!room.has_pending_cleanup_retries());
-}
-
-#[tokio::test]
-async fn large_cleanup_batch_executes_every_first_attempt() {
-    let manager = RoomManager::for_test();
-    let room = manager
-        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
-    let media_transport = real_adapter();
-    let cap = u64::try_from(CLEANUP_RETRY_CAPACITY).expect("cleanup capacity should fit u64");
-    let operations = (1..=cap + 1)
-        .map(|raw| TransportCleanupOperation::CloseUser {
-            session_key: TransportSessionKey::new(
-                RoomInstanceId::from_raw(1),
-                MediaWorkerId::from_raw(0),
-                ConnectionId::from_raw(raw),
-                UserId::Integer(1),
-            ),
-        })
-        .collect::<Vec<_>>();
-
-    let outcome = room
-        .execute_transport_cleanup_operations(&media_transport, &operations)
-        .await;
-
-    assert_eq!(outcome, TransportEffectOutcome::Applied);
-    assert!(!room.has_pending_cleanup_retries());
 }

@@ -58,8 +58,8 @@ pub(crate) use self::{
     packet_sinks::RoomPacketSinkRegistry,
 };
 
-/// retry sweep cadence for retained rooms with pending transport cleanup
-const CLEANUP_RETRY_DRAIN_INTERVAL: Duration = Duration::from_secs(1);
+/// cadence for advancing load-triggered spillover cooldowns
+const SPILLOVER_COOLDOWN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// state for shared runtime services
 ///
@@ -207,7 +207,7 @@ impl Runtime {
 struct RuntimeTasks {
     shutdown_token: CancellationToken,
     source_packet_policy_sync: Option<JoinHandle<()>>,
-    cleanup_retry_drain: Option<JoinHandle<()>>,
+    spillover_cooldown: Option<JoinHandle<()>>,
 }
 
 impl RuntimeTasks {
@@ -219,15 +219,14 @@ impl RuntimeTasks {
             runtime.media_transport.source_policy_subscription(),
             shutdown_token.child_token(),
         );
-        let cleanup_retry_drain = spawn_cleanup_retry_drain_task(
+        let spillover_cooldown = spawn_spillover_cooldown_task(
             Arc::clone(&runtime.room_manager),
-            runtime.media_transport.clone(),
             shutdown_token.child_token(),
         );
         Self {
             shutdown_token,
             source_packet_policy_sync: Some(source_packet_policy_sync),
-            cleanup_retry_drain: Some(cleanup_retry_drain),
+            spillover_cooldown: Some(spillover_cooldown),
         }
     }
 
@@ -242,8 +241,8 @@ impl RuntimeTasks {
         if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
             wait_for_runtime_task(source_packet_policy_sync, "source packet policy update").await;
         }
-        if let Some(cleanup_retry_drain) = self.cleanup_retry_drain.take() {
-            wait_for_runtime_task(cleanup_retry_drain, "cleanup retry drain").await;
+        if let Some(spillover_cooldown) = self.spillover_cooldown.take() {
+            wait_for_runtime_task(spillover_cooldown, "spillover cooldown").await;
         }
     }
 }
@@ -267,8 +266,8 @@ impl Drop for RuntimeTasks {
         if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
             source_packet_policy_sync.abort();
         }
-        if let Some(cleanup_retry_drain) = self.cleanup_retry_drain.take() {
-            cleanup_retry_drain.abort();
+        if let Some(spillover_cooldown) = self.spillover_cooldown.take() {
+            spillover_cooldown.abort();
         }
     }
 }
@@ -349,30 +348,24 @@ fn spawn_source_packet_policy_update_task(
     })
 }
 
-/// starts the process driver for room cleanup retry progress
+/// advances load-triggered spillover cooldowns from the runtime clock
 ///
-/// room cleanup retry state deliberately has no timer. this task supplies the
-/// wall-clock poll from the runtime shell, then exits through the shared
-/// shutdown token so retained rooms cannot keep the server future alive after
-/// cancellation
-///
-/// missed ticks are skipped because cleanup retry draining is recovery work
-/// rather than a backlog that should catch up under load
-fn spawn_cleanup_retry_drain_task(
+/// missed ticks are skipped because each turn observes current room state
+/// rather than replaying elapsed work
+fn spawn_spillover_cooldown_task(
     rooms: Arc<RoomManager>,
-    media_transport: MediaTransport,
     shutdown_token: CancellationToken,
 ) -> JoinHandle<()> {
-    info!("booted cleanup retry drain task");
+    info!("booted spillover cooldown task");
     tokio::spawn(async move {
-        let mut retry_interval = time::interval(CLEANUP_RETRY_DRAIN_INTERVAL);
-        retry_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        let mut interval = time::interval(SPILLOVER_COOLDOWN_INTERVAL);
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 biased;
                 () = shutdown_token.cancelled() => return,
-                _ = retry_interval.tick() => {
-                    rooms.drain_cleanup_retries(&media_transport).await;
+                _ = interval.tick() => {
+                    rooms.advance_spillover_cooldowns().await;
                 }
             }
         }

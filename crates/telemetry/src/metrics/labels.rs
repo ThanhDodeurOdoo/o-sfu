@@ -304,14 +304,6 @@ pub(super) enum MediaQualityRttBucket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportCleanupFailureKind {
-    Terminal,
-    RetryExhausted,
-    QueueFull,
-    Shutdown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecordingActionOutcome {
     StartAccepted,
     StartRejected,
@@ -635,13 +627,6 @@ impl HistogramBucketLabel for MediaQualityRttBucket {
         Self::Le5Seconds
     }
 }
-
-impl_exported_metric_label!(TransportCleanupFailureKind {
-    Terminal => (0, "terminal"),
-    RetryExhausted => (1, "retry_exhausted"),
-    QueueFull => (2, "queue_full"),
-    Shutdown => (3, "shutdown"),
-});
 
 impl_exported_metric_label_pair!(RecordingActionOutcome {
     StartAccepted => (0, [("action", "start"), ("outcome", "accepted")]),

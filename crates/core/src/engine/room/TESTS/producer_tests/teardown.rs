@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::engine::media_transport::TransportTeardown;
 
 #[tokio::test]
 async fn explicit_unpublish_removes_state_and_transport_media() {
@@ -54,7 +55,7 @@ async fn explicit_unpublish_removes_state_and_transport_media() {
 }
 
 #[tokio::test]
-async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
+async fn explicit_unpublish_is_idempotent_after_transport_session_closes() {
     let mut scenario = Box::pin(setup_real_rtc_refresh_scenario()).await;
 
     publish_track(
@@ -86,9 +87,18 @@ async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
         .await;
     scenario
         .media_transport
-        .close_session(&transport_user_key)
-        .await
-        .expect("closing the publisher transport should succeed");
+        .teardown([TransportTeardown::CloseSession {
+            session_key: transport_user_key,
+        }])
+        .await;
+    assert!(
+        scenario
+            .media_transport
+            .test_api()
+            .route_entry_by_media_id(transport_media_id)
+            .await
+            .is_none()
+    );
 
     assert!(
         scenario
@@ -104,6 +114,6 @@ async fn explicit_unpublish_queues_cleanup_when_real_transport_owner_is_gone() {
     );
 
     assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
+    assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 0);
     assert_transport_media_mapping_is_missing(&scenario.room, transport_media_id).await;
-    assert!(scenario.room.has_pending_cleanup_retries());
 }
