@@ -2,8 +2,13 @@
 //! - JSON Web Token (JWT): <https://www.rfc-editor.org/rfc/rfc7519>
 //! - JSON Web Algorithms (JWA): <https://www.rfc-editor.org/rfc/rfc7518>
 
+use std::{fmt, time::Duration};
+
 pub use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, Visitor},
+};
 
 /// JWT `typ` header value.
 ///
@@ -15,18 +20,85 @@ pub const TYPE_JWT: &str = "JWT";
 /// Reference: RFC 7518 section 3.2.
 pub const ALGORITHM_HS256: &str = "HS256";
 
+/// minimum HS256 key length from RFC 7518 section 3.2
+pub const HS256_MIN_KEY_BYTES: usize = 32;
+
+/// RFC 7519 seconds since the Unix epoch with subsecond precision
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NumericDate(Duration);
+
+impl From<u64> for NumericDate {
+    fn from(seconds: u64) -> Self {
+        Self(Duration::from_secs(seconds))
+    }
+}
+
+impl From<Duration> for NumericDate {
+    fn from(duration: Duration) -> Self {
+        Self(duration)
+    }
+}
+
+impl Serialize for NumericDate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if self.0.subsec_nanos() == 0 {
+            serializer.serialize_u64(self.0.as_secs())
+        } else {
+            serializer.serialize_f64(self.0.as_secs_f64())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NumericDate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NumericDateVisitor)
+    }
+}
+
+struct NumericDateVisitor;
+
+impl Visitor<'_> for NumericDateVisitor {
+    type Value = NumericDate;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a nonnegative RFC 7519 NumericDate")
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(NumericDate::from(value))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Duration::try_from_secs_f64(value)
+            .map(NumericDate)
+            .map_err(|_error| E::custom("NumericDate must be nonnegative, finite and in range"))
+    }
+}
+
 /// Registered JWT claims from RFC 7519 section 4.1.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegisteredJwtClaims {
-    /// Expiration time (in seconds since epoch)
+    /// expiration time
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exp: Option<u64>,
-    /// Issued at (in seconds since epoch)
+    pub exp: Option<NumericDate>,
+    /// issued at time
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub iat: Option<u64>,
-    /// Not before (in seconds since epoch)
+    pub iat: Option<NumericDate>,
+    /// not before time
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nbf: Option<u64>,
+    pub nbf: Option<NumericDate>,
     /// Issuer
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iss: Option<String>,

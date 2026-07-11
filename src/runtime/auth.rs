@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{
@@ -9,8 +9,8 @@ use base64::{
 };
 use hmac::{Hmac, KeyInit, Mac};
 use o_sfu_protocol::wire::{UserId, UserPermissions};
-pub use o_sfu_rfc::jwt::RegisteredJwtClaims;
 use o_sfu_rfc::jwt::{ALGORITHM_HS256, JwtHeader, TYPE_JWT, URL_SAFE_NO_PAD};
+pub use o_sfu_rfc::jwt::{NumericDate, RegisteredJwtClaims};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 use thiserror::Error;
@@ -46,7 +46,7 @@ pub enum AuthenticationError {
 /// RFC 7519 defines `iat` as an informational registered claim, so this
 /// tolerance remains a runtime hardening policy rather than an RFC-mandated
 /// validity rule.
-const MAX_IAT_FUTURE_SKEW_SECONDS: u64 = 60;
+const MAX_IAT_FUTURE_SKEW: Duration = Duration::from_mins(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HttpRoomClaims {
@@ -95,10 +95,10 @@ impl WebSocketConnectClaims {
 }
 
 #[must_use]
-pub(crate) fn secs_since_epoch() -> u64 {
+pub(crate) fn duration_since_epoch() -> Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
+        .unwrap_or(Duration::ZERO)
 }
 
 /// # Errors
@@ -108,7 +108,7 @@ pub fn sign<T>(claims: &T, key_b64: &str) -> Result<String, AuthenticationError>
 where
     T: Serialize,
 {
-    let key = decode_base64(key_b64)?;
+    let key = decode_key(key_b64)?;
     let header = JwtHeader {
         alg: ALGORITHM_HS256.to_owned(),
         typ: Some(TYPE_JWT.to_owned()),
@@ -137,7 +137,7 @@ where
     T: DeserializeOwned,
 {
     validate_token_length(token)?;
-    let key = decode_base64(key_b64)?;
+    let key = decode_key(key_b64)?;
     let (header_b64, claims_b64, signature_b64) = split_token(token)?;
     let header_bytes = decode_jwt_segment(header_b64)?;
     let header: JwtHeader = serde_json::from_slice(&header_bytes)
@@ -183,17 +183,22 @@ fn validate_token_length(token: &str) -> Result<(), AuthenticationError> {
 }
 
 fn validate_registered_claims(claims: &RegisteredJwtClaims) -> Result<(), AuthenticationError> {
-    let now = secs_since_epoch();
+    validate_registered_claims_at(claims, duration_since_epoch())
+}
+
+fn validate_registered_claims_at(
+    claims: &RegisteredJwtClaims,
+    now: Duration,
+) -> Result<(), AuthenticationError> {
+    let iat_limit = NumericDate::from(now.saturating_add(MAX_IAT_FUTURE_SKEW));
+    let now = NumericDate::from(now);
     if claims.exp.is_some_and(|exp| exp <= now) {
         return Err(AuthenticationError::TokenExpired);
     }
     if claims.nbf.is_some_and(|nbf| nbf > now) {
         return Err(AuthenticationError::TokenNotYetValid);
     }
-    if claims
-        .iat
-        .is_some_and(|iat| iat > now + MAX_IAT_FUTURE_SKEW_SECONDS)
-    {
+    if claims.iat.is_some_and(|iat| iat > iat_limit) {
         return Err(AuthenticationError::TokenIssuedInFuture);
     }
     Ok(())
@@ -227,7 +232,7 @@ fn split_token(token: &str) -> Result<(&str, &str, &str), AuthenticationError> {
     Ok((header, claims, signature))
 }
 
-fn decode_base64(input: &str) -> Result<Vec<u8>, AuthenticationError> {
+pub(crate) fn decode_key(input: &str) -> Result<Vec<u8>, AuthenticationError> {
     let padded = pad_base64(input);
     URL_SAFE
         .decode(padded.as_bytes())

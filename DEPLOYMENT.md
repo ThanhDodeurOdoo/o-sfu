@@ -32,7 +32,7 @@ RTC Server URL = https://<sfu-domain>
 RTC server KEY = <same value as AUTH_KEY>
 ```
 
-`AUTH_KEY` only has to be valid base64, but production keys should be generated from at least 32 bytes of cryptographically safe randomness
+`AUTH_KEY` must be valid base64 that decodes to at least 32 bytes and should be generated from cryptographically safe randomness
 
 ```bash
 openssl rand -base64 32
@@ -350,7 +350,7 @@ runtime:
 - Docker Compose logging uses explicit `max-size` and `max-file` limits
 - `PROXY=true` is set only behind the trusted NGINX edge
 - `AUTH_KEY` matches the Odoo caller configuration
-- `AUTH_KEY` is generated with cryptographically safe randomness
+- `AUTH_KEY` decodes to at least 32 bytes generated with cryptographically safe randomness
 - `DIAGNOSTICS_AUTH_TOKEN` is set for operator routes
 - `RTC_MEDIA_WORKER_COUNT` fits the VM capacity
 - `ROOM_MAX_LOCAL_ROUTERS` does not exceed `RTC_MEDIA_WORKER_COUNT`
@@ -371,7 +371,7 @@ required:
 | variable | default | description |
 | --- | --- | --- |
 | `PUBLIC_IP` | required | concrete advertised IP address used in ICE-lite SDP |
-| `AUTH_KEY` | required | base64 key used to sign and verify SFU JWTs |
+| `AUTH_KEY` | required | base64 key with at least 32 decoded bytes used to sign and verify SFU JWTs |
 
 HTTP, proxy and diagnostics:
 
