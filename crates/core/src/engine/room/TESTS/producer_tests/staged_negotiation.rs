@@ -12,10 +12,7 @@ async fn staged_negotiated_publish_rollback_cleans_transport_media_without_commi
         .staged_media_id(TestSourceKind::ScalableVideo)
         .await;
 
-    assert_eq!(
-        scenario.rollback_scalable_video().await,
-        Some(TransportEffectOutcome::Applied)
-    );
+    assert!(scenario.rollback_scalable_video().await);
 
     assert_eq!(scenario.staged_count().await, 0);
     assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
@@ -40,10 +37,7 @@ async fn duplicate_staged_publish_is_ignored_before_transport_reservation() {
         PublishStageOutcome::Duplicate
     );
     assert_eq!(scenario.staged_count().await, 1);
-    assert_eq!(
-        scenario.rollback_scalable_video().await,
-        Some(TransportEffectOutcome::Applied)
-    );
+    assert!(scenario.rollback_scalable_video().await);
 }
 
 #[tokio::test]
@@ -85,7 +79,7 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
 }
 
 #[tokio::test]
-async fn staged_publish_connection_cleanup_rolls_back_every_staged_stream() {
+async fn staged_publish_connection_teardown_rolls_back_every_staged_stream() {
     let mut scenario = StagedPublishScenario::new().await;
 
     assert_eq!(

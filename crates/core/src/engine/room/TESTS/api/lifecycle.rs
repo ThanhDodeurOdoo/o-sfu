@@ -46,7 +46,7 @@ impl RoomTestLifecycle<'_> {
     /// # Errors
     ///
     /// returns [`RoomJoinError`] when admission or routing rejects the user
-    pub async fn join_session_without_transport_cleanup(
+    pub async fn join_session_without_transport_teardown(
         self,
         user_id: UserId,
         label: Option<String>,

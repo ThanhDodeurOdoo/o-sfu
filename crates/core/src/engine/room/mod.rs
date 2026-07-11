@@ -1,7 +1,6 @@
 #[cfg(any(test, feature = "testing-transport"))]
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
-mod cleanup;
 mod definition;
 mod directory;
 mod effects;

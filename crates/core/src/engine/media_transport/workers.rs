@@ -24,7 +24,8 @@ use crate::engine::{
         TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
         TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
-        TransportSourceActivitySnapshot, TransportSourceKey, TransportWorkerPressureSnapshot,
+        TransportSourceActivitySnapshot, TransportSourceKey, TransportTeardown,
+        TransportWorkerPressureSnapshot,
     },
 };
 
@@ -63,6 +64,7 @@ impl MediaTransport {
             .into();
         Self {
             workers,
+            metrics: deps.metrics(),
             source_policy_signal,
         }
     }
@@ -384,6 +386,14 @@ impl MediaTransport {
         &self,
         effect: &TransportRelayRouteEffect,
     ) -> Result<(), TransportAdapterError> {
+        if effect.action == TransportRelayRouteAction::Release {
+            self.teardown([TransportTeardown::ReleaseRelayRoute {
+                source: effect.source.clone(),
+                target_media_worker_id: effect.target_media_worker_id,
+            }])
+            .await;
+            return Ok(());
+        }
         let source_worker = self.require_worker_for_user(effect.source.session_key())?;
         let target_worker =
             self.require_worker_for_media_worker_id(effect.target_media_worker_id)?;
@@ -394,9 +404,7 @@ impl MediaTransport {
             TransportRelayRouteAction::Install => {
                 target_worker.relay_install_request(effect.source.clone())?
             }
-            TransportRelayRouteAction::Release => {
-                target_worker.relay_release_request(effect.source.transport_media_id())
-            }
+            TransportRelayRouteAction::Release => return Ok(()),
             TransportRelayRouteAction::SetActivity(activity) => {
                 target_worker.relay_activity_request(effect.source.clone(), activity.is_active())
             }
@@ -452,7 +460,7 @@ impl MediaTransport {
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
 
-    fn require_worker_for_media_worker_id(
+    pub(super) fn require_worker_for_media_worker_id(
         &self,
         media_worker_id: MediaWorkerId,
     ) -> Result<Arc<RtcWorker>, TransportAdapterError> {

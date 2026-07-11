@@ -1,19 +1,18 @@
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     marker::PhantomData,
-    slice,
 };
 
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use tracing::warn;
 
-use super::TransportEffectOutcome;
 use crate::engine::{
     ConnectionId, UserId,
-    media_transport::{AppliedSessionAnswer, SessionUploadEncoding, TransportMediaId},
+    media_transport::{
+        AppliedSessionAnswer, SessionUploadEncoding, TransportMediaId, TransportTeardown,
+    },
     room::{
         RoomUserOperation,
-        cleanup::TransportCleanupOperation,
         effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
         media_graph::ValidatedPublish,
     },
@@ -56,14 +55,14 @@ impl StagedPublishes {
         Some(publish)
     }
 
-    pub fn cleanup_operations_for_connection(
+    pub fn take_teardowns_for_connection(
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
-    ) -> Vec<TransportCleanupOperation> {
+    ) -> Vec<TransportTeardown> {
         self.take_for_connection(user_id, connection_id)
             .into_iter()
-            .map(StagedPublish::into_cleanup_operation)
+            .map(StagedPublish::release_into_teardown)
             .collect()
     }
 
@@ -150,11 +149,7 @@ impl StagedPublish {
             let user = self.descriptor.owner_user_id.clone();
             let connection = self.descriptor.owner_connection_id;
             let stream_id = self.descriptor.stream_id.clone();
-            self.cleanup_reserved_media(
-                operation,
-                "media transport failed to remove staged publish media after answered negotiation omitted producer parameters",
-            )
-            .await;
+            self.release_reserved_media(operation).await;
             warn!(
                 user_id = ?user,
                 connection_id = ?connection,
@@ -185,11 +180,7 @@ impl StagedPublish {
             state.commit_publish_reservation(self.descriptor.clone(), rtp, upload_encodings, media)
         };
         let Some(commit) = committed else {
-            self.cleanup_reserved_media(
-                operation,
-                "media transport failed to remove published transport media after room commit failed",
-            )
-                .await;
+            self.release_reserved_media(operation).await;
             warn!(
                 user_id = ?user,
                 connection_id = ?connection,
@@ -206,39 +197,21 @@ impl StagedPublish {
         Some(stream_id)
     }
 
-    pub(super) async fn cleanup_reserved_media(
-        self,
-        operation: RoomUserOperation<'_>,
-        failure_message: &str,
-    ) -> TransportEffectOutcome {
-        let media = self.media;
-        let cleanup = self.into_cleanup_operation();
-        let outcome = operation
-            .room
-            .execute_transport_cleanup_operations(
-                operation.media_transport,
-                slice::from_ref(&cleanup),
-            )
+    pub(super) async fn release_reserved_media(self, operation: RoomUserOperation<'_>) {
+        operation
+            .media_transport
+            .teardown([self.release_into_teardown()])
             .await;
-        if outcome == TransportEffectOutcome::Failed {
-            warn!(
-                user_id = ?cleanup.user_id(),
-                connection_id = ?cleanup.connection_id(),
-                transport_media_id = ?media,
-                "{failure_message}"
-            );
-        }
-        outcome
     }
 
-    pub(super) fn into_cleanup_operation(self) -> TransportCleanupOperation {
+    pub(super) fn release_into_teardown(self) -> TransportTeardown {
         let Self {
             descriptor,
             media,
             reservation,
         } = self;
         let _released = reservation.release();
-        TransportCleanupOperation::RemoveMedia {
+        TransportTeardown::RemoveMedia {
             session_key: descriptor.session_key,
             transport_media_id: media,
         }

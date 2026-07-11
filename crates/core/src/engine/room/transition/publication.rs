@@ -13,11 +13,11 @@
 //!                              |                room graph commit
 //!                              |                  |
 //!                              v                  v
-//!                         rollback cleanup    effects after lock
+//!                         rollback teardown   effects after lock
 //! ```
 //!
 //! only answer-proven RTP enters the room graph
-//! cleanup, worker route updates and fanout run after state mutation releases
+//! teardown, worker route updates and fanout run after state mutation releases
 //! the room lock
 
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
@@ -25,7 +25,6 @@ use tracing::warn;
 
 use super::super::{
     Room, RoomUserOperation,
-    cleanup::TransportEffectOutcome,
     effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
     media_graph::{ProducerActivityCommit, PublishIntentPlan, ValidatedPublish},
 };
@@ -132,12 +131,7 @@ impl RoomUserOperation<'_> {
             }
         };
         if let Some(duplicate) = duplicate {
-            duplicate
-                .cleanup_reserved_media(
-                    self,
-                    "media transport failed to remove duplicated staged publish media",
-                )
-                .await;
+            duplicate.release_reserved_media(self).await;
             return Ok(PublishStageOutcome::DuplicateAfterReservation);
         }
         Ok(PublishStageOutcome::Staged)
@@ -178,35 +172,24 @@ impl RoomUserOperation<'_> {
         }
     }
 
-    pub async fn rollback_staged_publish(
-        self,
-        stream_id: &UserStreamId,
-    ) -> Option<TransportEffectOutcome> {
-        let staged = {
+    pub async fn rollback_staged_publish(self, stream_id: &UserStreamId) -> bool {
+        let Some(staged) = ({
             let mut state = self.room.state.write().await;
             state
                 .staged_publishes
                 .take(self.user_id, self.connection_id, stream_id)
-        }?;
-        Some(
-            staged
-                .cleanup_reserved_media(
-                    self,
-                    "media transport failed to remove staged publish media during rollback",
-                )
-                .await,
-        )
+        }) else {
+            return false;
+        };
+        staged.release_reserved_media(self).await;
+        true
     }
 
     pub(crate) async fn stop_publish(
         self,
         intent: &SourceUnpublishIntent,
     ) -> UnpublishIntentOutcome {
-        if self
-            .rollback_staged_publish(intent.stream_id())
-            .await
-            .is_some()
-        {
+        if self.rollback_staged_publish(intent.stream_id()).await {
             return UnpublishIntentOutcome::RolledBack;
         }
         if self.unpublish(intent).await {

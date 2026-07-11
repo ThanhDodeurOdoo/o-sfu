@@ -21,6 +21,7 @@ use crate::{
         ConnectionId, TestSourceKind, UserId, UserPermissions,
         media_transport::{
             AppliedSessionAnswer, MediaTransport, TransportMediaId, TransportRelayRouteAction,
+            TransportTeardown,
             test_support::{test_media_transport_builder, test_rtc_port_range},
         },
         metrics::RuntimeMetrics,
@@ -532,9 +533,10 @@ async fn relay_setup_failure_releases_pending_setup_for_retry() {
         .transport_user_key(&publisher_id, publisher_connection_id)
         .await;
     media_transport
-        .close_session(&publisher_session_key)
-        .await
-        .expect("source session should close before relay install");
+        .teardown([TransportTeardown::CloseSession {
+            session_key: publisher_session_key,
+        }])
+        .await;
 
     commit_scalable_video(
         &room,

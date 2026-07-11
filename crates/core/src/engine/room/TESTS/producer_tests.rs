@@ -1,5 +1,3 @@
-#[path = "producer_tests/cleanup.rs"]
-mod cleanup;
 #[path = "producer_tests/consumer_setup.rs"]
 mod consumer_setup;
 #[path = "producer_tests/publish_lifecycle.rs"]
@@ -12,3 +10,5 @@ mod source_policy;
 mod staged_negotiation;
 #[path = "producer_tests/support.rs"]
 mod support;
+#[path = "producer_tests/teardown.rs"]
+mod teardown;

@@ -181,6 +181,17 @@ pub(super) fn worker_add_relay_target(
     Ok(())
 }
 
+pub(super) fn worker_remove_relay_target(
+    state: &mut PacketLoopState,
+    source: &TransportSourceKey,
+    target_id: RelayTargetId,
+) -> Result<(), TransportAdapterError> {
+    let src_media = source.transport_media_id();
+    ensure_local_producer_mid(state, source.session_key(), src_media)?;
+    state.routes.remove_relay_target(src_media, target_id);
+    Ok(())
+}
+
 pub(super) fn worker_set_relay_target_active(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
@@ -375,8 +386,8 @@ fn update_consumer_route(
 ///
 /// # errors
 ///
-/// returns `InvalidInput` when the media id exists but is not owned by
-/// `src_key` as a producer
+/// returns `InvalidInput` when the media id exists without a live producer
+/// owned by `src_key`
 /// returns `TransportUnavailable` when the media id is not registered
 pub fn ensure_local_producer_mid(
     state: &PacketLoopState,
@@ -384,7 +395,9 @@ pub fn ensure_local_producer_mid(
     src_media: TransportMediaId,
 ) -> Result<Mid, TransportAdapterError> {
     match state.media_handle(src_media) {
-        Some(RegisteredMediaHandle::Producer { session_key, mid }) if session_key == src_key => {
+        Some(RegisteredMediaHandle::Producer { session_key, mid })
+            if session_key == src_key && state.users.contains_key(src_key) =>
+        {
             Ok(*mid)
         }
         Some(RegisteredMediaHandle::Producer { .. } | RegisteredMediaHandle::Consumer { .. }) => {

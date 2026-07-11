@@ -27,12 +27,13 @@ use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
-        media_transport::{SessionUploadEncoding, TransportConsumerRoute, TransportMediaId},
+        media_transport::{
+            SessionUploadEncoding, TransportConsumerRoute, TransportMediaId, TransportTeardown,
+        },
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
-            cleanup::TransportCleanupOperation, rtp_capabilities::router_rtp_capabilities,
-            state::RoomState,
+            rtp_capabilities::router_rtp_capabilities, state::RoomState,
         },
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
@@ -808,17 +809,17 @@ fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_route
     ));
 
     let outcome = state.apply_disconnect_users(&[publisher_id.clone(), subscriber_id.clone()]);
-    let (_, cleanup) = outcome.transport_plan.relays_and_cleanup();
+    let (_, teardown) = outcome.transport_plan.relays_and_teardown();
 
-    let mut removed_media = cleanup
+    let mut removed_media = teardown
         .iter()
         .filter_map(|operation| match operation {
-            TransportCleanupOperation::RemoveMedia {
+            TransportTeardown::RemoveMedia {
                 session_key,
                 transport_media_id,
             } => Some((session_key.user_id(), *transport_media_id)),
-            TransportCleanupOperation::CloseUser { .. }
-            | TransportCleanupOperation::ReleaseRelayRoute { .. } => None,
+            TransportTeardown::CloseSession { .. }
+            | TransportTeardown::ReleaseRelayRoute { .. } => None,
         })
         .collect::<Vec<_>>();
     removed_media.sort_unstable();

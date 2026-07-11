@@ -207,8 +207,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         transport_health_transitions_connected_to_unset => TransportHealthTransitionsTotal &[("from", "connected"), ("to", "unset")],
         transport_health_transitions_disconnected_to_unset => TransportHealthTransitionsTotal &[("from", "disconnected"), ("to", "unset")],
         transport_dtls_connected => TransportDtlsConnectedTotal &[],
-        transport_cleanup_retries => TransportCleanupRetriesTotal &[],
-        transport_cleanup_retry_successes => TransportCleanupRetrySuccessesTotal &[],
         rtc_datagram_fallback_scans => RtcDatagramFallbackScansTotal &[],
         rtc_datagram_scan_users => RtcDatagramScanUsersTotal &[],
         rtc_relay_mailbox_depth_samples => RtcRelayMailboxDepthSamplesTotal &[],

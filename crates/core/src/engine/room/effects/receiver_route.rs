@@ -2,14 +2,13 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 
 use super::{
     RoomGaugeDelta,
-    transport::{RoomRouteEffects, RoomTransportOutcome, execute_relays_and_cleanup},
+    transport::{RoomRouteEffects, RoomTransportOutcome, execute_relays_and_teardown},
 };
 use crate::engine::{
     diagnostics::DiagnosticsEventData,
-    media_transport::{MediaTransport, TransportConsumerRoute},
+    media_transport::{MediaTransport, TransportConsumerRoute, TransportTeardown},
     room::{
         Room, UserOutbound,
-        cleanup::TransportCleanupOperation,
         media_graph::{
             ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
         },
@@ -37,7 +36,7 @@ impl ReceiverSetupTurn {
             setup: mut pending,
             origin,
         } = self;
-        if !execute_relays_and_cleanup(room, media_transport, pending.take_relays(), []).await {
+        if !execute_relays_and_teardown(media_transport, pending.take_relays(), []).await {
             Self::release_pending_setup(room, pending, media_transport, outcome).await;
             return;
         }
@@ -78,11 +77,11 @@ impl ReceiverSetupTurn {
                 let _ = sender.send(UserOutbound::RemoteSources(snapshot));
             }
             ConsumerSetupOutcome::Released(route, relays) => {
-                let cleanup = [TransportCleanupOperation::RemoveMedia {
+                let teardown = [TransportTeardown::RemoveMedia {
                     session_key: route.consumer_session_key().clone(),
                     transport_media_id: route.consumer_transport_media_id(),
                 }];
-                execute_relays_and_cleanup(room, media_transport, relays, cleanup).await;
+                execute_relays_and_teardown(media_transport, relays, teardown).await;
                 outcome.source_policy.fanout_pressure_changed();
             }
         }
@@ -98,7 +97,7 @@ impl ReceiverSetupTurn {
             let mut state = room.state.write().await;
             state.release_pending_consumer_setup(setup)
         };
-        execute_relays_and_cleanup(room, media_transport, relays, []).await;
+        execute_relays_and_teardown(media_transport, relays, []).await;
         outcome.gauges.push(RoomGaugeDelta::media(before, after));
         outcome.source_policy.fanout_pressure_changed();
     }

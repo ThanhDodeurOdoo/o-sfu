@@ -6,8 +6,8 @@ use std::{
 use tokio::sync::RwLock;
 
 use super::{
-    cleanup::CleanupReconciler, definition::RoomDefinition, factory::RoomInit,
-    placement::LoadTriggeredPlacementState, state::RoomState,
+    definition::RoomDefinition, factory::RoomInit, placement::LoadTriggeredPlacementState,
+    state::RoomState,
 };
 use crate::{
     RoomSpilloverMode, RoomWorkerPolicy,
@@ -53,7 +53,6 @@ pub struct Room {
     pub(super) definition: RoomDefinition,
     pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
     pub(super) metrics: Arc<RuntimeMetrics>,
-    pub(super) cleanup_reconciler: Mutex<CleanupReconciler>,
     pub(super) state: RwLock<RoomState>,
 }
 
@@ -74,7 +73,6 @@ impl Room {
             definition,
             load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
             metrics: services.metrics,
-            cleanup_reconciler: Mutex::new(CleanupReconciler::default()),
             state: RwLock::new(RoomState::new(
                 &runtime_context,
                 runtime_policy.admission_policy,

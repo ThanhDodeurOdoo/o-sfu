@@ -38,12 +38,8 @@ pub fn apply_route_control_request(
             target_id,
             target,
         } => routes::worker_add_relay_target(state, &source, target_id, target),
-        RouteControlRequest::RemoveRelayTarget {
-            src_media,
-            target_id,
-        } => {
-            state.routes.remove_relay_target(src_media, target_id);
-            Ok(())
+        RouteControlRequest::RemoveRelayTarget { source, target_id } => {
+            routes::worker_remove_relay_target(state, &source, target_id)
         }
         RouteControlRequest::SetRelayTargetActive {
             source,

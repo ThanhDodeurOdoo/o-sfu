@@ -7,8 +7,8 @@ use crate::metrics::{
     BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
     RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
     RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
-    RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind, TransportCleanupFailureKind,
-    TransportHealthState, TransportIceState, WsSessionLoopExitReason,
+    RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind, TransportHealthState,
+    TransportIceState, WsSessionLoopExitReason,
 };
 
 fn assert_http_and_websocket_metrics(rendered: &str) {
@@ -85,9 +85,7 @@ fn assert_transport_lifecycle_metrics(rendered: &str) {
     assert!(rendered.contains("osfu_transport_user_lifetime_seconds_bucket{le=\"+Inf\"} 1"));
     assert!(rendered.contains("osfu_transport_user_lifetime_seconds_sum 1.5"));
     assert!(rendered.contains("osfu_transport_user_lifetime_seconds_count 1"));
-    assert!(rendered.contains("osfu_transport_cleanup_retries_total 1"));
-    assert!(rendered.contains("osfu_transport_cleanup_retry_successes_total 1"));
-    assert!(rendered.contains("osfu_transport_cleanup_failures_total{kind=\"retry_exhausted\"} 1"));
+    assert!(rendered.contains("osfu_transport_cleanup_failures_total{kind=\"terminal\"} 1"));
 }
 
 fn assert_rtc_keyframe_request_metrics(rendered: &str) {
@@ -133,9 +131,7 @@ fn sample_metrics() -> RuntimeMetrics {
     metrics.record_transport_ice_state_change(TransportIceState::Connected);
     metrics.record_transport_dtls_connected();
     metrics.record_transport_user_lifetime(Duration::from_millis(1500));
-    metrics.record_transport_cleanup_retry_scheduled();
-    metrics.record_transport_cleanup_retry_succeeded();
-    metrics.record_transport_cleanup_failure(TransportCleanupFailureKind::RetryExhausted);
+    metrics.record_transport_cleanup_failure();
     metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
     metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
     metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);

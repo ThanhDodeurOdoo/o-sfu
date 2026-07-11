@@ -19,7 +19,7 @@ use crate::{
     MediaCodecFlags, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
-        media_transport::{TransportMediaId, TransportSourceKey},
+        media_transport::{TransportMediaId, TransportSourceKey, TransportTeardown},
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
@@ -196,17 +196,19 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     }
 }
 
-fn source_relay_cleanup_count(
-    cleanup: &[TransportCleanupOperation],
-    relay: &RelayedSource,
-) -> usize {
-    let expected = TransportCleanupOperation::ReleaseRelayRoute {
-        source: relay.source.clone(),
-        target_media_worker_id: relay.target_media_worker_id,
-    };
-    cleanup
+fn source_relay_teardown_count(teardown: &[TransportTeardown], relay: &RelayedSource) -> usize {
+    teardown
         .iter()
-        .filter(|operation| *operation == &expected)
+        .filter(|operation| {
+            matches!(
+                operation,
+                TransportTeardown::ReleaseRelayRoute {
+                    source,
+                    target_media_worker_id,
+                } if source == &relay.source
+                    && *target_media_worker_id == relay.target_media_worker_id
+            )
+        })
         .count()
 }
 
@@ -221,12 +223,12 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
     let outcome = state.apply_disconnect_users(&[user_a.clone(), user_b.clone()]);
 
     assert_eq!(state.users.len(), 0);
-    assert_eq!(outcome.close_operations.len(), 2);
-    assert!(outcome.close_operations.iter().any(|operation| {
+    assert_eq!(outcome.session_teardowns.len(), 2);
+    assert!(outcome.session_teardowns.iter().any(|operation| {
         let session = operation.session_key();
         session.user_id() == &user_a && session.connection_id() == connection_a
     }));
-    assert!(outcome.close_operations.iter().any(|operation| {
+    assert!(outcome.session_teardowns.iter().any(|operation| {
         let session = operation.session_key();
         session.user_id() == &user_b && session.connection_id() == connection_b
     }));
@@ -235,7 +237,7 @@ fn disconnect_sessions_removes_current_members_and_fanouts_departures() {
 }
 
 #[test]
-fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
+fn stale_close_unregisters_committed_placement_and_returns_teardown() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
     let connection_id = join_test_user_on_placement(
@@ -259,11 +261,11 @@ fn stale_close_unregisters_committed_placement_and_returns_cleanup() {
     assert!(matches!(
         commit,
         ConnectionCloseCommit::StalePlacement {
-            cleanup: TransportCleanupOperation::CloseUser {
-                session_key: cleanup_key,
+            session_teardown: TransportTeardown::CloseSession {
+                session_key: teardown_key,
             },
             ..
-        } if cleanup_key == session_key
+        } if teardown_key == session_key
     ));
     assert_eq!(
         state.committed_transport_user_key(&user_id, connection_id),
@@ -347,10 +349,10 @@ fn presence_update_returns_none_for_stale_connection() {
 fn disconnect_sessions_ignores_missing_members() {
     let mut state = test_state();
     let outcome = state.apply_disconnect_users(&[UserId::Integer(1)]);
-    let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
+    let (relays, teardown) = outcome.transport_plan.relays_and_teardown();
 
     assert!(relays.is_empty());
-    assert!(cleanup.is_empty());
+    assert!(teardown.is_empty());
     assert!(outcome.effects.close_requests.is_empty());
     assert!(outcome.effects.fanouts.is_empty());
 }
@@ -367,22 +369,22 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
             test_sender(),
         )
         .expect("replacement join should succeed");
-    let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
+    let (relays, teardown) = outcome.transport_plan.relays_and_teardown();
 
     assert!(relays.is_empty());
-    assert_eq!(source_relay_cleanup_count(cleanup, &relay), 1);
-    assert!(cleanup.iter().any(|operation| {
+    assert_eq!(source_relay_teardown_count(teardown, &relay), 1);
+    assert!(teardown.iter().any(|operation| {
         matches!(
             operation,
-            TransportCleanupOperation::CloseUser {
+            TransportTeardown::CloseSession {
                 session_key,
             } if session_key == relay.source.session_key()
         )
     }));
-    assert!(!cleanup.iter().any(|operation| {
+    assert!(!teardown.iter().any(|operation| {
         matches!(
             operation,
-            TransportCleanupOperation::RemoveMedia { session_key, .. }
+            TransportTeardown::RemoveMedia { session_key, .. }
                 if session_key == relay.source.session_key()
         )
     }));
@@ -402,10 +404,10 @@ fn leave_releases_relay_before_forgetting_source_session() {
     let ConnectionCloseCommit::Current { transport_plan, .. } = outcome else {
         panic!("publisher leave should remove the current user");
     };
-    let (relays, cleanup) = transport_plan.relays_and_cleanup();
+    let (relays, teardown) = transport_plan.relays_and_teardown();
 
     assert!(relays.is_empty());
-    assert_eq!(source_relay_cleanup_count(cleanup, &relay), 1);
+    assert_eq!(source_relay_teardown_count(teardown, &relay), 1);
 }
 
 #[test]
@@ -414,8 +416,8 @@ fn disconnect_releases_relay_before_forgetting_source_session() {
     let relay = install_relayed_source(&mut state);
 
     let outcome = state.apply_disconnect_users(from_ref(relay.source.session_key().user_id()));
-    let (relays, cleanup) = outcome.transport_plan.relays_and_cleanup();
+    let (relays, teardown) = outcome.transport_plan.relays_and_teardown();
 
     assert!(relays.is_empty());
-    assert_eq!(source_relay_cleanup_count(cleanup, &relay), 1);
+    assert_eq!(source_relay_teardown_count(teardown, &relay), 1);
 }

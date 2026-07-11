@@ -108,7 +108,7 @@ pub fn worker_remove_media(
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
     let Some(handle) = state.media_handle(transport_media_id).cloned() else {
-        return Err(TransportAdapterError::TransportUnavailable);
+        return Ok(());
     };
     if handle.session_key() != session_key {
         return Err(TransportAdapterError::InvalidInput);
@@ -148,7 +148,7 @@ fn unregister_media_handle(
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
     let Some(handle) = state.remove_media_handle(transport_media_id) else {
-        return Err(TransportAdapterError::TransportUnavailable);
+        return Err(TransportAdapterError::InvalidInput);
     };
     match handle {
         RegisteredMediaHandle::Producer { session_key, mid } => {
@@ -187,13 +187,15 @@ fn stage_last_mid_removal_before_unregistering_handle(
     transport_media_id: TransportMediaId,
     handle: &RegisteredMediaHandle,
 ) -> Result<(), TransportAdapterError> {
-    if state.session_has_other_media_mid(handle.session_key(), handle.mid(), transport_media_id) {
-        return Ok(());
-    }
+    let has_other_mid =
+        state.session_has_other_media_mid(handle.session_key(), handle.mid(), transport_media_id);
     let session_state = state
         .users
         .get_mut(handle.session_key())
-        .ok_or(TransportAdapterError::TransportUnavailable)?;
+        .ok_or(TransportAdapterError::InvalidInput)?;
+    if has_other_mid {
+        return Ok(());
+    }
     if session_state.sdp_negotiation.initial_offer_applied {
         worker_stage_native_media_removal(session_state, handle.mid())
     } else {

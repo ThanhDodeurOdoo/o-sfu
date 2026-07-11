@@ -24,11 +24,10 @@ use crate::{
         ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
         media_transport::{
             RelayRouteActivity, TransportConsumerRoute, TransportMediaId,
-            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
+            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey, TransportTeardown,
         },
         room::{
             RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
-            cleanup::TransportCleanupOperation,
             effects::transport::RoomTransportPlan,
             outbound::OutboundSender,
             placement::{LoadTriggeredPlacementState, WorkerLoadIndex},
@@ -660,13 +659,13 @@ impl RoomTopology {
         )
     }
 
-    fn transport_cleanup_operations(
+    fn resolve_media_teardowns(
         &self,
         removals: impl IntoIterator<Item = TransportMediaRemoval>,
-    ) -> Vec<TransportCleanupOperation> {
+    ) -> Vec<TransportTeardown> {
         removals
             .into_iter()
-            .map(|removal| TransportCleanupOperation::RemoveMedia {
+            .map(|removal| TransportTeardown::RemoveMedia {
                 session_key: self.transport_user_key(removal.user, removal.connection),
                 transport_media_id: removal.transport_media,
             })
@@ -725,7 +724,7 @@ impl RoomTopology {
         target: &ProducerRouteTarget,
     ) -> Option<RoomTransportPlan> {
         let transport_removals = self.transport_removals_for_producer_target(user_id, target);
-        let transport_cleanup = self.transport_cleanup_operations(transport_removals);
+        let teardown = self.resolve_media_teardowns(transport_removals);
         if let Some(error) = self.router.remove_producer(target.routed_producer_id).err() {
             error!(
                 ?user_id,
@@ -736,9 +735,9 @@ impl RoomTopology {
         }
         let relay_effects = self.remove_source(target.source_id)?;
         let relay_effects = self.resolve_relay_effects(relay_effects);
-        Some(RoomTransportPlan::from_relays_and_cleanup(
+        Some(RoomTransportPlan::from_relays_and_teardown(
             relay_effects,
-            transport_cleanup,
+            teardown,
         ))
     }
 
@@ -761,7 +760,7 @@ impl RoomTopology {
         true
     }
 
-    /// commits the new connection before returning cleanup for displaced placement
+    /// commits the new connection before returning teardown for displaced placement
     ///
     /// `previous_connection` must name the currently committed session for replacement joins
     pub fn commit_session_placement(
@@ -795,7 +794,7 @@ impl RoomTopology {
         let replacement_transport_plan = previous_session_key.as_ref().map_or_else(
             RoomTransportPlan::default,
             |replaced_session_key| {
-                let transport_cleanup = vec![TransportCleanupOperation::CloseUser {
+                let teardown = [TransportTeardown::CloseSession {
                     session_key: replaced_session_key.clone(),
                 }];
                 let relay_effects = self.remove_user_media(user_id);
@@ -804,7 +803,7 @@ impl RoomTopology {
                     user_id,
                     replaced_session_key,
                 );
-                RoomTransportPlan::from_relays_and_cleanup(relay_effects, transport_cleanup)
+                RoomTransportPlan::from_relays_and_teardown(relay_effects, teardown)
             },
         );
         Ok(SessionPlacementCommit {
@@ -815,13 +814,13 @@ impl RoomTopology {
 
     pub fn remove_session(&mut self, user_id: &UserId) -> RoomTransportPlan {
         let transport_removals = self.transport_removals_for_user(user_id);
-        let transport_cleanup = self.transport_cleanup_operations(transport_removals);
+        let teardown = self.resolve_media_teardowns(transport_removals);
         let relay_effects = self.remove_user_media(user_id);
         let relay_effects = self.resolve_relay_effects(relay_effects);
         if let Some(error) = self.router.remove_session(user_id).err() {
             error!(?user_id, ?error, "failed to remove user from room router");
         }
-        RoomTransportPlan::from_relays_and_cleanup(relay_effects, transport_cleanup)
+        RoomTransportPlan::from_relays_and_teardown(relay_effects, teardown)
     }
 
     pub(super) fn commit_consumer_setup(

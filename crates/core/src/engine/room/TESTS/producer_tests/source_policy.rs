@@ -1,6 +1,6 @@
 use super::support::*;
 use crate::engine::{
-    media_transport::ReceiverBandwidthSnapshot,
+    media_transport::{ReceiverBandwidthSnapshot, TransportTeardown},
     room::source_policy::SourcePolicyTransaction,
     source_model::{ConsumerSourceSelection, PublishedSourceId, SourcePolicy, SourcePublishIntent},
 };
@@ -241,7 +241,7 @@ async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
     let tx = source_policy_transaction_from_transport_snapshot(&scenario).await;
 
     let (replacement_tx, _replacement_rx) = test_sender();
-    join_user_without_transport_cleanup(
+    join_user_without_transport_teardown(
         &scenario.room,
         &scenario.adapter,
         featured_user_id.clone(),
@@ -273,7 +273,7 @@ async fn source_policy_ignores_receiver_bandwidth_from_replaced_connection() {
         .await;
 
     let (replacement_tx, _replacement_rx) = test_sender();
-    join_user_without_transport_cleanup(
+    join_user_without_transport_teardown(
         &scenario.room,
         &scenario.adapter,
         receiver_user_id.clone(),
@@ -593,9 +593,10 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
 
     scenario
         .adapter
-        .close_session(&receiver_session_key)
-        .await
-        .expect("test should close receiver transport before source policy transaction");
+        .teardown([TransportTeardown::CloseSession {
+            session_key: receiver_session_key,
+        }])
+        .await;
     tx.execute(&scenario.room, &scenario.adapter).await;
 
     assert_subscription_policy_pause_reason(

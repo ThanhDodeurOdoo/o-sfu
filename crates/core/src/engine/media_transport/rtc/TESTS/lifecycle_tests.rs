@@ -1,11 +1,15 @@
+use std::sync::mpsc;
+
 use futures_util::future::join_all;
 use str0m::{Event, IceConnectionState};
-use tokio::time::timeout;
+use tokio::{sync::oneshot, time::timeout};
 
 use super::fixtures::*;
 use crate::engine::media_transport::rtc::{
+    commands::RtcWorkerCommand,
     packet_loop::{transport_health_from_event, transport_ice_state},
-    state::TransportSessionHealth,
+    state::{PacketLoopState, TransportSessionHealth},
+    worker::WorkerCommandContext,
 };
 
 fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
@@ -201,6 +205,63 @@ async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
     );
     sleep(Duration::from_millis(5)).await;
     assert!(adapter.packet_loop_started());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 144, UserId::Integer(144));
+    let _offer = expect_initial_offer(&adapter, &session_key).await;
+    let media_id = adapter
+        .add_recv_media(
+            &session_key,
+            Str0mMediaKind::Audio,
+            &sample_router_rtp_parameters("aud-up", 14_400),
+        )
+        .await
+        .expect("test media should be registered");
+    let worker_handle = adapter
+        .worker_handle()
+        .expect("worker handle should be readable")
+        .expect("worker should be started");
+
+    let (probe_entered_tx, probe_entered_rx) = oneshot::channel();
+    let (release_probe_tx, release_probe_rx) = mpsc::channel();
+    let debug_handle = worker_handle.debug_handle.clone();
+    let probe = tokio::spawn(async move {
+        debug_handle
+            .probe(move |_: &PacketLoopState, _: &WorkerCommandContext<'_>| {
+                let _ = probe_entered_tx.send(());
+                release_probe_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("test should release the blocking probe");
+            })
+            .await
+    });
+    timeout(Duration::from_secs(1), async {
+        probe_entered_rx
+            .await
+            .expect("blocking probe should enter the worker");
+
+        let (response_tx, response_rx) = oneshot::channel();
+        worker_handle
+            .command_tx
+            .send(RtcWorkerCommand::RemoveMedia {
+                session_key,
+                transport_media_id: media_id,
+                response: response_tx,
+            })
+            .await
+            .expect("worker should accept the media removal");
+        drop(response_rx);
+        release_probe_tx
+            .send(())
+            .expect("blocking probe should still be waiting");
+        assert_eq!(probe.await.expect("probe task should complete"), Some(()));
+        assert_eq!(adapter.debug_resolve_mid(media_id).await, None);
+    })
+    .await
+    .expect("accepted worker command should complete before timeout");
 }
 
 #[tokio::test]

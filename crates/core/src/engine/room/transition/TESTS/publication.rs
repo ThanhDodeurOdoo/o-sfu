@@ -10,7 +10,7 @@ use o_sfu_router::{
     rtp::MediaCapabilities, test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
 };
 
-use super::{PublishStageOutcome, TransportEffectOutcome};
+use super::PublishStageOutcome;
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId, UserPermissions,
     media_transport::{
@@ -127,11 +127,10 @@ async fn staged_publish_is_not_visible_in_room_graph_before_answer() {
             .await
             .is_some()
     );
-    assert_eq!(
+    assert!(
         room.user_operation(&user_id, connection_id, &media_transport)
             .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
-            .await,
-        Some(TransportEffectOutcome::Applied)
+            .await
     );
 }
 
@@ -184,18 +183,17 @@ async fn rollback_before_answer_consumes_reserved_publish_once() {
     let (room, media_transport, user_id, connection_id) = staged_room().await;
     let transport_media_id = staged_media_id(&room, &user_id, connection_id).await;
 
-    assert_eq!(
+    assert!(
         room.user_operation(&user_id, connection_id, &media_transport)
             .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
-            .await,
-        Some(TransportEffectOutcome::Applied)
+            .await
     );
 
-    assert_eq!(
-        room.user_operation(&user_id, connection_id, &media_transport)
+    assert!(
+        !room
+            .user_operation(&user_id, connection_id, &media_transport)
             .rollback_staged_publish(&stream_id_for_source(TestSourceKind::ScalableVideo))
-            .await,
-        None
+            .await
     );
     assert!(
         media_transport

@@ -55,7 +55,7 @@
 //! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC consts/types |
 //! | `o-sfu-model` | shared call data surfaced through [`o_sfu_protocol::wire::UserId`], [`o_sfu_protocol::wire::StreamType`], [`o_sfu_protocol::wire::RecordingState`] and [`o_sfu_protocol::wire::WebSocketCloseCode`] |
 //! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] facade for room placement and routed media lifetimes |
-//! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, cleanup effects and [`core::server::transport::MediaTransport`] projection |
+//! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, resolved teardown effects and [`core::server::transport::MediaTransport`] projection |
 //! | [`o_sfu_protocol`] | sans-I/O [`o_sfu_protocol::host::ProtocolCore`] and typed [`o_sfu_protocol::host::Command`] values |
 //! | [`o_sfu_telemetry`] | tracing setup, [`o_sfu_telemetry::metrics::RuntimeMetrics`], [`o_sfu_telemetry::diagnostics::DiagnosticsStore`], [`o_sfu_telemetry::prometheus::render_prometheus`] and graph payloads |
 //!
@@ -96,7 +96,7 @@
 //! request handlers receive a smaller internal state handle so HTTP extractors
 //! and WebSocket loops cannot depend on boot details or shutdown ownership
 //!
-//! # shutdown and cleanup
+//! # shutdown and teardown
 //!
 //! [`Runtime::serve_listener`] scopes background tasks to the server future
 //! normal shutdown cancels the shared token and waits for those tasks to finish
@@ -108,7 +108,7 @@
 //!     |
 //!     +-> spawn RuntimeTasks
 //!     |     +-> source-policy sync
-//!     |     +-> cleanup retry drain
+//!     |     +-> spillover cooldown
 //!     |
 //!     +-> serve HTTP and WebSocket
 //!     |
@@ -119,11 +119,13 @@
 //!     +-> return server result
 //! ```
 //!
-//! user and media cleanup is explicit async work,
-//! closing a WebSocket user drains room cleanup through
+//! user and media teardown is explicit async work,
+//! closing a WebSocket user awaits resolved teardown through
 //! [`core::server::room::RoomManager`], [`core::server::room::UserCloseReason`]
 //! and [`core::server::transport::MediaTransport`]
-//! drop paths are used to detect missed cleanup, not to complete normal media
+//! the current room is removed immediately once final teardown and its
+//! lifecycle lease finish
+//! drop paths are used to detect missed teardown, not to complete normal media
 //! teardown
 //!
 //! # HTTP and WebSocket admission
@@ -156,7 +158,7 @@
 //! | validate user and connection   |    | MediaTransport commands      |
 //! | commit room topology           |    | diagnostics and metrics      |
 //! | capture RoomEffects            |--->| websocket output             |
-//! |                                |    | cleanup retry reconciliation |
+//! |                                |    | idempotent teardown           |
 //! +--------------------------------+    +------------------------------+
 //! ```
 //!
@@ -171,8 +173,13 @@
 //! transport effects,
 //! they decide which [`core::prelude::SourcePublishIntent`] values exist, which
 //! receivers want them, which [`core::server::transport::SourcePacketGate`]
-//! should be installed and which cleanup work must be retried after transport
-//! failure
+//! should be installed and which resolved teardown operations must run
+//!
+//! [`core::server::transport::MediaTransport`] owns final teardown semantics
+//! missing workers or resources are successful no-ops
+//! ownership and invariant failures are terminal and trigger an awaited
+//! session-close fallback
+//! no room or runtime teardown retry state exists
 //!
 //! # packet path
 //!
@@ -224,6 +231,10 @@
 //! - recent-event storage for operator investigation
 //! - [`o_sfu_telemetry::graph`] payloads used by the diagnostics UI and
 //!   Grafana-style views
+//!
+//! provisioned dashboards and Prometheus rules live in the sibling
+//! `o-sfu-telemetry` repository
+//! terminal teardown observability requires a separate delivery there
 //!
 //! diagnostics routes are separate from metrics,
 //! metrics are intended for time series,

@@ -20,10 +20,10 @@ use super::{
         MediaQualitySample, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
         RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
         RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
-        RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind,
-        TransportCleanupFailureKind, TransportHealthState, TransportHealthTransition,
-        TransportIceState, TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection,
-        WsBusFailureKind, WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
+        RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind, TransportHealthState,
+        TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
+        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
+        WsSessionLoopExitReason, WsStartupFailureKind,
     },
     rtc::{RtcMetrics, RtcMetricsRecorder, RtcRouteControlMetrics},
     rtp::{RtpMetrics, RtpMetricsRecorder},
@@ -79,9 +79,7 @@ pub struct RuntimeMetrics {
     pub(super) media_quality_bwe_observations: Counter,
     pub(super) media_quality_jitter_rtp_timestamp_units_observed: Counter,
     pub(super) media_quality_jitter_observations: Counter,
-    pub(super) transport_cleanup_retries: Counter,
-    pub(super) transport_cleanup_retry_successes: Counter,
-    pub(super) transport_cleanup_failures: CounterFamily<TransportCleanupFailureKind>,
+    pub(super) transport_cleanup_failures: Counter,
     pub(super) source_selection_updates: CounterFamily<SourceSelectionKind>,
     pub(super) budget_solver_outcomes: CounterFamily<BudgetSolverOutcome>,
 }
@@ -477,16 +475,8 @@ impl RuntimeMetrics {
         self.media_quality_jitter_observations.increment();
     }
 
-    pub fn record_transport_cleanup_retry_scheduled(&self) {
-        self.transport_cleanup_retries.increment();
-    }
-
-    pub fn record_transport_cleanup_retry_succeeded(&self) {
-        self.transport_cleanup_retry_successes.increment();
-    }
-
-    pub fn record_transport_cleanup_failure(&self, kind: TransportCleanupFailureKind) {
-        self.transport_cleanup_failures.increment(kind);
+    pub fn record_transport_cleanup_failure(&self) {
+        self.transport_cleanup_failures.increment();
     }
 
     pub fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {
