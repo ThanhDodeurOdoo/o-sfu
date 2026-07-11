@@ -11,7 +11,6 @@ use o_sfu_router::rtp::MediaCapabilities;
 use super::super::{
     RoomUserOperation,
     effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
-    user_negotiation::UserNegotiationUpdate,
 };
 use crate::engine::{
     UserId,
@@ -23,16 +22,14 @@ impl RoomUserOperation<'_> {
         self,
         capabilities: MediaCapabilities,
     ) -> Option<()> {
-        let update = {
+        let became_ready = {
             let mut state = self.room.state.write().await;
             state.set_user_negotiated(self.user_id, self.connection_id, capabilities)
-        };
-        match update {
-            Some(UserNegotiationUpdate::BecameConsumerReady) => {
-                self.apply_receiver_readiness().await
-            }
-            Some(UserNegotiationUpdate::Applied) => Some(()),
-            None => None,
+        }?;
+        if became_ready {
+            self.apply_receiver_readiness().await
+        } else {
+            Some(())
         }
     }
 

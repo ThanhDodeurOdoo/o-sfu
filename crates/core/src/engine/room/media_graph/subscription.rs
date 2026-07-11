@@ -166,19 +166,11 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<ReceiverRouteCommit> {
-        let can_consume = {
-            let user = self.users.get(user_id)?;
-            if user.connection_id != connection_id {
-                return None;
-            }
-            user.negotiation.can_consume()
-        };
+        let user = self.user_for_connection(user_id, connection_id)?;
+        user.parsed_client_rtp_capabilities.as_ref()?;
         let before = self.media_counts();
-        let work = if can_consume {
-            self.plan_missing_receiver_routes(ReceiverRouteScope::Receiver(user_id, connection_id))
-        } else {
-            ReceiverRouteWork::default()
-        };
+        let work =
+            self.plan_missing_receiver_routes(ReceiverRouteScope::Receiver(user_id, connection_id));
         Some(ReceiverRouteCommit {
             receiver_user_id: user_id.clone(),
             receiver_connection_id: connection_id,
@@ -197,11 +189,8 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<Vec<PendingConsumerSetup>> {
-        let user = self.users.get(user_id)?;
-        if user.connection_id != connection_id {
-            return None;
-        }
-        if !user.negotiation.can_consume() {
+        let user = self.user_for_connection(user_id, connection_id)?;
+        if user.parsed_client_rtp_capabilities.is_none() {
             return Some(Vec::new());
         }
         let ReceiverRouteWork { setups, .. } =
@@ -296,8 +285,8 @@ impl RoomState {
             ReceiverRouteScope::Producer(producer_id) => {
                 let receivers = self.users.iter().filter_map(|(user, state)| {
                     state
-                        .negotiation
-                        .can_consume()
+                        .parsed_client_rtp_capabilities
+                        .is_some()
                         .then_some((user, state.connection_id))
                 });
                 self.topology
@@ -317,9 +306,7 @@ impl RoomState {
     fn plan_consumer(&mut self, target: ConsumerSetupTarget) -> Option<PendingConsumerSetup> {
         let (sender, client_caps) = {
             let user = self.users.get(target.session.user_id())?;
-            if user.connection_id != target.session.connection_id()
-                || !user.negotiation.can_consume()
-            {
+            if user.connection_id != target.session.connection_id() {
                 return None;
             }
             (

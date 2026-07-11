@@ -81,9 +81,7 @@ impl RoomTestMedia<'_> {
         let (publisher_connection_id, capabilities) = {
             let state = self.room.state.read().await;
             let user = state.users.get(user_id)?;
-            if !user.negotiation.can_publish() {
-                return None;
-            }
+            user.parsed_client_rtp_capabilities.as_ref()?;
             (user.connection_id, state.router_rtp_capabilities())
         };
         let consumable_rtp_parameters =

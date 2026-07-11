@@ -162,7 +162,7 @@ impl RoomState {
             );
             return None;
         }
-        if !user.negotiation.can_publish() {
+        if user.parsed_client_rtp_capabilities.is_none() {
             warn!(
                 ?user_id,
                 publisher_connection_id = ?publisher_connection_id,
@@ -269,12 +269,13 @@ impl RoomState {
             );
             return None;
         };
-        if user.connection_id != publish.owner_connection_id || !user.negotiation.can_publish() {
+        let publish_ready = user.parsed_client_rtp_capabilities.is_some();
+        if user.connection_id != publish.owner_connection_id || !publish_ready {
             warn!(
                 user_id = ?publish.owner_user_id,
                 owner_connection_id = ?publish.owner_connection_id,
                 current_connection_id = ?user.connection_id,
-                publish_ready = user.negotiation.can_publish(),
+                publish_ready,
                 stream_id = %publish.stream_id,
                 ?transport_media_id,
                 "cannot commit negotiated publish because the user state changed before commit"

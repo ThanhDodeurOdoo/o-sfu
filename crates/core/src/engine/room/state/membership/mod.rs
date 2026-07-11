@@ -16,7 +16,6 @@ use super::{
             CommittedTransportReceipt, SessionPlacementCommit, SessionPlacementRejection,
         },
         outbound::{MessageFanout, OutboundSender, RemoteSourceSnapshot, fanout_all},
-        user_negotiation::{UserNegotiation, UserNegotiationUpdate},
     },
     UserJoinedFanout,
     shared::{ActiveUser, RoomState},
@@ -202,7 +201,6 @@ impl RoomState {
             let old_sender = mem::replace(&mut user.sender, sender);
             user.permissions = permissions;
             user.reset_presentation();
-            user.negotiation = UserNegotiation::default();
             user.parsed_client_rtp_capabilities = None;
             user.connection_id = connection_id;
             return Some(old_sender);
@@ -214,7 +212,6 @@ impl RoomState {
                 permissions,
                 info: UserInfo::default(),
                 server_featured: None,
-                negotiation: UserNegotiation::default(),
                 desired_source_subscriptions: BTreeMap::new(),
                 parsed_client_rtp_capabilities: None,
                 connection_id,
@@ -433,10 +430,11 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         capabilities: MediaCapabilities,
-    ) -> Option<UserNegotiationUpdate> {
+    ) -> Option<bool> {
         let user = self.user_mut_for_connection(user_id, connection_id)?;
+        let became_ready = user.parsed_client_rtp_capabilities.is_none();
         user.parsed_client_rtp_capabilities = Some(capabilities);
-        Some(user.negotiation.mark_ready())
+        Some(became_ready)
     }
 
     pub fn apply_disconnect_users(&mut self, user_ids: &[UserId]) -> DisconnectCommit {

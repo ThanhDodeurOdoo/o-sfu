@@ -17,7 +17,6 @@ pub mod rtp_capabilities;
 mod source_policy;
 mod state;
 mod transition;
-mod user_negotiation;
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub use TESTS::api::{

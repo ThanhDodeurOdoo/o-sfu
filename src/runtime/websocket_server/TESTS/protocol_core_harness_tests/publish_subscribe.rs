@@ -171,47 +171,38 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
 }
 
 #[tokio::test]
-async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer_lands() {
-    let Some((_server, room, mut alice, mut bob)) = Box::pin(setup_real_rtc_protocol_peers(
-        "issuer-protocol-rtc-publish-queue",
-        UserId::Integer(73),
-        UserId::Integer(74),
-        56_303,
-        56_304,
-    ))
-    .await
-    else {
-        return;
-    };
+async fn protocol_core_queues_one_follow_up_offer_until_first_answer() -> TestResult {
+    let (_server, room, mut alice, mut bob) = require_some(
+        Box::pin(setup_real_rtc_protocol_peers(
+            "issuer-protocol-rtc-publish-queue",
+            UserId::Integer(73),
+            UserId::Integer(74),
+            56_303,
+            56_304,
+        ))
+        .await,
+        "real RTC protocol peers should start",
+    )?;
     alice.auto_answer_negotiation = false;
 
-    assert!(
-        alice
-            .publish(ProtocolStreamType::Camera, true)
-            .await
-            .is_some()
-    );
+    require_some(
+        alice.publish(ProtocolStreamType::Camera, true).await,
+        "publisher should stage camera publish",
+    )?;
     assert!(
         alice.read_server_frame().await.is_some(),
         "publisher should receive the first rtc-backed renegotiation request"
     );
-    assert_eq!(
-        alice.pending_negotiations.len(),
-        1,
-        "the first publish should leave one pending negotiation answer in the harness"
-    );
+    assert_eq!(alice.pending_negotiations.len(), 1);
 
-    assert!(
-        alice
-            .publish(ProtocolStreamType::Screen, true)
-            .await
-            .is_some()
-    );
-    assert_eq!(
-        alice.pending_negotiations.len(),
-        1,
-        "the second publish should queue behind the in-flight negotiation instead of producing a second simultaneous offer"
-    );
+    for stream_type in [
+        ProtocolStreamType::Screen,
+        ProtocolStreamType::Audio,
+        ProtocolStreamType::Screen,
+    ] {
+        assert!(alice.publish(stream_type, true).await.is_some());
+    }
+    assert_eq!(alice.pending_negotiations.len(), 1);
 
     assert!(
         alice.answer_next_negotiation().await.is_some(),
@@ -232,33 +223,44 @@ async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer
         alice.read_server_frame().await.is_some(),
         "publisher should receive the queued follow-up renegotiation only after the first answer lands"
     );
-    assert_eq!(
-        alice.pending_negotiations.len(),
-        1,
-        "the queued publish should surface exactly one follow-up negotiation request"
-    );
+    assert_eq!(alice.pending_negotiations.len(), 1);
 
     assert!(
         alice.answer_next_negotiation().await.is_some(),
         "publisher should answer the queued follow-up negotiation"
     );
-    let Some(updated_track_bindings) = read_track_snapshot(&mut bob).await else {
-        return;
-    };
-    assert_eq!(updated_track_bindings.len(), 2);
-    assert_track_snapshot_contains(
-        &updated_track_bindings,
-        &ProtocolSessionId::Integer(73),
-        ProtocolStreamType::Camera,
-    );
-    assert_track_snapshot_contains(
-        &updated_track_bindings,
-        &ProtocolSessionId::Integer(73),
-        ProtocolStreamType::Screen,
+    for expected in [
+        &[ProtocolStreamType::Camera, ProtocolStreamType::Audio][..],
+        &[
+            ProtocolStreamType::Camera,
+            ProtocolStreamType::Audio,
+            ProtocolStreamType::Screen,
+        ],
+    ] {
+        let Some(tracks) = read_track_snapshot(&mut bob).await else {
+            panic!("subscriber should receive queued publish replay snapshot");
+        };
+        assert_eq!(tracks.len(), expected.len());
+        for stream_type in expected {
+            assert_track_snapshot_contains(&tracks, &ProtocolSessionId::Integer(73), *stream_type);
+        }
+        assert!(
+            read_until_server_request(&mut bob).await.is_some(),
+            "subscriber should negotiate each replayed stream"
+        );
+    }
+    assert!(
+        no_server_frame(&mut bob, Duration::from_millis(150)).await,
+        "duplicate queued publish should not produce another replay or offer"
     );
     assert!(
-        bob.read_server_frame().await.is_some(),
-        "subscriber should receive the follow-up renegotiation request for the queued publish"
+        timeout(
+            Duration::from_millis(150),
+            read_until_server_request(&mut alice),
+        )
+        .await
+        .is_err(),
+        "queued publishes should produce exactly one publisher follow-up offer"
     );
     assert!(
         close_peer_and_wait_for_room_cleanup(&mut alice, &room, &UserId::Integer(73))
@@ -272,6 +274,7 @@ async fn protocol_core_publish_queues_follow_up_renegotiation_until_first_answer
             .is_some(),
         "subscriber websocket should close cleanly before the test server is dropped"
     );
+    Ok(())
 }
 
 #[tokio::test]
