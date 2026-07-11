@@ -48,6 +48,10 @@
 //! [`core::server::room::Room`], [`o_sfu_router::Router`]
 //! and [`core::server::transport::MediaTransport`]
 //!
+//! room media control reaches `MediaTransport` as one semantic plan, then runs
+//! through bounded receiver-BWE, producer, source-gate and consumer follow-up
+//! worker phases while relay control and resolved teardown keep separate paths
+//!
 //! ## sub crates
 //!
 //! | crate | role |
@@ -150,7 +154,7 @@
 //! # room, router and transport ownership
 //!
 //! room transitions are planned while holding short exclusive room state locks,
-//! asyn transport and diagnostics work is executed later through effect plans
+//! async transport and diagnostics work is executed later through effect plans
 //!
 //! ```text
 //! room state lock held                  lock released

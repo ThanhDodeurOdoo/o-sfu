@@ -4,9 +4,7 @@ use str0m::media::Mid;
 use tokio::sync::mpsc;
 
 use super::super::{
-    commands::{
-        RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
-    },
+    commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
     relay_registry::RelayTargetId,
     route_control::PacketLayerGate,
     source_route::RemoteSourceRegistration,
@@ -143,12 +141,12 @@ fn remote_packet_gate_command(
     target_id: RelayTargetId,
     packet_gate: PacketLayerGate,
 ) -> RtcWorkerCommand {
-    RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+    RtcWorkerCommand::RouteControl {
         request: RouteControlRequest::SetRemoteSourcePacketGate {
             source,
             target_id,
             packet_gate,
         },
         response: None,
-    })
+    }
 }

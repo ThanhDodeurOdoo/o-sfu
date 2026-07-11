@@ -664,7 +664,7 @@ impl RouteTable {
         self.active.expired_srcs(now)
     }
 
-    #[cfg(any(test, feature = "internal-benchmarks"))]
+    #[cfg(test)]
     pub(super) fn effective_packet_gate(
         &self,
         source_id: TransportMediaId,

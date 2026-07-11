@@ -49,7 +49,7 @@ use std::{
 };
 
 #[cfg(feature = "internal-benchmarks")]
-pub use handlers::worker_set_consumer_pkt_gates_for_bench;
+pub use handlers::apply_media_control_batch;
 pub(super) use handlers::{
     KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_rid_ready,
     drain_due_rid_kf_refreshes, handle_worker_command, request_kf_for_target,
@@ -61,8 +61,6 @@ use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::MediaKind;
 use tokio::sync::mpsc;
 
-#[cfg(test)]
-use super::commands::{ConsumerPacketGateCommand, RtcMediaControlCommand};
 use super::{
     bitrate::BitrateRegistry,
     commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
@@ -71,10 +69,7 @@ use super::{
     state::RtcSnapshotState,
 };
 #[cfg(test)]
-use crate::engine::media_transport::{
-    AppliedSessionAnswer, ReceiverBweTargetUpdate, SourcePacketGate, TransportConsumerRoute,
-    TransportResult,
-};
+use crate::engine::media_transport::AppliedSessionAnswer;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::engine::media_transport::{SessionOffer, TransportMediaId, TransportSessionKey};
 use crate::{
@@ -84,7 +79,7 @@ use crate::{
         diagnostics::DiagnosticsStore,
         media_transport::{
             MediaTransportConfig, MediaTransportDeps, SourcePolicySignal, TransportAdapterError,
-            TransportSourceKey,
+            TransportRelayRouteAction, TransportSourceKey,
         },
         metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
         packet_sink_registry::RoomPacketSinkRegistry,
@@ -324,105 +319,6 @@ impl RtcWorker {
         .await
     }
 
-    #[cfg(test)]
-    async fn request_media_control(
-        &self,
-        request: RouteControlRequest,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_worker(|response| RtcWorkerCommand::media_control(request, response))
-            .await
-    }
-
-    #[cfg(test)]
-    pub async fn set_producer_active(
-        &self,
-        source: &TransportSourceKey,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(RouteControlRequest::SetProducerActive {
-            source: source.clone(),
-            active,
-        })
-        .await
-    }
-
-    #[cfg(test)]
-    pub async fn set_consumer_active(
-        &self,
-        route: &TransportConsumerRoute,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(RouteControlRequest::SetConsumerActive {
-            route: route.clone(),
-            active,
-        })
-        .await
-    }
-
-    #[cfg(test)]
-    pub async fn set_consumer_pkt_gate(
-        &self,
-        route: &TransportConsumerRoute,
-        packet_gate: SourcePacketGate,
-    ) -> Result<(), TransportAdapterError> {
-        let mut results = self
-            .request_worker(|response| {
-                RtcWorkerCommand::MediaControl(RtcMediaControlCommand::SetConsumerPacketGateBatch {
-                    source: route.source().clone(),
-                    updates: vec![ConsumerPacketGateCommand::from_route(route, &packet_gate)],
-                    response,
-                })
-            })
-            .await?;
-        results
-            .pop()
-            .unwrap_or(Err(TransportAdapterError::InvalidInput))
-    }
-
-    #[cfg(test)]
-    pub async fn activate_relay_route(
-        &self,
-        source: &TransportSourceKey,
-        target: &Self,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(target.relay_install_request(source.clone())?)
-            .await
-    }
-
-    #[cfg(test)]
-    pub async fn deactivate_relay_route(
-        &self,
-        source: &TransportSourceKey,
-        target: &Self,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(target.relay_release_request(source.clone()))
-            .await
-    }
-
-    #[cfg(test)]
-    pub async fn apply_relay_target_activity(
-        &self,
-        source: &TransportSourceKey,
-        target: &Self,
-        active: bool,
-    ) -> Result<(), TransportAdapterError> {
-        self.request_media_control(target.relay_activity_request(source.clone(), active))
-            .await
-    }
-
-    #[cfg(test)]
-    pub async fn set_receiver_bwe_targets<'a>(
-        &self,
-        updates: impl IntoIterator<Item = &'a ReceiverBweTargetUpdate>,
-    ) -> Result<Vec<TransportResult<()>>, TransportAdapterError> {
-        let updates = updates.into_iter().cloned().collect();
-        self.request_worker(|response| RtcWorkerCommand::SetReceiverBweTargetBatch {
-            updates,
-            response,
-        })
-        .await
-    }
-
     /// builds the control handle a consumer worker stores for a remote source
     ///
     /// the returned handle lets the consumer worker send best-effort keyframe
@@ -446,34 +342,29 @@ impl RtcWorker {
         ))
     }
 
-    pub fn relay_install_request(
+    pub fn relay_route_request(
         &self,
         source: TransportSourceKey,
+        action: TransportRelayRouteAction,
     ) -> Result<RouteControlRequest, TransportAdapterError> {
-        Ok(RouteControlRequest::AddRelayTarget {
-            source,
-            target_id: self.relay_target_id,
-            target: self.ensure_packet_loop_started()?.relay_mailbox,
+        Ok(match action {
+            TransportRelayRouteAction::Install => RouteControlRequest::AddRelayTarget {
+                source,
+                target_id: self.relay_target_id,
+                target: self.ensure_packet_loop_started()?.relay_mailbox,
+            },
+            TransportRelayRouteAction::Release => RouteControlRequest::RemoveRelayTarget {
+                source,
+                target_id: self.relay_target_id,
+            },
+            TransportRelayRouteAction::SetActivity(activity) => {
+                RouteControlRequest::SetRelayTargetActive {
+                    source,
+                    target_id: self.relay_target_id,
+                    active: activity.is_active(),
+                }
+            }
         })
-    }
-
-    pub fn relay_release_request(&self, source: TransportSourceKey) -> RouteControlRequest {
-        RouteControlRequest::RemoveRelayTarget {
-            source,
-            target_id: self.relay_target_id,
-        }
-    }
-
-    pub fn relay_activity_request(
-        &self,
-        source: TransportSourceKey,
-        active: bool,
-    ) -> RouteControlRequest {
-        RouteControlRequest::SetRelayTargetActive {
-            source,
-            target_id: self.relay_target_id,
-            active,
-        }
     }
 }
 

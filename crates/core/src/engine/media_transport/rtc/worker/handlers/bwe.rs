@@ -12,18 +12,7 @@ use crate::{
     engine::media_transport::{ReceiverBweTargetUpdate, TransportAdapterError, TransportResult},
 };
 
-pub(super) fn worker_set_receiver_bwe_targets(
-    state: &mut PacketLoopState,
-    max_bitrate_out: Bitrate,
-    updates: &[ReceiverBweTargetUpdate],
-) -> Vec<TransportResult<()>> {
-    updates
-        .iter()
-        .map(|update| apply_receiver_bwe_target(state, max_bitrate_out, update))
-        .collect()
-}
-
-fn apply_receiver_bwe_target(
+pub(super) fn apply_receiver_bwe_target(
     state: &mut PacketLoopState,
     max_bitrate_out: Bitrate,
     update: &ReceiverBweTargetUpdate,

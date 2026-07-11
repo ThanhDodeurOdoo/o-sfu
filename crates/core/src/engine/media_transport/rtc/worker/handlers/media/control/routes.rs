@@ -5,10 +5,10 @@ use str0m::media::{MediaKind, Mid, Pt};
 
 use super::{super::RouteSourceKind, selected_rid};
 use crate::engine::media_transport::{
-    TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
-    TransportSessionKey, TransportSourceKey,
+    SourcePacketGate, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+    TransportResult, TransportSessionKey, TransportSourceKey,
     rtc::{
-        commands::{ConsumerPacketGateCommand, RemoteSourceControl},
+        commands::RemoteSourceControl,
         media_registry::RegisteredMediaHandle,
         relay_registry::{RelayPacketMailbox, RelayTargetId},
         route_control::PacketLayerGate,
@@ -285,41 +285,36 @@ pub(super) fn worker_set_consumer_active(
 pub(super) fn worker_set_consumer_pkt_gates(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
-    updates: Vec<ConsumerPacketGateCommand>,
+    updates: Vec<(usize, TransportConsumerRoute, SourcePacketGate)>,
     now: Instant,
 ) -> Vec<TransportResult<()>> {
     let src_media = source.transport_media_id();
     let mut changed = false;
     let mut results = Vec::with_capacity(updates.len());
-    for update in updates {
-        let (consumer_key, consumer_media, packet_gate) = update.into_parts();
-        let route = TransportConsumerRoute::new(consumer_key, consumer_media, source.clone());
-        match update_consumer_route(
+    for (_, route, packet_gate) in updates {
+        if route.source() != source {
+            results.push(Err(TransportAdapterError::InvalidInput));
+            continue;
+        }
+        let packet_gate = match packet_gate {
+            SourcePacketGate::Open => PacketLayerGate::Open,
+            SourcePacketGate::Rid(rid) => PacketLayerGate::Rid(rid.as_str().into()),
+        };
+        let result = update_consumer_route(
             state,
             &route,
             ConsumerRouteMutation::PacketGate { packet_gate, now },
-        ) {
-            Ok(route_changed) => {
-                changed |= route_changed;
-                results.push(Ok(()));
-            }
-            Err(error) => results.push(Err(error)),
-        }
+        );
+        results.push(
+            result
+                .inspect(|route_changed| changed |= *route_changed)
+                .map(|_| ()),
+        );
     }
     if changed {
         state.routes.refresh_src_pkt_gate(src_media);
     }
     results
-}
-
-#[cfg(feature = "internal-benchmarks")]
-pub fn worker_set_consumer_pkt_gates_for_bench(
-    state: &mut PacketLoopState,
-    source: &TransportSourceKey,
-    updates: Vec<ConsumerPacketGateCommand>,
-    now: Instant,
-) -> Vec<TransportResult<()>> {
-    worker_set_consumer_pkt_gates(state, source, updates, now)
 }
 
 #[derive(Clone, Copy)]

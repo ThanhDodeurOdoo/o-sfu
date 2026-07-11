@@ -39,10 +39,8 @@ mod responses;
 mod routes;
 mod selected_rid;
 
-pub use responses::{apply_route_control_request, respond_set_consumer_pkt_gates};
+pub use responses::{apply_media_control_batch, apply_route_control_request};
 pub use routes::remove_source_route;
-#[cfg(feature = "internal-benchmarks")]
-pub use routes::worker_set_consumer_pkt_gates_for_bench;
 pub(super) use routes::{
     ConsumerRouteRegistration, consumer_payload_type, ensure_existing_route_src,
     ensure_local_producer_mid, ensure_route_src_registered, register_consumer_route,

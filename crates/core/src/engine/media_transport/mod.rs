@@ -38,10 +38,12 @@ pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
 pub(crate) use route_control::{
-    ConsumerRouteControl, ConsumerRouteControlOutcome, RouteControlPlan,
+    ConsumerRouteControl, ConsumerRouteControlOutcome, MediaControlPlan,
+};
+pub(in crate::engine::media_transport) use route_control::{
+    ConsumerRouteControlFailure, ProducerRouteControl,
 };
 pub(crate) use teardown::TransportTeardown;
-pub(crate) use types::ConsumerPacketGateUpdate;
 #[cfg(feature = "internal-benchmarks")]
 pub mod benchmark_support {
     pub use super::rtc::benchmark_support::*;
@@ -83,6 +85,8 @@ use crate::engine::{RoomInstanceId, metrics::RuntimeMetrics};
 pub struct MediaTransport {
     workers: Arc<[Arc<RtcWorker>]>,
     metrics: Arc<RuntimeMetrics>,
+    #[cfg(test)]
+    media_control_batches: test_support::MediaControlBatchLog,
     /// Shared wakeup signal used by every worker to notify room-level source
     /// policy tasks about transport-observed changes without polling every room.
     source_policy_signal: Arc<SourcePolicySignal>,
@@ -95,9 +99,6 @@ enum TransportCommandOp {
     ApplySessionAnswer,
     PublishMedia,
     ConsumeMedia,
-    SetProducerActive,
-    SetConsumerActive,
-    RequestConsumerKeyframe,
 }
 
 fn warn_session_command_failed(
@@ -121,22 +122,6 @@ impl MediaTransport {
         log_error: impl FnOnce(TransportAdapterError),
     ) -> Result<T, TransportAdapterError> {
         let result = match self.require_worker_for_user(session_key) {
-            Ok(worker) => worker.request_worker(build).await,
-            Err(error) => Err(error),
-        };
-        if let Err(error) = &result {
-            log_error(*error);
-        }
-        result
-    }
-
-    async fn request_consumer_route_command<T>(
-        &self,
-        route: &TransportConsumerRoute,
-        build: impl FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
-        log_error: impl FnOnce(TransportAdapterError),
-    ) -> Result<T, TransportAdapterError> {
-        let result = match self.require_consumer_worker_for_route(route) {
             Ok(worker) => worker.request_worker(build).await,
             Err(error) => Err(error),
         };

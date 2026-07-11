@@ -6,7 +6,7 @@ use tokio::{sync::oneshot, time::timeout};
 
 use super::fixtures::*;
 use crate::engine::media_transport::rtc::{
-    commands::RtcWorkerCommand,
+    commands::{RtcWorkerCommand, WorkerMediaControlBatch},
     packet_loop::{transport_health_from_event, transport_ice_state},
     state::{PacketLoopState, TransportSessionHealth},
     worker::WorkerCommandContext,
@@ -210,16 +210,10 @@ async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
     let adapter = RtcWorker::default();
-    let session_key = transport_key(1, 144, UserId::Integer(144));
-    let _offer = expect_initial_offer(&adapter, &session_key).await;
-    let media_id = adapter
-        .add_recv_media(
-            &session_key,
-            Str0mMediaKind::Audio,
-            &sample_router_rtp_parameters("aud-up", 14_400),
-        )
-        .await
-        .expect("test media should be registered");
+    let first_session = transport_key(1, 144, UserId::Integer(144));
+    let second_session = transport_key(1, 145, UserId::Integer(145));
+    let _offer = expect_initial_offer(&adapter, &first_session).await;
+    let _offer = expect_initial_offer(&adapter, &second_session).await;
     let worker_handle = adapter
         .worker_handle()
         .expect("worker handle should be readable")
@@ -227,6 +221,7 @@ async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
 
     let (probe_entered_tx, probe_entered_rx) = oneshot::channel();
     let (release_probe_tx, release_probe_rx) = mpsc::channel();
+    let updates = [(first_session.clone(), 640), (second_session.clone(), 720)];
     let debug_handle = worker_handle.debug_handle.clone();
     let probe = tokio::spawn(async move {
         debug_handle
@@ -246,9 +241,22 @@ async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
         let (response_tx, response_rx) = oneshot::channel();
         worker_handle
             .command_tx
-            .send(RtcWorkerCommand::RemoveMedia {
-                session_key,
-                transport_media_id: media_id,
+            .send(RtcWorkerCommand::ApplyMediaControlBatch {
+                batch: WorkerMediaControlBatch::ReceiverBwe(
+                    updates
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (session, kbps))| {
+                            (
+                                index,
+                                ReceiverBweTargetUpdate::new(
+                                    session.clone(),
+                                    Bitrate::from_kbps(*kbps),
+                                ),
+                            )
+                        })
+                        .collect(),
+                ),
                 response: response_tx,
             })
             .await
@@ -258,7 +266,12 @@ async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
             .send(())
             .expect("blocking probe should still be waiting");
         assert_eq!(probe.await.expect("probe task should complete"), Some(()));
-        assert_eq!(adapter.debug_resolve_mid(media_id).await, None);
+        for (session, kbps) in updates {
+            assert_eq!(
+                adapter.debug_session_receiver_bwe_target(&session).await,
+                Some(Bitrate::from_kbps(kbps))
+            );
+        }
     })
     .await
     .expect("accepted worker command should complete before timeout");

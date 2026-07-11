@@ -5,8 +5,8 @@ use super::{RoomGaugeDelta, receiver_route::ReceiverSetupTurn};
 use crate::engine::{
     diagnostics::DiagnosticsEventData,
     media_transport::{
-        ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaTransport,
-        ProducerActivity, ReceiverBweTargetUpdate, RouteControlPlan, TransportConsumerRoute,
+        ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaControlPlan,
+        MediaTransport, ProducerActivity, ReceiverBweTargetUpdate, TransportConsumerRoute,
         TransportRelayRouteAction, TransportRelayRouteEffect, TransportSourceKey,
         TransportTeardown,
     },
@@ -126,7 +126,7 @@ pub(in crate::engine::room) struct RoomRouteOutcome {
 #[derive(Debug, Default)]
 #[must_use = "room route effects must be executed or intentionally dropped"]
 pub(in crate::engine::room) struct RoomRouteEffects(
-    RouteControlPlan<ProducerRouteFinish, ConsumerRouteFinish>,
+    MediaControlPlan<ProducerRouteFinish, ConsumerRouteFinish>,
 );
 
 impl RoomRouteEffects {
@@ -215,12 +215,13 @@ impl RoomRouteEffects {
         self,
         media_transport: &MediaTransport,
     ) -> RoomRouteOutcome {
-        let transport_outcome = media_transport.apply_route_control(self.0).await;
+        let transport_outcome = media_transport.apply_media_control(self.0).await;
 
         let mut outcome = RoomRouteOutcome::default();
         for (completion, result) in transport_outcome.producers {
-            if result.is_err() {
+            if let Err(error) = result {
                 warn!(
+                    ?error,
                     source = ?completion.source,
                     active = completion.activity.is_active(),
                     "media transport failed to update producer route activity"
@@ -261,6 +262,7 @@ impl ConsumerRouteFinish {
                 let target = activity.target();
                 if result.activity_failed() {
                     warn!(
+                        error = ?result.error(),
                         route = ?target.transport_route(),
                         stream_id = %target.stream_id(),
                         active = activity.active(),
@@ -268,6 +270,7 @@ impl ConsumerRouteFinish {
                     );
                 } else if result.keyframe_failed() {
                     warn!(
+                        error = ?result.error(),
                         route = ?target.transport_route(),
                         stream_id = %target.stream_id(),
                         "media transport failed to request a consumer keyframe refresh"
@@ -278,6 +281,7 @@ impl ConsumerRouteFinish {
             Self::Keyframe(target) => {
                 if result.keyframe_failed() {
                     warn!(
+                        error = ?result.error(),
                         route = ?target.transport_route(),
                         "media transport failed to request a refreshed consumer keyframe"
                     );
@@ -286,12 +290,14 @@ impl ConsumerRouteFinish {
             Self::SetupActivity(route, active) => {
                 if result.activity_failed() {
                     warn!(
+                        error = ?result.error(),
                         ?route,
                         active,
                         "media transport failed to correct in-flight consumer setup activity"
                     );
                 } else if result.keyframe_failed() {
                     warn!(
+                        error = ?result.error(),
                         ?route,
                         "media transport failed to request keyframe after consumer setup activity correction"
                     );
@@ -301,6 +307,7 @@ impl ConsumerRouteFinish {
                 if result.packet_gate_failed() || result.activity_failed() {
                     warn!(
                         ?route,
+                        error = ?result.error(),
                         route_active = update.route_active(),
                         "media transport rejected the receiver-driven packet selection update"
                     );
@@ -308,6 +315,7 @@ impl ConsumerRouteFinish {
                 }
                 if result.keyframe_failed() {
                     warn!(
+                        error = ?result.error(),
                         ?route,
                         "media transport failed to request an adaptation keyframe refresh"
                     );

@@ -14,18 +14,17 @@ use std::{
 
 use str0m::media::MediaKind as Str0mMediaKind;
 
-use super::rtc::{ConsumerPacketGateCommand, RtcMediaControlCommand, RtcWorker, RtcWorkerCommand};
+use super::rtc::{RtcWorker, RtcWorkerCommand};
 use crate::engine::{
     MediaWorkerId, RoomInstanceId,
     media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ConsumerPacketGateUpdate,
-        MediaTransport, MediaTransportConfig, MediaTransportDeps, ReceiverBandwidthSnapshot,
-        ReceiverBweTargetUpdate, SourcePolicySignal, SourcePolicyUpdateSubscription,
-        TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
-        TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
-        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
-        TransportSourceActivitySnapshot, TransportSourceKey, TransportTeardown,
-        TransportWorkerPressureSnapshot,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, MediaTransport, MediaTransportConfig,
+        MediaTransportDeps, ReceiverBandwidthSnapshot, SourcePolicySignal,
+        SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySnapshot,
+        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
+        TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
+        TransportTeardown, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -65,6 +64,8 @@ impl MediaTransport {
         Self {
             workers,
             metrics: deps.metrics(),
+            #[cfg(test)]
+            media_control_batches: Arc::default(),
             source_policy_signal,
         }
     }
@@ -204,105 +205,6 @@ impl MediaTransport {
             .collect()
     }
 
-    /// Applies packet-gate updates in worker-local batches.
-    ///
-    /// The result vector preserves the input order so callers can correlate
-    /// failures with planned policy updates. Cross-room updates are rejected
-    /// before reaching worker state because a consumer route must never target
-    /// media owned by another room instance.
-    pub(super) async fn apply_consumer_pkt_gate_batch(
-        &self,
-        updates: &[ConsumerPacketGateUpdate],
-    ) -> Vec<Result<(), TransportAdapterError>> {
-        let mut results = vec![Err(TransportAdapterError::TransportUnavailable); updates.len()];
-        let mut batches = BTreeMap::<ConsumerPacketGateBatchKey, Vec<usize>>::new();
-        for (index, update) in updates.iter().enumerate() {
-            let route = update.route();
-            if !route.is_single_room() {
-                if let Some(result) = results.get_mut(index) {
-                    *result = Err(TransportAdapterError::InvalidInput);
-                }
-                continue;
-            }
-            let Some(worker_index) = self.worker_index_for_user(route.consumer_session_key())
-            else {
-                continue;
-            };
-            let key = ConsumerPacketGateBatchKey {
-                worker_index,
-                source: route.source().clone(),
-            };
-            batches.entry(key).or_default().push(index);
-        }
-        for (key, batch) in batches {
-            let Some(worker) = self.worker_for_index(key.worker_index) else {
-                continue;
-            };
-            let update_count = batch.len();
-            let batch_updates = batch
-                .iter()
-                .filter_map(|index| updates.get(*index))
-                .map(ConsumerPacketGateCommand::from_update)
-                .collect();
-            let batch_results = worker
-                .request_worker(|response| {
-                    RtcWorkerCommand::MediaControl(
-                        RtcMediaControlCommand::SetConsumerPacketGateBatch {
-                            source: key.source,
-                            updates: batch_updates,
-                            response,
-                        },
-                    )
-                })
-                .await
-                .unwrap_or_else(|error| vec![Err(error); update_count]);
-            for (index, result) in batch.into_iter().zip(batch_results) {
-                if let Some(stored_result) = results.get_mut(index) {
-                    *stored_result = result;
-                }
-            }
-        }
-        results
-    }
-
-    pub(super) async fn execute_receiver_bwe_target_batch(
-        &self,
-        updates: &[ReceiverBweTargetUpdate],
-    ) -> Vec<Result<(), TransportAdapterError>> {
-        let mut results = vec![Err(TransportAdapterError::TransportUnavailable); updates.len()];
-        let mut batches = BTreeMap::<usize, Vec<usize>>::new();
-        for (index, update) in updates.iter().enumerate() {
-            let Some(worker_index) = self.worker_index_for_user(update.session_key()) else {
-                continue;
-            };
-            batches.entry(worker_index).or_default().push(index);
-        }
-        for (worker_index, batch) in batches {
-            let Some(worker) = self.worker_for_index(worker_index) else {
-                continue;
-            };
-            let update_count = batch.len();
-            let batch_updates = batch
-                .iter()
-                .filter_map(|index| updates.get(*index))
-                .cloned()
-                .collect();
-            let batch_results = worker
-                .request_worker(|response| RtcWorkerCommand::SetReceiverBweTargetBatch {
-                    updates: batch_updates,
-                    response,
-                })
-                .await
-                .unwrap_or_else(|error| vec![Err(error); update_count]);
-            for (index, result) in batch.into_iter().zip(batch_results) {
-                if let Some(stored_result) = results.get_mut(index) {
-                    *stored_result = result;
-                }
-            }
-        }
-        results
-    }
-
     /// Returns the latest active-speaker observations across all workers.
     ///
     /// This is a transport-observed snapshot. It is sorted newest first and
@@ -400,17 +302,12 @@ impl MediaTransport {
         if Arc::ptr_eq(&source_worker, &target_worker) {
             return Ok(());
         }
-        let request = match effect.action {
-            TransportRelayRouteAction::Install => {
-                target_worker.relay_install_request(effect.source.clone())?
-            }
-            TransportRelayRouteAction::Release => return Ok(()),
-            TransportRelayRouteAction::SetActivity(activity) => {
-                target_worker.relay_activity_request(effect.source.clone(), activity.is_active())
-            }
-        };
+        let request = target_worker.relay_route_request(effect.source.clone(), effect.action)?;
         source_worker
-            .request_worker(|response| RtcWorkerCommand::media_control(request, response))
+            .request_worker(|response| RtcWorkerCommand::RouteControl {
+                request,
+                response: Some(response),
+            })
             .await
     }
 
@@ -506,15 +403,7 @@ impl MediaTransport {
         Err(TransportAdapterError::InvalidInput)
     }
 
-    pub(super) fn require_consumer_worker_for_route(
-        &self,
-        route: &TransportConsumerRoute,
-    ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
-        Self::ensure_same_room(route.consumer_session_key(), route.source_session_key())?;
-        self.require_worker_for_user(route.consumer_session_key())
-    }
-
-    fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcWorker>> {
+    pub(super) fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcWorker>> {
         self.workers.get(worker_index).map(Arc::clone)
     }
 
@@ -541,10 +430,4 @@ pub(super) fn signaling_to_str0m_media_kind(kind: o_sfu_router::MediaKind) -> St
         o_sfu_router::MediaKind::Audio => Str0mMediaKind::Audio,
         o_sfu_router::MediaKind::Video => Str0mMediaKind::Video,
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ConsumerPacketGateBatchKey {
-    worker_index: usize,
-    source: TransportSourceKey,
 }

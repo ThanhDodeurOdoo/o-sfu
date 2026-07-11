@@ -24,8 +24,12 @@ pub(super) use crate::{
         UserId,
         media_transport::{
             ActiveSpeakerSource, ReceiverBweTargetUpdate, SessionOffer, TransportAdapterError,
-            TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
+            TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
+            TransportSourceKey,
             rtc::{
+                commands::{
+                    RtcWorkerCommand, WorkerMediaControlBatch, WorkerMediaControlBatchOutcome,
+                },
                 test_support::{DebugPacketGate, test_transport_session_key},
                 worker::RtcWorker,
             },
@@ -116,4 +120,29 @@ pub(super) async fn expect_initial_offer(
         .create_initial_session_offer(session_key)
         .await
         .expect("initial offer should succeed")
+}
+
+pub(super) async fn apply_worker_media_control(
+    adapter: &RtcWorker,
+    batch: WorkerMediaControlBatch,
+) -> WorkerMediaControlBatchOutcome {
+    adapter
+        .request_worker(|response| RtcWorkerCommand::ApplyMediaControlBatch { batch, response })
+        .await
+        .expect("media control batch should reach the worker")
+}
+
+pub(super) async fn apply_receiver_bwe_batch(
+    adapter: &RtcWorker,
+    updates: impl IntoIterator<Item = ReceiverBweTargetUpdate>,
+) -> Vec<TransportResult<()>> {
+    let outcome = apply_worker_media_control(
+        adapter,
+        WorkerMediaControlBatch::ReceiverBwe(updates.into_iter().enumerate().collect()),
+    )
+    .await;
+    let WorkerMediaControlBatchOutcome::Applied(results) = outcome else {
+        panic!("receiver BWE batch should return applied results");
+    };
+    results
 }

@@ -55,10 +55,7 @@ use crate::{
             rtc::{
                 bitrate::BitrateRegistry,
                 bootstrap,
-                commands::{
-                    RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand,
-                    RtcWorkerCommand,
-                },
+                commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
                 forwarding_destination::PacketForward,
                 media_registry::RegisteredMediaHandle,
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
@@ -412,10 +409,10 @@ fn set_source_route_active(
 fn drain_remote_packet_gate_setup(control_rx: &mut mpsc::Receiver<RtcWorkerCommand>) {
     loop {
         match control_rx.try_recv() {
-            Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            Ok(RtcWorkerCommand::RouteControl {
                 request: RouteControlRequest::SetRemoteSourcePacketGate { .. },
                 response: None,
-            })) => {}
+            }) => {}
             Ok(_) => panic!("expected only remote packet-gate setup commands"),
             Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
                 break;
@@ -442,7 +439,7 @@ fn recv_remote_keyframe_request(
 ) {
     loop {
         match control_rx.try_recv() {
-            Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            Ok(RtcWorkerCommand::RouteControl {
                 request:
                     RouteControlRequest::RequestRemoteKeyframe {
                         source,
@@ -451,11 +448,11 @@ fn recv_remote_keyframe_request(
                         kind,
                     },
                 response: None,
-            })) => return (source, target_id, rid, kind),
-            Ok(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            }) => return (source, target_id, rid, kind),
+            Ok(RtcWorkerCommand::RouteControl {
                 request: RouteControlRequest::SetRemoteSourcePacketGate { .. },
                 response: None,
-            })) => {}
+            }) => {}
             Ok(_) => panic!("expected a remote keyframe request"),
             Err(mpsc::error::TryRecvError::Empty) => {
                 panic!("expected a remote keyframe request but channel was empty")

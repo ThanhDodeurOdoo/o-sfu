@@ -11,15 +11,18 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, RelayRouteActivity, TransportMediaId, TransportRelayRouteAction,
-            TransportSessionKey, TransportTeardown,
+            ConsumerActivity, RelayRouteActivity, TransportAdapterError, TransportMediaId,
+            TransportRelayRouteAction, TransportSessionKey, TransportTeardown,
             test_support::{
                 DebugRouteEntry, test_media_transport_config, test_media_transport_deps,
                 test_rtc_port_range,
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
-        source_model::UserStreamId,
+        room::media_graph::ConsumerRouteTransportRef,
+        source_model::{
+            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId, UserStreamId,
+        },
     },
 };
 
@@ -61,6 +64,38 @@ fn room_transport_plan_moves_relay_release_to_teardown() {
             target_media_worker_id: teardown_target,
         }] if teardown_source == &source && *teardown_target == target_media_worker_id
     ));
+}
+
+#[test]
+fn keyframe_failure_keeps_source_policy_update() -> Result<(), io::Error> {
+    let consumer = session_key(1, UserId::Integer(1));
+    let source = session_key(2, UserId::Integer(2));
+    let route = TransportConsumerRoute::new(
+        consumer.clone(),
+        TransportMediaId::new(1),
+        TransportSourceKey::new(source.clone(), TransportMediaId::new(2)),
+    );
+    let update = ConsumerPacketSelectionUpdate::route_activity(
+        ConsumerRouteTransportRef {
+            consumer_user_id: consumer.user_id().clone(),
+            consumer_connection_id: consumer.connection_id(),
+            consumer_media: route.consumer_transport_media_id(),
+            source_user_id: source.user_id().clone(),
+            source_connection_id: source.connection_id(),
+            source_media: route.source_transport_media_id(),
+        },
+        PublishedSourceId::from_raw(1),
+        ConsumerSourceSelection::open(true),
+        Some(PolicyPauseReason::HiddenTile),
+    )
+    .ok_or_else(|| io::Error::other("policy pause change should create a route update"))?;
+    let mut outcome = RoomRouteOutcome::default();
+    ConsumerRouteFinish::SourcePolicy(update.clone(), route).finish(
+        ConsumerRouteControlOutcome::keyframe_error(TransportAdapterError::TransportUnavailable),
+        &mut outcome,
+    );
+    assert_eq!(outcome.accepted_policy_updates, [update]);
+    Ok(())
 }
 
 #[tokio::test]

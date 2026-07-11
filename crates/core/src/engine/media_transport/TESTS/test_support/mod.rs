@@ -15,7 +15,7 @@ use {
 };
 #[cfg(test)]
 use {
-    super::{MediaTransportBuilder, TransportAdapterError},
+    super::{MediaTransportBuilder, TransportAdapterError, rtc::WorkerMediaControlBatch},
     o_sfu_router::rtp::MediaStream as RouterRtpParameters,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
@@ -46,6 +46,9 @@ const RTC_PORT_LOCK_DIR: &str = "o-sfu-rtc-test-ports";
 #[cfg(any(test, feature = "testing-transport"))]
 const RTC_PORT_LOCK_STALE_AFTER: Duration = Duration::from_hours(1);
 
+#[cfg(test)]
+pub(super) type MediaControlBatchLog = Arc<Mutex<Vec<(usize, &'static str, Vec<usize>)>>>;
+
 #[derive(Debug, Clone, Copy)]
 #[cfg(any(test, feature = "testing-transport"))]
 pub struct MediaTransportTestApi<'a> {
@@ -57,6 +60,23 @@ impl MediaTransport {
     #[must_use]
     pub fn test_api(&self) -> MediaTransportTestApi<'_> {
         MediaTransportTestApi { transport: self }
+    }
+
+    #[cfg(test)]
+    pub(super) fn observe_media_control_batch(
+        &self,
+        worker: usize,
+        batch: &WorkerMediaControlBatch,
+    ) {
+        use WorkerMediaControlBatch::*;
+
+        let (phase, indexes) = match batch {
+            ReceiverBwe(items) => ("bwe", items.iter().map(|item| item.0).collect()),
+            ProducerActivity(items) => ("producer", items.iter().map(|item| item.0).collect()),
+            ConsumerGates { updates, .. } => ("gates", updates.iter().map(|item| item.0).collect()),
+            ConsumerFollowUp(items) => ("consumer", items.iter().map(|item| item.0).collect()),
+        };
+        lock_unpoisoned(&self.media_control_batches).push((worker, phase, indexes));
     }
 }
 
