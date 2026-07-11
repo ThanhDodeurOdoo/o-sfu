@@ -1,21 +1,34 @@
-//! Command response adapters for worker-local media route control.
+//! command adapters for worker-local media control
 
 use std::time::Instant;
 
 use super::{
-    super::keyframe::{worker_request_consumer_kf, worker_request_remote_kf},
+    super::{
+        super::bwe,
+        keyframe::{worker_request_consumer_kf, worker_request_remote_kf},
+    },
     routes,
 };
-use crate::engine::{
-    media_transport::{
-        TransportResult, TransportSourceKey,
-        rtc::{
-            commands::{ConsumerPacketGateCommand, RouteControlRequest, RtcWorkerResponse},
-            state::PacketLoopState,
+use crate::{
+    Bitrate,
+    engine::{
+        media_transport::{
+            ConsumerRouteControlFailure, ConsumerRouteControlOutcome,
+            rtc::{
+                commands::{
+                    RouteControlRequest, RtcWorkerResponse, WorkerMediaControlBatch,
+                    WorkerMediaControlBatchOutcome,
+                },
+                state::PacketLoopState,
+            },
         },
+        metrics::RuntimeMetrics,
     },
-    metrics::RuntimeMetrics,
 };
+
+fn map_updates<T, R>(updates: Vec<(usize, T)>, mut apply: impl FnMut(T) -> R) -> Vec<R> {
+    updates.into_iter().map(|(_, value)| apply(value)).collect()
+}
 
 pub fn apply_route_control_request(
     state: &mut PacketLoopState,
@@ -24,15 +37,6 @@ pub fn apply_route_control_request(
     response: Option<RtcWorkerResponse<()>>,
 ) {
     let result = match request {
-        RouteControlRequest::SetProducerActive { source, active } => {
-            routes::worker_set_producer_active(state, &source, active)
-        }
-        RouteControlRequest::SetConsumerActive { route, active } => {
-            routes::worker_set_consumer_active(state, &route, active)
-        }
-        RouteControlRequest::RequestConsumerKeyframe { route } => {
-            worker_request_consumer_kf(state, metrics, &route)
-        }
         RouteControlRequest::AddRelayTarget {
             source,
             target_id,
@@ -69,14 +73,43 @@ pub fn apply_route_control_request(
     }
 }
 
-pub fn respond_set_consumer_pkt_gates(
+pub fn apply_media_control_batch(
     state: &mut PacketLoopState,
-    source: &TransportSourceKey,
-    updates: Vec<ConsumerPacketGateCommand>,
+    metrics: &RuntimeMetrics,
+    max_bitrate_out: Bitrate,
     now: Instant,
-    response: RtcWorkerResponse<Vec<TransportResult<()>>>,
-) {
-    let _ = response.send(Ok(routes::worker_set_consumer_pkt_gates(
-        state, source, updates, now,
-    )));
+    batch: WorkerMediaControlBatch,
+) -> WorkerMediaControlBatchOutcome {
+    use WorkerMediaControlBatch::{ConsumerFollowUp, ConsumerGates, ProducerActivity, ReceiverBwe};
+    use WorkerMediaControlBatchOutcome::{Applied, Consumers};
+
+    match batch {
+        ReceiverBwe(updates) => Applied(map_updates(updates, |update| {
+            bwe::apply_receiver_bwe_target(state, max_bitrate_out, &update)
+        })),
+        ProducerActivity(updates) => Applied(map_updates(updates, |control| {
+            routes::worker_set_producer_active(state, &control.source, control.activity.is_active())
+        })),
+        ConsumerGates { source, updates } => Applied(routes::worker_set_consumer_pkt_gates(
+            state, &source, updates, now,
+        )),
+        ConsumerFollowUp(updates) => Consumers(map_updates(updates, |control| {
+            if let Some(activity) = control.activity
+                && let Err(error) =
+                    routes::worker_set_consumer_active(state, &control.route, activity.is_active())
+            {
+                return ConsumerRouteControlOutcome(Some(ConsumerRouteControlFailure::Activity(
+                    error,
+                )));
+            }
+            if control.request_keyframe
+                && let Err(error) = worker_request_consumer_kf(state, metrics, &control.route)
+            {
+                return ConsumerRouteControlOutcome(Some(ConsumerRouteControlFailure::Keyframe(
+                    error,
+                )));
+            }
+            ConsumerRouteControlOutcome::default()
+        })),
+    }
 }

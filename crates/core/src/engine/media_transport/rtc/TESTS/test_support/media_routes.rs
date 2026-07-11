@@ -3,86 +3,33 @@
     reason = "rtc media route test support fails loudly when mandatory fixture setup is impossible"
 )]
 
-use std::{net::SocketAddr, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use str0m::{
-    media::{KeyframeRequestKind, MediaKind, Mid, Rid},
+    media::{KeyframeRequestKind, Mid, Rid},
     rtp::Ssrc,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use super::{
     collect_ready_session_keys, route_graph::MediaWorkerScenario, test_transport_session_key,
 };
-use crate::{
-    Bitrate, MediaCodecFlags,
-    engine::{
-        UserId,
-        media_transport::{
-            TransportMediaId, TransportResult, TransportSessionKey, TransportSourceKey,
-            rtc::{
-                bootstrap,
-                commands::{
-                    RemoteSourceControl, RouteControlRequest, RtcMediaControlCommand,
-                    RtcWorkerCommand,
-                },
-                media_registry::RegisteredMediaHandle,
-                relay_registry::RelayTargetId,
-                route_control::PacketLayerGate,
-                state::PacketLoopState,
-            },
+use crate::engine::{
+    UserId,
+    media_transport::{
+        TransportMediaId, TransportSessionKey, TransportSourceKey,
+        rtc::{
+            commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
+            relay_registry::RelayTargetId,
+            route_control::PacketLayerGate,
+            state::PacketLoopState,
         },
-        metrics::RtcMetricsRecorder,
     },
+    metrics::RtcMetricsRecorder,
 };
 
 pub fn drain_ready_sessions(state: &mut PacketLoopState) -> Vec<TransportSessionKey> {
     collect_ready_session_keys(state, Instant::now())
-}
-
-pub fn expect_response<T>(response: oneshot::Receiver<TransportResult<T>>) -> TransportResult<T> {
-    response.blocking_recv().unwrap_or_else(|error| {
-        panic!("worker response channel should deliver a result: {error:?}")
-    })
-}
-
-pub fn prepare_source_session(
-    state: &mut PacketLoopState,
-    src_key: &TransportSessionKey,
-    src_mid: Mid,
-    ssrc: u32,
-) -> TransportMediaId {
-    prepare_source_session_with_rid(state, src_key, src_mid, ssrc, None)
-}
-
-pub fn prepare_source_session_with_rid(
-    state: &mut PacketLoopState,
-    src_key: &TransportSessionKey,
-    src_mid: Mid,
-    ssrc: u32,
-    rid: Option<Rid>,
-) -> TransportMediaId {
-    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_000));
-    assert!(
-        bootstrap::ensure_session_rtc_state(
-            &mut state.users,
-            src_key,
-            candidate_addr,
-            Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
-        )
-        .is_ok()
-    );
-    let Some(session) = state.users.get_mut(src_key) else {
-        panic!("source session should exist after RTC state bootstrap");
-    };
-    let mut direct_api = session.rtc.direct_api();
-    direct_api.declare_media(src_mid, MediaKind::Video);
-    direct_api.expect_stream_rx(Ssrc::from(ssrc), None, src_mid, rid);
-    state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: src_key.clone(),
-        mid: src_mid,
-    })
 }
 
 pub fn add_source_rid_stream(
@@ -139,21 +86,38 @@ pub fn install_video_route_with_pending_gate(
     scenario.destination_with_pending_gate(src_media, dst_key.clone(), dst_mid, packet_gate)
 }
 
-pub fn register_remote_source(
-    state: &mut PacketLoopState,
-    src_media: TransportMediaId,
-    src_key: &TransportSessionKey,
+pub fn saturated_remote_control(
+    source: &TransportSourceKey,
     target_id: RelayTargetId,
-) -> mpsc::Receiver<RtcWorkerCommand> {
+) -> (
+    mpsc::Sender<RtcWorkerCommand>,
+    mpsc::Receiver<RtcWorkerCommand>,
+) {
     let (control_tx, control_rx) = mpsc::channel(1);
-    let source = TransportSourceKey::new(src_key.clone(), src_media);
     assert!(
-        state
-            .routes
-            .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
+        control_tx
+            .try_send(RtcWorkerCommand::RouteControl {
+                request: RouteControlRequest::SetRemoteSourcePacketGate {
+                    source: source.clone(),
+                    target_id,
+                    packet_gate: PacketLayerGate::Open,
+                },
+                response: None,
+            })
             .is_ok()
     );
-    control_rx
+    (control_tx, control_rx)
+}
+
+pub fn register_remote_source_control(
+    state: &mut PacketLoopState,
+    source: &TransportSourceKey,
+    control_tx: mpsc::Sender<RtcWorkerCommand>,
+    target_id: RelayTargetId,
+    rtc_metrics: Arc<RtcMetricsRecorder>,
+) {
+    let control = RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics);
+    assert!(state.routes.register_remote_source(source, control).is_ok());
 }
 
 pub fn register_saturated_remote_source(
@@ -163,31 +127,9 @@ pub fn register_saturated_remote_source(
     target_id: RelayTargetId,
     rtc_metrics: Arc<RtcMetricsRecorder>,
 ) -> mpsc::Receiver<RtcWorkerCommand> {
-    let (control_tx, control_rx) = mpsc::channel(1);
     let source = TransportSourceKey::new(src_key.clone(), src_media);
-    assert!(
-        control_tx
-            .try_send(RtcWorkerCommand::MediaControl(
-                RtcMediaControlCommand::Apply {
-                    request: RouteControlRequest::SetRemoteSourcePacketGate {
-                        source: source.clone(),
-                        target_id,
-                        packet_gate: PacketLayerGate::Open,
-                    },
-                    response: None,
-                },
-            ))
-            .is_ok()
-    );
-    assert!(
-        state
-            .routes
-            .register_remote_source(
-                &source,
-                RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
-            )
-            .is_ok()
-    );
+    let (control_tx, control_rx) = saturated_remote_control(&source, target_id);
+    register_remote_source_control(state, &source, control_tx, target_id, rtc_metrics);
     control_rx
 }
 
@@ -200,14 +142,14 @@ pub fn assert_remote_keyframe_command(
 ) {
     loop {
         match control_rx.try_recv().ok() {
-            Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+            Some(RtcWorkerCommand::RouteControl {
                 request: RouteControlRequest::SetRemoteSourcePacketGate { .. },
                 response: None,
-            })) => {}
+            }) => {}
             command => {
                 assert!(matches!(
                     command,
-                    Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+                    Some(RtcWorkerCommand::RouteControl {
                         request: RouteControlRequest::RequestRemoteKeyframe {
                             source,
                             target_id: forwarded_target_id,
@@ -215,7 +157,7 @@ pub fn assert_remote_keyframe_command(
                             kind: KeyframeRequestKind::Pli,
                         },
                         response: None,
-                    })) if source.session_key() == src_key
+                    }) if source.session_key() == src_key
                         && source.transport_media_id() == src_media
                         && forwarded_target_id == target_id
                         && forwarded_rid == rid
@@ -235,14 +177,14 @@ pub fn assert_remote_packet_gate_command(
 ) {
     assert!(matches!(
         control_rx.try_recv().ok(),
-        Some(RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
+        Some(RtcWorkerCommand::RouteControl {
             request: RouteControlRequest::SetRemoteSourcePacketGate {
                 source,
                 target_id: forwarded_target_id,
                 packet_gate: forwarded_packet_gate,
             },
             response: None,
-        })) if source.session_key() == src_key
+        }) if source.session_key() == src_key
             && source.transport_media_id() == src_media
             && forwarded_target_id == target_id
             && forwarded_packet_gate == packet_gate

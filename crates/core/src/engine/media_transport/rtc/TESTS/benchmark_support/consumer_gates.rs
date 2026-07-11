@@ -1,19 +1,25 @@
-use std::time::Instant;
+use std::{mem::take, sync::OnceLock, time::Instant};
 
-use str0m::media::{Mid, Rid};
+use str0m::media::Mid;
 
 use super::super::{
-    commands::ConsumerPacketGateCommand,
-    route_control::PacketLayerGate,
-    test_support::{MediaWorkerScenario, test_transport_session_key},
-    worker::worker_set_consumer_pkt_gates_for_bench,
+    commands::WorkerMediaControlBatch,
+    test_support::{MediaWorkerScenario, prepare_source_session, test_transport_session_key},
+    worker::apply_media_control_batch,
 };
-use crate::engine::{
-    UserId,
-    media_transport::{
-        TransportMediaId, TransportSessionKey, TransportSourceKey, rtc::state::PacketLoopState,
+use crate::{
+    Bitrate,
+    engine::{
+        UserId,
+        media_transport::{
+            SourcePacketGate, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+            TransportSourceKey, rtc::state::PacketLoopState,
+        },
+        metrics::RuntimeMetrics,
     },
 };
+
+static BENCH_METRICS: OnceLock<RuntimeMetrics> = OnceLock::new();
 
 /// fixed consumer packet-gate batch fixture for route-control benchmarks
 ///
@@ -22,8 +28,10 @@ use crate::engine::{
 /// batch through the production worker route-control helper
 pub struct ConsumerGateBatchBenchFixture {
     state: PacketLoopState,
-    source: TransportSourceKey,
-    updates: Vec<ConsumerPacketGateCommand>,
+    metrics: &'static RuntimeMetrics,
+    source: Option<TransportSourceKey>,
+    updates: Vec<(usize, TransportConsumerRoute, SourcePacketGate)>,
+    src_media: TransportMediaId,
     now: Instant,
 }
 
@@ -39,66 +47,67 @@ impl ConsumerGateBatchBenchFixture {
     }
 
     fn with_consumers(destination_count: usize) -> Self {
-        let source_session = test_transport_session_key(121, 0, 122, UserId::Integer(123));
-        let consumer_session = test_transport_session_key(121, 0, 124, UserId::Integer(125));
+        let src_key = test_transport_session_key(121, 0, 122, UserId::Integer(123));
+        let dst_key = test_transport_session_key(121, 0, 124, UserId::Integer(125));
         let mut state = PacketLoopState::default();
+        let src_media = prepare_source_session(&mut state, &src_key, Mid::from("cam-up"), 88_889);
         let mut scenario = MediaWorkerScenario::new(&mut state);
-        let src_media = scenario.source(source_session.clone(), Mid::from("cam-up"));
-        let source = TransportSourceKey::new(source_session, src_media);
+        let source = TransportSourceKey::new(src_key, src_media);
         let updates = route_gate_updates(
             &mut scenario,
             src_media,
-            &consumer_session,
+            &source,
+            &dst_key,
             destination_count,
         );
 
         Self {
             state,
-            source,
+            metrics: BENCH_METRICS.get_or_init(RuntimeMetrics::default),
+            source: Some(source),
             updates,
+            src_media,
             now: Instant::now(),
         }
     }
 
     #[must_use]
-    pub fn apply_updates(self) -> usize {
-        let Self {
-            mut state,
-            source,
-            updates,
-            now,
-        } = self;
-        let results = worker_set_consumer_pkt_gates_for_bench(&mut state, &source, updates, now);
-        let gate_state_evidence = gate_state_evidence(&state, source.transport_media_id());
-        results.len() + gate_state_evidence
+    pub fn apply_updates(mut self) -> Self {
+        if let Some(source) = self.source.take() {
+            let updates = take(&mut self.updates);
+            let _ = apply_media_control_batch(
+                &mut self.state,
+                self.metrics,
+                Bitrate::from_mbps(10),
+                self.now,
+                WorkerMediaControlBatch::ConsumerGates { source, updates },
+            );
+        }
+        self
     }
-}
 
-fn gate_state_evidence(state: &PacketLoopState, src_media: TransportMediaId) -> usize {
-    let pending_gate = state
-        .routes
-        .local_route(src_media)
-        .and_then(|entry| entry.destinations.first())
-        .is_some_and(|destination| destination.pending_gate.is_some());
-    let effective_gate = state.routes.effective_packet_gate(src_media).is_some();
-    usize::from(pending_gate) + usize::from(effective_gate)
+    #[must_use]
+    pub fn updates_applied(self) -> bool {
+        let route = self.state.routes.local_route(self.src_media);
+        route.is_some_and(|r| r.destinations.iter().all(|dst| dst.pending_gate.is_some()))
+    }
 }
 
 fn route_gate_updates(
     scenario: &mut MediaWorkerScenario<'_>,
     src_media: TransportMediaId,
+    source: &TransportSourceKey,
     consumer_session: &TransportSessionKey,
     destination_count: usize,
-) -> Vec<ConsumerPacketGateCommand> {
+) -> Vec<(usize, TransportConsumerRoute, SourcePacketGate)> {
     let mut updates = Vec::with_capacity(destination_count);
-    let rid = Rid::from("hi");
     for destination_idx in 0..destination_count {
         let mid = Mid::from(format!("cam-down-{destination_idx}").as_str());
         let consumer_media = scenario.destination(src_media, consumer_session.clone(), mid);
-        updates.push(ConsumerPacketGateCommand::new(
-            consumer_session.clone(),
-            consumer_media,
-            PacketLayerGate::Rid(rid),
+        updates.push((
+            destination_idx,
+            TransportConsumerRoute::new(consumer_session.clone(), consumer_media, source.clone()),
+            SourcePacketGate::Rid("hi".into()),
         ));
     }
     updates

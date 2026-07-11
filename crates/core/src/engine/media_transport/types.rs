@@ -699,29 +699,6 @@ impl TransportConsumerRoute {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConsumerPacketGateUpdate {
-    route: TransportConsumerRoute,
-    packet_gate: SourcePacketGate,
-}
-
-impl ConsumerPacketGateUpdate {
-    #[must_use]
-    pub fn new(route: TransportConsumerRoute, packet_gate: SourcePacketGate) -> Self {
-        Self { route, packet_gate }
-    }
-
-    #[must_use]
-    pub fn route(&self) -> &TransportConsumerRoute {
-        &self.route
-    }
-
-    #[must_use]
-    pub fn packet_gate(&self) -> &SourcePacketGate {
-        &self.packet_gate
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiverBweTargetUpdate {
     session_key: TransportSessionKey,
     target: Bitrate,

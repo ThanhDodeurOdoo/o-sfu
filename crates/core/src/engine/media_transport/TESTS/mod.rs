@@ -11,21 +11,24 @@ use o_sfu_router::{
 };
 use str0m::media::Mid;
 
-use super::{MediaTransport, MediaTransportBuildError, TransportTeardown};
+use super::{
+    MediaTransport, MediaTransportBuildError, TransportTeardown, route_control::reconcile_applied,
+};
 use crate::{
     Bitrate, MediaWorkerId, RtcPortRange,
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, ConsumerRouteControl, ProducerActivity, ReceiverBweTargetUpdate,
-            RelayRouteActivity, RouteControlPlan, SessionOffer, SourcePacketGate,
+            ConsumerActivity, ConsumerRouteControl, MediaControlPlan, ProducerActivity,
+            ReceiverBweTargetUpdate, RelayRouteActivity, SessionOffer, SourcePacketGate,
             TransportAdapterError, TransportConsumerRoute, TransportMediaId,
             TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
             TransportSourceKey,
-            rtc::RtcWorker,
+            rtc::{RtcWorker, WorkerMediaControlBatchOutcome},
             test_support::{DebugPacketGate, test_media_transport_builder, test_rtc_port_range},
         },
         metrics::MetricName,
+        sync::lock_unpoisoned,
     },
 };
 #[cfg(not(target_os = "linux"))]
@@ -152,12 +155,12 @@ async fn set_remote_relay_and_consumer_active(
         remote_consumer_media_id,
         TransportSourceKey::new(source_session.clone(), source_media_id),
     );
-    let mut plan: RouteControlPlan<(), ()> = RouteControlPlan::new();
+    let mut plan: MediaControlPlan<(), ()> = MediaControlPlan::default();
     plan.push_consumer(
         ConsumerRouteControl::new(route).activity(ConsumerActivity::from_active(active)),
         (),
     );
-    let outcome = adapter.apply_route_control(plan).await;
+    let outcome = adapter.apply_media_control(plan).await;
     let [((), consumer_outcome)] = outcome.consumers.as_slice() else {
         panic!("one consumer route-control outcome should be returned");
     };
@@ -304,29 +307,100 @@ async fn media_transport_teardown_does_not_start_idle_workers() {
     assert!(!target_worker.packet_loop_started());
 }
 
-#[tokio::test]
-async fn media_transport_route_control_plan_updates_source_route() {
-    #[derive(Debug, PartialEq, Eq)]
-    enum Finish {
-        Producer,
-        MissingProducer,
-        Consumer,
-        MissingConsumer,
+async fn assert_media_control_batch_bound(
+    adapter: &MediaTransport,
+    consumer_session: TransportSessionKey,
+    source: TransportSourceKey,
+    route: TransportConsumerRoute,
+) {
+    lock_unpoisoned(&adapter.media_control_batches).clear();
+    let mut bounded = MediaControlPlan::default();
+    let bwe = ReceiverBweTargetUpdate::new(consumer_session, Bitrate::from_kbps(600));
+    bounded.set_receiver_bwe_targets(vec![bwe; 65]);
+    for index in 0..65 {
+        let producer = if index == 0 {
+            TransportSourceKey::new(
+                source.session_key().clone(),
+                TransportMediaId::new(u64::MAX),
+            )
+        } else {
+            source.clone()
+        };
+        bounded.push_producer(producer, ProducerActivity::Active, index);
+        bounded.push_consumer(
+            ConsumerRouteControl::new(route.clone()).activity(ConsumerActivity::Active),
+            index,
+        );
     }
+    let outcome = adapter.apply_media_control(bounded).await;
+    assert!(outcome.producers.iter().map(|entry| entry.0).eq(0..65));
+    assert!(outcome.consumers.iter().map(|entry| entry.0).eq(0..65));
+    assert_eq!(
+        outcome.producers.first().map(|entry| entry.1),
+        Some(Err(TransportAdapterError::TransportUnavailable))
+    );
+    assert_eq!(outcome.producers.last().map(|entry| entry.1), Some(Ok(())));
+    assert!(
+        outcome
+            .consumers
+            .last()
+            .is_some_and(|(_, result)| result.error().is_none())
+    );
+    let first_chunk = (0..64).collect::<Vec<_>>();
+    assert_eq!(
+        *lock_unpoisoned(&adapter.media_control_batches),
+        vec![
+            (1, "bwe", first_chunk.clone()),
+            (1, "bwe", vec![64]),
+            (1, "producer", first_chunk.clone()),
+            (1, "producer", vec![64]),
+            (1, "consumer", first_chunk),
+            (1, "consumer", vec![64]),
+        ]
+    );
+}
 
-    let adapter = test_media_transport(1, test_rtc_range(1));
-    let source_session = test_session_key(60, 0, 1, UserId::Integer(1));
-    let consumer_session = test_session_key(60, 0, 2, UserId::Integer(2));
-    let missing_session = test_session_key(60, 0, 3, UserId::Integer(3));
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one phase-order scenario")]
+async fn media_transport_plan_updates_source_route() {
+    let adapter = test_media_transport(3, test_rtc_range(3));
+    let source_session = test_session_key(60, 1, 1, UserId::Integer(1));
+    let consumer_session = test_session_key(60, 1, 2, UserId::Integer(2));
+    let peer_source_session = test_session_key(60, 2, 3, UserId::Integer(3));
+    let missing_session = test_session_key(60, 0, 4, UserId::Integer(4));
+    let idle_worker = expect_worker_for_user(&adapter, &missing_session);
     let source_rtp_parameters = sample_rtp_parameters("cam-up", 81_000);
     let consumer_rtp_parameters = sample_rtp_parameters("cam-down", 82_000);
 
-    prepare_rtc_sessions(&adapter, &[&source_session, &consumer_session]).await;
+    prepare_rtc_sessions(
+        &adapter,
+        &[&source_session, &peer_source_session, &consumer_session],
+    )
+    .await;
 
     let source_media_id = adapter
         .publish_media(&source_session, MediaKind::Video, &source_rtp_parameters)
         .await
         .unwrap_or_else(|error| panic!("test video publication should succeed: {error:?}"));
+    let peer_source_media_id = adapter
+        .publish_media(
+            &peer_source_session,
+            MediaKind::Video,
+            &source_rtp_parameters,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("peer video publication should succeed: {error:?}"));
+    let peer_consumer_media_id = adapter
+        .consume_media(
+            &peer_source_session,
+            MediaKind::Video,
+            &peer_source_session,
+            peer_source_media_id,
+            &consumer_rtp_parameters,
+            ConsumerActivity::Active,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("peer video consumption should succeed: {error:?}"));
     let consumer_media_id = adapter
         .consume_media(
             &consumer_session,
@@ -339,72 +413,151 @@ async fn media_transport_route_control_plan_updates_source_route() {
         .await
         .unwrap_or_else(|error| panic!("test video consumption should succeed: {error:?}"));
     let source = TransportSourceKey::new(source_session.clone(), source_media_id);
+    let peer_source = TransportSourceKey::new(peer_source_session.clone(), peer_source_media_id);
     let route =
         TransportConsumerRoute::new(consumer_session.clone(), consumer_media_id, source.clone());
+    let peer_route = TransportConsumerRoute::new(
+        peer_source_session.clone(),
+        peer_consumer_media_id,
+        peer_source.clone(),
+    );
     let missing_media_id = TransportMediaId::new(999_999);
-    let missing_source = TransportSourceKey::new(source_session, missing_media_id);
+    let missing_source = TransportSourceKey::new(missing_session.clone(), missing_media_id);
     let missing_route =
-        TransportConsumerRoute::new(consumer_session.clone(), missing_media_id, source.clone());
-    let mut plan = RouteControlPlan::new();
+        TransportConsumerRoute::new(missing_session.clone(), missing_media_id, source.clone());
+    let misaddressed_route = TransportConsumerRoute::new(
+        test_session_key(60, 1, 6, UserId::Integer(6)),
+        consumer_media_id,
+        source.clone(),
+    );
+    let cross_room_route = TransportConsumerRoute::new(
+        test_session_key(61, 0, 5, UserId::Integer(5)),
+        missing_media_id,
+        source.clone(),
+    );
+    let mut plan = MediaControlPlan::default();
     plan.set_receiver_bwe_targets(vec![
-        ReceiverBweTargetUpdate::new(consumer_session, Bitrate::from_kbps(600)),
+        ReceiverBweTargetUpdate::new(consumer_session.clone(), Bitrate::from_kbps(600)),
+        ReceiverBweTargetUpdate::new(peer_source_session, Bitrate::from_kbps(500)),
+        ReceiverBweTargetUpdate::new(consumer_session.clone(), Bitrate::from_kbps(600)),
         ReceiverBweTargetUpdate::new(missing_session, Bitrate::from_kbps(700)),
     ]);
-    plan.push_producer(source, ProducerActivity::Active, Finish::Producer);
-    plan.push_producer(
-        missing_source,
-        ProducerActivity::Inactive,
-        Finish::MissingProducer,
-    );
+    plan.push_producer(source.clone(), ProducerActivity::Inactive, 0);
+    plan.push_producer(peer_source.clone(), ProducerActivity::Inactive, 1);
+    plan.push_producer(source.clone(), ProducerActivity::Active, 2);
+    plan.push_producer(peer_source, ProducerActivity::Active, 3);
+    plan.push_producer(missing_source, ProducerActivity::Inactive, 4);
+    let follow_up = |route, rid: Option<&str>, active| {
+        let packet_gate = rid.map_or(SourcePacketGate::Open, |rid| {
+            SourcePacketGate::Rid(rid.into())
+        });
+        ConsumerRouteControl::new(route)
+            .packet_gate(packet_gate)
+            .activity(ConsumerActivity::from_active(active))
+            .request_keyframe(true)
+    };
     plan.push_consumer(
-        ConsumerRouteControl::new(route.clone())
-            .packet_gate(SourcePacketGate::Rid("lo".into()))
-            .activity(ConsumerActivity::Active)
+        ConsumerRouteControl::new(cross_room_route).packet_gate(SourcePacketGate::Rid("hi".into())),
+        0,
+    );
+    plan.push_consumer(follow_up(missing_route.clone(), Some("hi"), false), 1);
+    plan.push_consumer(
+        ConsumerRouteControl::new(missing_route)
+            .activity(ConsumerActivity::Inactive)
             .request_keyframe(true),
-        Finish::Consumer,
+        2,
     );
-    plan.push_consumer(
-        ConsumerRouteControl::new(missing_route).activity(ConsumerActivity::Inactive),
-        Finish::MissingConsumer,
-    );
+    plan.push_consumer(follow_up(misaddressed_route, Some("hi"), false), 3);
+    plan.push_consumer(follow_up(peer_route.clone(), Some("lo"), false), 4);
+    plan.push_consumer(follow_up(route.clone(), Some("lo"), false), 5);
+    plan.push_consumer(follow_up(peer_route, None, true), 6);
+    plan.push_consumer(follow_up(route.clone(), None, true), 7);
 
-    let outcome = adapter.apply_route_control(plan).await;
+    let outcome = adapter.apply_media_control(plan).await;
 
     assert_eq!(
         outcome.producers.as_slice(),
         &[
-            (Finish::Producer, Ok(())),
-            (
-                Finish::MissingProducer,
-                Err(TransportAdapterError::TransportUnavailable),
-            )
+            (0, Ok(())),
+            (1, Ok(())),
+            (2, Ok(())),
+            (3, Ok(())),
+            (4, Err(TransportAdapterError::TransportUnavailable))
         ]
     );
     let [
-        (Finish::Consumer, valid_consumer),
-        (Finish::MissingConsumer, missing_consumer),
+        (0, cross_room),
+        (1, missing_gate),
+        (2, missing_activity),
+        (3, misaddressed_gate),
+        (4, _),
+        (5, valid_after_failed_gate),
+        (6, _),
+        (7, valid_after_failed_gate_duplicate),
     ] = outcome.consumers.as_slice()
     else {
-        panic!("route-control plan should return two consumer outcomes");
+        panic!("media-control plan should preserve consumer input order");
     };
-    assert!(!valid_consumer.packet_gate_failed());
-    assert!(!valid_consumer.activity_failed());
-    assert!(!valid_consumer.keyframe_failed());
-    assert!(missing_consumer.activity_failed());
+    assert!(misaddressed_gate.packet_gate_failed());
+    assert!(missing_activity.activity_failed());
     assert_eq!(
-        adapter
-            .test_api()
-            .session_receiver_bwe_target(route.consumer_session_key())
-            .await,
-        Some(Bitrate::from_kbps(600))
+        [
+            cross_room.error(),
+            missing_gate.error(),
+            missing_activity.error(),
+            misaddressed_gate.error(),
+        ],
+        [
+            Some(TransportAdapterError::InvalidInput),
+            Some(TransportAdapterError::TransportUnavailable),
+            Some(TransportAdapterError::TransportUnavailable),
+            Some(TransportAdapterError::InvalidInput),
+        ]
     );
-
+    assert_eq!(
+        [
+            valid_after_failed_gate.error(),
+            valid_after_failed_gate_duplicate.error(),
+        ],
+        [None, None]
+    );
+    assert_eq!(
+        *lock_unpoisoned(&adapter.media_control_batches),
+        vec![
+            (1, "bwe", vec![0, 2]),
+            (2, "bwe", vec![1]),
+            (1, "producer", vec![0, 2]),
+            (2, "producer", vec![1, 3]),
+            (1, "gates", vec![3, 5, 7]),
+            (2, "gates", vec![4, 6]),
+            (1, "consumer", vec![5, 7]),
+            (2, "consumer", vec![4, 6]),
+        ]
+    );
+    assert!(!idle_worker.packet_loop_started());
     let route_entry = adapter
         .test_api()
         .route_entry_by_media_id(route.source_transport_media_id())
         .await
         .unwrap_or_else(|| panic!("video route should survive planned route control"));
-    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
+    assert!(route_entry.source_active);
+    assert_eq!(route_entry.active_destination_count, 1);
+    assert!(route_entry.destinations.iter().any(|destination| {
+        destination.dest_session == consumer_session
+            && destination.dest_transport_media_id == consumer_media_id
+            && destination.active
+    }));
+    assert_media_control_batch_bound(&adapter, consumer_session, source, route).await;
+}
+
+#[test]
+fn media_control_reconciliation_rejects_short_worker_results() {
+    let results = reconcile_applied(Ok(WorkerMediaControlBatchOutcome::Applied(vec![Ok(())])), 2);
+    assert_eq!(
+        results,
+        vec![Err(TransportAdapterError::TransportUnavailable); 2]
+    );
 }
 
 #[test]

@@ -199,10 +199,15 @@ fn packet_sink_512(mut fixture: PacketSinkFanoutBenchFixture) -> usize {
 //
 // this protects dense room policy changes from adding per-consumer lookup cost
 // beyond the required destination validation and one aggregate source refresh
-#[library_benchmark(config = callgrind_config(1.0))]
+#[allow(clippy::panic, reason = "invalid fixtures must fail the benchmark")]
+fn validate_route_gate_batch(fixture: ConsumerGateBatchBenchFixture) {
+    assert!(fixture.updates_applied());
+}
+
+#[library_benchmark(config = callgrind_config(1.0), teardown = validate_route_gate_batch)]
 #[bench::consumers_64(ConsumerGateBatchBenchFixture::consumers_64())]
 #[bench::consumers_256(ConsumerGateBatchBenchFixture::consumers_256())]
-fn route_gate_batch(fixture: ConsumerGateBatchBenchFixture) -> usize {
+fn route_gate_batch(fixture: ConsumerGateBatchBenchFixture) -> ConsumerGateBatchBenchFixture {
     black_box(fixture.apply_updates())
 }
 

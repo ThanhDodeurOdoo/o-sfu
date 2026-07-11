@@ -75,7 +75,7 @@ pub(in crate::engine::room) struct ConsumerPacketSelectionUpdate {
 }
 
 impl ConsumerPacketSelectionUpdate {
-    pub(super) fn route_activity(
+    pub(in crate::engine::room) fn route_activity(
         transport_ref: ConsumerRouteTransportRef,
         source_id: PublishedSourceId,
         current_selection: ConsumerSourceSelection,

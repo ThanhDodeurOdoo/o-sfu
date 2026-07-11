@@ -1,10 +1,61 @@
-use str0m::media::Mid;
+use std::net::SocketAddr;
+
+use str0m::{
+    media::{MediaKind, Mid, Rid},
+    rtp::Ssrc,
+};
 
 use super::super::{
-    media_registry::RegisteredMediaHandle, route_control::PacketLayerGate,
+    bootstrap, media_registry::RegisteredMediaHandle, route_control::PacketLayerGate,
     slots::ConsumerStreamHandle, source_route::MediaRouteDestination, state::PacketLoopState,
 };
-use crate::engine::media_transport::{TransportMediaId, TransportSessionKey};
+use crate::{
+    Bitrate, MediaCodecFlags,
+    engine::media_transport::{TransportMediaId, TransportSessionKey},
+};
+
+pub fn prepare_source_session(
+    state: &mut PacketLoopState,
+    src_key: &TransportSessionKey,
+    src_mid: Mid,
+    ssrc: u32,
+) -> TransportMediaId {
+    prepare_source_session_with_rid(state, src_key, src_mid, ssrc, None)
+}
+
+#[allow(
+    clippy::panic,
+    reason = "invalid session setup must fail route fixtures"
+)]
+pub fn prepare_source_session_with_rid(
+    state: &mut PacketLoopState,
+    src_key: &TransportSessionKey,
+    src_mid: Mid,
+    ssrc: u32,
+    rid: Option<Rid>,
+) -> TransportMediaId {
+    let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 47_000));
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            src_key,
+            candidate_addr,
+            Bitrate::from_mbps(10),
+            MediaCodecFlags::default(),
+        )
+        .is_ok()
+    );
+    let Some(session) = state.users.get_mut(src_key) else {
+        panic!("source session should exist after RTC state bootstrap");
+    };
+    let mut direct_api = session.rtc.direct_api();
+    direct_api.declare_media(src_mid, MediaKind::Video);
+    direct_api.expect_stream_rx(Ssrc::from(ssrc), None, src_mid, rid);
+    state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: src_key.clone(),
+        mid: src_mid,
+    })
+}
 
 pub struct MediaWorkerScenario<'a> {
     state: &'a mut PacketLoopState,

@@ -18,10 +18,10 @@ use super::publication;
 use super::{
     super::super::{
         bitrate::BitrateRegistry,
-        commands::{RtcMediaControlCommand, RtcWorkerCommand},
+        commands::RtcWorkerCommand,
         state::{PacketLoopState, RtcSnapshotState},
     },
-    bwe, media,
+    media,
     negotiation::{self, OfferBootstrapConfig},
     session,
 };
@@ -116,14 +116,6 @@ pub fn handle_worker_command(
         RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response } => {
             respond(response, Ok(state.expired_active_speaker_rooms(now)));
         }
-        RtcWorkerCommand::SetReceiverBweTargetBatch { updates, response } => respond(
-            response,
-            Ok(bwe::worker_set_receiver_bwe_targets(
-                state,
-                context.max_bitrate_out,
-                &updates,
-            )),
-        ),
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
             response,
@@ -170,7 +162,10 @@ pub fn handle_worker_command(
         | RtcWorkerCommand::RemoveMedia { .. }
         | RtcWorkerCommand::AddRecvMedia { .. }
         | RtcWorkerCommand::AddSendMedia { .. }
-        | RtcWorkerCommand::MediaControl(_) => handle_resource_command(state, context, command),
+        | RtcWorkerCommand::ApplyMediaControlBatch { .. }
+        | RtcWorkerCommand::RouteControl { .. } => {
+            handle_resource_command(state, context, command);
+        }
     }
 }
 
@@ -265,27 +260,19 @@ fn handle_resource_command(
                 context.now,
             ),
         ),
-        RtcWorkerCommand::MediaControl(command) => {
-            handle_media_route_control_command(state, context.metrics, context.now, command);
+        RtcWorkerCommand::ApplyMediaControlBatch { batch, response } => respond(
+            response,
+            Ok(media::apply_media_control_batch(
+                state,
+                context.metrics,
+                context.max_bitrate_out,
+                context.now,
+                batch,
+            )),
+        ),
+        RtcWorkerCommand::RouteControl { request, response } => {
+            media::apply_route_control_request(state, context.metrics, request, response);
         }
         _ => {}
-    }
-}
-
-fn handle_media_route_control_command(
-    state: &mut PacketLoopState,
-    metrics: &RuntimeMetrics,
-    now: Instant,
-    command: RtcMediaControlCommand,
-) {
-    match command {
-        RtcMediaControlCommand::Apply { request, response } => {
-            media::apply_route_control_request(state, metrics, request, response);
-        }
-        RtcMediaControlCommand::SetConsumerPacketGateBatch {
-            source,
-            updates,
-            response,
-        } => media::respond_set_consumer_pkt_gates(state, &source, updates, now, response),
     }
 }

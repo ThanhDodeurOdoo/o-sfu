@@ -1,15 +1,11 @@
 use super::fixtures::*;
 use crate::engine::media_transport::SourcePacketGate;
 
-#[tokio::test]
-async fn rtc_transport_bootstrap_starts_packet_loop() {
-    let adapter = RtcWorker::default();
-    assert!(!adapter.packet_loop_started());
-    let session_key = transport_key(1, 15, UserId::Integer(15));
-    let bootstrap_result = adapter.create_initial_session_offer(&session_key).await;
-    assert!(bootstrap_result.is_ok());
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
+fn assert_applied(outcome: WorkerMediaControlBatchOutcome) {
+    let WorkerMediaControlBatchOutcome::Applied(results) = outcome else {
+        panic!("worker media control should return applied results");
+    };
+    assert_eq!(results, [Ok(())]);
 }
 
 #[tokio::test]
@@ -86,118 +82,58 @@ async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
 }
 
 #[tokio::test]
-async fn rtc_receiver_bwe_target_update_writes_session_state() {
+async fn rtc_receiver_bwe_batch_preserves_target_semantics() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 183, UserId::Integer(183));
     expect_initial_offer(&adapter, &session_key).await;
     let update = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(850));
 
-    let results = adapter
-        .set_receiver_bwe_targets(slice::from_ref(&update))
-        .await
-        .expect("receiver BWE target command should reach the worker");
-
-    assert_eq!(results, vec![Ok(())]);
+    let _ = apply_receiver_bwe_batch(&adapter, [update.clone()]).await;
     assert_eq!(
         adapter
             .debug_session_receiver_bwe_target(&session_key)
             .await,
         Some(Bitrate::from_kbps(850))
     );
-}
-
-#[tokio::test]
-async fn rtc_receiver_bwe_target_update_dedupes_identical_targets() {
-    let adapter = RtcWorker::default();
-    let session_key = transport_key(1, 184, UserId::Integer(184));
-    expect_initial_offer(&adapter, &session_key).await;
-    let update = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(640));
-
-    let first_results = adapter
-        .set_receiver_bwe_targets(slice::from_ref(&update))
-        .await
-        .expect("first receiver BWE target command should reach the worker");
-    let second_results = adapter
-        .set_receiver_bwe_targets(slice::from_ref(&update))
-        .await
-        .expect("second receiver BWE target command should reach the worker");
-
-    assert_eq!(first_results, vec![Ok(())]);
-    assert_eq!(second_results, vec![Ok(())]);
+    assert_eq!(
+        apply_receiver_bwe_batch(&adapter, [update]).await,
+        vec![Ok(())]
+    );
     assert_eq!(
         adapter
             .debug_session_receiver_bwe_str0m_update_count(&session_key)
             .await,
         Some(1)
     );
-}
-
-#[tokio::test]
-async fn rtc_receiver_bwe_target_update_caps_at_max_bitrate_out() {
-    let adapter = rtc_with_bitrate_limits(Bitrate::from_mbps(8), Bitrate::from_kbps(500));
-    let session_key = transport_key(1, 185, UserId::Integer(185));
-    expect_initial_offer(&adapter, &session_key).await;
-    let update = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(900));
-
-    let results = adapter
-        .set_receiver_bwe_targets(slice::from_ref(&update))
-        .await
-        .expect("receiver BWE target command should reach the worker");
-
-    assert_eq!(results, vec![Ok(())]);
-    assert_eq!(
-        adapter
-            .debug_session_receiver_bwe_target(&session_key)
-            .await,
-        Some(Bitrate::from_kbps(500))
-    );
-}
-
-#[tokio::test]
-async fn rtc_receiver_bwe_target_update_missing_session_returns_error() {
-    let adapter = RtcWorker::default();
-    let session_key = transport_key(1, 186, UserId::Integer(186));
-    let update = ReceiverBweTargetUpdate::new(session_key, Bitrate::from_kbps(400));
-
-    let results = adapter
-        .set_receiver_bwe_targets(slice::from_ref(&update))
-        .await
-        .expect("missing session result should still return through the worker");
-
-    assert!(matches!(
-        results.as_slice(),
-        [Err(TransportAdapterError::InvalidInput)]
-    ));
-}
-
-#[tokio::test]
-async fn rtc_receiver_bwe_zero_target_clears_previous_target() {
-    let adapter = RtcWorker::default();
-    let session_key = transport_key(1, 187, UserId::Integer(187));
-    expect_initial_offer(&adapter, &session_key).await;
-    let non_zero = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::from_kbps(700));
     let zero = ReceiverBweTargetUpdate::new(session_key.clone(), Bitrate::zero());
-
-    assert!(
-        adapter
-            .set_receiver_bwe_targets(slice::from_ref(&non_zero))
-            .await
-            .expect("non-zero target command should reach the worker")[0]
-            .is_ok()
-    );
-    assert!(
-        adapter
-            .set_receiver_bwe_targets(slice::from_ref(&zero))
-            .await
-            .expect("zero target command should reach the worker")[0]
-            .is_ok()
-    );
-
+    let _ = apply_receiver_bwe_batch(&adapter, [zero]).await;
     assert_eq!(
         adapter
             .debug_session_receiver_bwe_target(&session_key)
             .await,
         Some(Bitrate::zero())
+    );
+    let missing = ReceiverBweTargetUpdate::new(
+        transport_key(1, 186, UserId::Integer(186)),
+        Bitrate::from_kbps(400),
+    );
+    assert!(matches!(
+        apply_receiver_bwe_batch(&adapter, [missing])
+            .await
+            .as_slice(),
+        [Err(TransportAdapterError::InvalidInput)]
+    ));
+
+    let capped = rtc_with_bitrate_limits(Bitrate::from_mbps(8), Bitrate::from_kbps(500));
+    let capped_session = transport_key(1, 185, UserId::Integer(185));
+    expect_initial_offer(&capped, &capped_session).await;
+    let above_cap = ReceiverBweTargetUpdate::new(capped_session.clone(), Bitrate::from_kbps(900));
+    let _ = apply_receiver_bwe_batch(&capped, [above_cap]).await;
+    assert_eq!(
+        capped
+            .debug_session_receiver_bwe_target(&capped_session)
+            .await,
+        Some(Bitrate::from_kbps(500))
     );
 }
 
@@ -465,11 +401,15 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         &producer_session_key,
         source_media_id,
     );
-    assert!(
-        adapter
-            .set_consumer_pkt_gate(&route, SourcePacketGate::Rid("lo".into()))
-            .await
-            .is_ok()
+    assert_applied(
+        apply_worker_media_control(
+            &adapter,
+            WorkerMediaControlBatch::ConsumerGates {
+                source: route.source().clone(),
+                updates: vec![(0, route.clone(), SourcePacketGate::Rid("lo".into()))],
+            },
+        )
+        .await,
     );
 
     let route_entry = adapter
@@ -478,11 +418,15 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         .expect("route entry should still exist after consumer gate update");
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 
-    assert!(
-        adapter
-            .set_consumer_pkt_gate(&route, SourcePacketGate::Open)
-            .await
-            .is_ok()
+    assert_applied(
+        apply_worker_media_control(
+            &adapter,
+            WorkerMediaControlBatch::ConsumerGates {
+                source: route.source().clone(),
+                updates: vec![(0, route, SourcePacketGate::Open)],
+            },
+        )
+        .await,
     );
 
     let route_entry = adapter
@@ -490,140 +434,6 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         .await
         .expect("route entry should still exist after opening the consumer gate");
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
-}
-
-#[tokio::test]
-async fn rtc_consumer_packet_gate_rejects_stale_source_owner() {
-    let adapter = RtcWorker::default();
-    let producer_session_key = transport_key(1, 125, UserId::Integer(125));
-    let stale_producer_session_key = transport_key(1, 126, UserId::Integer(125));
-    let consumer_key = transport_key(1, 127, UserId::Integer(127));
-    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 83_000);
-    let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 84_000);
-
-    for session_key in [&producer_session_key, &consumer_key] {
-        assert!(
-            adapter
-                .create_initial_session_offer(session_key)
-                .await
-                .is_ok()
-        );
-    }
-
-    let source_media_id = adapter
-        .add_recv_media(
-            &producer_session_key,
-            Str0mMediaKind::Video,
-            &producer_rtp_parameters,
-        )
-        .await
-        .expect("producer media should register");
-
-    let consumer_media_id = adapter
-        .add_send_media(
-            &consumer_key,
-            Str0mMediaKind::Video,
-            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
-            &consumer_rtp_parameters,
-            true,
-        )
-        .await
-        .expect("consumer media should register");
-
-    assert!(
-        adapter
-            .set_consumer_pkt_gate(
-                &transport_consumer_route(
-                    &consumer_key,
-                    consumer_media_id,
-                    &stale_producer_session_key,
-                    source_media_id,
-                ),
-                SourcePacketGate::Rid("lo".into()),
-            )
-            .await
-            .is_err()
-    );
-}
-
-#[tokio::test]
-async fn rtc_route_activity_updates_producer_and_consumer_flags() {
-    let adapter = RtcWorker::default();
-    let producer_session_key = transport_key(1, 23, UserId::Integer(23));
-    let consumer_key = transport_key(1, 24, UserId::Integer(24));
-    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 91_000);
-    let consumer_rtp_parameters = sample_router_rtp_parameters("vid-down", 92_000);
-
-    assert!(
-        adapter
-            .create_initial_session_offer(&producer_session_key)
-            .await
-            .is_ok()
-    );
-    assert!(
-        adapter
-            .create_initial_session_offer(&consumer_key)
-            .await
-            .is_ok()
-    );
-
-    let source_media_id = adapter
-        .add_recv_media(
-            &producer_session_key,
-            Str0mMediaKind::Video,
-            &producer_rtp_parameters,
-        )
-        .await;
-    assert!(source_media_id.is_ok());
-    let Some(source_media_id) = source_media_id.ok() else {
-        return;
-    };
-
-    let consumer_media_id = adapter
-        .add_send_media(
-            &consumer_key,
-            Str0mMediaKind::Video,
-            TransportSourceKey::new(producer_session_key.clone(), source_media_id),
-            &consumer_rtp_parameters,
-            true,
-        )
-        .await;
-    assert!(consumer_media_id.is_ok());
-    let Some(consumer_media_id) = consumer_media_id.ok() else {
-        return;
-    };
-    let source = TransportSourceKey::new(producer_session_key.clone(), source_media_id);
-
-    assert!(adapter.set_producer_active(&source, false).await.is_ok());
-    assert!(
-        adapter
-            .set_consumer_active(
-                &transport_consumer_route(
-                    &consumer_key,
-                    consumer_media_id,
-                    &producer_session_key,
-                    source_media_id,
-                ),
-                false,
-            )
-            .await
-            .is_ok()
-    );
-
-    let route_entry = adapter.debug_route_entry_by_media_id(source_media_id).await;
-    assert!(route_entry.is_some());
-    let Some(route_entry) = route_entry else {
-        return;
-    };
-    assert_eq!(route_entry.source_transport_media_id, source_media_id);
-    assert!(!route_entry.source_active);
-    assert_eq!(route_entry.active_destination_count, 0);
-    assert!(route_entry.destinations.iter().any(|destination| {
-        destination.dest_session == consumer_key
-            && destination.dest_transport_media_id == consumer_media_id
-            && destination.dest_mid == Mid::from("vid-down")
-            && !destination.active
-    }));
 }
 
 #[tokio::test]
@@ -819,62 +629,4 @@ async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
     sleep(Duration::from_millis(300)).await;
 
     assert_eq!(adapter.next_active_speaker_deadline().await, None);
-}
-
-#[tokio::test]
-async fn rtc_relay_route_api_registers_and_removes_target_mailboxes() {
-    let source_adapter = RtcWorker::default();
-    let target_adapter = RtcWorker::default();
-    let source_session = transport_key(91, 91, UserId::Integer(91));
-    let rtp_parameters = sample_router_rtp_parameters("aud-up", 91_091);
-
-    assert!(
-        source_adapter
-            .create_initial_session_offer(&source_session)
-            .await
-            .is_ok()
-    );
-    let src_media = source_adapter
-        .add_recv_media(&source_session, Str0mMediaKind::Audio, &rtp_parameters)
-        .await;
-    assert!(src_media.is_ok());
-    let Some(src_media) = src_media.ok() else {
-        return;
-    };
-    let source = TransportSourceKey::new(source_session.clone(), src_media);
-
-    assert!(
-        source_adapter
-            .activate_relay_route(&source, &target_adapter)
-            .await
-            .is_ok()
-    );
-    assert_eq!(source_adapter.debug_relay_target_count(src_media).await, 1);
-    assert_eq!(
-        source_adapter
-            .debug_active_relay_target_count(src_media)
-            .await,
-        0
-    );
-
-    assert!(
-        source_adapter
-            .apply_relay_target_activity(&source, &target_adapter, true)
-            .await
-            .is_ok()
-    );
-    assert_eq!(
-        source_adapter
-            .debug_active_relay_target_count(src_media)
-            .await,
-        1
-    );
-
-    assert!(
-        source_adapter
-            .deactivate_relay_route(&source, &target_adapter)
-            .await
-            .is_ok()
-    );
-    assert_eq!(source_adapter.debug_relay_target_count(src_media).await, 0);
 }

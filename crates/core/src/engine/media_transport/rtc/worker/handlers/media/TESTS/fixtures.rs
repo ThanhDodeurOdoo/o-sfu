@@ -6,29 +6,31 @@
 use std::time::Instant;
 
 use str0m::media::{Mid, Rid};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
-use super::super::{
-    apply_route_control_request, observe_src_rid_ready, respond_set_consumer_pkt_gates,
-};
-use crate::engine::{
-    media_transport::{
-        TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
-        rtc::{
-            commands::{ConsumerPacketGateCommand, RouteControlRequest, RtcWorkerCommand},
-            relay_registry::RelayTargetId,
-            route_control::PacketLayerGate,
-            state::PacketLoopState,
-            test_support::{
-                add_source_rid_stream, assert_consumer_packet_gate, drain_ready_sessions,
-                expect_response, install_video_route_with_gate,
-                install_video_route_with_pending_gate, prepare_source_session,
-                prepare_source_session_with_rid, register_remote_source, test_consumer_session_key,
-                test_consumer_session_key_on_worker, test_source_session_key,
+use super::super::{apply_media_control_batch, observe_src_rid_ready};
+use crate::{
+    Bitrate,
+    engine::{
+        media_transport::{
+            ConsumerRouteControl, SourcePacketGate, TransportConsumerRoute, TransportMediaId,
+            TransportSessionKey, TransportSourceKey,
+            rtc::{
+                commands::{RemoteSourceControl, RtcWorkerCommand, WorkerMediaControlBatch},
+                relay_registry::RelayTargetId,
+                route_control::PacketLayerGate,
+                state::PacketLoopState,
+                test_support::{
+                    add_source_rid_stream, assert_consumer_packet_gate, drain_ready_sessions,
+                    install_video_route_with_gate, install_video_route_with_pending_gate,
+                    prepare_source_session, prepare_source_session_with_rid,
+                    test_consumer_session_key, test_consumer_session_key_on_worker,
+                    test_source_session_key,
+                },
             },
         },
+        metrics::RuntimeMetrics,
     },
-    metrics::RuntimeMetrics,
 };
 
 const SOURCE_MID: &str = "cam-up";
@@ -42,40 +44,39 @@ pub(super) fn request_consumer_keyframe(
     source_session: &TransportSessionKey,
     src_media: TransportMediaId,
 ) {
-    let (response_tx, response_rx) = oneshot::channel();
     let route = TransportConsumerRoute::new(
         consumer_session.clone(),
         consumer_media,
         TransportSourceKey::new(source_session.clone(), src_media),
     );
-    apply_route_control_request(
+    let _ = apply_media_control_batch(
         state,
         metrics,
-        RouteControlRequest::RequestConsumerKeyframe { route },
-        Some(response_tx),
+        Bitrate::from_mbps(10),
+        Instant::now(),
+        WorkerMediaControlBatch::ConsumerFollowUp(vec![(
+            0,
+            ConsumerRouteControl::new(route).request_keyframe(true),
+        )]),
     );
-    assert_eq!(expect_response(response_rx), Ok(()));
 }
 
 pub(super) fn set_consumer_packet_gate_at(
     state: &mut PacketLoopState,
     route: &TransportConsumerRoute,
-    packet_gate: PacketLayerGate,
+    packet_gate: SourcePacketGate,
     now: Instant,
 ) {
-    let (response_tx, response_rx) = oneshot::channel();
-    respond_set_consumer_pkt_gates(
+    let _ = apply_media_control_batch(
         state,
-        route.source(),
-        vec![ConsumerPacketGateCommand::new(
-            route.consumer_session_key().clone(),
-            route.consumer_transport_media_id(),
-            packet_gate,
-        )],
+        &RuntimeMetrics::default(),
+        Bitrate::from_mbps(10),
         now,
-        response_tx,
+        WorkerMediaControlBatch::ConsumerGates {
+            source: route.source().clone(),
+            updates: vec![(0, route.clone(), packet_gate)],
+        },
     );
-    assert_eq!(expect_response(response_rx), Ok(vec![Ok(())]));
 }
 
 pub(super) struct LocalVideoRoute {
@@ -235,7 +236,21 @@ impl RemoteVideoRoute {
         let target_id = RelayTargetId::new(target_id);
         let mut state = PacketLoopState::default();
         let metrics = RuntimeMetrics::default();
-        let control_rx = register_remote_source(&mut state, src_media, &source_session, target_id);
+        let (control_tx, control_rx) = mpsc::channel(1);
+        let source = TransportSourceKey::new(source_session.clone(), src_media);
+        assert!(
+            state
+                .routes
+                .register_remote_source(
+                    &source,
+                    RemoteSourceControl::with_metrics(
+                        control_tx,
+                        target_id,
+                        metrics.register_rtc_worker(),
+                    ),
+                )
+                .is_ok()
+        );
         let consumer_media = install_video_route_with_gate(
             &mut state,
             src_media,
@@ -343,7 +358,7 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
     set_consumer_packet_gate_at(
         &mut state,
         &route,
-        PacketLayerGate::Rid(selected_rid),
+        SourcePacketGate::Rid(selected_rid.to_string()),
         Instant::now(),
     );
     PendingSelectedRidRoute {

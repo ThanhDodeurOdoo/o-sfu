@@ -13,10 +13,10 @@ use std::time::Instant;
 #[cfg(test)]
 pub(super) use media_routes::{
     add_source_rid_stream, assert_consumer_packet_gate, assert_remote_keyframe_command,
-    assert_remote_packet_gate_command, drain_ready_sessions, expect_response,
-    install_video_route_with_gate, install_video_route_with_pending_gate, prepare_source_session,
-    prepare_source_session_with_rid, register_remote_source, register_saturated_remote_source,
-    test_consumer_session_key, test_consumer_session_key_on_worker, test_source_session_key,
+    assert_remote_packet_gate_command, drain_ready_sessions, install_video_route_with_gate,
+    install_video_route_with_pending_gate, register_remote_source_control,
+    register_saturated_remote_source, saturated_remote_control, test_consumer_session_key,
+    test_consumer_session_key_on_worker, test_source_session_key,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use probe::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
@@ -31,10 +31,13 @@ pub(super) use probe::{
     RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
     SessionStreamTxSsrcProbe,
 };
+#[cfg(test)]
+pub(super) use route_graph::prepare_source_session_with_rid;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub(super) use {
     super::forwarded_packet::test_support::sample_forwarded_packet_without_mid,
-    packets::serialize_stun_message, route_graph::MediaWorkerScenario,
+    packets::serialize_stun_message,
+    route_graph::{MediaWorkerScenario, prepare_source_session},
 };
 #[cfg(feature = "internal-benchmarks")]
 pub(super) use {

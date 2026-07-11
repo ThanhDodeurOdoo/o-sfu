@@ -66,8 +66,7 @@ pub mod test_support;
 mod worker;
 
 pub use commands::{
-    ConsumerPacketGateCommand, RouteControlRequest, RtcMediaControlCommand, RtcWorkerCommand,
-    RtcWorkerResponse,
+    RtcWorkerCommand, RtcWorkerResponse, WorkerMediaControlBatch, WorkerMediaControlBatchOutcome,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use forwarded_packet::ForwardedPacket;

@@ -3,8 +3,9 @@ use std::sync::Arc;
 use tracing::warn;
 
 use super::{
-    MediaTransport, TransportAdapterError, TransportMediaId, TransportSessionKey,
-    TransportSourceKey, rtc::RtcWorkerCommand,
+    MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
+    TransportSessionKey, TransportSourceKey,
+    rtc::{RtcWorker, RtcWorkerCommand, RtcWorkerResponse},
 };
 use crate::engine::MediaWorkerId;
 
@@ -34,41 +35,52 @@ impl TransportTeardown {
     }
 }
 
+async fn send_if_started(
+    worker: &RtcWorker,
+    build: impl FnOnce(RtcWorkerResponse<()>) -> RtcWorkerCommand,
+) -> Result<(), TransportAdapterError> {
+    let Some(handle) = worker.worker_handle()? else {
+        return Ok(());
+    };
+    match worker.send_worker_command(&handle, build).await {
+        Err(TransportAdapterError::TransportUnavailable) => Ok(()),
+        result => result,
+    }
+}
+
 impl MediaTransport {
     pub(crate) async fn teardown(&self, teardowns: impl IntoIterator<Item = TransportTeardown>) {
         for teardown in teardowns {
-            let result = match &teardown {
-                TransportTeardown::CloseSession { session_key } => {
-                    self.close_session(session_key).await
-                }
+            let (session_key, result, transport_media_id, target_media_worker_id) = match &teardown
+            {
+                TransportTeardown::CloseSession { session_key } => (
+                    session_key,
+                    self.close_session(session_key).await,
+                    None,
+                    None,
+                ),
                 TransportTeardown::RemoveMedia {
                     session_key,
                     transport_media_id,
-                } => self.remove_media(session_key, *transport_media_id).await,
-                TransportTeardown::ReleaseRelayRoute {
-                    source,
-                    target_media_worker_id,
-                } => {
-                    self.release_relay_route(source, *target_media_worker_id)
-                        .await
-                }
-            };
-            let Err(error) = result else {
-                continue;
-            };
-            let session_key = teardown.session_key();
-            let (transport_media_id, target_media_worker_id) = match &teardown {
-                TransportTeardown::CloseSession { .. } => (None, None),
-                TransportTeardown::RemoveMedia {
-                    transport_media_id, ..
-                } => (Some(*transport_media_id), None),
+                } => (
+                    session_key,
+                    self.remove_media(session_key, *transport_media_id).await,
+                    Some(*transport_media_id),
+                    None,
+                ),
                 TransportTeardown::ReleaseRelayRoute {
                     source,
                     target_media_worker_id,
                 } => (
+                    source.session_key(),
+                    self.release_relay_route(source, *target_media_worker_id)
+                        .await,
                     Some(source.transport_media_id()),
                     Some(*target_media_worker_id),
                 ),
+            };
+            let Err(error) = result else {
+                continue;
             };
             self.metrics.record_transport_cleanup_failure();
             warn!(
@@ -78,10 +90,8 @@ impl MediaTransport {
                 ?error,
                 "media transport teardown reached terminal failure"
             );
-            if matches!(
-                &teardown,
-                TransportTeardown::RemoveMedia { .. } | TransportTeardown::ReleaseRelayRoute { .. }
-            ) && let Err(fallback_error) = self.close_session(session_key).await
+            if transport_media_id.is_some()
+                && let Err(fallback_error) = self.close_session(session_key).await
             {
                 warn!(
                     ?session_key,
@@ -99,19 +109,11 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         let worker = self.require_worker_for_user(session_key)?;
-        let Some(handle) = worker.worker_handle()? else {
-            return Ok(());
-        };
-        match worker
-            .send_worker_command(&handle, |response| RtcWorkerCommand::CloseSession {
-                session_key: session_key.clone(),
-                response,
-            })
-            .await
-        {
-            Err(TransportAdapterError::TransportUnavailable) => Ok(()),
-            result => result,
-        }
+        send_if_started(&worker, |response| RtcWorkerCommand::CloseSession {
+            session_key: session_key.clone(),
+            response,
+        })
+        .await
     }
 
     pub(super) async fn remove_media(
@@ -120,20 +122,12 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         let worker = self.require_worker_for_user(session_key)?;
-        let Some(handle) = worker.worker_handle()? else {
-            return Ok(());
-        };
-        match worker
-            .send_worker_command(&handle, |response| RtcWorkerCommand::RemoveMedia {
-                session_key: session_key.clone(),
-                transport_media_id,
-                response,
-            })
-            .await
-        {
-            Err(TransportAdapterError::TransportUnavailable) => Ok(()),
-            result => result,
-        }
+        send_if_started(&worker, |response| RtcWorkerCommand::RemoveMedia {
+            session_key: session_key.clone(),
+            transport_media_id,
+            response,
+        })
+        .await
     }
 
     async fn release_relay_route(
@@ -146,18 +140,12 @@ impl MediaTransport {
         if Arc::ptr_eq(&source_worker, &target_worker) {
             return Ok(());
         }
-        let Some(handle) = source_worker.worker_handle()? else {
-            return Ok(());
-        };
-        let request = target_worker.relay_release_request(source.clone());
-        match source_worker
-            .send_worker_command(&handle, |response| {
-                RtcWorkerCommand::media_control(request, response)
-            })
-            .await
-        {
-            Err(TransportAdapterError::TransportUnavailable) => Ok(()),
-            result => result,
-        }
+        let request = target_worker
+            .relay_route_request(source.clone(), TransportRelayRouteAction::Release)?;
+        send_if_started(&source_worker, |response| RtcWorkerCommand::RouteControl {
+            request,
+            response: Some(response),
+        })
+        .await
     }
 }

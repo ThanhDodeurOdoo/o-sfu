@@ -21,9 +21,10 @@ use crate::engine::{
     RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
-        ConsumerPacketGateUpdate, ReceiverBweTargetUpdate, SessionOffer, SourcePacketGate,
-        TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
-        TransportSourceActivitySnapshot, TransportSourceKey,
+        ConsumerRouteControl, ConsumerRouteControlOutcome, ProducerRouteControl,
+        ReceiverBweTargetUpdate, SessionOffer, SourcePacketGate, TransportConsumerRoute,
+        TransportMediaId, TransportResult, TransportSessionKey, TransportSourceActivitySnapshot,
+        TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -76,15 +77,12 @@ impl RemoteSourceControl {
         kind: KeyframeRequestKind,
     ) -> bool {
         self.send_command(
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
-                request: RouteControlRequest::RequestRemoteKeyframe {
-                    source: source.clone(),
-                    target_id: self.target_id,
-                    rid,
-                    kind,
-                },
-                response: None,
-            }),
+            RouteControlRequest::RequestRemoteKeyframe {
+                source: source.clone(),
+                target_id: self.target_id,
+                rid,
+                kind,
+            },
             RtcRemoteControlDropKind::Keyframe,
         )
     }
@@ -96,14 +94,11 @@ impl RemoteSourceControl {
         packet_gate: PacketLayerGate,
     ) -> bool {
         self.send_command(
-            RtcWorkerCommand::MediaControl(RtcMediaControlCommand::Apply {
-                request: RouteControlRequest::SetRemoteSourcePacketGate {
-                    source: source.clone(),
-                    target_id: self.target_id,
-                    packet_gate,
-                },
-                response: None,
-            }),
+            RouteControlRequest::SetRemoteSourcePacketGate {
+                source: source.clone(),
+                target_id: self.target_id,
+                packet_gate,
+            },
             RtcRemoteControlDropKind::PacketGate,
         )
     }
@@ -118,14 +113,17 @@ impl RemoteSourceControl {
             .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
     }
 
-    fn send_command(&self, command: RtcWorkerCommand, drop_kind: RtcRemoteControlDropKind) -> bool {
-        match self.tx.try_send(command) {
+    fn send_command(
+        &self,
+        request: RouteControlRequest,
+        drop_kind: RtcRemoteControlDropKind,
+    ) -> bool {
+        match self.tx.try_send(RtcWorkerCommand::RouteControl {
+            request,
+            response: None,
+        }) {
             Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_command)) => {
-                self.metrics.record_rtc_remote_control_drop(drop_kind);
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_command)) => {
+            Err(mpsc::error::TrySendError::Full(_) | mpsc::error::TrySendError::Closed(_)) => {
                 self.metrics.record_rtc_remote_control_drop(drop_kind);
                 false
             }
@@ -139,73 +137,24 @@ impl RemoteSourceControl {
 /// mutation that is already being handled
 pub type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
 
-/// one consumer packet-gate update inside a source-scoped batch
-///
-/// batches keep dense-room layer changes as one mailbox command while still
-/// returning one result per consumer update
-#[derive(Debug, Clone)]
-pub struct ConsumerPacketGateCommand {
-    consumer_key: TransportSessionKey,
-    consumer_media: TransportMediaId,
-    packet_gate: PacketLayerGate,
-}
-
-impl ConsumerPacketGateCommand {
-    pub fn from_update(update: &ConsumerPacketGateUpdate) -> Self {
-        Self::from_route(update.route(), update.packet_gate())
-    }
-
-    pub fn from_route(route: &TransportConsumerRoute, packet_gate: &SourcePacketGate) -> Self {
-        Self::new(
-            route.consumer_session_key().clone(),
-            route.consumer_transport_media_id(),
-            packet_layer_gate(packet_gate),
-        )
-    }
-
-    /// builds one consumer update for a source-scoped packet-gate batch
-    pub fn new(
-        consumer_key: TransportSessionKey,
-        consumer_media: TransportMediaId,
-        packet_gate: PacketLayerGate,
-    ) -> Self {
-        Self {
-            consumer_key,
-            consumer_media,
-            packet_gate,
-        }
-    }
-
-    /// splits the batch entry for worker-side validation and route mutation
-    pub fn into_parts(self) -> (TransportSessionKey, TransportMediaId, PacketLayerGate) {
-        (self.consumer_key, self.consumer_media, self.packet_gate)
-    }
-}
-
-pub enum RtcMediaControlCommand {
-    Apply {
-        request: RouteControlRequest,
-        response: Option<RtcWorkerResponse<()>>,
-    },
-    SetConsumerPacketGateBatch {
+#[derive(Debug)]
+pub enum WorkerMediaControlBatch {
+    ReceiverBwe(Vec<(usize, ReceiverBweTargetUpdate)>),
+    ProducerActivity(Vec<(usize, ProducerRouteControl)>),
+    ConsumerGates {
         source: TransportSourceKey,
-        updates: Vec<ConsumerPacketGateCommand>,
-        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
+        updates: Vec<(usize, TransportConsumerRoute, SourcePacketGate)>,
     },
+    ConsumerFollowUp(Vec<(usize, ConsumerRouteControl)>),
+}
+
+#[derive(Debug)]
+pub enum WorkerMediaControlBatchOutcome {
+    Applied(Vec<TransportResult<()>>),
+    Consumers(Vec<ConsumerRouteControlOutcome>),
 }
 
 pub enum RouteControlRequest {
-    SetProducerActive {
-        source: TransportSourceKey,
-        active: bool,
-    },
-    SetConsumerActive {
-        route: TransportConsumerRoute,
-        active: bool,
-    },
-    RequestConsumerKeyframe {
-        route: TransportConsumerRoute,
-    },
     AddRelayTarget {
         source: TransportSourceKey,
         target_id: RelayTargetId,
@@ -231,13 +180,6 @@ pub enum RouteControlRequest {
         target_id: RelayTargetId,
         packet_gate: PacketLayerGate,
     },
-}
-
-fn packet_layer_gate(packet_gate: &SourcePacketGate) -> PacketLayerGate {
-    match packet_gate {
-        SourcePacketGate::Open => PacketLayerGate::Open,
-        SourcePacketGate::Rid(rid) => PacketLayerGate::Rid(rid.as_str().into()),
-    }
 }
 
 /// production command handled by the rtc packet-loop task
@@ -305,14 +247,6 @@ pub enum RtcWorkerCommand {
     ExpiredActiveSpeakerRoomInstanceIds {
         now: Instant,
         response: RtcWorkerResponse<BTreeSet<RoomInstanceId>>,
-    },
-    /// update receiver-side desired send bitrate for BWE probing
-    ///
-    /// the worker caps every target at its outgoing bitrate ceiling and dedupes
-    /// unchanged values before touching str0m
-    SetReceiverBweTargetBatch {
-        updates: Vec<ReceiverBweTargetUpdate>,
-        response: RtcWorkerResponse<Vec<TransportResult<()>>>,
     },
     /// accept the answer for the current pending local offer
     ///
@@ -392,14 +326,12 @@ pub enum RtcWorkerCommand {
         active: bool,
         response: RtcWorkerResponse<TransportMediaId>,
     },
-    MediaControl(RtcMediaControlCommand),
-}
-
-impl RtcWorkerCommand {
-    pub fn media_control(request: RouteControlRequest, response: RtcWorkerResponse<()>) -> Self {
-        Self::MediaControl(RtcMediaControlCommand::Apply {
-            request,
-            response: Some(response),
-        })
-    }
+    ApplyMediaControlBatch {
+        batch: WorkerMediaControlBatch,
+        response: RtcWorkerResponse<WorkerMediaControlBatchOutcome>,
+    },
+    RouteControl {
+        request: RouteControlRequest,
+        response: Option<RtcWorkerResponse<()>>,
+    },
 }
