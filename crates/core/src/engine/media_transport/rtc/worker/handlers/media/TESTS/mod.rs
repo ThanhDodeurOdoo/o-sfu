@@ -30,8 +30,8 @@ use crate::{
     engine::{
         UserId,
         media_transport::{
-            ConsumerActivity, ConsumerRouteControl, SourcePacketGate, TransportAdapterError,
-            TransportConsumerRoute, TransportMediaId, TransportSourceKey,
+            ConsumerActivity, ConsumerRouteControl, TransportAdapterError, TransportConsumerRoute,
+            TransportMediaId, TransportSourceKey,
             rtc::{
                 bootstrap,
                 commands::{
@@ -326,7 +326,7 @@ fn set_consumer_pkt_gate_updates_one_route_without_rewriting_the_source_gate() {
     set_consumer_packet_gate_at(
         &mut state,
         &route,
-        SourcePacketGate::Rid("lo".into()),
+        PacketLayerGate::Rid("lo".into()),
         observed_at + Duration::from_millis(20),
     );
     assert!(matches!(
@@ -414,7 +414,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     set_consumer_packet_gate_at(
         &mut route.state,
         &consumer_route,
-        SourcePacketGate::Rid(selected_rid.to_string()),
+        PacketLayerGate::Rid(selected_rid),
         observed_at + Duration::from_millis(500),
     );
 
@@ -429,7 +429,7 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
     set_consumer_packet_gate_at(
         &mut route.state,
         &consumer_route,
-        SourcePacketGate::Rid(selected_rid.to_string()),
+        PacketLayerGate::Rid(selected_rid),
         observed_at + Duration::from_secs(3),
     );
 
@@ -650,7 +650,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
         (
             index,
             TransportConsumerRoute::new(session, media, source.clone()),
-            SourcePacketGate::Rid(rid.into()),
+            PacketLayerGate::Rid(rid.into()),
         )
     };
 

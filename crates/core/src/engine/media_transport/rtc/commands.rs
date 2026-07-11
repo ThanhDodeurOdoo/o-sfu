@@ -22,9 +22,8 @@ use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ConsumerRouteControl, ConsumerRouteControlOutcome, ProducerRouteControl,
-        ReceiverBweTargetUpdate, SessionOffer, SourcePacketGate, TransportConsumerRoute,
-        TransportMediaId, TransportResult, TransportSessionKey, TransportSourceActivitySnapshot,
-        TransportSourceKey,
+        ReceiverBweTargetUpdate, SessionOffer, TransportConsumerRoute, TransportMediaId,
+        TransportResult, TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -143,7 +142,7 @@ pub enum WorkerMediaControlBatch {
     ProducerActivity(Vec<(usize, ProducerRouteControl)>),
     ConsumerGates {
         source: TransportSourceKey,
-        updates: Vec<(usize, TransportConsumerRoute, SourcePacketGate)>,
+        updates: Vec<(usize, TransportConsumerRoute, PacketLayerGate)>,
     },
     ConsumerFollowUp(Vec<(usize, ConsumerRouteControl)>),
 }

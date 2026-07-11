@@ -5,8 +5,8 @@ use str0m::media::{MediaKind, Mid, Pt};
 
 use super::{super::RouteSourceKind, selected_rid};
 use crate::engine::media_transport::{
-    SourcePacketGate, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-    TransportResult, TransportSessionKey, TransportSourceKey,
+    TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
+    TransportSessionKey, TransportSourceKey,
     rtc::{
         commands::RemoteSourceControl,
         media_registry::RegisteredMediaHandle,
@@ -285,7 +285,7 @@ pub(super) fn worker_set_consumer_active(
 pub(super) fn worker_set_consumer_pkt_gates(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
-    updates: Vec<(usize, TransportConsumerRoute, SourcePacketGate)>,
+    updates: Vec<(usize, TransportConsumerRoute, PacketLayerGate)>,
     now: Instant,
 ) -> Vec<TransportResult<()>> {
     let src_media = source.transport_media_id();
@@ -296,10 +296,6 @@ pub(super) fn worker_set_consumer_pkt_gates(
             results.push(Err(TransportAdapterError::InvalidInput));
             continue;
         }
-        let packet_gate = match packet_gate {
-            SourcePacketGate::Open => PacketLayerGate::Open,
-            SourcePacketGate::Rid(rid) => PacketLayerGate::Rid(rid.as_str().into()),
-        };
         let result = update_consumer_route(
             state,
             &route,

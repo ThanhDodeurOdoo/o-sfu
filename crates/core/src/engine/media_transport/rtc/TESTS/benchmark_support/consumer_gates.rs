@@ -4,6 +4,7 @@ use str0m::media::Mid;
 
 use super::super::{
     commands::WorkerMediaControlBatch,
+    route_control::PacketLayerGate,
     test_support::{MediaWorkerScenario, prepare_source_session, test_transport_session_key},
     worker::apply_media_control_batch,
 };
@@ -12,8 +13,8 @@ use crate::{
     engine::{
         UserId,
         media_transport::{
-            SourcePacketGate, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
-            TransportSourceKey, rtc::state::PacketLoopState,
+            TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
+            rtc::state::PacketLoopState,
         },
         metrics::RuntimeMetrics,
     },
@@ -30,7 +31,7 @@ pub struct ConsumerGateBatchBenchFixture {
     state: PacketLoopState,
     metrics: &'static RuntimeMetrics,
     source: Option<TransportSourceKey>,
-    updates: Vec<(usize, TransportConsumerRoute, SourcePacketGate)>,
+    updates: Vec<(usize, TransportConsumerRoute, PacketLayerGate)>,
     src_media: TransportMediaId,
     now: Instant,
 }
@@ -99,7 +100,7 @@ fn route_gate_updates(
     source: &TransportSourceKey,
     consumer_session: &TransportSessionKey,
     destination_count: usize,
-) -> Vec<(usize, TransportConsumerRoute, SourcePacketGate)> {
+) -> Vec<(usize, TransportConsumerRoute, PacketLayerGate)> {
     let mut updates = Vec::with_capacity(destination_count);
     for destination_idx in 0..destination_count {
         let mid = Mid::from(format!("cam-down-{destination_idx}").as_str());
@@ -107,7 +108,7 @@ fn route_gate_updates(
         updates.push((
             destination_idx,
             TransportConsumerRoute::new(consumer_session.clone(), consumer_media, source.clone()),
-            SourcePacketGate::Rid("hi".into()),
+            PacketLayerGate::Rid("hi".into()),
         ));
     }
     updates

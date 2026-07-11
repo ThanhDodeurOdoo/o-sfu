@@ -1,5 +1,4 @@
-use super::fixtures::*;
-use crate::engine::media_transport::SourcePacketGate;
+use super::{super::route_control::PacketLayerGate, fixtures::*};
 
 fn assert_applied(outcome: WorkerMediaControlBatchOutcome) {
     let WorkerMediaControlBatchOutcome::Applied(results) = outcome else {
@@ -406,7 +405,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
             &adapter,
             WorkerMediaControlBatch::ConsumerGates {
                 source: route.source().clone(),
-                updates: vec![(0, route.clone(), SourcePacketGate::Rid("lo".into()))],
+                updates: vec![(0, route.clone(), PacketLayerGate::Rid("lo".into()))],
             },
         )
         .await,
@@ -423,7 +422,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
             &adapter,
             WorkerMediaControlBatch::ConsumerGates {
                 source: route.source().clone(),
-                updates: vec![(0, route, SourcePacketGate::Open)],
+                updates: vec![(0, route, PacketLayerGate::Open)],
             },
         )
         .await,

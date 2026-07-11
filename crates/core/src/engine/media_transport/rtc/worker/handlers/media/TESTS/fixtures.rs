@@ -13,8 +13,8 @@ use crate::{
     Bitrate,
     engine::{
         media_transport::{
-            ConsumerRouteControl, SourcePacketGate, TransportConsumerRoute, TransportMediaId,
-            TransportSessionKey, TransportSourceKey,
+            ConsumerRouteControl, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+            TransportSourceKey,
             rtc::{
                 commands::{RemoteSourceControl, RtcWorkerCommand, WorkerMediaControlBatch},
                 relay_registry::RelayTargetId,
@@ -64,7 +64,7 @@ pub(super) fn request_consumer_keyframe(
 pub(super) fn set_consumer_packet_gate_at(
     state: &mut PacketLoopState,
     route: &TransportConsumerRoute,
-    packet_gate: SourcePacketGate,
+    packet_gate: PacketLayerGate,
     now: Instant,
 ) {
     let _ = apply_media_control_batch(
@@ -358,7 +358,7 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
     set_consumer_packet_gate_at(
         &mut state,
         &route,
-        SourcePacketGate::Rid(selected_rid.to_string()),
+        PacketLayerGate::Rid(selected_rid),
         Instant::now(),
     );
     PendingSelectedRidRoute {
