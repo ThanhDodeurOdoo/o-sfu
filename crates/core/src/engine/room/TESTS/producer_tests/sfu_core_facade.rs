@@ -1,5 +1,5 @@
 use super::support::*;
-use crate::prelude::{MediaSession, NegotiationOffer, SfuCore};
+use crate::prelude::{MediaSession, NegotiationOffer, SessionError, SfuCore};
 
 #[tokio::test]
 async fn media_session_initial_offer_is_one_shot() {
@@ -24,6 +24,10 @@ async fn media_session_initial_offer_is_one_shot() {
         .await
         .expect("initial answer should apply");
     assert!(offer.is_none());
+    assert!(matches!(
+        session.answer(&answer_sdp).await,
+        Err(SessionError::NoPendingRequest)
+    ));
     assert!(
         session
             .establish()

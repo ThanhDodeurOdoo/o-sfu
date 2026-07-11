@@ -179,6 +179,19 @@
 //! receivers want them, which [`core::server::transport::SourcePacketGate`]
 //! should be installed and which resolved teardown operations must run
 //!
+//! [`core::server::transport::SessionOffer`],
+//! [`core::server::transport::SessionUploadSlot`] and
+//! [`core::server::transport::SessionUploadEncoding`] are the canonical public
+//! offer family
+//! [`core::prelude::NegotiationOffer`], [`core::prelude::UploadSlot`] and
+//! [`core::prelude::UploadEncoding`] are renamed re-exports of those same types
+//! only `WaitingForAnswer(InFlightOffer)` owns queued publishes plus the
+//! follow-up latch
+//! parsed client capability presence is the direct room publish and consume
+//! readiness fact with its first accepted commit named `became_ready`
+//! `ServerMediaNegotiation`, room-staged reservations and worker-pinned
+//! `SdpPendingOffer` keep their separate failure boundaries
+//!
 //! [`core::server::transport::MediaTransport`] owns final teardown semantics
 //! missing workers or resources are successful no-ops
 //! ownership and invariant failures are terminal and trigger an awaited

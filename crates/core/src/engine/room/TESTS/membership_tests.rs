@@ -29,24 +29,41 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await;
+    let user_id = UserId::Integer(1);
     let (tx1, mut rx1) = test_sender();
     let first_connection = room
         .test_api()
         .lifecycle()
-        .join_user(UserId::Integer(1), None, UserPermissions::default(), tx1)
+        .join_user(user_id.clone(), None, UserPermissions::default(), tx1)
         .await
         .expect("first join should succeed");
+    assert_eq!(
+        room.state.write().await.set_user_negotiated(
+            &user_id,
+            first_connection,
+            test_client_rtp_capabilities(),
+        ),
+        Some(true)
+    );
 
     let (tx2, _rx2) = test_sender();
     let second_connection = room
         .test_api()
         .lifecycle()
-        .join_user(UserId::Integer(1), None, UserPermissions::default(), tx2)
+        .join_user(user_id.clone(), None, UserPermissions::default(), tx2)
         .await
         .expect("replacement join should succeed");
 
     assert_ne!(first_connection, second_connection);
-    let (user_count, _active_stream_counts) = room.state.read().await.user_stats_counts();
+    let mut state = room.state.write().await;
+    assert!(state.session_client_rtp_codec_names(&user_id).is_none());
+    assert_eq!(
+        state.set_user_negotiated(&user_id, first_connection, test_client_rtp_capabilities()),
+        None
+    );
+    assert!(state.session_client_rtp_codec_names(&user_id).is_none());
+    let (user_count, _active_stream_counts) = state.user_stats_counts();
+    drop(state);
     assert_eq!(user_count, 1);
     assert!(matches!(
         rx1.try_recv().ok(),
@@ -55,17 +72,14 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     assert!(
         !room
             .remove_user_with_teardown(
-                &UserId::Integer(1),
+                &user_id,
                 first_connection,
                 RoomEffectContext::state_only(None),
             )
             .await
     );
     assert_eq!(
-        room.test_api()
-            .inspect()
-            .user_connection_id(&UserId::Integer(1))
-            .await,
+        room.test_api().inspect().user_connection_id(&user_id).await,
         Some(second_connection)
     );
 }

@@ -10,7 +10,6 @@ use super::super::{
     media_graph::{ConsumerRouteView, RoomTopology},
     outbound::{OutboundSender, RemoteSourceProjection, RemoteSourceSnapshot},
     transition::StagedPublishes,
-    user_negotiation::UserNegotiation,
 };
 use crate::{
     RoomMediaLimits, RoomSpilloverMode,
@@ -44,7 +43,6 @@ pub struct ActiveUser {
     pub(super) permissions: RoomUserPermissions,
     pub(super) info: UserInfo,
     pub(super) server_featured: Option<bool>,
-    pub negotiation: UserNegotiation,
     pub desired_source_subscriptions:
         BTreeMap<UserId, BTreeMap<UserStreamId, SourceSubscriptionIntent>>,
     pub parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,

@@ -54,16 +54,19 @@
 //! # }
 //! ```
 //!
-use std::{collections::BTreeMap, mem::take, sync::Arc};
+use std::{collections::BTreeMap, mem::replace, sync::Arc};
 
+pub use crate::engine::media_transport::{
+    SessionOffer as NegotiationOffer, SessionUploadEncoding as UploadEncoding,
+    SessionUploadSlot as UploadSlot,
+};
 use crate::{
-    Bitrate, ConnectionId,
+    ConnectionId,
     engine::{
         AvailableFeatures, JsonPayload, PeerSnapshot, RecordingOptions, RecordingState, UserId,
         UserInfo,
         media_transport::{
-            MediaTransport, SessionOffer, SessionUploadEncoding, SessionUploadSlot,
-            TransportAdapterError, TransportSessionHealth, TransportSessionKey,
+            MediaTransport, TransportAdapterError, TransportSessionHealth, TransportSessionKey,
         },
         room::{
             BroadcastPayloadError, JoinUserRequest, PublishIntentOutcome, Room, RoomManager,
@@ -74,49 +77,6 @@ use crate::{
         },
     },
 };
-
-/// server-authored SDP offer plus upload metadata for the client
-///
-/// the SDP is transport state
-/// callers should send it to the client unchanged and use `upload_slots` only
-/// to project browser-facing source setup hints
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NegotiationOffer {
-    /// do not parse this outside the transport boundary for routing decisions
-    pub sdp: String,
-    /// media sections the client may publish after applying the offer
-    pub upload_slots: Vec<UploadSlot>,
-}
-
-/// one offered upload media section
-///
-/// `mid` binds this slot to the SDP media section
-/// `kind`, `codecs` and `simulcast_encodings` are compatibility metadata for
-/// the protocol layer
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UploadSlot {
-    /// SDP media section id for this upload slot
-    pub mid: String,
-    /// audio or video kind accepted on this media section
-    pub kind: o_sfu_router::MediaKind,
-    /// codec names accepted for this upload slot
-    pub codecs: Vec<String>,
-    /// simulcast layers the client may announce for this upload slot
-    pub simulcast_encodings: Vec<UploadEncoding>,
-}
-
-/// one upload encoding offered to the client
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UploadEncoding {
-    /// RTP stream id that should appear in RID or simulcast signaling
-    pub rid: String,
-    /// optional send bitrate ceiling for this encoding
-    pub max_bitrate: Option<Bitrate>,
-    /// optional inverse scale from source resolution
-    pub resolution_scale: Option<u16>,
-    /// optional frame-rate ceiling for this encoding
-    pub max_framerate: Option<u16>,
-}
 
 /// media-session negotiation phase
 ///
@@ -129,9 +89,7 @@ enum SessionPhase {
     #[default]
     BeforeInitialOffer,
     /// no offer is awaiting an answer
-    Stable {
-        queued_publishes: BTreeMap<UserStreamId, SourcePublishIntent>,
-    },
+    Stable,
     /// one offer has been sent and must be answered before the next offer
     WaitingForAnswer(InFlightOffer),
 }
@@ -144,62 +102,47 @@ struct InFlightOffer {
     follow_up_renegotiation: bool,
 }
 
-/// outcome of asking the phase machine for a new renegotiation offer
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RenegotiationDecision {
-    CreateOfferNow,
-    QueuedAfterAnswer,
-    IgnoredBeforeInitialOffer,
-}
-
 impl SessionPhase {
     fn can_stage_publish(&self) -> bool {
         !matches!(self, Self::WaitingForAnswer(_))
     }
 
     fn has_queued_publish(&self, stream_id: &UserStreamId) -> bool {
-        match self {
-            Self::BeforeInitialOffer => false,
-            Self::Stable { queued_publishes } => queued_publishes.contains_key(stream_id),
-            Self::WaitingForAnswer(pending) => pending.queued_publishes.contains_key(stream_id),
-        }
+        matches!(
+            self,
+            Self::WaitingForAnswer(pending)
+                if pending.queued_publishes.contains_key(stream_id)
+        )
     }
 
-    fn queue_publish(&mut self, stream_id: UserStreamId, intent: SourcePublishIntent) {
-        match self {
-            Self::BeforeInitialOffer => {}
-            Self::Stable { queued_publishes } => {
-                queued_publishes.insert(stream_id, intent);
-            }
-            Self::WaitingForAnswer(pending) => {
-                pending.queued_publishes.insert(stream_id, intent);
-            }
+    fn queue_publish(&mut self, intent: SourcePublishIntent) {
+        if let Self::WaitingForAnswer(pending) = self {
+            let stream_id = intent.stream_id().clone();
+            pending.queued_publishes.insert(stream_id, intent);
+            pending.follow_up_renegotiation = true;
         }
     }
 
     fn remove_queued_publish(&mut self, stream_id: &UserStreamId) -> bool {
-        match self {
-            Self::BeforeInitialOffer => false,
-            Self::Stable { queued_publishes } => queued_publishes.remove(stream_id).is_some(),
-            Self::WaitingForAnswer(pending) => pending.queued_publishes.remove(stream_id).is_some(),
-        }
+        let Self::WaitingForAnswer(pending) = self else {
+            return false;
+        };
+        pending.queued_publishes.remove(stream_id).is_some()
     }
 
     fn clear_queued_publishes(&mut self) {
-        match self {
-            Self::BeforeInitialOffer => {}
-            Self::Stable { queued_publishes } => queued_publishes.clear(),
-            Self::WaitingForAnswer(pending) => pending.queued_publishes.clear(),
+        if let Self::WaitingForAnswer(pending) = self {
+            pending.queued_publishes.clear();
         }
     }
 
-    fn request_renegotiation(&mut self) -> RenegotiationDecision {
+    fn request_renegotiation(&mut self) -> bool {
         match self {
-            Self::BeforeInitialOffer => RenegotiationDecision::IgnoredBeforeInitialOffer,
-            Self::Stable { .. } => RenegotiationDecision::CreateOfferNow,
+            Self::BeforeInitialOffer => false,
+            Self::Stable => true,
             Self::WaitingForAnswer(pending) => {
                 pending.follow_up_renegotiation = true;
-                RenegotiationDecision::QueuedAfterAnswer
+                false
             }
         }
     }
@@ -218,34 +161,20 @@ impl SessionPhase {
         });
     }
 
-    fn pending_offer_purpose(&self) -> Option<&SessionOfferPurpose> {
-        let Self::WaitingForAnswer(pending) = self else {
-            return None;
-        };
-        Some(&pending.purpose)
-    }
-
-    fn complete_answer(&mut self) -> Option<bool> {
-        let Self::WaitingForAnswer(pending) = self else {
-            return None;
-        };
-        let queued_publishes = take(&mut pending.queued_publishes);
-        let follow_up_renegotiation = pending.follow_up_renegotiation;
-        *self = Self::Stable { queued_publishes };
-        Some(follow_up_renegotiation)
-    }
-
-    fn take_queued_publishes(&mut self) -> BTreeMap<UserStreamId, SourcePublishIntent> {
-        match self {
-            Self::BeforeInitialOffer => BTreeMap::new(),
-            Self::Stable { queued_publishes } => take(queued_publishes),
-            Self::WaitingForAnswer(pending) => take(&mut pending.queued_publishes),
+    #[expect(
+        clippy::unreachable,
+        reason = "answer validates the phase before awaiting with exclusive session access"
+    )]
+    fn complete_answer(&mut self) -> InFlightOffer {
+        match replace(self, Self::Stable) {
+            Self::WaitingForAnswer(pending) => pending,
+            _ => unreachable!("answer completion requires an in-flight offer"),
         }
     }
 }
 
 /// reason an offer is waiting for an answer
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum SessionOfferPurpose {
     EstablishSession,
     RefreshSession,
@@ -391,7 +320,6 @@ impl MediaSession {
             .media_transport
             .create_initial_session_offer(&self.transport_user_key)
             .await
-            .map(NegotiationOffer::from)
             .map_err(SfuCoreError::Transport)?;
         self.phase
             .wait_for_answer(SessionOfferPurpose::EstablishSession);
@@ -400,8 +328,10 @@ impl MediaSession {
 
     /// accepts the answer for the pending offer and commits any ready room work
     ///
-    /// an invalid answer leaves the pending offer in place, so the caller may
-    /// pass a later valid answer for the same request
+    /// a rejection before the worker consumes its pending offer leaves the
+    /// application round in place so a direct caller may retry it
+    /// failures after the worker consumes that offer do not promise retry even
+    /// when the RTC backend rejects the answer
     /// when queued publish intent needs another SDP round the returned offer
     /// must be sent to the client before the next answer
     ///
@@ -411,15 +341,20 @@ impl MediaSession {
     /// returns [`SessionError::Core`] when answer application fails, capability
     /// projection fails or room state rejects the accepted answer as stale
     pub async fn answer(&mut self, sdp: &str) -> Result<Option<NegotiationOffer>, SessionError> {
-        let Some(purpose) = self.phase.pending_offer_purpose() else {
+        if !matches!(self.phase, SessionPhase::WaitingForAnswer(_)) {
             return Err(SessionError::NoPendingRequest);
-        };
+        }
         let applied_answer = self
             .core
             .media_transport
             .apply_session_answer(&self.transport_user_key, sdp)
             .await
             .map_err(SfuCoreError::Transport)?;
+        let InFlightOffer {
+            purpose,
+            queued_publishes,
+            follow_up_renegotiation,
+        } = self.phase.complete_answer();
         match purpose {
             SessionOfferPurpose::EstablishSession => {
                 let client_capabilities = applied_answer.client_capabilities().cloned().ok_or(
@@ -437,13 +372,10 @@ impl MediaSession {
                     .ok_or(SfuCoreError::SessionRefreshRejected)?;
             }
         }
-        let Some(follow_up_renegotiation) = self.phase.complete_answer() else {
-            return Err(SessionError::NoPendingRequest);
-        };
         self.room_operation()
             .commit_staged_publishes(&applied_answer)
             .await;
-        let staged = self.stage_queued_publishes().await?;
+        let staged = self.stage_queued_publishes(queued_publishes).await?;
         if staged || follow_up_renegotiation {
             return self.renegotiate().await;
         }
@@ -465,8 +397,7 @@ impl MediaSession {
         &mut self,
         intent: SourcePublishIntent,
     ) -> Result<Option<NegotiationOffer>, SessionError> {
-        let stream_id = intent.stream_id().clone();
-        if self.phase.has_queued_publish(&stream_id) {
+        if self.phase.has_queued_publish(intent.stream_id()) {
             return Ok(None);
         }
         match self
@@ -475,8 +406,7 @@ impl MediaSession {
         {
             PublishIntentOutcome::Noop | PublishIntentOutcome::Activated => Ok(None),
             PublishIntentOutcome::Queue => {
-                self.phase.queue_publish(stream_id, intent);
-                self.phase.mark_follow_up_renegotiation();
+                self.phase.queue_publish(intent);
                 Ok(None)
             }
             PublishIntentOutcome::Staged => self.renegotiate().await,
@@ -549,10 +479,8 @@ impl MediaSession {
     /// returns [`SessionError::Core`] when the transport rejects
     /// renegotiation
     pub async fn renegotiate(&mut self) -> Result<Option<NegotiationOffer>, SessionError> {
-        match self.phase.request_renegotiation() {
-            RenegotiationDecision::CreateOfferNow => {}
-            RenegotiationDecision::QueuedAfterAnswer
-            | RenegotiationDecision::IgnoredBeforeInitialOffer => return Ok(None),
+        if !self.phase.request_renegotiation() {
+            return Ok(None);
         }
         let offer = match self
             .core
@@ -560,7 +488,7 @@ impl MediaSession {
             .create_session_renegotiation_offer(&self.transport_user_key)
             .await
         {
-            Ok(offer) => NegotiationOffer::from(offer),
+            Ok(offer) => offer,
             Err(TransportAdapterError::UnsupportedFeature) => return Ok(None),
             Err(error) => return Err(SfuCoreError::Transport(error).into()),
         };
@@ -703,8 +631,10 @@ impl MediaSession {
             .apply_recording_stop(self.user_id(), self.connection_id())
     }
 
-    async fn stage_queued_publishes(&mut self) -> Result<bool, SessionError> {
-        let queued = self.phase.take_queued_publishes();
+    async fn stage_queued_publishes(
+        &self,
+        queued: BTreeMap<UserStreamId, SourcePublishIntent>,
+    ) -> Result<bool, SessionError> {
         let mut staged = false;
         for intent in queued.into_values() {
             if self.start_publish(&intent, true).await? == PublishIntentOutcome::Staged {
@@ -712,41 +642,5 @@ impl MediaSession {
             }
         }
         Ok(staged)
-    }
-}
-
-impl From<SessionOffer> for NegotiationOffer {
-    fn from(offer: SessionOffer) -> Self {
-        let (sdp, upload_slots) = offer.into_parts();
-        Self {
-            sdp,
-            upload_slots: upload_slots.into_iter().map(UploadSlot::from).collect(),
-        }
-    }
-}
-
-impl From<SessionUploadSlot> for UploadSlot {
-    fn from(slot: SessionUploadSlot) -> Self {
-        Self {
-            mid: slot.mid,
-            kind: slot.kind,
-            codecs: slot.codecs,
-            simulcast_encodings: slot
-                .simulcast_encodings
-                .into_iter()
-                .map(UploadEncoding::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<SessionUploadEncoding> for UploadEncoding {
-    fn from(encoding: SessionUploadEncoding) -> Self {
-        Self {
-            rid: encoding.rid,
-            max_bitrate: encoding.max_bitrate,
-            resolution_scale: encoding.resolution_scale,
-            max_framerate: encoding.max_framerate,
-        }
     }
 }

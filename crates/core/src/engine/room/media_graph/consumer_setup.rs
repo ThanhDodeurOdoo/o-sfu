@@ -102,13 +102,14 @@ impl RoomState {
         let before = self.media_counts();
         let target = &setup.pending.target;
         let session = &target.session;
-        let outcome = if self.users.get(session.user_id()).is_some_and(|user| {
-            user.connection_id == session.connection_id() && user.negotiation.can_consume()
-        }) && let Some(producer_active) = self
-            .topology
-            .producer(target.routed.producer_id())
-            .filter(|producer| target.matches_identity(producer))
-            .map(|producer| producer.active)
+        let outcome = if self
+            .user_for_connection(session.user_id(), session.connection_id())
+            .is_some_and(|user| user.parsed_client_rtp_capabilities.is_some())
+            && let Some(producer_active) = self
+                .topology
+                .producer(target.routed.producer_id())
+                .filter(|producer| target.matches_identity(producer))
+                .map(|producer| producer.active)
         {
             let selection = self.setup_selection(target, producer_active);
             let delivery_active = selection.delivery_active();

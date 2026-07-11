@@ -728,11 +728,17 @@ impl ReceiverBweTargetUpdate {
     }
 }
 
-/// Transitional server-authored SDP offer returned by the transport boundary.
+/// server-authored SDP offer plus upload metadata for the client
+///
+/// the SDP is transport state
+/// callers should send it to the client unchanged and use `upload_slots` only
+/// to project browser-facing source setup hints
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionOffer {
-    sdp: String,
-    upload_slots: Vec<SessionUploadSlot>,
+    /// do not parse this outside the transport boundary for routing decisions
+    pub sdp: String,
+    /// media sections the client may publish after applying the offer
+    pub upload_slots: Vec<SessionUploadSlot>,
 }
 
 impl SessionOffer {
@@ -756,18 +762,32 @@ impl SessionOffer {
     }
 }
 
+/// one offered upload media section
+///
+/// `mid` binds this slot to the SDP media section
+/// `kind`, `codecs` and `simulcast_encodings` are compatibility metadata for
+/// the protocol layer
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionUploadSlot {
+    /// SDP media section id for this upload slot
     pub mid: String,
+    /// audio or video kind accepted on this media section
     pub kind: MediaKind,
+    /// codec names accepted for this upload slot
     pub codecs: Vec<String>,
+    /// simulcast layers the client may announce for this upload slot
     pub simulcast_encodings: Vec<SessionUploadEncoding>,
 }
 
+/// one upload encoding offered to the client
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionUploadEncoding {
+    /// RTP stream id that should appear in RID or simulcast signaling
     pub rid: String,
+    /// optional send bitrate ceiling for this encoding
     pub max_bitrate: Option<Bitrate>,
+    /// optional inverse scale from source resolution
     pub resolution_scale: Option<u16>,
+    /// optional frame-rate ceiling for this encoding
     pub max_framerate: Option<u16>,
 }
