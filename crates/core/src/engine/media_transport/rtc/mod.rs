@@ -72,4 +72,5 @@ pub use commands::{
 pub use forwarded_packet::ForwardedPacket;
 #[cfg(any(test, feature = "fuzzing"))]
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
+pub(super) use route_control::PacketLayerGate;
 pub use worker::RtcWorker;

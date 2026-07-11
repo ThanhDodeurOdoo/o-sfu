@@ -6,7 +6,7 @@ use super::{
     ConsumerActivity, MediaTransport, ProducerActivity, ReceiverBweTargetUpdate, SourcePacketGate,
     TransportAdapterError, TransportConsumerRoute, TransportResult, TransportSourceKey,
     rtc::{
-        RtcWorkerCommand, WorkerMediaControlBatch as WorkerBatch,
+        PacketLayerGate, RtcWorkerCommand, WorkerMediaControlBatch as WorkerBatch,
         WorkerMediaControlBatchOutcome as WorkerBatchOutcome,
     },
 };
@@ -173,7 +173,7 @@ pub(super) fn reconcile_applied(
 }
 
 type WorkerBatches<T> = BTreeMap<usize, Vec<(usize, T)>>;
-type GateUpdate = (usize, TransportConsumerRoute, SourcePacketGate);
+type GateUpdate = (usize, TransportConsumerRoute, PacketLayerGate);
 
 fn push<K: Ord, T>(batches: &mut BTreeMap<K, Vec<T>>, key: K, item: T) {
     batches.entry(key).or_default().push(item);
@@ -241,11 +241,15 @@ impl<P, C> MediaControlExecution<P, C> {
                 .consumer_session_key()
                 .media_worker_id()
                 .as_usize();
-            if let Some(packet_gate) = control.packet_gate.take() {
+            if let Some(gate) = control.packet_gate.take() {
+                let gate = match gate {
+                    SourcePacketGate::Open => PacketLayerGate::Open,
+                    SourcePacketGate::Rid(rid) => PacketLayerGate::Rid(rid.as_str().into()),
+                };
                 push(
                     &mut execution.gates,
                     (worker, control.route.source().clone()),
-                    (index, control.route.clone(), packet_gate),
+                    (index, control.route.clone(), gate),
                 );
             }
             if control.activity.is_some() || control.request_keyframe {

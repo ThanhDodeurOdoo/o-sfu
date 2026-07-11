@@ -562,8 +562,8 @@ impl ActiveSpeakerSourceDiagnostic {
 /// Packet gate applied by transport to one published source.
 ///
 /// Room policy decides in source-domain terms. The transport boundary receives
-/// only the packet-facing projection that the worker can apply without knowing
-/// room layout, source identity or relay placement.
+/// only the packet-facing selection needed to build the worker-native gate
+/// without knowing room layout, source identity or relay placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourcePacketGate {
     Open,
