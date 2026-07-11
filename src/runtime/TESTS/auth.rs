@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use base64::Engine as _;
 use o_sfu_protocol::wire::{UserId, UserPermissions};
@@ -8,8 +8,8 @@ use serde_json::json;
 
 use super::{
     AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, MAX_JWT_TOKEN_BYTES,
-    RegisteredJwtClaims, WebSocketConnectClaims, decode_base64, secs_since_epoch, sign, sign_hs256,
-    verify,
+    RegisteredJwtClaims, WebSocketConnectClaims, decode_key, duration_since_epoch, sign,
+    sign_hs256, validate_registered_claims_at, verify,
 };
 
 const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
@@ -23,7 +23,7 @@ fn jwt_claims_round_trip() -> serde_json::Result<()> {
                 "urn:odoo:sfu".to_owned(),
                 "urn:odoo:recording".to_owned(),
             ])),
-            exp: Some(1_744_000_000),
+            exp: Some(1_744_000_000_u64.into()),
             ..RegisteredJwtClaims::default()
         },
         key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
@@ -160,8 +160,8 @@ fn sign_and_verify_round_trip_with_uuid_like_channel_key() {
 }
 
 #[test]
-fn decode_base64_matches_legacy_uuid_like_channel_key_bytes() {
-    let decoded = decode_base64("123e4567-e89b-12d3-a456-426614174000");
+fn decode_key_matches_legacy_uuid_like_channel_key_bytes() {
+    let decoded = decode_key("123e4567-e89b-12d3-a456-426614174000");
     assert_eq!(
         decoded.ok(),
         Some(vec![
@@ -173,10 +173,10 @@ fn decode_base64_matches_legacy_uuid_like_channel_key_bytes() {
 
 #[test]
 fn verify_rejects_expired_token() {
-    let now = secs_since_epoch();
+    let now = duration_since_epoch().as_secs();
     let claims = HttpRoomClaims {
         registered: RegisteredJwtClaims {
-            exp: Some(now.saturating_sub(1)),
+            exp: Some(now.saturating_sub(1).into()),
             ..RegisteredJwtClaims::default()
         },
         key: None,
@@ -196,10 +196,10 @@ fn verify_rejects_expired_token() {
 
 #[test]
 fn verify_rejects_token_when_exp_matches_current_second() {
-    let now = secs_since_epoch();
+    let now = duration_since_epoch().as_secs();
     let claims = HttpRoomClaims {
         registered: RegisteredJwtClaims {
-            exp: Some(now),
+            exp: Some(now.into()),
             ..RegisteredJwtClaims::default()
         },
         key: None,
@@ -211,6 +211,51 @@ fn verify_rejects_token_when_exp_matches_current_second() {
     };
     let error = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY).err();
     assert_eq!(error, Some(AuthenticationError::TokenExpired));
+}
+
+#[test]
+fn registered_claims_use_subsecond_time() -> serde_json::Result<()> {
+    let now = Duration::new(1_744_000_000, 500_000_000);
+    let cases = [
+        (
+            r#"{"exp":1744000000.5}"#,
+            Err(AuthenticationError::TokenExpired),
+        ),
+        (r#"{"exp":1744000000.6}"#, Ok(())),
+        (r#"{"nbf":1744000000.5}"#, Ok(())),
+        (
+            r#"{"nbf":1744000000.6}"#,
+            Err(AuthenticationError::TokenNotYetValid),
+        ),
+        (r#"{"iat":1744000060.5}"#, Ok(())),
+        (
+            r#"{"iat":1744000060.6}"#,
+            Err(AuthenticationError::TokenIssuedInFuture),
+        ),
+    ];
+
+    for (raw, expected) in cases {
+        let claims = serde_json::from_str(raw)?;
+        assert_eq!(validate_registered_claims_at(&claims, now), expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn verify_handles_fractional_expiration() {
+    for (claims, expected) in [
+        (r#"{"exp":4000000000.5}"#, None),
+        (r#"{"exp":0.5}"#, Some(AuthenticationError::TokenExpired)),
+    ] {
+        let token = sign_raw_claims_token_for_test(claims.as_bytes(), TEST_AUTH_KEY);
+        assert!(token.is_some());
+        if let Some(token) = token {
+            assert_eq!(
+                verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY).err(),
+                expected
+            );
+        }
+    }
 }
 
 #[test]
@@ -342,7 +387,7 @@ fn sign_token_for_test<T: Serialize>(
     typ: Option<&str>,
     segment_encoding: SegmentEncoding,
 ) -> Option<String> {
-    let key = decode_base64(key_b64).ok()?;
+    let key = decode_key(key_b64).ok()?;
     let header = JwtHeader {
         alg: ALGORITHM_HS256.to_owned(),
         typ: typ.map(str::to_owned),
@@ -358,7 +403,7 @@ fn sign_token_for_test<T: Serialize>(
 }
 
 fn sign_raw_claims_token_for_test(claims_json: &[u8], key_b64: &str) -> Option<String> {
-    let key = decode_base64(key_b64).ok()?;
+    let key = decode_key(key_b64).ok()?;
     let header = JwtHeader {
         alg: ALGORITHM_HS256.to_owned(),
         typ: Some(TYPE_JWT.to_owned()),

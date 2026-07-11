@@ -1,3 +1,8 @@
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
+
 use super::super::transport::default_rtc_media_worker_count;
 use crate::{
     config::{
@@ -10,6 +15,8 @@ use crate::{
     },
 };
 
+const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
+
 fn config_from(overrides: &[(&str, &str)]) -> anyhow::Result<Config> {
     Config::from_var_lookup(|key| {
         overrides
@@ -17,7 +24,7 @@ fn config_from(overrides: &[(&str, &str)]) -> anyhow::Result<Config> {
             .find(|(name, _value)| *name == key)
             .map(|(_name, value)| (*value).to_owned())
             .or_else(|| match key {
-                "AUTH_KEY" => Some("dGVzdC1rZXk=".to_owned()),
+                "AUTH_KEY" => Some(TEST_AUTH_KEY.to_owned()),
                 "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
                 _ => None,
             })
@@ -41,10 +48,30 @@ fn config_requires_auth_key() {
 }
 
 #[test]
+fn config_validates_auth_key_material() -> anyhow::Result<()> {
+    let short = STANDARD.encode([0xff; 31]);
+    let error = config_error_from(&[("AUTH_KEY", &short)]);
+    assert_eq!(
+        error.as_deref(),
+        Some("AUTH_KEY must decode to at least 32 bytes")
+    );
+
+    let standard = STANDARD.encode([0xff; 32]);
+    assert_eq!(config_from(&[("AUTH_KEY", &standard)])?.auth.key, standard);
+
+    let jose = URL_SAFE_NO_PAD.encode([0xff; 32]);
+    assert_eq!(config_from(&[("AUTH_KEY", &jose)])?.auth.key, jose);
+
+    let error = config_error_from(&[("AUTH_KEY", "not base64")]);
+    assert_eq!(error.as_deref(), Some("AUTH_KEY must be valid base64"));
+    Ok(())
+}
+
+#[test]
 fn config_uses_defaults_and_explicit_values() -> anyhow::Result<()> {
     let config = config_from(&[])?;
     assert_eq!(config.http.bind_address.to_string(), "0.0.0.0:8070");
-    assert_eq!(config.auth.key, "dGVzdC1rZXk=");
+    assert_eq!(config.auth.key, TEST_AUTH_KEY);
     assert_eq!(config.auth.authentication_timeout_ms, 10_000);
     assert_eq!(
         config.auth.max_pre_auth_websocket_sessions,
