@@ -23,7 +23,7 @@ use rid_refresh::RidRefreshQueue;
 use source::{RemovedConsumerRoute, RouteSource};
 pub(super) use source::{RidReadinessRouteUpdate, RidReadinessSelectedGateUpdate};
 use str0m::{
-    media::{KeyframeRequestKind, Rid},
+    media::{KeyframeRequestKind, Pt, Rid},
     rtp::Ssrc,
 };
 use tracing::debug;
@@ -34,9 +34,7 @@ use super::{
     keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker, SourceKeyframeRequest},
     relay_registry::{ActiveRelayTarget, RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
-    source_route::{
-        DecoderRefreshCodec, MediaRouteDestination, MediaRouteEntry, RemoteSourceRegistration,
-    },
+    source_route::{MediaRouteDestination, MediaRouteEntry, PacketCodec, RemoteSourceRegistration},
 };
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError, TransportMediaId,
@@ -376,39 +374,38 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn decoder_refresh_codec(
+    pub(super) fn packet_codec(
         &self,
         source_id: TransportMediaId,
-    ) -> Option<DecoderRefreshCodec> {
-        self.sources
-            .get(&source_id)
-            .and_then(|source| source.producer.decoder)
+        payload_type: Pt,
+    ) -> Option<PacketCodec> {
+        self.sources.get(&source_id).and_then(|source| {
+            source
+                .producer
+                .codecs
+                .iter()
+                .find_map(|(candidate, codec)| (*candidate == payload_type).then_some(*codec))
+        })
     }
 
-    pub(super) fn set_decoder_refresh_codec(
-        &mut self,
-        source_id: TransportMediaId,
-        codec: Option<DecoderRefreshCodec>,
-    ) {
-        if codec.is_some() {
-            self.source_mut(source_id).producer.decoder = codec;
-        } else if let Some(source) = self.sources.get_mut(&source_id) {
-            source.producer.decoder = None;
+    pub(super) fn clear_packet_codecs(&mut self, source_id: TransportMediaId) {
+        if let Some(source) = self.sources.get_mut(&source_id) {
+            source.producer.codecs.clear();
         }
     }
 
-    /// refreshes decoder-refresh classification from negotiated RTP parameters
-    ///
-    /// returns the previous classifier so route registration rollback can put
-    /// source metadata back exactly as it was before a failed mutation
-    pub(super) fn refresh_decoder_codec(
+    /// refreshes packet codec classification from negotiated RTP parameters
+    pub(super) fn refresh_packet_codecs(
         &mut self,
         source_id: TransportMediaId,
         parameters: &MediaStream,
-    ) -> Option<DecoderRefreshCodec> {
-        let previous = self.decoder_refresh_codec(source_id);
-        self.set_decoder_refresh_codec(source_id, DecoderRefreshCodec::from_parameters(parameters));
-        previous
+    ) {
+        let codecs = PacketCodec::from_parameters(parameters);
+        if codecs.is_empty() {
+            self.clear_packet_codecs(source_id);
+        } else {
+            self.source_mut(source_id).producer.codecs = codecs;
+        }
     }
 
     pub(super) fn observe_producer_packet(

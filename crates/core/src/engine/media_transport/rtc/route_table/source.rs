@@ -22,7 +22,7 @@ use crate::engine::media_transport::{
             PacketLayerGate, SourceAudioPolicyState, aggregate_packet_gates, intersect_packet_gates,
         },
         source_route::{
-            DecoderRefreshCodec, DestinationKeyframeTarget, MediaRouteDestination, MediaRouteEntry,
+            DestinationKeyframeTarget, MediaRouteDestination, MediaRouteEntry, PacketCodecs,
             RemoteSourceRegistration,
         },
     },
@@ -654,7 +654,7 @@ impl SourcePacketState {
 pub(super) struct ProducerSourceState {
     pub(super) registered: bool,
     pub(super) ssrcs: Vec<Ssrc>,
-    pub(super) decoder: Option<DecoderRefreshCodec>,
+    pub(super) codecs: PacketCodecs,
     last_keyframe: Option<Instant>,
     rids: Vec<ProducerRidLiveness>,
     pub(super) pending_rid_refreshes: Vec<RidKeyframeRefresh>,
@@ -708,7 +708,7 @@ impl ProducerSourceState {
     pub(super) fn is_empty(&self) -> bool {
         !self.registered
             && self.ssrcs.is_empty()
-            && self.decoder.is_none()
+            && self.codecs.is_empty()
             && self.last_keyframe.is_none()
             && self.rids.is_empty()
             && self.pending_rid_refreshes.is_empty()

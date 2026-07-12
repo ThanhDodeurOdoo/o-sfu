@@ -613,7 +613,7 @@ impl PacketLoopState {
         };
         self.clear_producer_ssrcs(session_key, transport_media_id);
         self.routes
-            .refresh_decoder_codec(transport_media_id, parameters);
+            .refresh_packet_codecs(transport_media_id, parameters);
         let accepted_ssrcs = parameters
             .bindings()
             .filter_map(|binding| {
@@ -650,8 +650,7 @@ impl PacketLoopState {
             return;
         };
         self.clear_producer_ssrcs(session_key, transport_media_id);
-        self.routes
-            .set_decoder_refresh_codec(transport_media_id, None);
+        self.routes.clear_packet_codecs(transport_media_id);
         self.routes
             .replace_producer_ssrcs(transport_media_id, Vec::new());
     }

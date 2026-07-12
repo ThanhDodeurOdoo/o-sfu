@@ -31,12 +31,12 @@ use super::{
             media_registry::RegisteredMediaHandle,
             simulcast,
             slots::ConsumerStreamHandle,
-            source_route::{DecoderRefreshCodec, RemoteSourceRegistration},
+            source_route::RemoteSourceRegistration,
             state::{PacketLoopState, PendingRecvStream, RtcSessionState},
         },
         negotiation,
     },
-    AddSendMediaRequest, RouteSourceKind,
+    AddSendMediaRequest,
     control::{
         ConsumerRouteRegistration, ensure_route_src_registered, register_consumer_route,
         remove_consumer_route, remove_source_route,
@@ -63,7 +63,6 @@ struct RemoteSourceRollback {
     is_remote_source: bool,
     src_media: TransportMediaId,
     previous_registration: Option<RemoteSourceRegistration>,
-    previous_decoder_refresh_codec: Option<DecoderRefreshCodec>,
 }
 
 impl RemoteSourceRollback {
@@ -75,14 +74,10 @@ impl RemoteSourceRollback {
         let previous_registration = is_remote_source
             .then(|| state.routes.remote_source(src_media).cloned())
             .flatten();
-        let previous_decoder_refresh_codec = is_remote_source
-            .then(|| state.routes.decoder_refresh_codec(src_media))
-            .flatten();
         Self {
             is_remote_source,
             src_media,
             previous_registration,
-            previous_decoder_refresh_codec,
         }
     }
 
@@ -93,9 +88,6 @@ impl RemoteSourceRollback {
         state
             .routes
             .restore_remote_source(self.src_media, self.previous_registration);
-        state
-            .routes
-            .set_decoder_refresh_codec(self.src_media, self.previous_decoder_refresh_codec);
     }
 }
 
@@ -446,11 +438,6 @@ pub fn worker_add_send_media(
                 return Err(error);
             }
         };
-    if matches!(route_source, RouteSourceKind::Remote) {
-        state
-            .routes
-            .refresh_decoder_codec(src_media, consumer_rtp_parameters);
-    }
     let Some(session_state) = state.users.get_mut(consumer_key) else {
         remote_source_rollback.rollback(state);
         return Err(TransportAdapterError::TransportUnavailable);

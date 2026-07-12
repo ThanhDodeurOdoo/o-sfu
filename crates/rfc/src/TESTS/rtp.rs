@@ -155,6 +155,16 @@ fn h264_payload_keyframe_detection_covers_idr_packetizations() {
         &[0x7c, 0x85, 0x88],
         PacketizationMode::SingleNalUnit
     ));
+    assert!(!h264::payload_starts_idr(
+        &[0x78, 0x00, 0x01, 0x65, 0x00, 0x03, 0x41, 0x88],
+        PacketizationMode::NonInterleaved
+    ));
+    for nested_header in [0x78, 0x7c] {
+        assert!(!h264::payload_starts_idr(
+            &[0x78, 0x00, 0x02, 0x65, 0x88, 0x00, 0x01, nested_header],
+            PacketizationMode::NonInterleaved
+        ));
+    }
 }
 
 #[test]
