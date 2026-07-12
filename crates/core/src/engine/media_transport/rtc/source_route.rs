@@ -178,32 +178,29 @@ pub(super) struct RemoteSourceRegistration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DecoderRefreshCodec {
+pub(super) enum PacketCodec {
     H264(rtp::h264::PacketizationMode),
     Vp8,
-    Unsupported,
 }
 
-impl DecoderRefreshCodec {
-    pub(super) fn from_parameters(parameters: &MediaStream) -> Option<Self> {
-        let mut has_vp8 = false;
-        let mut has_unsupported_primary = false;
-        for format in parameters.formats() {
-            match format.codec() {
-                &rtp::CodecName::H264 => return Some(Self::from_h264_format(format)),
-                &rtp::CodecName::Vp8 => has_vp8 = true,
-                codec if !codec.is_rtx() => has_unsupported_primary = true,
-                _ => {}
-            }
-        }
-        if has_vp8 {
-            Some(Self::Vp8)
-        } else {
-            has_unsupported_primary.then_some(Self::Unsupported)
-        }
+pub(super) type PacketCodecs = Vec<(Pt, PacketCodec)>;
+
+impl PacketCodec {
+    pub(super) fn from_parameters(parameters: &MediaStream) -> PacketCodecs {
+        parameters
+            .formats()
+            .filter_map(|format| {
+                let codec = match *format.codec() {
+                    rtp::CodecName::H264 => Self::from_h264_format(format)?,
+                    rtp::CodecName::Vp8 => Self::Vp8,
+                    _ => return None,
+                };
+                Some((Pt::from(format.payload_type()), codec))
+            })
+            .collect()
     }
 
-    fn from_h264_format(format: &MediaFormat) -> Self {
+    fn from_h264_format(format: &MediaFormat) -> Option<Self> {
         let mode = format
             .settings()
             .find_map(|setting| match setting {
@@ -213,8 +210,8 @@ impl DecoderRefreshCodec {
             .unwrap_or(rtp::h264::PacketizationMode::SingleNalUnit);
         match mode {
             rtp::h264::PacketizationMode::SingleNalUnit
-            | rtp::h264::PacketizationMode::NonInterleaved => Self::H264(mode),
-            rtp::h264::PacketizationMode::Interleaved => Self::Unsupported,
+            | rtp::h264::PacketizationMode::NonInterleaved => Some(Self::H264(mode)),
+            rtp::h264::PacketizationMode::Interleaved => None,
         }
     }
 }

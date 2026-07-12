@@ -25,7 +25,7 @@ use str0m::{
 
 use super::{
     local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
-    route_control::PacketLayerMetadata, slots::SessionHandle, source_route::DecoderRefreshCodec,
+    route_control::PacketLayerMetadata, slots::SessionHandle, source_route::PacketCodec,
     state::PacketLoopState,
 };
 use crate::engine::{
@@ -251,7 +251,10 @@ impl ForwardedPacket {
         }
         let src_media = self.resolve_src_media(state)?;
         let layer_metadata = self.compute_route_control_layer_metadata(state);
-        let decoder_refresh = self.decoder_refresh_for_source(state, src_media);
+        let packet_codec = state
+            .routes
+            .packet_codec(src_media, self.rtp_header().payload_type);
+        let decoder_refresh = self.decoder_refresh(packet_codec);
         let extensions = self.route_control_extension_values();
         let facts = PacketFacts {
             src_media,
@@ -261,7 +264,7 @@ impl ForwardedPacket {
             voice_activity: extensions.voice_activity,
             audio_level: extensions.audio_level,
             decoder_refresh,
-            vp8_payload: self.resolve_vp8_payload(),
+            vp8_payload: self.resolve_vp8_payload(packet_codec),
         };
         self.facts = Some(facts);
         Some(facts)
@@ -402,25 +405,21 @@ impl ForwardedPacket {
         state.source_rid_for_ssrc(src_key, self.rtp_header().ssrc)
     }
 
-    fn decoder_refresh_for_source(
-        &self,
-        state: &PacketLoopState,
-        src_media: TransportMediaId,
-    ) -> bool {
-        match state.routes.decoder_refresh_codec(src_media) {
-            Some(DecoderRefreshCodec::H264(packetization_mode)) => {
+    fn decoder_refresh(&self, codec: Option<PacketCodec>) -> bool {
+        match codec {
+            Some(PacketCodec::H264(packetization_mode)) => {
                 h264::payload_starts_idr(self.payload.as_ref(), packetization_mode)
             }
-            Some(DecoderRefreshCodec::Vp8) | None => {
-                vp8::payload_starts_keyframe(self.payload.as_ref())
-            }
-            Some(DecoderRefreshCodec::Unsupported) => false,
+            Some(PacketCodec::Vp8) => vp8::payload_starts_keyframe(self.payload.as_ref()),
+            None => false,
         }
     }
 
-    fn resolve_vp8_payload(&self) -> Option<PacketVp8Payload> {
-        let extensions = self.route_control_extension_values();
-        extensions.rid.or(extensions.rid_repair)?;
+    fn resolve_vp8_payload(&self, codec: Option<PacketCodec>) -> Option<PacketVp8Payload> {
+        if codec != Some(PacketCodec::Vp8) {
+            return None;
+        }
+        self.resolved_source_rid?;
         PacketVp8Payload::parse(self.payload.as_ref())
     }
 }

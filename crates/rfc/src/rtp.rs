@@ -695,30 +695,30 @@ pub mod h264 {
 
     /// Scans a STAP-A payload for any contained IDR NAL unit.
     ///
-    /// Each aggregate entry is length-prefixed. A malformed length makes the
-    /// whole probe fail closed because the caller cannot safely trust later
-    /// bytes as NAL boundaries.
+    /// each aggregate entry is length-prefixed and must use a single NAL unit type
+    /// malformed lengths fail closed because the caller cannot safely trust later
+    /// bytes as NAL boundaries
     fn stap_a_contains_idr(mut payload: &[u8]) -> bool {
-        while payload.len() >= 2 {
-            let Some((&first_len_octet, rest)) = payload.split_first() else {
+        let mut contains_idr = false;
+        while !payload.is_empty() {
+            let Some((len, rest)) = payload.split_first_chunk::<2>() else {
                 return false;
             };
-            let Some((&second_len_octet, rest)) = rest.split_first() else {
+            let nal_len = usize::from(u16::from_be_bytes(*len));
+            let Some((nal, remaining_payload)) = rest.split_at_checked(nal_len) else {
                 return false;
             };
-            let nal_len = usize::from(u16::from_be_bytes([first_len_octet, second_len_octet]));
-            if nal_len == 0 || rest.len() < nal_len {
+            let Some(&nal_header) = nal.first() else {
+                return false;
+            };
+            let nal_type = nal_header & NAL_UNIT_TYPE_MASK;
+            if !(1..NAL_UNIT_TYPE_STAP_A).contains(&nal_type) {
                 return false;
             }
-            let Some((&nal_header, remaining_payload)) = rest.split_first() else {
-                return false;
-            };
-            if nal_header & NAL_UNIT_TYPE_MASK == NAL_UNIT_TYPE_IDR {
-                return true;
-            }
-            payload = remaining_payload.get(nal_len - 1..).unwrap_or_default();
+            contains_idr |= nal_type == NAL_UNIT_TYPE_IDR;
+            payload = remaining_payload;
         }
-        false
+        contains_idr
     }
 
     /// Detects whether a FU-A packet is the first fragment of an IDR NAL unit.
