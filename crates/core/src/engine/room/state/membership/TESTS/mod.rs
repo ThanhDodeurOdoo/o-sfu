@@ -9,7 +9,7 @@
 use std::{slice::from_ref, sync::Arc};
 
 use o_sfu_router::{
-    ProducerId, RouterId,
+    RouterId,
     rtp::MediaStream,
     test_support::rtp_samples::{sample_client_rtp_capabilities, sample_video_rtp_parameters},
 };
@@ -26,11 +26,7 @@ use crate::{
             media_graph::{ConsumerSetupOrigin, ConsumerSetupOutcome, ValidatedPublish},
             rtp_capabilities::router_rtp_capabilities,
         },
-        source_model::{
-            PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
-            PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-            SourceEncodingId, test_support::source_publish_intent_for_source,
-        },
+        source_model::{PublishedSourceId, test_support::source_publish_intent_for_source},
     },
 };
 
@@ -81,7 +77,7 @@ fn join_test_user_on_placement(
         .connection_id
 }
 
-fn install_test_published_producer(
+fn commit_test_publication(
     state: &mut RoomState,
     user_id: &UserId,
     connection_id: ConnectionId,
@@ -89,52 +85,22 @@ fn install_test_published_producer(
     transport_media_id: TransportMediaId,
     consumable_rtp_parameters: MediaStream,
 ) -> PublishedSourceId {
-    let producer_id = ProducerId::allocate(&mut state.next_producer_id);
-    let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
-    let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
     let intent = source_publish_intent_for_source(stream_type);
-    let source = PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-        source_id,
-        owner: PublishedSourceOwner::new(user_id.clone()),
-        stream_id: intent.stream_id().clone(),
-        media_kind: intent.media_kind(),
-        policy: intent.policy(),
-        mid: None,
-        encodings: vec![SourceEncodingDescriptor::new(
-            SourceEncodingDescriptorParts {
-                encoding_id,
-                source_id,
-                rid: None,
-                primary_ssrc: None,
-                repair_ssrc: None,
-                max_bitrate: None,
-                resolution_scale: None,
-                max_framerate: None,
-                policy_role: None,
-                negotiated_format: None,
-            },
-        )],
-    })
-    .expect("test source graph should be valid");
     state
         .topology
-        .publish_source(
+        .commit_publication(
             ValidatedPublish {
-                owner_user_id: user_id.clone(),
-                owner_connection_id: connection_id,
                 session_key: state.transport_user_key(user_id, connection_id),
-                stream_id: source.stream_id().clone(),
-                media_kind: source.media_kind(),
-                policy: source.policy(),
+                stream_id: intent.stream_id().clone(),
+                media_kind: intent.media_kind(),
+                policy: intent.policy(),
                 presence: None,
             },
-            producer_id,
-            source,
             consumable_rtp_parameters,
+            &[],
             transport_media_id,
         )
-        .expect("test producer route should be published");
-    source_id
+        .expect("test publication should commit")
 }
 
 #[derive(Debug)]
@@ -168,7 +134,7 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let publisher_session = state.transport_user_key(&publisher, publisher_connection);
     let source_media = TransportMediaId::new(11);
     let consumer_media = TransportMediaId::new(21);
-    install_test_published_producer(
+    commit_test_publication(
         state,
         &publisher,
         publisher_connection,
@@ -287,7 +253,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
             )
             .is_some()
     );
-    let source_id = install_test_published_producer(
+    let source_id = commit_test_publication(
         &mut state,
         &UserId::Integer(1),
         producer_connection_id,
@@ -313,7 +279,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
     assert!(outcome.is_some());
     assert_eq!(state.consumer_count(), 0);
     assert_eq!(state.producer_count(), 1);
-    assert!(state.topology.source(source_id).is_some());
+    assert!(state.topology.source_descriptor(source_id).is_some());
 }
 
 #[test]

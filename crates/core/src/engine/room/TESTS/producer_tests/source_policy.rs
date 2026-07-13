@@ -670,12 +670,12 @@ async fn reset_subscription_selection_to_open(
         .live_consumer_routes()
         .find(|route| {
             route.consumer_user_id == *consumer_user_id
-                && route.source.owner().user_id() == producer_user_id
-                && route.source.stream_id() == &stream_id
+                && route.source.descriptor.owner().user_id() == producer_user_id
+                && route.source.descriptor.stream_id() == &stream_id
         })
         .expect("test should have a live subscription route");
     let transport_ref = route.transport_ref();
-    let source_id = route.source.source_id();
+    let source_id = route.source.descriptor.source_id();
     drop(state);
 
     let mut state = room.state.write().await;

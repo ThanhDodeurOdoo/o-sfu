@@ -12,7 +12,7 @@ use super::{
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::RoomState,
     },
-    ConsumerId, ConsumerKey, ConsumerRouteTarget, ConsumerState, PublishedProducer,
+    ConsumerId, ConsumerKey, ConsumerRouteTarget, ConsumerState, PublishedSource,
     route_graph::{ConsumerRouteReservation, RelayRouteKey},
 };
 use crate::engine::{
@@ -105,13 +105,13 @@ impl RoomState {
         let outcome = if self
             .user_for_connection(session.user_id(), session.connection_id())
             .is_some_and(|user| user.parsed_client_rtp_capabilities.is_some())
-            && let Some(producer_active) = self
+            && let Some(source_active) = self
                 .topology
-                .producer(target.routed.producer_id())
-                .filter(|producer| target.matches_identity(producer))
-                .map(|producer| producer.active)
+                .published_source(target.source_id)
+                .filter(|source| target.matches_identity(source))
+                .map(|source| source.active)
         {
-            let selection = self.setup_selection(target, producer_active);
+            let selection = self.setup_selection(target, source_active);
             let delivery_active = selection.delivery_active();
             match self.topology.commit_consumer_setup(setup, selection) {
                 Ok(commit) => {
@@ -215,18 +215,14 @@ impl PendingConsumerSetup {
 }
 
 impl ConsumerSetupTarget {
-    pub fn new(
-        session: TransportSessionKey,
-        source: TransportSourceKey,
-        producer: &PublishedProducer,
-    ) -> Self {
+    pub fn new(session: TransportSessionKey, source: &PublishedSource) -> Self {
         Self {
             session,
-            source,
-            source_id: producer.source_id,
-            stream: producer.stream_id.clone(),
-            kind: producer.media_kind,
-            routed: producer.routed_producer_id,
+            source: source.transport.clone(),
+            source_id: source.descriptor.source_id(),
+            stream: source.descriptor.stream_id().clone(),
+            kind: source.descriptor.media_kind(),
+            routed: source.routed,
         }
     }
 
@@ -268,13 +264,11 @@ impl ConsumerSetupTarget {
         }
     }
 
-    pub(super) fn matches_identity(&self, producer: &PublishedProducer) -> bool {
-        producer.source_id == self.source_id
-            && &producer.owner_user_id == self.source.session_key().user_id()
-            && producer.owner_connection_id == self.source.session_key().connection_id()
-            && producer.stream_id == self.stream
-            && producer.media_kind == self.kind
-            && producer.transport_media_id == Some(self.source.transport_media_id())
-            && producer.routed_producer_id == self.routed
+    pub(super) fn matches_identity(&self, source: &PublishedSource) -> bool {
+        source.descriptor.source_id() == self.source_id
+            && source.transport == self.source
+            && source.descriptor.stream_id() == &self.stream
+            && source.descriptor.media_kind() == self.kind
+            && source.routed == self.routed
     }
 }

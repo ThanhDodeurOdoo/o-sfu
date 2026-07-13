@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use o_sfu_router::{ConsumerId, MediaKind, ProducerId, rtp, topology::RoutedProducerId};
+use o_sfu_router::{ConsumerId, MediaKind, rtp, topology::RoutedProducerId};
 
 use crate::engine::{
     ConnectionId, UserId,
-    media_transport::{TransportConsumerRoute, TransportMediaId},
+    media_transport::{TransportConsumerRoute, TransportMediaId, TransportSourceKey},
     source_model::{
         ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, UserStreamId,
     },
@@ -61,43 +61,13 @@ pub(super) struct SourceKey {
     stream_id: UserStreamId,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct PublishedProducer {
-    pub source_id: PublishedSourceId,
-    pub owner_user_id: UserId,
-    pub owner_connection_id: ConnectionId,
-    pub stream_id: UserStreamId,
-    pub media_kind: MediaKind,
-    pub consumable_rtp_parameters: rtp::MediaStream,
-    pub routed_producer_id: RoutedProducerId,
-    pub transport_media_id: Option<TransportMediaId>,
-    pub active: bool,
-}
-
 #[derive(Debug)]
-pub(super) struct PublishedSourceInstall {
-    pub source_descriptor: PublishedSourceDescriptor,
-    pub producer: PublishedProducer,
-    pub transport_media_id: TransportMediaId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SourceTransportMediaIndexEntry {
-    pub source: PublishedSourceId,
-    pub owner: UserId,
-    pub stream: UserStreamId,
-}
-
-#[allow(
-    clippy::struct_field_names,
-    reason = "postfix _id is intentional because the fields are all identity values"
-)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ProducerRouteTarget {
-    pub source_id: PublishedSourceId,
-    pub owner_connection_id: ConnectionId,
-    pub routed_producer_id: RoutedProducerId,
-    pub transport_media_id: TransportMediaId,
+pub(super) struct PublishedSource {
+    pub descriptor: PublishedSourceDescriptor,
+    pub transport: TransportSourceKey,
+    pub rtp: rtp::MediaStream,
+    pub routed: RoutedProducerId,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,15 +90,8 @@ pub(super) struct ConsumerState {
 pub(super) struct ConsumerRouteView<'a> {
     pub consumer_user_id: UserId,
     pub state: &'a ConsumerState,
-    pub source: &'a PublishedSourceDescriptor,
-    pub producer: &'a PublishedProducer,
+    pub source: &'a PublishedSource,
     pub selection: Option<ConsumerSourceSelection>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct SourceView<'a> {
-    pub source: &'a PublishedSourceDescriptor,
-    pub producer: &'a PublishedProducer,
 }
 
 impl ConsumerRouteView<'_> {
@@ -142,7 +105,7 @@ impl ConsumerRouteView<'_> {
             consumer_user_id: self.consumer_user_id.clone(),
             consumer_connection_id: self.state.consumer_connection_id,
             consumer_media: self.state.consumer_media,
-            source_user_id: self.source.owner().user_id().clone(),
+            source_user_id: self.source.descriptor.owner().user_id().clone(),
             source_connection_id: self.state.source_connection_id,
             source_media: self.state.source_media,
         }
@@ -152,7 +115,7 @@ impl ConsumerRouteView<'_> {
         self.consumer_user_id == route.consumer_user_id
             && self.state.consumer_connection_id == route.consumer_connection_id
             && self.state.consumer_media == route.consumer_media
-            && self.source.owner().user_id() == &route.source_user_id
+            && self.source.descriptor.owner().user_id() == &route.source_user_id
             && self.state.source_connection_id == route.source_connection_id
             && self.state.source_media == route.source_media
     }
@@ -160,8 +123,7 @@ impl ConsumerRouteView<'_> {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingConsumerRouteView<'a> {
-    pub source: &'a PublishedSourceDescriptor,
-    pub producer: &'a PublishedProducer,
+    pub source: &'a PublishedSource,
     pub selection: Option<ConsumerSourceSelection>,
 }
 
@@ -220,31 +182,12 @@ impl ConsumerRouteTarget {
     }
 }
 
-impl SourceTransportMediaIndexEntry {
-    pub fn new(source: PublishedSourceId, owner: UserId, stream: UserStreamId) -> Self {
-        Self {
-            source,
-            owner,
-            stream,
-        }
-    }
-}
-
 impl SourceKey {
     pub fn new(owner_user_id: &UserId, stream_id: &UserStreamId) -> Self {
         Self {
             owner_user_id: owner_user_id.clone(),
             stream_id: stream_id.clone(),
         }
-    }
-}
-
-impl ProducerRouteTarget {
-    fn matches_producer(&self, producer: &PublishedProducer) -> bool {
-        producer.source_id == self.source_id
-            && producer.owner_connection_id == self.owner_connection_id
-            && producer.routed_producer_id == self.routed_producer_id
-            && producer.transport_media_id == Some(self.transport_media_id)
     }
 }
 

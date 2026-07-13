@@ -28,9 +28,6 @@ pub struct RoomState {
     pub users: BTreeMap<UserId, ActiveUser>,
     /// rejects stale async callbacks from previous connections
     pub(super) next_connection_id: u64,
-    pub next_source_id: u64,
-    pub next_source_encoding_id: u64,
-    pub next_producer_id: u64,
     pub next_consumer_id: u64,
     pub(super) recording_state: RecordingState,
     pub(in crate::engine::room) staged_publishes: StagedPublishes,
@@ -88,9 +85,6 @@ impl RoomState {
             media_limits,
             users: BTreeMap::new(),
             next_connection_id: 0,
-            next_source_id: 1,
-            next_source_encoding_id: 1,
-            next_producer_id: 1,
             next_consumer_id: 1,
             recording_state: RecordingState {
                 recording: Some(false),
@@ -240,12 +234,13 @@ impl RoomState {
                 .committed_consumer_routes_for_user(user_id)
                 .filter(|route| connection_id == Some(route.state.consumer_connection_id))
                 .filter_map(|route| {
-                    let owner = self.users.get(route.source.owner().user_id())?;
+                    let source = &route.source.descriptor;
+                    let owner = self.users.get(source.owner().user_id())?;
                     Some(RemoteSourceProjection {
                         consumer_mid: route.state.consumer_mid.clone(),
-                        source: route.source.clone(),
+                        source: source.clone(),
                         owner_info: owner.info.clone().with_featured(owner.server_featured),
-                        producer_active: route.producer.active,
+                        producer_active: route.source.active,
                     })
                 })
                 .collect(),
