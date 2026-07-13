@@ -194,7 +194,7 @@ async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
         !room
             .test_api()
             .inspect()
-            .has_producer_route_target(
+            .has_published_source(
                 &UserId::Integer(1),
                 test_connection_id(0),
                 TestSourceKind::ScalableVideo,
@@ -424,14 +424,14 @@ async fn user_replacement_purges_all_published_stream_mappings() {
         audio_transport_media_id.expect("audio producer should expose a transport id"),
     )
     .await;
-    assert_user_has_no_producer_route_target(
+    assert_user_has_no_published_source(
         &room,
         &UserId::Integer(1),
         test_connection_id(0),
         TestSourceKind::ScalableVideo,
     )
     .await;
-    assert_user_has_no_producer_route_target(
+    assert_user_has_no_published_source(
         &room,
         &UserId::Integer(1),
         test_connection_id(0),

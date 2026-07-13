@@ -1,7 +1,5 @@
-use std::collections::BTreeSet;
-
 use o_sfu_router::{
-    MediaKind as RouterMediaKind,
+    MediaKind as RouterMediaKind, RouterError,
     rtp::{MediaFormat, MediaStream as RouterRtpParameters, Mid, Rid, Ssrc},
 };
 use tracing::{error, warn};
@@ -13,7 +11,8 @@ use super::{
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::{PresenceCommit, RemoteSourceRefresh, RoomState},
     },
-    ProducerId, ProducerRouteTarget, ReceiverRouteWork, SourceTransportMediaIndexEntry,
+    ReceiverRouteWork,
+    source_index::PublishedSources,
     subscription::ReceiverRouteScope,
 };
 use crate::{
@@ -26,16 +25,14 @@ use crate::{
         source_model::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
             PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-            SourceEncodingId, SourceModelError, SourcePolicy, SourcePublishIntent,
-            SourceUnpublishIntent, UploadLayerPolicyRole, UserStreamId,
+            SourceModelError, SourcePolicy, SourcePublishIntent, SourceUnpublishIntent,
+            UploadLayerPolicyRole, UserStreamId,
         },
     },
 };
 
 #[derive(Debug, Clone)]
 pub struct ValidatedPublish {
-    pub owner_user_id: UserId,
-    pub owner_connection_id: ConnectionId,
     pub session_key: TransportSessionKey,
     pub stream_id: UserStreamId,
     pub media_kind: RouterMediaKind,
@@ -80,6 +77,14 @@ pub enum ProducerActivityRejection {
     StalePublication,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(in crate::engine::room) enum PublicationCommitError {
+    #[error(transparent)]
+    Source(#[from] SourceModelError),
+    #[error(transparent)]
+    Router(#[from] RouterError),
+}
+
 #[derive(Debug)]
 pub struct UnpublishCommit {
     pub before: RoomMediaCounts,
@@ -117,7 +122,7 @@ impl RoomState {
             return PublishIntentPlan::Noop;
         }
         if self
-            .producer_route_target(user_id, publisher_connection_id, intent.stream_id())
+            .published_source_id(user_id, publisher_connection_id, intent.stream_id())
             .is_some()
         {
             return self
@@ -172,8 +177,6 @@ impl RoomState {
             return None;
         }
         Some(ValidatedPublish {
-            owner_user_id: user_id.clone(),
-            owner_connection_id: publisher_connection_id,
             session_key: self.transport_user_key(user_id, publisher_connection_id),
             stream_id: intent.stream_id().clone(),
             media_kind: intent.media_kind(),
@@ -190,47 +193,35 @@ impl RoomState {
         transport_media_id: TransportMediaId,
     ) -> Option<PublishCommit> {
         self.validate_publish_commit(&publish, transport_media_id)?;
-        let owner_user_id = publish.owner_user_id.clone();
-        let owner_connection_id = publish.owner_connection_id;
+        let owner_user_id = publish.session_key.user_id().clone();
+        let owner_connection_id = publish.session_key.connection_id();
         let stream_id = publish.stream_id.clone();
         let media_worker_id = publish.session_key.media_worker_id();
         let presence = publish.presence.clone();
-        let source_descriptor = self
-            .source_descriptor_for_publish(&publish, &consumable_rtp_parameters, upload_encodings)
-            .map_err(|error| {
-                error!(
-                    user_id = ?publish.owner_user_id,
-                    owner_connection_id = ?publish.owner_connection_id,
-                    stream_id = %publish.stream_id,
-                    ?transport_media_id,
-                    ?error,
-                    "failed to build source descriptor for negotiated publish"
-                );
-            })
-            .ok()?;
         let publish_before = self.media_counts();
-        let producer_id = ProducerId::allocate(&mut self.next_producer_id);
-        if let Err(error) = self.topology.publish_source(
+        let source_id = match self.topology.commit_publication(
             publish,
-            producer_id,
-            source_descriptor,
             consumable_rtp_parameters,
+            upload_encodings,
             transport_media_id,
         ) {
-            error!(
-                user_id = ?owner_user_id,
-                ?owner_connection_id,
-                stream_id = %stream_id,
-                ?transport_media_id,
-                ?error,
-                "failed to mirror publish request into room router producer state"
-            );
-            return None;
-        }
+            Ok(source_id) => source_id,
+            Err(error) => {
+                error!(
+                    user_id = ?owner_user_id,
+                    ?owner_connection_id,
+                    stream_id = %stream_id,
+                    ?transport_media_id,
+                    ?error,
+                    "failed to commit negotiated publication"
+                );
+                return None;
+            }
+        };
         let publish_after = self.media_counts();
         let setup_before = publish_after;
         let receiver_route_work =
-            self.plan_missing_receiver_routes(ReceiverRouteScope::Producer(producer_id));
+            self.plan_missing_receiver_routes(ReceiverRouteScope::Source(source_id));
         let setup_after = self.media_counts();
         let presence = presence.and_then(|info| {
             self.apply_presence_update(
@@ -259,10 +250,12 @@ impl RoomState {
         publish: &ValidatedPublish,
         transport_media_id: TransportMediaId,
     ) -> Option<()> {
-        let Some(user) = self.users.get(&publish.owner_user_id) else {
+        let user_id = publish.session_key.user_id();
+        let connection_id = publish.session_key.connection_id();
+        let Some(user) = self.users.get(user_id) else {
             warn!(
-                user_id = ?publish.owner_user_id,
-                owner_connection_id = ?publish.owner_connection_id,
+                ?user_id,
+                ?connection_id,
                 stream_id = %publish.stream_id,
                 ?transport_media_id,
                 "cannot commit negotiated publish because the user is missing from room state"
@@ -270,10 +263,10 @@ impl RoomState {
             return None;
         };
         let publish_ready = user.parsed_client_rtp_capabilities.is_some();
-        if user.connection_id != publish.owner_connection_id || !publish_ready {
+        if user.connection_id != connection_id || !publish_ready {
             warn!(
-                user_id = ?publish.owner_user_id,
-                owner_connection_id = ?publish.owner_connection_id,
+                ?user_id,
+                ?connection_id,
                 current_connection_id = ?user.connection_id,
                 publish_ready,
                 stream_id = %publish.stream_id,
@@ -284,12 +277,12 @@ impl RoomState {
         }
         if self
             .topology
-            .source_id_for_owner_stream(&publish.owner_user_id, &publish.stream_id)
+            .source_id_for_owner_stream(user_id, &publish.stream_id)
             .is_some()
         {
             warn!(
-                user_id = ?publish.owner_user_id,
-                owner_connection_id = ?publish.owner_connection_id,
+                ?user_id,
+                ?connection_id,
                 stream_id = %publish.stream_id,
                 ?transport_media_id,
                 "cannot commit negotiated publish because a source already exists for this stream"
@@ -299,89 +292,33 @@ impl RoomState {
         Some(())
     }
 
-    fn source_descriptor_for_publish(
-        &mut self,
-        publish: &ValidatedPublish,
-        consumable_rtp_parameters: &RouterRtpParameters,
-        upload_encodings: &[SessionUploadEncoding],
-    ) -> Result<PublishedSourceDescriptor, SourceModelError> {
-        let source_id = PublishedSourceId::allocate(&mut self.next_source_id);
-        let encodings = consumable_rtp_parameters
-            .bindings()
-            .map(|binding| {
-                let encoding_id = SourceEncodingId::allocate(&mut self.next_source_encoding_id);
-                let upload_profile = upload_profile_for_rid(upload_encodings, binding.rid());
-                let policy_role =
-                    upload_profile.map(|profile| upload_layer_policy_role_for_rank(profile.rank));
-                SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
-                    encoding_id,
-                    source_id,
-                    rid: binding.rid().map(Rid::new),
-                    primary_ssrc: binding.ssrc().map(Ssrc::new),
-                    repair_ssrc: None,
-                    max_bitrate: binding
-                        .max_bitrate()
-                        .map(Bitrate::from_bps)
-                        .or_else(|| upload_profile.and_then(MatchedUploadEncoding::max_bitrate)),
-                    resolution_scale: upload_profile
-                        .and_then(MatchedUploadEncoding::resolution_scale),
-                    max_framerate: upload_profile.and_then(MatchedUploadEncoding::max_framerate),
-                    policy_role,
-                    negotiated_format: negotiated_format_for_binding(
-                        consumable_rtp_parameters,
-                        binding.payload_type(),
-                    ),
-                })
-            })
-            .collect::<Vec<_>>();
-        PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-            source_id,
-            owner: PublishedSourceOwner::new(publish.owner_user_id.clone()),
-            stream_id: publish.stream_id.clone(),
-            media_kind: publish.media_kind,
-            policy: publish.policy,
-            mid: consumable_rtp_parameters.mid().map(Mid::new),
-            encodings,
-        })
-    }
-
     #[must_use]
     pub fn producer_stream_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<UserStreamId> {
-        self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.stream.clone())
+        self.topology
+            .source_for_transport_media(transport_media_id)
+            .map(|source| source.descriptor.stream_id().clone())
     }
 
     #[must_use]
-    pub fn source_transport_media_entry(
+    pub fn published_source_id(
         &self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<&SourceTransportMediaIndexEntry> {
-        self.topology
-            .source_transport_media_entry(transport_media_id)
-    }
-
-    #[must_use]
-    pub fn producer_route_target(
-        &self,
-        owner_user_id: &UserId,
-        owner_connection_id: ConnectionId,
-        stream_id: &UserStreamId,
-    ) -> Option<ProducerRouteTarget> {
-        self.topology
-            .producer_route_target(owner_user_id, owner_connection_id, stream_id)
+        owner: &UserId,
+        connection: ConnectionId,
+        stream: &UserStreamId,
+    ) -> Option<PublishedSourceId> {
+        self.topology.published_source_id(owner, connection, stream)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub fn producer_route_target_for_user(
+    pub fn published_source_id_for_user(
         &self,
-        user_id: &UserId,
-        stream_id: &UserStreamId,
-    ) -> Option<ProducerRouteTarget> {
-        let connection_id = self.user_connection_id(user_id)?;
-        self.producer_route_target(user_id, connection_id, stream_id)
+        user: &UserId,
+        stream: &UserStreamId,
+    ) -> Option<PublishedSourceId> {
+        self.published_source_id(user, self.user_connection_id(user)?, stream)
     }
 
     pub fn unpublish_track(
@@ -390,13 +327,14 @@ impl RoomState {
         connection_id: ConnectionId,
         intent: &SourceUnpublishIntent,
     ) -> Option<UnpublishCommit> {
-        let producer_target =
-            self.producer_route_target(user_id, connection_id, intent.stream_id())?;
+        let source_id = self.published_source_id(user_id, connection_id, intent.stream_id())?;
         let source_recipients = self
             .topology
-            .committed_consumer_user_ids_for_source(producer_target.source_id);
+            .committed_consumer_user_ids_for_source(source_id);
         let before = self.media_counts();
-        let transport_plan = self.topology.unpublish_source(user_id, &producer_target)?;
+        let transport_plan = self
+            .topology
+            .unpublish_source(user_id, connection_id, source_id)?;
         let after = self.media_counts();
         Some(UnpublishCommit {
             before,
@@ -409,27 +347,6 @@ impl RoomState {
         })
     }
 
-    pub fn apply_producer_activity(
-        &mut self,
-        user_id: &UserId,
-        producer_target: &ProducerRouteTarget,
-        active: bool,
-    ) -> Option<BTreeSet<UserId>> {
-        let current_connection_id = self.user_connection_id(user_id);
-        let changed = self.topology.set_published_source_activity(
-            producer_target,
-            current_connection_id,
-            active,
-        );
-        if !changed {
-            return None;
-        }
-        Some(
-            self.topology
-                .committed_consumer_user_ids_for_source(producer_target.source_id),
-        )
-    }
-
     pub fn apply_publication_activity(
         &mut self,
         user_id: &UserId,
@@ -438,31 +355,79 @@ impl RoomState {
         active: bool,
         presence: Option<&UserInfo>,
     ) -> Result<ProducerActivityCommit, ProducerActivityRejection> {
-        let producer_target = self
-            .producer_route_target(user_id, connection_id, stream_id)
+        let source_id = self
+            .published_source_id(user_id, connection_id, stream_id)
             .ok_or(ProducerActivityRejection::MissingPublication)?;
-        let Some(transport_user_key) =
-            self.committed_transport_user_key(user_id, producer_target.owner_connection_id)
-        else {
-            return Err(ProducerActivityRejection::MissingPublication);
-        };
-        let Some(source_recipients) =
-            self.apply_producer_activity(user_id, &producer_target, active)
-        else {
+        if !self
+            .topology
+            .set_published_source_activity(source_id, connection_id, active)
+        {
             return Err(ProducerActivityRejection::StalePublication);
-        };
+        }
+        let source_recipients = self
+            .topology
+            .committed_consumer_user_ids_for_source(source_id);
+        let source = self
+            .topology
+            .published_source(source_id)
+            .ok_or(ProducerActivityRejection::StalePublication)?
+            .transport
+            .clone();
         let presence = presence.and_then(|info| {
             self.apply_presence_update(user_id, connection_id, info, RemoteSourceRefresh::Skip)
         });
         let source_snapshots = self.remote_source_snapshots_for_users(source_recipients, false);
         Ok(ProducerActivityCommit {
-            source: TransportSourceKey::new(transport_user_key, producer_target.transport_media_id),
+            source,
             stream_id: stream_id.clone(),
             active,
             source_snapshots,
             presence,
         })
     }
+}
+
+pub(super) fn allocate_source_descriptor(
+    sources: &mut PublishedSources,
+    publish: &ValidatedPublish,
+    consumable_rtp_parameters: &RouterRtpParameters,
+    upload_encodings: &[SessionUploadEncoding],
+) -> Result<PublishedSourceDescriptor, SourceModelError> {
+    let source_id = sources.allocate_id();
+    let encodings = consumable_rtp_parameters
+        .bindings()
+        .map(|binding| {
+            let upload_profile = upload_profile_for_rid(upload_encodings, binding.rid());
+            SourceEncodingDescriptor::new(SourceEncodingDescriptorParts {
+                encoding_id: sources.allocate_encoding_id(),
+                source_id,
+                rid: binding.rid().map(Rid::new),
+                primary_ssrc: binding.ssrc().map(Ssrc::new),
+                repair_ssrc: None,
+                max_bitrate: binding
+                    .max_bitrate()
+                    .map(Bitrate::from_bps)
+                    .or_else(|| upload_profile.and_then(MatchedUploadEncoding::max_bitrate)),
+                resolution_scale: upload_profile.and_then(MatchedUploadEncoding::resolution_scale),
+                max_framerate: upload_profile.and_then(MatchedUploadEncoding::max_framerate),
+                policy_role: upload_profile
+                    .map(|profile| upload_layer_policy_role_for_rank(profile.rank)),
+                negotiated_format: negotiated_format_for_binding(
+                    consumable_rtp_parameters,
+                    binding.payload_type(),
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
+        source_id,
+        owner: PublishedSourceOwner::new(publish.session_key.user_id().clone()),
+        stream_id: publish.stream_id.clone(),
+        media_kind: publish.media_kind,
+        policy: publish.policy,
+        mid: consumable_rtp_parameters.mid().map(Mid::new),
+        encodings,
+    })
 }
 
 fn upload_profile_for_rid<'a>(

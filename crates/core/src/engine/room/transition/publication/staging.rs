@@ -130,8 +130,8 @@ impl StagedPublish {
 
     fn key(&self) -> StagedPublishKey {
         staged_publish_key(
-            &self.descriptor.owner_user_id,
-            self.descriptor.owner_connection_id,
+            self.descriptor.session_key.user_id(),
+            self.descriptor.session_key.connection_id(),
             &self.descriptor.stream_id,
         )
     }
@@ -146,8 +146,8 @@ impl StagedPublish {
             .negotiated_producer_parameters(media)
             .cloned()
         else {
-            let user = self.descriptor.owner_user_id.clone();
-            let connection = self.descriptor.owner_connection_id;
+            let user = self.descriptor.session_key.user_id().clone();
+            let connection = self.descriptor.session_key.connection_id();
             let stream_id = self.descriptor.stream_id.clone();
             self.release_reserved_media(operation).await;
             warn!(
@@ -171,8 +171,8 @@ impl StagedPublish {
         upload_encodings: &[SessionUploadEncoding],
     ) -> Option<UserStreamId> {
         let room = operation.room;
-        let user = self.descriptor.owner_user_id.clone();
-        let connection = self.descriptor.owner_connection_id;
+        let user = self.descriptor.session_key.user_id().clone();
+        let connection = self.descriptor.session_key.connection_id();
         let stream_id = self.descriptor.stream_id.clone();
         let media = self.media;
         let committed = {

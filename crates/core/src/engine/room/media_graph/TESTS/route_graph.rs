@@ -3,10 +3,10 @@
     reason = "route graph tests fail loudly when fixed route reservations are invalid"
 )]
 
-use o_sfu_router::{MediaKind, RouterId, rtp::MediaStream, topology::RoutedProducerId};
+use o_sfu_router::{MediaKind, ProducerId, RouterId, topology::RoutedProducerId};
 
 use super::{
-    ConsumerKey, ConsumerSourceSelection, ConsumerState, ProducerId, PublishedProducer,
+    ConsumerKey, ConsumerSourceSelection, ConsumerState,
     consumer_setup::ConsumerSetupTarget,
     route_graph::{ConsumerRouteReservation, RelayRouteEffect, RouteGraph},
 };
@@ -24,27 +24,18 @@ fn target(
     connection: ConnectionId,
     source_id: PublishedSourceId,
 ) -> ConsumerSetupTarget {
-    let transport_media_id = TransportMediaId::new(50);
-    let producer = PublishedProducer {
-        source_id,
-        owner_user_id: UserId::Integer(1),
-        owner_connection_id: ConnectionId::from_raw(10),
-        stream_id: UserStreamId::from("camera"),
-        media_kind: MediaKind::Video,
-        consumable_rtp_parameters: MediaStream::new(vec![], vec![], vec![]),
-        routed_producer_id: RoutedProducerId::for_test(
-            RouterId(1),
-            ConnectionId::from_raw(10),
-            ProducerId(10),
+    let source_connection = ConnectionId::from_raw(10);
+    ConsumerSetupTarget {
+        session: session_key(consumer, connection),
+        source: TransportSourceKey::new(
+            session_key(UserId::Integer(1), source_connection),
+            TransportMediaId::new(50),
         ),
-        transport_media_id: Some(transport_media_id),
-        active: true,
-    };
-    let source = TransportSourceKey::new(
-        session_key(producer.owner_user_id.clone(), producer.owner_connection_id),
-        transport_media_id,
-    );
-    ConsumerSetupTarget::new(session_key(consumer, connection), source, &producer)
+        source_id,
+        stream: UserStreamId::from("camera"),
+        kind: MediaKind::Video,
+        routed: RoutedProducerId::for_test(RouterId(1), source_connection, ProducerId(10)),
+    }
 }
 
 fn session_key(user: UserId, connection: ConnectionId) -> TransportSessionKey {

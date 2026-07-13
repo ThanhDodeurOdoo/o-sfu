@@ -20,8 +20,7 @@ use o_sfu_router::{
 
 use super::{
     ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerSetupOrigin,
-    ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup, ProducerId,
-    ValidatedPublish,
+    ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup, ValidatedPublish,
 };
 use crate::{
     Bitrate, MediaCodecFlags, RoomMediaLimits,
@@ -36,10 +35,8 @@ use crate::{
             rtp_capabilities::router_rtp_capabilities, state::RoomState,
         },
         source_model::{
-            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
-            PublishedSourceDescriptorParts, PublishedSourceId, PublishedSourceOwner,
-            SourceEncodingDescriptor, SourceEncodingDescriptorParts, SourceEncodingId,
-            SourceSelector, UploadLayerPolicyRole, UserStreamId,
+            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
+            SourceEncodingDescriptor, SourceSelector, UploadLayerPolicyRole, UserStreamId,
             test_support::{
                 TestSubscriptionStates, source_kind_for_stream_id,
                 source_publish_intent_for_source, stream_id_for_source,
@@ -166,7 +163,7 @@ fn install_test_consumer_route(
     consumer_user_id: &UserId,
 ) -> (ConsumerKey, ConnectionId) {
     let consumer_connection_id = set_test_user_ready(state, consumer_user_id);
-    let source_id = install_test_published_producer(
+    let source_id = commit_test_publication(
         state,
         producer_user_id,
         TestSourceKind::ScalableVideo,
@@ -190,40 +187,7 @@ fn install_test_consumer_route(
     (route_key, consumer_connection_id)
 }
 
-fn test_source_descriptor(
-    state: &mut RoomState,
-    user_id: &UserId,
-    stream_type: TestSourceKind,
-) -> PublishedSourceDescriptor {
-    let source_id = PublishedSourceId::allocate(&mut state.next_source_id);
-    let encoding_id = SourceEncodingId::allocate(&mut state.next_source_encoding_id);
-    let intent = source_publish_intent_for_source(stream_type);
-    PublishedSourceDescriptor::new(PublishedSourceDescriptorParts {
-        source_id,
-        owner: PublishedSourceOwner::new(user_id.clone()),
-        stream_id: intent.stream_id().clone(),
-        media_kind: intent.media_kind(),
-        policy: intent.policy(),
-        mid: None,
-        encodings: vec![SourceEncodingDescriptor::new(
-            SourceEncodingDescriptorParts {
-                encoding_id,
-                source_id,
-                rid: None,
-                primary_ssrc: None,
-                repair_ssrc: None,
-                max_bitrate: None,
-                resolution_scale: None,
-                max_framerate: None,
-                policy_role: None,
-                negotiated_format: None,
-            },
-        )],
-    })
-    .expect("test source graph should be valid")
-}
-
-fn install_test_published_producer_with_rtp(
+fn commit_test_publication_with_rtp(
     state: &mut RoomState,
     user_id: &UserId,
     connection_id: ConnectionId,
@@ -231,31 +195,25 @@ fn install_test_published_producer_with_rtp(
     consumable_rtp_parameters: MediaStream,
     transport_media_id: TransportMediaId,
 ) -> PublishedSourceId {
-    let producer_id = ProducerId::allocate(&mut state.next_producer_id);
-    let source_descriptor = test_source_descriptor(state, user_id, stream_type);
-    let source_id = source_descriptor.source_id();
+    let intent = source_publish_intent_for_source(stream_type);
     state
         .topology
-        .publish_source(
+        .commit_publication(
             ValidatedPublish {
-                owner_user_id: user_id.clone(),
-                owner_connection_id: connection_id,
                 session_key: state.transport_user_key(user_id, connection_id),
-                stream_id: source_descriptor.stream_id().clone(),
-                media_kind: source_descriptor.media_kind(),
-                policy: source_descriptor.policy(),
+                stream_id: intent.stream_id().clone(),
+                media_kind: intent.media_kind(),
+                policy: intent.policy(),
                 presence: None,
             },
-            producer_id,
-            source_descriptor,
             consumable_rtp_parameters,
+            &[],
             transport_media_id,
         )
-        .expect("test producer route should be published");
-    source_id
+        .expect("test publication should commit")
 }
 
-fn install_test_published_producer(
+fn commit_test_publication(
     state: &mut RoomState,
     user_id: &UserId,
     stream_type: TestSourceKind,
@@ -264,7 +222,7 @@ fn install_test_published_producer(
     let connection_id = state
         .user_connection_id(user_id)
         .expect("publisher user should have a connection id");
-    install_test_published_producer_with_rtp(
+    commit_test_publication_with_rtp(
         state,
         user_id,
         connection_id,
@@ -274,7 +232,7 @@ fn install_test_published_producer(
     )
 }
 
-fn install_test_consumable_video_producer(
+fn commit_test_video_publication(
     state: &mut RoomState,
     user_id: &UserId,
     stream_type: TestSourceKind,
@@ -289,7 +247,7 @@ fn install_test_consumable_video_producer(
         &state.router_rtp_capabilities(),
     )
     .expect("publisher RTP parameters should derive consumable router parameters");
-    install_test_published_producer_with_rtp(
+    commit_test_publication_with_rtp(
         state,
         user_id,
         connection_id,
@@ -331,7 +289,7 @@ fn pending_consumer_setup() -> (
     join_test_user(&mut state, &subscriber_user_id);
 
     let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
-    install_test_consumable_video_producer(
+    commit_test_video_publication(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ScalableVideo,
@@ -481,7 +439,7 @@ fn subscription_change_reserves_missing_setup_for_existing_publisher() {
     join_test_user(&mut state, &subscriber_user_id);
 
     let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
-    let source_id = install_test_consumable_video_producer(
+    let source_id = commit_test_video_publication(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ScalableVideo,
@@ -526,14 +484,14 @@ fn consumer_setup_commit_uses_latest_room_state() {
     let publisher_connection_id = state
         .user_connection_id(&publisher_user_id)
         .expect("publisher should have a connection id");
-    let producer_target = state
-        .producer_route_target(&publisher_user_id, publisher_connection_id, &stream_id)
-        .expect("producer route target should exist");
-    assert!(
-        state
-            .apply_producer_activity(&publisher_user_id, &producer_target, false)
-            .is_some()
-    );
+    let source_id = state
+        .published_source_id(&publisher_user_id, publisher_connection_id, &stream_id)
+        .expect("published source should exist");
+    assert!(state.topology.set_published_source_activity(
+        source_id,
+        publisher_connection_id,
+        false
+    ));
 
     let intents = subscription_intents_from_test_states(&scalable_video_states(false));
     let change = state.plan_receiver_route_work(
@@ -592,7 +550,7 @@ fn consumer_setup_commit_releases_stale_receiver_plan() {
 }
 
 #[test]
-fn consumer_setup_commit_releases_stale_producer_plan() {
+fn consumer_setup_commit_releases_stale_publication_plan() {
     let (
         mut state,
         publisher_user_id,
@@ -663,14 +621,14 @@ fn missing_consumer_setup_applies_video_download_cap_before_effects() {
     join_test_user(&mut state, &subscriber_user_id);
 
     let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
-    let scalable_source_id = install_test_consumable_video_producer(
+    let scalable_source_id = commit_test_video_publication(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ScalableVideo,
         TransportMediaId::new(10),
         22_222,
     );
-    let readable_source_id = install_test_consumable_video_producer(
+    let readable_source_id = commit_test_video_publication(
         &mut state,
         &publisher_user_id,
         TestSourceKind::ReadableVideo,
@@ -747,7 +705,7 @@ fn commit_publish_reservation_registers_all_source_encodings() {
         .expect("transport media should resolve to the committed source");
     let source = state
         .topology
-        .source(source_id)
+        .source_descriptor(source_id)
         .expect("source registry should own the committed source");
     assert_eq!(source.owner().user_id(), &user_id);
     assert_eq!(
@@ -787,7 +745,7 @@ fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_route
     join_test_user(&mut state, &subscriber_id);
 
     let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_id);
-    install_test_published_producer(
+    commit_test_publication(
         &mut state,
         &publisher_id,
         TestSourceKind::ScalableVideo,

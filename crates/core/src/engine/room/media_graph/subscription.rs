@@ -6,7 +6,7 @@ use o_sfu_router::{MediaKind as RouterMediaKind, negotiation::negotiate_consumer
 use super::ConsumerKey;
 use super::{
     super::{effects::RoomGaugeDelta, state::RoomState},
-    ConsumerId, ConsumerRouteTarget, ProducerId,
+    ConsumerId, ConsumerRouteTarget,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
 };
 use crate::engine::{
@@ -14,8 +14,8 @@ use crate::engine::{
     media_transport::TransportRelayRouteEffect,
     room::source_policy::VideoAdmissionRank,
     source_model::{
-        ConsumerSourceSelection, PolicyPauseReason, SourceRoutePriority, SourceSubscriptionIntent,
-        UserStreamId,
+        ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId, SourceRoutePriority,
+        SourceSubscriptionIntent, UserStreamId,
     },
 };
 
@@ -72,7 +72,7 @@ pub struct ReceiverRouteCommit {
 
 #[derive(Clone, Copy)]
 pub(super) enum ReceiverRouteScope<'a> {
-    Producer(ProducerId),
+    Source(PublishedSourceId),
     Receiver(&'a UserId, ConnectionId),
     SourceUser(&'a UserId, ConnectionId, &'a UserId),
 }
@@ -232,7 +232,7 @@ impl RoomState {
                 target.source_id,
             );
         }
-        let Some(source) = self.topology.source(target.source_id) else {
+        let Some(source) = self.topology.source_descriptor(target.source_id) else {
             return VideoAdmissionRank::new(
                 SourceRoutePriority::HiddenOrOverflow,
                 None,
@@ -282,7 +282,7 @@ impl RoomState {
         scope: ReceiverRouteScope<'_>,
     ) -> Vec<ConsumerSetupTarget> {
         match scope {
-            ReceiverRouteScope::Producer(producer_id) => {
+            ReceiverRouteScope::Source(source_id) => {
                 let receivers = self.users.iter().filter_map(|(user, state)| {
                     state
                         .parsed_client_rtp_capabilities
@@ -290,15 +290,15 @@ impl RoomState {
                         .then_some((user, state.connection_id))
                 });
                 self.topology
-                    .missing_consumer_targets_for_producer(producer_id, receivers)
+                    .missing_consumer_targets_for_source(source_id, receivers)
             }
             ReceiverRouteScope::Receiver(user, connection) => self
                 .topology
                 .missing_consumer_targets(user, connection, |_| true),
             ReceiverRouteScope::SourceUser(user, connection, source_user_id) => self
                 .topology
-                .missing_consumer_targets(user, connection, |producer| {
-                    producer.owner_user_id == *source_user_id
+                .missing_consumer_targets(user, connection, |source| {
+                    source.descriptor.owner().user_id() == source_user_id
                 }),
         }
     }
@@ -314,15 +314,12 @@ impl RoomState {
                 user.parsed_client_rtp_capabilities.as_ref()?,
             )
         };
-        let (producer_rtp, producer_active) = {
-            let producer = self.topology.producer(target.routed.producer_id())?;
-            if !target.matches_identity(producer) {
-                return None;
-            }
-            (&producer.consumable_rtp_parameters, producer.active)
-        };
-        let selection = self.setup_selection(&target, producer_active);
-        let rtp = negotiate_consumer_rtp_parameters(producer_rtp, client_caps).ok()?;
+        let source = self.topology.published_source(target.source_id)?;
+        if !target.matches_identity(source) {
+            return None;
+        }
+        let selection = self.setup_selection(&target, source.active);
+        let rtp = negotiate_consumer_rtp_parameters(&source.rtp, client_caps).ok()?;
         let consumer = ConsumerId::allocate(&mut self.next_consumer_id);
         self.topology
             .reserve_consumer_setup(target, consumer, selection, sender, rtp)
@@ -331,7 +328,7 @@ impl RoomState {
     pub(super) fn setup_selection(
         &self,
         target: &ConsumerSetupTarget,
-        producer_active: bool,
+        source_active: bool,
     ) -> ConsumerSourceSelection {
         let key = target.consumer_key();
         let selection = self
@@ -344,17 +341,17 @@ impl RoomState {
                     &target.stream,
                 ))
             });
-        self.apply_initial_video_download_cap(target, producer_active, selection)
+        self.apply_initial_video_download_cap(target, source_active, selection)
     }
 
     fn apply_initial_video_download_cap(
         &self,
         target: &ConsumerSetupTarget,
-        producer_active: bool,
+        source_active: bool,
         mut selection: ConsumerSourceSelection,
     ) -> ConsumerSourceSelection {
         if target.kind != RouterMediaKind::Video
-            || !producer_active
+            || !source_active
             || !selection.delivery_active()
             || self.active_video_count(target.session.user_id())
                 < self.media_limits.max_video_downloads_per_receiver()
@@ -369,13 +366,13 @@ impl RoomState {
         let committed = self
             .live_consumer_routes()
             .filter(|route| route.consumer_user_id == *consumer_user_id)
-            .filter(|route| route.source.media_kind() == RouterMediaKind::Video)
-            .filter(|route| route.producer.active)
+            .filter(|route| route.source.descriptor.media_kind() == RouterMediaKind::Video)
+            .filter(|route| route.source.active)
             .filter(|route| {
                 let desired_active = self.desired_source_active(
                     &route.consumer_user_id,
-                    route.source.owner().user_id(),
-                    route.source.stream_id(),
+                    route.source.descriptor.owner().user_id(),
+                    route.source.descriptor.stream_id(),
                 );
                 route.selection_or_open(desired_active).delivery_active()
             })
@@ -383,13 +380,13 @@ impl RoomState {
         let pending = self
             .topology
             .pending_consumer_routes_for_user(consumer_user_id)
-            .filter(|route| route.source.media_kind() == RouterMediaKind::Video)
-            .filter(|route| route.producer.active)
+            .filter(|route| route.source.descriptor.media_kind() == RouterMediaKind::Video)
+            .filter(|route| route.source.active)
             .filter(|route| {
                 let desired_active = self.desired_source_active(
                     consumer_user_id,
-                    route.source.owner().user_id(),
-                    route.source.stream_id(),
+                    route.source.descriptor.owner().user_id(),
+                    route.source.descriptor.stream_id(),
                 );
                 route
                     .selection
@@ -435,7 +432,7 @@ impl RoomState {
         let desired_active =
             self.desired_source_active(consumer_user_id, producer_user_id, stream_id);
         let route_active =
-            route.producer.active && route.selection_or_open(desired_active).delivery_active();
+            route.source.active && route.selection_or_open(desired_active).delivery_active();
         Some(if route_active {
             ConsumerRouteState::Active
         } else {

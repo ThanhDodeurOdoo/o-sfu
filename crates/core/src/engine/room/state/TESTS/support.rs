@@ -60,8 +60,9 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<UserId> {
-        self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.owner.clone())
+        self.topology
+            .source_for_transport_media(transport_media_id)
+            .map(|source| source.descriptor.owner().user_id().clone())
     }
 
     #[cfg(test)]
@@ -69,8 +70,9 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<PublishedSourceId> {
-        self.source_transport_media_entry(transport_media_id)
-            .map(|entry| entry.source)
+        self.topology
+            .source_for_transport_media(transport_media_id)
+            .map(|source| source.descriptor.source_id())
     }
 
     #[cfg(test)]
@@ -99,14 +101,14 @@ impl RoomState {
         &self,
         transport_media_id: TransportMediaId,
     ) -> Option<Vec<SourceEncodingId>> {
-        let source_id = self
-            .source_transport_media_entry(transport_media_id)?
-            .source;
-        self.topology.source(source_id).map(|source| {
-            source
-                .encodings()
-                .map(SourceEncodingDescriptor::encoding_id)
-                .collect()
-        })
+        self.topology
+            .source_for_transport_media(transport_media_id)
+            .map(|source| {
+                source
+                    .descriptor
+                    .encodings()
+                    .map(SourceEncodingDescriptor::encoding_id)
+                    .collect()
+            })
     }
 }

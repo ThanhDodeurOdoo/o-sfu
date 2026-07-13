@@ -43,15 +43,19 @@ impl RoomState {
     ) -> BTreeMap<UserId, DiagnosticsIncomingBitrate> {
         let mut incoming_bitrate = BTreeMap::new();
         for (transport_media_id, bits) in per_media {
-            let Some(entry) = self.source_transport_media_entry(*transport_media_id) else {
+            let Some(source) = self
+                .topology
+                .source_for_transport_media(*transport_media_id)
+            else {
                 continue;
             };
-            let session_bitrate: &mut DiagnosticsIncomingBitrate =
-                incoming_bitrate.entry(entry.owner.clone()).or_default();
+            let session_bitrate: &mut DiagnosticsIncomingBitrate = incoming_bitrate
+                .entry(source.descriptor.owner().user_id().clone())
+                .or_default();
             session_bitrate.total = session_bitrate.total.saturating_add(bits.as_bps());
             let stream_bitrate = session_bitrate
                 .by_stream_bps
-                .entry(entry.stream.to_string())
+                .entry(source.descriptor.stream_id().to_string())
                 .or_default();
             *stream_bitrate = stream_bitrate.saturating_add(bits.as_bps());
         }
@@ -64,10 +68,15 @@ impl RoomState {
     ) -> BTreeMap<PublishedSourceId, u64> {
         let mut incoming_bitrate: BTreeMap<PublishedSourceId, u64> = BTreeMap::new();
         for (transport_media_id, bits) in per_media {
-            let Some(entry) = self.source_transport_media_entry(*transport_media_id) else {
+            let Some(source) = self
+                .topology
+                .source_for_transport_media(*transport_media_id)
+            else {
                 continue;
             };
-            let source_bitrate = incoming_bitrate.entry(entry.source).or_default();
+            let source_bitrate = incoming_bitrate
+                .entry(source.descriptor.source_id())
+                .or_default();
             *source_bitrate = (*source_bitrate).saturating_add(bits.as_bps());
         }
         incoming_bitrate
@@ -83,22 +92,20 @@ impl RoomState {
         source_activity_by_media: &BTreeMap<TransportMediaId, TransportSourceActivity>,
     ) -> Vec<DiagnosticsSource> {
         self.topology
-            .source_views()
-            .map(|view| {
-                let source = view.source;
-                let producer = view.producer;
-                let transport_media_id = producer.transport_media_id;
-                let source_activity =
-                    transport_media_id.and_then(|media_id| source_activity_by_media.get(&media_id));
+            .published_sources()
+            .map(|publication| {
+                let source = &publication.descriptor;
+                let transport_media_id = publication.transport.transport_media_id();
+                let source_activity = source_activity_by_media.get(&transport_media_id);
                 let encodings = source
                     .encodings()
                     .map(|encoding| source_encoding(encoding, source_activity))
                     .collect();
                 DiagnosticsSource {
-                    active: producer.active,
+                    active: publication.active,
                     active_speaker: active_speaker(
                         source,
-                        transport_media_id,
+                        Some(transport_media_id),
                         active_speaker_diagnostics_by_media,
                     ),
                     current_incoming_bitrate_bps: incoming_bitrate_by_source
@@ -116,7 +123,7 @@ impl RoomState {
                     owner_user_id: source.owner().user_id().clone(),
                     source_id: source.source_id().as_u64(),
                     stream_id: source.stream_id().to_string(),
-                    transport_media_id: transport_media_id.map(TransportMediaId::as_u64),
+                    transport_media_id: Some(transport_media_id.as_u64()),
                     video_bitrate_cap_bps: source.policy().video_bitrate_cap().map(Bitrate::as_bps),
                 }
             })
@@ -125,14 +132,11 @@ impl RoomState {
 
     pub fn diagnostics_source_media(&self) -> Vec<DiagnosticsSourceMedia> {
         self.topology
-            .source_views()
-            .filter_map(|view| {
-                let media = view.producer.transport_media_id?;
-                Some(DiagnosticsSourceMedia {
-                    owner: view.producer.owner_user_id.clone(),
-                    connection: view.producer.owner_connection_id,
-                    media,
-                })
+            .published_sources()
+            .map(|source| DiagnosticsSourceMedia {
+                owner: source.transport.session_key().user_id().clone(),
+                connection: source.transport.session_key().connection_id(),
+                media: source.transport.transport_media_id(),
             })
             .collect()
     }
@@ -181,25 +185,24 @@ impl RoomState {
         connection_id: ConnectionId,
     ) -> Vec<DiagnosticsPublication> {
         self.topology
-            .source_views()
-            .filter_map(|view| {
-                let source = view.source;
-                let producer = view.producer;
-                if producer.owner_user_id != *user_id
-                    || producer.owner_connection_id != connection_id
+            .published_sources()
+            .filter_map(|publication| {
+                let source = &publication.descriptor;
+                if source.owner().user_id() != user_id
+                    || publication.transport.session_key().connection_id() != connection_id
                 {
                     return None;
                 }
                 Some(DiagnosticsPublication {
-                    active: producer.active,
+                    active: publication.active,
                     encoding_ids: source
                         .encodings()
                         .map(|encoding| encoding.encoding_id().as_u64())
                         .collect(),
-                    media_kind: media_kind(producer.media_kind),
-                    source_id: producer.source_id.as_u64(),
-                    stream_id: producer.stream_id.to_string(),
-                    transport_media_id: producer.transport_media_id.map(TransportMediaId::as_u64),
+                    media_kind: media_kind(source.media_kind()),
+                    source_id: source.source_id().as_u64(),
+                    stream_id: source.stream_id().to_string(),
+                    transport_media_id: Some(publication.transport.transport_media_id().as_u64()),
                 })
             })
             .collect()
@@ -219,7 +222,7 @@ impl RoomState {
                 {
                     return None;
                 }
-                let source = route.source;
+                let source = &route.source.descriptor;
                 let route_selection = route.selection_or_open(self.desired_source_active(
                     user_id,
                     source.owner().user_id(),
@@ -234,7 +237,7 @@ impl RoomState {
                     selection: selection(source, route_selection),
                     source_id: source.source_id().as_u64(),
                     source_transport_media_id: Some(route.state.source_media.as_u64()),
-                    state: if route.producer.active && route_selection.delivery_active() {
+                    state: if route.source.active && route_selection.delivery_active() {
                         DiagnosticsRouteState::Active
                     } else {
                         DiagnosticsRouteState::Inactive
@@ -246,7 +249,8 @@ impl RoomState {
 
         subscriptions.extend(self.topology.pending_consumer_routes_for_user(user_id).map(
             |route| {
-                let source = route.source;
+                let publication = route.source;
+                let source = &publication.descriptor;
                 let route_selection = route
                     .selection
                     .unwrap_or_else(|| ConsumerSourceSelection::open(true));
@@ -258,10 +262,9 @@ impl RoomState {
                     producer_user_id: source.owner().user_id().clone(),
                     selection: selection(source, route_selection),
                     source_id: source.source_id().as_u64(),
-                    source_transport_media_id: route
-                        .producer
-                        .transport_media_id
-                        .map(TransportMediaId::as_u64),
+                    source_transport_media_id: Some(
+                        publication.transport.transport_media_id().as_u64(),
+                    ),
                     state: DiagnosticsRouteState::Pending,
                     stream_id: source.stream_id().to_string(),
                 }

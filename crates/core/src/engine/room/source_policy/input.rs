@@ -79,10 +79,10 @@ fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRoute<'_>> {
     let live_routes = state.live_consumer_routes();
     let mut routes = Vec::with_capacity(live_routes.size_hint().1.unwrap_or_default());
     for route in live_routes {
-        if !route.producer.active {
+        if !route.source.active {
             continue;
         }
-        let source = route.source;
+        let source = &route.source.descriptor;
         let desired_active = state.desired_source_active(
             &route.consumer_user_id,
             source.owner().user_id(),

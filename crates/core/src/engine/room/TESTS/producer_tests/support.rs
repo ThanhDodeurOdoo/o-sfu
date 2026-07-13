@@ -103,7 +103,7 @@ pub(super) async fn assert_transport_media_owner_mapping_is_missing(
     assert!(!user_mapping_exists);
 }
 
-pub(super) async fn assert_user_has_no_producer_route_target(
+pub(super) async fn assert_user_has_no_published_source(
     room: &Arc<Room>,
     user_id: &UserId,
     connection_id: ConnectionId,
@@ -113,7 +113,7 @@ pub(super) async fn assert_user_has_no_producer_route_target(
         !room
             .test_api()
             .inspect()
-            .has_producer_route_target(user_id, connection_id, stream_type)
+            .has_published_source(user_id, connection_id, stream_type)
             .await
     );
 }

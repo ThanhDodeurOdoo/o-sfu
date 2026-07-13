@@ -57,7 +57,7 @@ impl RoomTestInspect<'_> {
         )
     }
 
-    pub async fn has_producer_route_target(
+    pub async fn has_published_source(
         self,
         owner_user_id: &UserId,
         owner_connection_id: ConnectionId,
@@ -67,7 +67,7 @@ impl RoomTestInspect<'_> {
             .state
             .read()
             .await
-            .producer_route_target(
+            .published_source_id(
                 owner_user_id,
                 owner_connection_id,
                 &stream_id_for_source(stream_type),
@@ -126,7 +126,7 @@ impl RoomTestInspect<'_> {
             .state
             .read()
             .await
-            .producer_route_target_for_user(user_id, stream_id)
+            .published_source_id_for_user(user_id, stream_id)
             .is_some()
     }
 
