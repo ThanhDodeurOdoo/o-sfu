@@ -325,6 +325,9 @@ pub mod vp8 {
             };
         }
         if extension & L_BIT != 0 {
+            if extension & T_BIT == 0 {
+                return None;
+            }
             rest = rest.get(1..)?;
         }
         if extension & T_BIT != 0 || extension & K_BIT != 0 {

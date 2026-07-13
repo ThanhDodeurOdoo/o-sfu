@@ -216,5 +216,6 @@ fn vp8_payload_keyframe_detection_follows_payload_descriptor() {
     assert!(super::vp8::payload_starts_keyframe(&[
         0x90, 0x80, 0x80, 0x42, 0x00,
     ]));
+    assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x40, 0, 0]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x80]));
 }
