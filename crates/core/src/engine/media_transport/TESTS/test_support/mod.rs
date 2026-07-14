@@ -308,7 +308,7 @@ pub(crate) fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> Medi
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub(crate) fn test_media_transport_config(rtc_port_range: RtcPortRange) -> MediaTransportConfig {
     MediaTransportConfig {
-        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         bitrate_limits: SessionBitrateLimits::new(Bitrate::from_mbps(8), Bitrate::from_mbps(10)),
         video_bitrate_limits: VideoBitrateLimits::default(),
         rtc_port_range,

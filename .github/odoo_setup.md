@@ -60,7 +60,7 @@ This document explains how to set up the SFU server for development to work with
 
 ## Configure The Environment
 
-The SFU uses meaningful defaults for almost everything. However, you must provide two specific configurations: `AUTH_KEY` and `PUBLIC_IP`. 
+The SFU uses meaningful defaults for almost everything. However, you must provide two specific configurations: `AUTH_KEY` and `ANNOUNCED_IP`. 
 
 ### 1. Generate your `AUTH_KEY`
 This key authenticates client requests to the SFU server. It must be a 32-byte, base64-encoded, cryptographically safe hash. You can generate one with:
@@ -68,7 +68,7 @@ This key authenticates client requests to the SFU server. It must be a 32-byte, 
 openssl rand -base64 32
 ```
 
-### 2. Determine your `PUBLIC_IP`
+### 2. Determine the `ANNOUNCED_IP`
 
 This is the IP address where the SFU can be reached. It must be routable from the client's perspective and cannot be the loopback address (`127.0.0.1` aka localhost).
 
@@ -84,18 +84,15 @@ macOS:
 ipconfig getifaddr "$(route -n get default | awk '/interface:/{print $2; exit}')"
 ```
 
-> [!TIP]
-> Even though the variable is named `PUBLIC_IP`, a local network address (like `10.x.x.x`) is perfectly fine for development.
-
 ### 3. Apply the Configurations
 
-Now that you have your `AUTH_KEY` and `PUBLIC_IP`, you need to configure both the SFU server and Odoo:
+Now that you have your `AUTH_KEY` and `ANNOUNCED_IP`, you need to configure both the SFU server and Odoo:
 
-1. For the SFU Server: Define `AUTH_KEY` and `PUBLIC_IP` as environment variables before running the server.
+1. For the SFU Server: Define `AUTH_KEY` and `ANNOUNCED_IP` as environment variables before running the server.
 
 2. For Odoo:
     - Navigate to **Settings**, locate the Discuss section, and check both **Custom Call Servers** and **Custom SFU Server**.
-    - Under **Custom SFU Server**, set the URL to `http://{PUBLIC_IP}:8070` (replacing `{PUBLIC_IP}` with your actual IP).
+    - Under **Custom SFU Server**, set the URL to `http://{ANNOUNCED_IP}:8070` (replacing `{ANNOUNCED_IP}` with your actual IP).
     - Set the **Key** field to the value of your `AUTH_KEY`.
 
 > [!TIP]

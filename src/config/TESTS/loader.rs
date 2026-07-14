@@ -25,7 +25,7 @@ fn config_from(overrides: &[(&str, &str)]) -> anyhow::Result<Config> {
             .map(|(_name, value)| (*value).to_owned())
             .or_else(|| match key {
                 "AUTH_KEY" => Some(TEST_AUTH_KEY.to_owned()),
-                "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+                "ANNOUNCED_IP" => Some("127.0.0.1".to_owned()),
                 _ => None,
             })
     })
@@ -38,7 +38,7 @@ fn config_error_from(overrides: &[(&str, &str)]) -> Option<String> {
 #[test]
 fn config_requires_auth_key() {
     let error = Config::from_var_lookup(|key| match key {
-        "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+        "ANNOUNCED_IP" => Some("127.0.0.1".to_owned()),
         _ => None,
     })
     .err()
@@ -98,7 +98,7 @@ fn config_uses_defaults_and_explicit_values() -> anyhow::Result<()> {
     assert_eq!(config.codecs.preferences, CodecPreferences::default());
     assert_eq!(config.diagnostics, DiagnosticsConfig::default());
     assert_eq!(config.telemetry, TelemetryConfig::default());
-    assert_eq!(config.transport.public_ip.to_string(), "127.0.0.1");
+    assert_eq!(config.transport.announced_ip.to_string(), "127.0.0.1");
     assert_eq!(config.transport.max_bitrate_in, Bitrate::from_mbps(8));
     assert_eq!(config.transport.max_bitrate_out, Bitrate::from_mbps(10));
     assert_eq!(

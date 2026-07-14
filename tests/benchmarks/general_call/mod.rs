@@ -625,7 +625,7 @@ fn media_transport() -> Result<MediaTransport> {
     let rtc_port_range = test_rtc_port_range(WORKER_COUNT)
         .ok_or_else(|| anyhow!("benchmark RTC port range was not available"))?;
     let config = MediaTransportConfig {
-        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         bitrate_limits: SessionBitrateLimits::new(Bitrate::from_mbps(8), Bitrate::from_mbps(10)),
         video_bitrate_limits: VideoBitrateLimits::default(),
         rtc_port_range,

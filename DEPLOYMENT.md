@@ -12,7 +12,7 @@ WebRTC UDP    -> public VM IP       -> o-sfu RTC UDP range
 
 the reverse proxy handles only HTTP and WebSocket traffic
 
-media UDP must reach the VM public address directly because `o-sfu` advertises `PUBLIC_IP` in ICE-lite SDP
+media UDP must reach the VM public address directly because `o-sfu` advertises `ANNOUNCED_IP` in ICE-lite SDP
 
 ## Odoo binding
 
@@ -22,7 +22,7 @@ on `o-sfu`:
 
 ```env
 AUTH_KEY=<base64-auth-key>
-PUBLIC_IP=<vm-public-ip>
+ANNOUNCED_IP=<vm-public-ip>
 ```
 
 on Odoo Discuss settings:
@@ -42,7 +42,7 @@ openssl rand -base64 32
 
 ```env
 PROXY=true
-PUBLIC_IP=<vm-public-ip>
+ANNOUNCED_IP=<vm-public-ip>
 AUTH_KEY=<base64-auth-key>
 DIAGNOSTICS_AUTH_TOKEN=<diagnostics-token>
 RTC_MIN_PORT=40000
@@ -344,9 +344,9 @@ proxy:
 
 runtime:
 
-- `PUBLIC_IP` is the VM public IP
-- `PUBLIC_IP` is not the NGINX domain
-- `PUBLIC_IP` is not `0.0.0.0`
+- `ANNOUNCED_IP` is the VM public IP
+- `ANNOUNCED_IP` is not the NGINX domain
+- `ANNOUNCED_IP` is not `0.0.0.0`
 - Docker Compose logging uses explicit `max-size` and `max-file` limits
 - `PROXY=true` is set only behind the trusted NGINX edge
 - `AUTH_KEY` matches the Odoo caller configuration
@@ -370,7 +370,7 @@ required:
 
 | variable | default | description |
 | --- | --- | --- |
-| `PUBLIC_IP` | required | concrete advertised IP address used in ICE-lite SDP |
+| `ANNOUNCED_IP` | required | concrete advertised IP address used in ICE-lite SDP |
 | `AUTH_KEY` | required | base64 key with at least 32 decoded bytes used to sign and verify SFU JWTs |
 
 HTTP, proxy and diagnostics:

@@ -54,7 +54,7 @@ pub fn media_transport() -> Result<MediaTransport> {
         test_rtc_port_range(4).ok_or_else(|| anyhow!("RTC test ports should be available"))?;
     MediaTransport::builder()
         .transport_config(MediaTransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(
                 Bitrate::from_mbps(8),
                 Bitrate::from_mbps(10),

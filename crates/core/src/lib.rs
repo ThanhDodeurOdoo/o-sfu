@@ -38,7 +38,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let options = CoreOptions::new(
 //!     MediaOptions {
-//!         public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+//!         announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
 //!         rtc_port_range: RtcPortRange::new(40_000, 40_099),
 //!         rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
 //!         bitrate_limits: SessionBitrateLimits::new(

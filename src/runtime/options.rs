@@ -28,7 +28,7 @@ impl RuntimeOptions {
         Self {
             core: CoreOptions::new(
                 MediaOptions {
-                    public_ip: config.transport.public_ip,
+                    announced_ip: config.transport.announced_ip,
                     rtc_port_range: config.transport.rtc_port_range,
                     rtc_udp_io_backend: config.transport.rtc_udp_io_backend,
                     bitrate_limits: SessionBitrateLimits::new(

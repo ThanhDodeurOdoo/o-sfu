@@ -57,7 +57,10 @@ impl TransportConfig {
                 "TRANSPORT_BACKEND is no longer supported; o-sfu always boots the RTC transport"
             ));
         }
-        let public_ip = env.var::<IpAddr>("PUBLIC_IP").required()?;
+        let announced_ip = env
+            .var::<IpAddr>("ANNOUNCED_IP")
+            .alias("PUBLIC_IP")
+            .required()?;
         let rtc_min_port = env.var("RTC_MIN_PORT").default(40_000)?;
         let max_bitrate_in_bps = env
             .var("MAX_BITRATE_IN")
@@ -100,12 +103,12 @@ impl TransportConfig {
             "ROOM_MAX_LOCAL_ROUTERS must be less than or equal to RTC_MEDIA_WORKER_COUNT"
         );
         ensure!(
-            !public_ip.is_unspecified(),
-            "PUBLIC_IP must be a concrete advertised address"
+            !announced_ip.is_unspecified(),
+            "ANNOUNCED_IP must be a concrete advertised address"
         );
         ensure!(
-            !public_ip.is_multicast(),
-            "PUBLIC_IP cannot be a multicast address"
+            !announced_ip.is_multicast(),
+            "ANNOUNCED_IP cannot be a multicast address"
         );
         let room_worker_policy = select_room_worker_policy(
             room_max_local_routers,
@@ -113,7 +116,7 @@ impl TransportConfig {
             local_spillover_policy,
         );
         Ok(Self {
-            public_ip,
+            announced_ip,
             max_bitrate_in: Bitrate::from_bps(max_bitrate_in_bps),
             max_bitrate_out: Bitrate::from_bps(max_bitrate_out_bps),
             video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_bps(max_video_bitrate_bps)),

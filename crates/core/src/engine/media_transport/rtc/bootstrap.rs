@@ -56,11 +56,11 @@ use crate::{
 /// returns `TransportUnavailable` when no port in the configured range produces
 /// a usable shared socket
 pub(super) fn bind_shared_rtc_socket(
-    public_ip: IpAddr,
+    announced_ip: IpAddr,
     rtc_port_range: RtcPortRange,
     rtc_udp_io_backend: RtcUdpIoBackend,
 ) -> Result<SharedRtcSocket, TransportAdapterError> {
-    let bind_ip = bind_ip_for_public_ip(public_ip);
+    let bind_ip = bind_ip_for_announced_ip(announced_ip);
     for port in rtc_port_range.ports() {
         let bind_addr = SocketAddr::new(bind_ip, port);
         let Ok(socket) = StdUdpSocket::bind(bind_addr) else {
@@ -72,7 +72,7 @@ pub(super) fn bind_shared_rtc_socket(
         let Ok(socket) = RtcUdpSocket::from_std(socket, rtc_udp_io_backend) else {
             continue;
         };
-        let candidate_addr = SocketAddr::new(public_ip, port);
+        let candidate_addr = SocketAddr::new(announced_ip, port);
         let ingress = UdpIngress::new(socket.clone(), bind_addr, candidate_addr);
         info!(
             %bind_addr,
@@ -91,9 +91,9 @@ pub(super) fn bind_shared_rtc_socket(
 /// choose the local bind address that matches the advertised IP family
 ///
 /// workers bind to all local interfaces for that family while keeping SDP
-/// candidates anchored to the configured public address
-fn bind_ip_for_public_ip(public_ip: IpAddr) -> IpAddr {
-    match public_ip {
+/// candidates anchored to the configured announced IP
+fn bind_ip_for_announced_ip(announced_ip: IpAddr) -> IpAddr {
+    match announced_ip {
         IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
     }

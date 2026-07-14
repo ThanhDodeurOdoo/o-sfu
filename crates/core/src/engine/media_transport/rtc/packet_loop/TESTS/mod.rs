@@ -703,7 +703,7 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
     let outbound_recorder = metrics.register_rtp_worker();
     let datagram_recorder = metrics.register_rtc_worker();
     PacketLoopConfig {
-        public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         max_bitrate_in: Bitrate::from_mbps(8),
         max_bitrate_out: Bitrate::from_mbps(10),
         video_bitrate_limits: VideoBitrateLimits::default(),

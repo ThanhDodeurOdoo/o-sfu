@@ -64,7 +64,7 @@ use crate::{
 /// `Arc` fields are shared services that the packet loop may update or query
 /// without exposing direct access to `PacketLoopState`
 pub struct PacketLoopConfig {
-    pub public_ip: IpAddr,
+    pub announced_ip: IpAddr,
     pub max_bitrate_in: Bitrate,
     pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
@@ -572,7 +572,7 @@ fn handle_control_input(
             bitrate_registry,
             snapshot_state,
             now: Instant::now(),
-            public_ip: config.public_ip,
+            announced_ip: config.announced_ip,
             max_bitrate_in: config.max_bitrate_in,
             max_bitrate_out: config.max_bitrate_out,
             video_bitrate_limits: config.video_bitrate_limits,

@@ -46,7 +46,7 @@ const INITIAL_NEGOTIATION_MEDIA_KINDS: [MediaKind; 2] = [MediaKind::Audio, Media
 
 #[derive(Clone, Copy)]
 pub(super) struct OfferBootstrapConfig<'a> {
-    pub(super) public_ip: IpAddr,
+    pub(super) announced_ip: IpAddr,
     pub(super) max_bitrate_out: Bitrate,
     pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
@@ -449,7 +449,7 @@ fn ensure_session_ready_for_offer(
         shared_socket.candidate_addr
     } else {
         let shared_socket = bootstrap::bind_shared_rtc_socket(
-            config.public_ip,
+            config.announced_ip,
             config.rtc_port_range,
             config.rtc_udp_io_backend,
         )?;

@@ -4,7 +4,7 @@ use crate::Bitrate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaOptions {
-    pub public_ip: IpAddr,
+    pub announced_ip: IpAddr,
     pub rtc_port_range: RtcPortRange,
     pub rtc_udp_io_backend: RtcUdpIoBackend,
     pub bitrate_limits: SessionBitrateLimits,

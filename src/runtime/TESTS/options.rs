@@ -32,7 +32,7 @@ fn test_config() -> Config {
             outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
         },
         transport: TransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+            announced_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
             max_bitrate_in: Bitrate::from_kbps(1_234),
             max_bitrate_out: Bitrate::from_kbps(5_678),
             video_bitrate_limits: VideoBitrateLimits::new(Bitrate::from_kbps(4_321)),
@@ -64,7 +64,10 @@ fn runtime_options_project_core_settings() {
 
     let options = RuntimeOptions::from_config(&config);
 
-    assert_eq!(options.core.media.public_ip, config.transport.public_ip);
+    assert_eq!(
+        options.core.media.announced_ip,
+        config.transport.announced_ip
+    );
     assert_eq!(
         options.core.media.rtc_port_range,
         config.transport.rtc_port_range
