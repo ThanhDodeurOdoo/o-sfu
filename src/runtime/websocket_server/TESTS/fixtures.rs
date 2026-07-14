@@ -1,6 +1,6 @@
 pub(super) use std::{
     fmt::Debug,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::SocketAddr,
     result::Result as StdResult,
     sync::{
         Arc,
@@ -34,20 +34,12 @@ pub(super) use crate::{
     application::stream_catalog::{
         source_publish_intent_for_stream_type, stream_id_for_stream_type,
     },
-    config::{
-        Bitrate, CodecPreferences, MediaCodecFlags, RtcUdpIoBackend, RuntimeFeatureFlags,
-        VideoBitrateLimits,
-    },
+    config::RuntimeFeatureFlags,
     runtime::{
-        RoomPacketSinkRegistry, RuntimeState,
+        RuntimeState,
         auth::{RegisteredJwtClaims, WebSocketConnectClaims, sign},
-        diagnostics::DiagnosticsStore,
         http_server::app,
-        media_transport::{
-            MediaTransport, MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits,
-            test_support::test_rtc_port_range,
-        },
-        metrics::RuntimeMetrics,
+        media_transport::MediaTransport,
         room::{
             JoinUserRequest, Room, RoomConfig, RoomManager, UserOutboundQueueLimits,
             UserOutboundReceiver, UserOutboundSender,
@@ -179,11 +171,6 @@ impl TestServerBuilder {
         self
     }
 
-    pub(super) fn media_transport(mut self, value: MediaTransport) -> Self {
-        self.runtime = self.runtime.media_transport(value);
-        self
-    }
-
     pub(super) fn feature_flags(mut self, value: RuntimeFeatureFlags) -> Self {
         self.runtime = self.runtime.feature_flags(value);
         self
@@ -227,40 +214,6 @@ impl TestServerBuilder {
 impl Default for TestServerBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[allow(
-    clippy::panic,
-    reason = "the test fixture builds a constant valid RTC transport and failing here means the fixture itself is invalid"
-)]
-pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
-    let rtc_port_range = test_rtc_port_range(1)
-        .unwrap_or_else(|| panic!("websocket test RTC ports should be available"));
-    match MediaTransport::builder()
-        .transport_config(MediaTransportConfig {
-            announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            bitrate_limits: SessionBitrateLimits::new(
-                Bitrate::from_mbps(8),
-                Bitrate::from_mbps(10),
-            ),
-            video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range,
-            rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: CodecPreferences::default(),
-            media_quality_interval: None,
-        })
-        .deps(MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-            metrics: Arc::new(RuntimeMetrics::default()),
-        })
-        .worker_count(1)
-        .build()
-    {
-        Ok(transport) => transport,
-        Err(error) => panic!("constant RTC test transport config should be valid: {error}"),
     }
 }
 

@@ -122,10 +122,8 @@ impl RouteFixture {
         let metrics = Arc::new(RuntimeMetrics::default());
         let mut deps = test_media_transport_deps();
         deps.metrics = Arc::clone(&metrics);
-        let media_transport = MediaTransport::builder()
-            .transport_config(test_media_transport_config(port_range))
-            .deps(deps)
-            .build()?;
+        let media_transport =
+            MediaTransport::build(test_media_transport_config(1, port_range), deps)?;
         let source_session = session_key(1, UserId::Integer(1));
         let consumer_session = session_key(2, UserId::Integer(2));
         media_transport

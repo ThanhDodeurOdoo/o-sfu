@@ -1,11 +1,7 @@
 //! codec policy shared by server config and RTC transport construction
 //!
-//! [`CodecOptions`] is part of the cold-path [`CoreOptions`](super::CoreOptions)
-//! projection because server configuration parses operator input into these
-//! value types, then media transport bootstrap reads them when it creates str0m RTC
-//! state for a session, packet forwarding reads the negotiated RTP state later,
-//! so this module only controls the capability surface advertised during
-//! negotiation
+//! server configuration parses operator input into these values then the room
+//! and transport owners consume them during capability and session bootstrap
 
 use bitflags::bitflags;
 use o_sfu_rfc::rtp::codec_name;
@@ -22,20 +18,6 @@ bitflags! {
         const VP9 = 1 << 6;
         const AV1 = 1 << 7;
     }
-}
-
-/// codec policy consumed by media transport startup
-///
-/// this groups independent enablement flags with preference order so callers can
-/// pass one immutable value through [`CoreOptions`](super::CoreOptions) without
-/// giving the transport layer access to server environment parsing
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CodecOptions {
-    /// codecs that may be advertised by newly created RTC sessions
-    pub flags: MediaCodecFlags,
-    /// preferred offer order for codecs that are enabled and supported by the
-    /// RTC backend
-    pub preferences: CodecPreferences,
 }
 
 /// enablign set for codecs that may enter the RTC capability surface

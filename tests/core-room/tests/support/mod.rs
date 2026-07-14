@@ -52,8 +52,9 @@ pub fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
 pub fn media_transport() -> Result<MediaTransport> {
     let rtc_port_range =
         test_rtc_port_range(4).ok_or_else(|| anyhow!("RTC test ports should be available"))?;
-    MediaTransport::builder()
-        .transport_config(MediaTransportConfig {
+    MediaTransport::build(
+        MediaTransportConfig {
+            worker_count: 4,
             announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: SessionBitrateLimits::new(
                 Bitrate::from_mbps(8),
@@ -65,15 +66,14 @@ pub fn media_transport() -> Result<MediaTransport> {
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
             media_quality_interval: None,
-        })
-        .deps(MediaTransportDeps {
+        },
+        MediaTransportDeps {
             diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
-        })
-        .worker_count(4)
-        .build()
-        .map_err(|error| anyhow!("test media transport should build: {error}"))
+        },
+    )
+    .map_err(|error| anyhow!("test media transport should build: {error}"))
 }
 
 pub fn manager_with_policy(policy: RoomWorkerPolicy) -> RoomManager {

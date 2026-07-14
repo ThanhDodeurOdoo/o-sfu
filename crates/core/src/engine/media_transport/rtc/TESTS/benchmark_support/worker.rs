@@ -72,11 +72,13 @@ impl WorkerLoopBenchFixture {
         else {
             panic!("failed to build current-thread benchmark runtime")
         };
+        let rtc_port_range = RtcPortRange::new(46_200, 46_220);
         let session_key = test_transport_session_key(91, 0, 92, UserId::Integer(93));
         let fixture = Self {
             runtime,
             worker: RtcWorker::new(
-                &test_media_transport_config(RtcPortRange::new(46_200, 46_220)),
+                &test_media_transport_config(1, rtc_port_range),
+                rtc_port_range,
                 &test_media_transport_deps(),
                 Arc::new(SourcePolicySignal::default()),
                 0,
@@ -166,10 +168,12 @@ impl WorkerPacketCommandMixBenchFixture {
         else {
             panic!("failed to build current-thread benchmark runtime")
         };
+        let rtc_port_range = RtcPortRange::new(46_200, 46_220);
         let mut fixture = Self {
             runtime,
             worker: RtcWorker::new(
-                &test_media_transport_config(RtcPortRange::new(46_200, 46_220)),
+                &test_media_transport_config(1, rtc_port_range),
+                rtc_port_range,
                 &test_media_transport_deps(),
                 Arc::new(SourcePolicySignal::default()),
                 0,

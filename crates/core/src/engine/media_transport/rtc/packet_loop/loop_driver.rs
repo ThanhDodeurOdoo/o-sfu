@@ -21,7 +21,6 @@
 
 use std::{
     mem::take,
-    net::IpAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -31,6 +30,7 @@ use tracing::warn;
 
 use super::{
     super::{
+        RtcWorkerConfig,
         bitrate::BitrateRegistry,
         forwarded_packet::ForwardedPacket,
         forwarding_planner::plan_forwards,
@@ -47,14 +47,11 @@ use super::{
     session_drain::{SessionDrainContext, drain_ready_sessions},
     udp::{RtcUdpSocket, UdpDatagram, UdpIngress},
 };
-use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
-    engine::{
-        diagnostics::DiagnosticsStore,
-        media_transport::SourcePolicySignal,
-        metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
-        packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
-    },
+use crate::engine::{
+    diagnostics::DiagnosticsStore,
+    media_transport::SourcePolicySignal,
+    metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
+    packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
 };
 
 /// immutable configuration and shared side channels for one packet-loop worker
@@ -64,23 +61,7 @@ use crate::{
 /// `Arc` fields are shared services that the packet loop may update or query
 /// without exposing direct access to `PacketLoopState`
 pub struct PacketLoopConfig {
-    pub announced_ip: IpAddr,
-    pub max_bitrate_in: Bitrate,
-    pub max_bitrate_out: Bitrate,
-    pub video_bitrate_limits: VideoBitrateLimits,
-    pub rtc_port_range: RtcPortRange,
-    pub rtc_udp_io_backend: RtcUdpIoBackend,
-    pub codec_flags: MediaCodecFlags,
-    pub codec_preferences: CodecPreferences,
-    pub media_quality_interval: Option<Duration>,
-    /// first transport media id allocated by this worker
-    ///
-    /// media ids are worker-local counters once the loop is running
-    /// the values must be unique across workers because cross-worker relay state
-    /// is keyed by the producing media id
-    /// the worker manager assigns disjoint ranges before boot so per-packet
-    /// routing does not need to carry a wider key
-    pub media_id_base: u64,
+    pub worker: RtcWorkerConfig,
     pub diagnostics: Arc<DiagnosticsStore>,
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub source_policy_signal: Arc<SourcePolicySignal>,
@@ -437,7 +418,7 @@ pub async fn run_packet_loop(
     // transport media ids must start from the worker-assigned range so relay
     // maps can use the media id alone across workers
     let mut packet_loop_state = PacketLoopState {
-        next_media_id: config.media_id_base,
+        next_media_id: config.worker.media_id_base,
         ..PacketLoopState::default()
     };
     // demux recovery is cached outside durable RTC state because any topology
@@ -572,15 +553,7 @@ fn handle_control_input(
             bitrate_registry,
             snapshot_state,
             now: Instant::now(),
-            announced_ip: config.announced_ip,
-            max_bitrate_in: config.max_bitrate_in,
-            max_bitrate_out: config.max_bitrate_out,
-            video_bitrate_limits: config.video_bitrate_limits,
-            rtc_port_range: config.rtc_port_range,
-            rtc_udp_io_backend: config.rtc_udp_io_backend,
-            codec_flags: config.codec_flags,
-            codec_preferences: config.codec_preferences,
-            media_quality_interval: config.media_quality_interval,
+            config: &config.worker,
             metrics: &config.metrics,
         },
     );

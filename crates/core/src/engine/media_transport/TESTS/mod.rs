@@ -14,6 +14,8 @@ use str0m::media::Mid;
 use super::{
     MediaTransport, MediaTransportBuildError, TransportTeardown, route_control::reconcile_applied,
 };
+#[cfg(not(target_os = "linux"))]
+use crate::RtcUdpIoBackend;
 use crate::{
     Bitrate, MediaWorkerId, RtcPortRange,
     engine::{
@@ -25,17 +27,13 @@ use crate::{
             TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
             TransportSourceKey,
             rtc::{RtcWorker, WorkerMediaControlBatchOutcome},
-            test_support::{DebugPacketGate, test_media_transport_builder, test_rtc_port_range},
+            test_support::{
+                DebugPacketGate, test_media_transport as build_test_media_transport,
+                test_media_transport_config, test_media_transport_deps, test_rtc_port_range,
+            },
         },
         metrics::MetricName,
         sync::lock_unpoisoned,
-    },
-};
-#[cfg(not(target_os = "linux"))]
-use crate::{
-    RtcUdpIoBackend,
-    engine::media_transport::test_support::{
-        test_media_transport_config, test_media_transport_deps,
     },
 };
 
@@ -227,10 +225,7 @@ async fn assert_remote_route_activity(
 }
 
 fn test_media_transport(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTransport {
-    match test_media_transport_builder(rtc_port_range)
-        .worker_count(worker_count)
-        .build()
-    {
+    match build_test_media_transport(worker_count, rtc_port_range) {
         Ok(transport) => transport,
         Err(error) => panic!("fixed RTC transport test config should be valid: {error}"),
     }
@@ -561,10 +556,9 @@ fn media_control_reconciliation_rejects_short_worker_results() {
 }
 
 #[test]
-fn media_transport_builder_rejects_invalid_worker_count() {
-    let result = test_media_transport_builder(RtcPortRange::new(46_210, 46_211))
-        .worker_count(0)
-        .build();
+fn media_transport_build_rejects_invalid_worker_count() {
+    let config = test_media_transport_config(0, RtcPortRange::new(46_210, 46_211));
+    let result = MediaTransport::build(config, test_media_transport_deps());
 
     assert_eq!(
         result.err(),
@@ -573,10 +567,9 @@ fn media_transport_builder_rejects_invalid_worker_count() {
 }
 
 #[test]
-fn media_transport_builder_rejects_invalid_port_split() {
-    let result = test_media_transport_builder(RtcPortRange::new(46_220, 46_221))
-        .worker_count(3)
-        .build();
+fn media_transport_build_rejects_invalid_port_split() {
+    let config = test_media_transport_config(3, RtcPortRange::new(46_220, 46_221));
+    let result = MediaTransport::build(config, test_media_transport_deps());
 
     assert_eq!(
         result.err(),
@@ -589,14 +582,11 @@ fn media_transport_builder_rejects_invalid_port_split() {
 
 #[cfg(not(target_os = "linux"))]
 #[test]
-fn media_transport_builder_rejects_non_linux_io_uring_backend() {
-    let mut config = test_media_transport_config(test_rtc_range(1));
+fn media_transport_build_rejects_non_linux_io_uring_backend() {
+    let mut config = test_media_transport_config(1, test_rtc_range(1));
     config.rtc_udp_io_backend = RtcUdpIoBackend::IoUring;
 
-    let result = MediaTransport::builder()
-        .transport_config(config)
-        .deps(test_media_transport_deps())
-        .build();
+    let result = MediaTransport::build(config, test_media_transport_deps());
 
     assert_eq!(
         result.err(),

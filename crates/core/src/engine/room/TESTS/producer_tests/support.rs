@@ -16,7 +16,7 @@ pub(super) use crate::{
         },
         media_transport::{
             SessionOffer, TransportMediaId, TransportSessionKey,
-            test_support::{test_media_transport_builder, test_media_transport_deps},
+            test_support::{test_media_transport_config, test_media_transport_deps},
         },
         room::{PublishIntentOutcome, RemoteSourceSnapshot, Room},
     },
@@ -380,11 +380,10 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
 fn build_real_rtc_media_transport_with_metrics(metrics: Arc<RuntimeMetrics>) -> MediaTransport {
     let mut deps = test_media_transport_deps();
     deps.metrics = metrics;
-    match test_media_transport_builder(RtcPortRange::new(46_200, 46_299))
-        .deps(deps)
-        .worker_count(1)
-        .build()
-    {
+    match MediaTransport::build(
+        test_media_transport_config(1, RtcPortRange::new(46_200, 46_299)),
+        deps,
+    ) {
         Ok(transport) => transport,
         Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
     }

@@ -110,9 +110,8 @@ pub mod source_model {
 
 /// media transport construction and extension boundary
 ///
-/// the runtime builds one `MediaTransport` from `CoreOptions` and process
-/// services, then room code uses the opaque handle for offers, answers,
-/// publications, subscriptions and transport diagnostics
+/// the runtime builds one `MediaTransport` from owner configuration and process
+/// services then room code uses the opaque handle for media operations
 ///
 /// code above this module should not branch on RTC worker internals
 pub mod transport {
@@ -143,14 +142,14 @@ pub mod transport {
         engine::media_transport::{
             ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
             ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
-            MediaTransport, MediaTransportBuildError, MediaTransportBuilder, MediaTransportConfig,
-            MediaTransportDeps, ProducerActivity, ReceiverBandwidthSnapshot, RelayRouteActivity,
-            SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
-            SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
-            TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute,
-            TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySample,
-            TransportQualitySnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
-            TransportResult, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
+            MediaTransport, MediaTransportBuildError, MediaTransportConfig, MediaTransportDeps,
+            ProducerActivity, ReceiverBandwidthSnapshot, RelayRouteActivity, SessionOffer,
+            SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePolicyDirtyState,
+            SourcePolicySignal, SourcePolicyUpdateSubscription, TransportAdapterError,
+            TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
+            TransportPlacementPressureSnapshot, TransportQualitySample, TransportQualitySnapshot,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult,
+            TransportSessionHealth, TransportSessionKey, TransportSourceKey,
             TransportWorkerPressureSnapshot,
         },
         prelude::SessionBitrateLimits,

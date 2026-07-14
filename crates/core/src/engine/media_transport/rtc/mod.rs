@@ -29,6 +29,13 @@
 //!   unknown-source recovery, observability snapshots plus answer-derived router RTP projection.
 //! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
+use std::{net::IpAddr, time::Duration};
+
+use crate::{
+    CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits,
+    VideoBitrateLimits,
+};
+
 #[cfg(test)]
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
@@ -74,3 +81,16 @@ pub use forwarded_packet::ForwardedPacket;
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
 pub(super) use route_control::PacketLayerGate;
 pub use worker::RtcWorker;
+
+#[derive(Copy, Clone, Debug)]
+struct RtcWorkerConfig {
+    announced_ip: IpAddr,
+    bitrate_limits: SessionBitrateLimits,
+    video_bitrate_limits: VideoBitrateLimits,
+    rtc_port_range: RtcPortRange,
+    rtc_udp_io_backend: RtcUdpIoBackend,
+    codec_flags: MediaCodecFlags,
+    codec_preferences: CodecPreferences,
+    media_quality_interval: Option<Duration>,
+    media_id_base: u64,
+}

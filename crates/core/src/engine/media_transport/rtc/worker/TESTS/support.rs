@@ -370,6 +370,7 @@ impl RtcWorkerTestBuilder {
     pub(crate) fn build(self) -> RtcWorker {
         RtcWorker::new(
             &MediaTransportConfig {
+                worker_count: 1,
                 announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 bitrate_limits: SessionBitrateLimits::new(
                     self.max_bitrate_in,
@@ -382,6 +383,7 @@ impl RtcWorkerTestBuilder {
                 codec_preferences: self.codec_preferences,
                 media_quality_interval: None,
             },
+            self.rtc_port_range,
             &MediaTransportDeps {
                 diagnostics: Arc::new(DiagnosticsStore::default()),
                 packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),

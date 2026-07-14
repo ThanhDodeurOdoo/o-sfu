@@ -116,7 +116,6 @@ async fn websocket_closes_when_rtc_transport_disconnects() {
     let server = TestServerBuilder::new()
         .user_timeout_ms(200)
         .ping_interval_ms(20)
-        .media_transport(build_real_rtc_media_transport())
         .spawn()
         .await;
     assert!(server.is_some());
@@ -190,7 +189,6 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
     let server = TestServerBuilder::new()
         .user_timeout_ms(200)
         .ping_interval_ms(20)
-        .media_transport(build_real_rtc_media_transport())
         .spawn()
         .await;
     assert!(server.is_some());

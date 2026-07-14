@@ -23,10 +23,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::{
-    config::Config,
-    core::prelude::{CoreOptions, SfuCore},
-};
+use crate::{config::Config, core::prelude::SfuCore};
 
 pub(crate) mod auth;
 pub(crate) mod diagnostics;
@@ -44,7 +41,7 @@ pub(crate) use o_sfu_core::{
     server::{metrics, packet_sinks, room, transport as media_transport},
 };
 pub(crate) use o_sfu_telemetry::{self as telemetry, prometheus};
-use options::{RuntimeConfig, RuntimeOptions};
+use options::{RuntimeConfig, effective_feature_flags};
 use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
     rtp_capabilities,
@@ -53,7 +50,7 @@ use telemetry::{init_tracing, schema::event as telemetry_event};
 
 pub(crate) use self::{
     diagnostics::DiagnosticsStore,
-    media_transport::{MediaTransport, MediaTransportDeps},
+    media_transport::{MediaTransport, MediaTransportConfig, MediaTransportDeps},
     metrics::RuntimeMetrics,
     packet_sinks::RoomPacketSinkRegistry,
 };
@@ -127,16 +124,15 @@ impl Runtime {
     /// configured RTC settings
     pub fn new(config: &Config) -> Result<Self> {
         let runtime_config = RuntimeConfig::from_config(config);
-        let options = RuntimeOptions::from_config(config);
         let services = RuntimeServices::default();
-        let media_transport = build_media_transport(&options.core, &services)?;
-        let room_runtime_policy = build_room_runtime_policy(&runtime_config, &options);
+        let media_transport = build_media_transport(config, &services)?;
+        let room_runtime_policy = build_room_runtime_policy(config);
         info!(
             event = telemetry_event::RUNTIME_BOOT,
-            rtc_udp_io_backend = options.core.media.rtc_udp_io_backend.wire_name(),
+            rtc_udp_io_backend = config.transport.rtc_udp_io_backend.wire_name(),
             "runtime configuration loaded"
         );
-        let room_manager = build_room_manager(&options, room_runtime_policy, &services);
+        let room_manager = build_room_manager(config, room_runtime_policy, &services);
         Ok(Self {
             config: runtime_config,
             room_manager,
@@ -372,12 +368,22 @@ fn spawn_spillover_cooldown_task(
     })
 }
 
-fn build_media_transport(
-    options: &CoreOptions,
-    services: &RuntimeServices,
-) -> Result<MediaTransport> {
-    Ok(MediaTransport::from_core_options(
-        options,
+fn build_media_transport(config: &Config, services: &RuntimeServices) -> Result<MediaTransport> {
+    Ok(MediaTransport::build(
+        MediaTransportConfig {
+            worker_count: config.transport.rtc_media_worker_count,
+            announced_ip: config.transport.announced_ip,
+            bitrate_limits: SessionBitrateLimits::new(
+                config.transport.max_bitrate_in,
+                config.transport.max_bitrate_out,
+            ),
+            video_bitrate_limits: config.transport.video_bitrate_limits,
+            rtc_port_range: config.transport.rtc_port_range,
+            rtc_udp_io_backend: config.transport.rtc_udp_io_backend,
+            codec_flags: config.codecs.flags,
+            codec_preferences: config.codecs.preferences,
+            media_quality_interval: config.telemetry.media_quality_interval,
+        },
         MediaTransportDeps {
             diagnostics: Arc::clone(&services.diagnostics),
             packet_sink_registry: Arc::clone(&services.packet_sink_registry),
@@ -386,29 +392,26 @@ fn build_media_transport(
     )?)
 }
 
-fn build_room_runtime_policy(
-    config: &RuntimeConfig,
-    options: &RuntimeOptions,
-) -> RoomRuntimePolicy {
+fn build_room_runtime_policy(config: &Config) -> RoomRuntimePolicy {
     RoomRuntimePolicy::new(
         RoomAdmissionPolicy::new(config.user.room_size),
-        options.effective_feature_flags(),
+        effective_feature_flags(config.features),
         rtp_capabilities::router_rtp_capabilities_with_preferences(
-            options.core.codecs.flags,
-            options.core.codecs.preferences,
+            config.codecs.flags,
+            config.codecs.preferences,
         ),
     )
-    .with_room_worker_policy(options.core.routing.room_worker_policy)
-    .with_media_limits(options.room_media_limits)
+    .with_room_worker_policy(config.transport.room_worker_policy)
+    .with_media_limits(config.transport.room_media_limits)
 }
 
 fn build_room_manager(
-    options: &RuntimeOptions,
+    config: &Config,
     runtime_policy: RoomRuntimePolicy,
     services: &RuntimeServices,
 ) -> Arc<RoomManager> {
     Arc::new(RoomManager::new(
-        RoomManagerConfig::new(options.core.routing.media_worker_count, runtime_policy),
+        RoomManagerConfig::new(config.transport.rtc_media_worker_count, runtime_policy),
         RoomManagerDeps {
             diagnostics: Arc::clone(&services.diagnostics),
             metrics: Arc::clone(&services.metrics),

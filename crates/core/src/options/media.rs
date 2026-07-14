@@ -1,15 +1,6 @@
-use std::{fmt, net::IpAddr};
+use std::fmt;
 
 use crate::Bitrate;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MediaOptions {
-    pub announced_ip: IpAddr,
-    pub rtc_port_range: RtcPortRange,
-    pub rtc_udp_io_backend: RtcUdpIoBackend,
-    pub bitrate_limits: SessionBitrateLimits,
-    pub video_bitrate_limits: VideoBitrateLimits,
-}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RtcUdpIoBackend {

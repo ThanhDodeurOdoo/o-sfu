@@ -17,7 +17,7 @@
 //! signaling code from growing knowledge of the concrete WebRTC
 //! implementation.
 
-mod builder;
+mod build;
 mod config;
 mod policy_invalidation;
 mod route_control;
@@ -31,7 +31,7 @@ mod workers;
 
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
-pub use builder::{MediaTransportBuildError, MediaTransportBuilder};
+pub use build::MediaTransportBuildError;
 pub use config::{MediaTransportConfig, MediaTransportDeps};
 use o_sfu_router::{MediaKind, rtp::MediaStream as RouterRtpParameters};
 pub use policy_invalidation::{

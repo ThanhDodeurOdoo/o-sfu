@@ -1,16 +1,5 @@
 use crate::Bitrate;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RoutingOptions {
-    pub media_worker_count: usize,
-    /// room-local routing policy used by the room runtime
-    ///
-    /// this is a cold-path control-plane setting
-    /// it decides how many local router placements a room may use without
-    /// changing packet forwarding or transport worker count
-    pub room_worker_policy: RoomWorkerPolicy,
-}
-
 /// same-room placement policy for local router spillover
 ///
 /// server startup chooses this topology model before any room exists
@@ -91,16 +80,6 @@ pub enum RoomSpilloverMode {
     /// keep capable room workers in use and add local capacity only after
     /// measured pressure crosses the configured policy thresholds
     LoadTriggeredLocalSpillover(LocalSpilloverPolicy),
-}
-
-impl RoutingOptions {
-    #[must_use]
-    pub const fn new(media_worker_count: usize) -> Self {
-        Self {
-            media_worker_count,
-            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
-        }
-    }
 }
 
 impl RoomWorkerPolicy {

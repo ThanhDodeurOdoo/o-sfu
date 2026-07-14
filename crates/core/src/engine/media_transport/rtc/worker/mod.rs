@@ -40,12 +40,10 @@ mod test_support;
 
 use std::{
     fmt,
-    net::IpAddr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 #[cfg(feature = "internal-benchmarks")]
@@ -62,6 +60,7 @@ use str0m::media::MediaKind;
 use tokio::sync::mpsc;
 
 use super::{
+    RtcWorkerConfig,
     bitrate::BitrateRegistry,
     commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
     packet_loop::PacketLoopLagSnapshot,
@@ -73,8 +72,7 @@ use crate::engine::media_transport::AppliedSessionAnswer;
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use crate::engine::media_transport::{SessionOffer, TransportMediaId, TransportSessionKey};
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
-    VideoBitrateLimits,
+    MediaWorkerId, RtcPortRange,
     engine::{
         diagnostics::DiagnosticsStore,
         media_transport::{
@@ -135,17 +133,7 @@ impl fmt::Debug for RtcWorkerHandle {
 /// as room-membership authority
 pub struct RtcWorker {
     pub(super) relay_target_id: RelayTargetId,
-    /// first transport media id reserved for this worker's packet loop
-    pub(super) media_id_base: u64,
-    pub(super) announced_ip: IpAddr,
-    pub(super) max_bitrate_in: Bitrate,
-    pub(super) max_bitrate_out: Bitrate,
-    pub(super) video_bitrate_limits: VideoBitrateLimits,
-    pub(super) rtc_port_range: RtcPortRange,
-    pub(super) rtc_udp_io_backend: RtcUdpIoBackend,
-    pub(super) codec_flags: MediaCodecFlags,
-    pub(super) codec_preferences: CodecPreferences,
-    pub(super) media_quality_interval: Option<Duration>,
+    config: RtcWorkerConfig,
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub(super) source_policy_signal: Arc<SourcePolicySignal>,
@@ -167,30 +155,32 @@ impl RtcWorker {
     /// process-wide unique across local relay routes
     pub fn new(
         config: &MediaTransportConfig,
+        rtc_port_range: RtcPortRange,
         deps: &MediaTransportDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
         media_id_base: u64,
         media_worker_id: MediaWorkerId,
     ) -> Self {
-        let metrics = deps.metrics();
+        let metrics = &deps.metrics;
         Self {
             relay_target_id: RelayTargetId::new(
                 NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
             ),
-            media_id_base,
-            announced_ip: config.announced_ip,
-            max_bitrate_in: config.bitrate_limits.max_bitrate_in(),
-            max_bitrate_out: config.bitrate_limits.max_bitrate_out(),
-            video_bitrate_limits: config.video_bitrate_limits,
-            rtc_port_range: config.rtc_port_range,
-            rtc_udp_io_backend: config.rtc_udp_io_backend,
-            codec_flags: config.codec_flags,
-            codec_preferences: config.codec_preferences,
-            media_quality_interval: config.media_quality_interval,
-            diagnostics: deps.diagnostics(),
-            packet_sink_registry: deps.packet_sink_registry(),
+            config: RtcWorkerConfig {
+                announced_ip: config.announced_ip,
+                bitrate_limits: config.bitrate_limits,
+                video_bitrate_limits: config.video_bitrate_limits,
+                rtc_port_range,
+                rtc_udp_io_backend: config.rtc_udp_io_backend,
+                codec_flags: config.codec_flags,
+                codec_preferences: config.codec_preferences,
+                media_quality_interval: config.media_quality_interval,
+                media_id_base,
+            },
+            diagnostics: Arc::clone(&deps.diagnostics),
+            packet_sink_registry: Arc::clone(&deps.packet_sink_registry),
             source_policy_signal,
-            metrics: Arc::clone(&metrics),
+            metrics: Arc::clone(metrics),
             rtp_metrics: metrics.register_rtp_worker_for_media_worker(media_worker_id.as_usize()),
             rtc_metrics: metrics.register_rtc_worker(),
             worker_handle: Mutex::new(WorkerHandleSlot::default()),
@@ -372,9 +362,7 @@ impl fmt::Debug for RtcWorker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RtcWorker")
-            .field("announced_ip", &self.announced_ip)
-            .field("rtc_port_range", &self.rtc_port_range)
-            .field("rtc_udp_io_backend", &self.rtc_udp_io_backend)
+            .field("config", &self.config)
             .finish_non_exhaustive()
     }
 }
