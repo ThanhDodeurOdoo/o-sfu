@@ -53,6 +53,7 @@ use crate::{
         media_transport::{
             SourcePolicySignal, TransportMediaId, TransportSessionKey, TransportSourceKey,
             rtc::{
+                RtcWorkerConfig,
                 bitrate::BitrateRegistry,
                 bootstrap,
                 commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
@@ -703,17 +704,21 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
     let outbound_recorder = metrics.register_rtp_worker();
     let datagram_recorder = metrics.register_rtc_worker();
     PacketLoopConfig {
-        announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        max_bitrate_in: Bitrate::from_mbps(8),
-        max_bitrate_out: Bitrate::from_mbps(10),
-        video_bitrate_limits: VideoBitrateLimits::default(),
-        rtc_port_range: test_rtc_port_range(1)
-            .unwrap_or_else(|| panic!("test RTC port range should be available")),
-        rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
-        codec_flags: MediaCodecFlags::default(),
-        codec_preferences: CodecPreferences::default(),
-        media_quality_interval: None,
-        media_id_base: 0,
+        worker: RtcWorkerConfig {
+            announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            bitrate_limits: crate::SessionBitrateLimits::new(
+                Bitrate::from_mbps(8),
+                Bitrate::from_mbps(10),
+            ),
+            video_bitrate_limits: VideoBitrateLimits::default(),
+            rtc_port_range: test_rtc_port_range(1)
+                .unwrap_or_else(|| panic!("test RTC port range should be available")),
+            rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
+            codec_flags: MediaCodecFlags::default(),
+            codec_preferences: CodecPreferences::default(),
+            media_quality_interval: None,
+            media_id_base: 0,
+        },
         diagnostics: Arc::new(DiagnosticsStore::default()),
         packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
         source_policy_signal: Arc::new(SourcePolicySignal::default()),

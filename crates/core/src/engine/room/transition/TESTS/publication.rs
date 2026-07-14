@@ -15,7 +15,7 @@ use crate::engine::{
     ConnectionId, TestSourceKind, UserId, UserPermissions,
     media_transport::{
         AppliedSessionAnswer, MediaTransport, TransportMediaId,
-        test_support::{test_media_transport_builder, test_rtc_port_range},
+        test_support::{test_media_transport, test_rtc_port_range},
     },
     metrics::RuntimeMetrics,
     room::{Room, RoomConfig, RoomManager, UserOutboundSender},
@@ -24,10 +24,7 @@ use crate::engine::{
 
 fn media_transport() -> MediaTransport {
     let rtc_port_range = test_rtc_port_range(4).expect("test ports should be available");
-    test_media_transport_builder(rtc_port_range)
-        .worker_count(4)
-        .build()
-        .expect("test media transport config should be valid")
+    test_media_transport(4, rtc_port_range).expect("test media transport config should be valid")
 }
 
 fn test_sender() -> UserOutboundSender {

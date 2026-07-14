@@ -21,7 +21,7 @@ pub(super) use crate::{
         media_transport::{
             AppliedSessionAnswer, MediaTransport, TransportMediaId, TransportSessionHealth,
             test_support::{
-                test_media_transport_builder, test_media_transport_deps, test_rtc_port_range,
+                test_media_transport_config, test_media_transport_deps, test_rtc_port_range,
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
@@ -77,11 +77,7 @@ fn real_adapter_with_metrics(metrics: Arc<RuntimeMetrics>) -> MediaTransport {
     deps.metrics = metrics;
     let rtc_port_range =
         test_rtc_port_range(4).unwrap_or_else(|| panic!("RTC room test ports should be available"));
-    match test_media_transport_builder(rtc_port_range)
-        .deps(deps)
-        .worker_count(4)
-        .build()
-    {
+    match MediaTransport::build(test_media_transport_config(4, rtc_port_range), deps) {
         Ok(transport) => transport,
         Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
     }

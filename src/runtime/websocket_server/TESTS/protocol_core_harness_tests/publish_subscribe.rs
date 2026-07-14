@@ -113,10 +113,7 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
 
 #[tokio::test]
 async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_state() -> TestResult {
-    let server = TestServerBuilder::new()
-        .media_transport(build_real_rtc_media_transport())
-        .spawn_required()
-        .await?;
+    let server = TestServerBuilder::new().spawn_required().await?;
     let room = create_room(
         &server,
         "issuer-protocol-rtc-capabilities",

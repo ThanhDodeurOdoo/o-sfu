@@ -15,7 +15,7 @@ use {
 };
 #[cfg(test)]
 use {
-    super::{MediaTransportBuilder, TransportAdapterError, rtc::WorkerMediaControlBatch},
+    super::{MediaTransportBuildError, TransportAdapterError, rtc::WorkerMediaControlBatch},
     o_sfu_router::rtp::MediaStream as RouterRtpParameters,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
@@ -299,15 +299,23 @@ fn release_rtc_port_locks(paths: &[PathBuf]) {
 }
 
 #[cfg(test)]
-pub(crate) fn test_media_transport_builder(rtc_port_range: RtcPortRange) -> MediaTransportBuilder {
-    MediaTransport::builder()
-        .transport_config(test_media_transport_config(rtc_port_range))
-        .deps(test_media_transport_deps())
+pub(crate) fn test_media_transport(
+    worker_count: usize,
+    rtc_port_range: RtcPortRange,
+) -> Result<MediaTransport, MediaTransportBuildError> {
+    MediaTransport::build(
+        test_media_transport_config(worker_count, rtc_port_range),
+        test_media_transport_deps(),
+    )
 }
 
 #[cfg(any(test, feature = "internal-benchmarks"))]
-pub(crate) fn test_media_transport_config(rtc_port_range: RtcPortRange) -> MediaTransportConfig {
+pub(crate) fn test_media_transport_config(
+    worker_count: usize,
+    rtc_port_range: RtcPortRange,
+) -> MediaTransportConfig {
     MediaTransportConfig {
+        worker_count,
         announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         bitrate_limits: SessionBitrateLimits::new(Bitrate::from_mbps(8), Bitrate::from_mbps(10)),
         video_bitrate_limits: VideoBitrateLimits::default(),

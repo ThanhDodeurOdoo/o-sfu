@@ -11,9 +11,8 @@
 //! - `server` contains construction, diagnostics, metrics and room integration
 //!   types used by the runtime crate
 //!
-//! typical server construction gives configuration into
-//! `CoreOptions`, then builds a `server::transport::MediaTransport` from those
-//! options plus process services
+//! typical server construction gives transport-owned configuration plus shared
+//! process services directly to `server::transport::MediaTransport`
 //!
 //! ```no_run
 //! use std::{
@@ -23,48 +22,39 @@
 //!
 //! use o_sfu_core::{
 //!     prelude::{
-//!         Bitrate, CodecOptions, CodecPreferences, CoreOptions, MediaCodecFlags, MediaOptions,
-//!         ObservabilityOptions, RoutingOptions, RtcPortRange, RtcUdpIoBackend,
+//!         Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend,
 //!         SessionBitrateLimits, VideoBitrateLimits,
 //!     },
 //!     server::{
 //!         diagnostics::DiagnosticsStore,
 //!         metrics::RuntimeMetrics,
 //!         packet_sinks::RoomPacketSinkRegistry,
-//!         transport::{MediaTransport, MediaTransportDeps},
+//!         transport::{MediaTransport, MediaTransportConfig, MediaTransportDeps},
 //!     },
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let options = CoreOptions::new(
-//!     MediaOptions {
-//!         announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-//!         rtc_port_range: RtcPortRange::new(40_000, 40_099),
-//!         rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
-//!         bitrate_limits: SessionBitrateLimits::new(
-//!             Bitrate::from_mbps(3),
-//!             Bitrate::from_mbps(3),
-//!         ),
-//!         video_bitrate_limits: VideoBitrateLimits::default(),
-//!     },
-//!     RoutingOptions::new(1),
-//!     CodecOptions {
-//!         flags: MediaCodecFlags::default(),
-//!         preferences: CodecPreferences::default(),
-//!     },
-//!     ObservabilityOptions {
-//!         transport_diagnostics_enabled: true,
-//!         transport_metrics_enabled: true,
-//!         media_quality_interval: None,
-//!     },
-//! );
+//! let config = MediaTransportConfig {
+//!     worker_count: 1,
+//!     announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+//!     bitrate_limits: SessionBitrateLimits::new(
+//!         Bitrate::from_mbps(3),
+//!         Bitrate::from_mbps(3),
+//!     ),
+//!     video_bitrate_limits: VideoBitrateLimits::default(),
+//!     rtc_port_range: RtcPortRange::new(40_000, 40_099),
+//!     rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
+//!     codec_flags: MediaCodecFlags::default(),
+//!     codec_preferences: CodecPreferences::default(),
+//!     media_quality_interval: None,
+//! };
 //! let deps = MediaTransportDeps {
 //!     diagnostics: Arc::new(DiagnosticsStore::default()),
 //!     packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
 //!     metrics: Arc::new(RuntimeMetrics::default()),
 //! };
 //!
-//! let transport = MediaTransport::from_core_options(&options, deps)?;
+//! let transport = MediaTransport::build(config, deps)?;
 //!
 //! # let _transport = transport;
 //! # Ok(())
@@ -85,9 +75,9 @@ pub mod server;
 mod sfu;
 
 pub(crate) use options::{
-    AudioCodecPreference, CodecPreferences, CoreOptions, LocalSpilloverPolicy, MediaCodecFlags,
-    RoomMediaLimits, RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
-    RuntimeFeatureFlags, SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
+    AudioCodecPreference, CodecPreferences, LocalSpilloverPolicy, MediaCodecFlags, RoomMediaLimits,
+    RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags,
+    SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
 };
 
 /// Media bitrate stored as bits per second (not bytes per second).

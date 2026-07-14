@@ -303,17 +303,9 @@ impl RtcWorker {
             packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown_token);
         #[cfg(any(test, feature = "testing-transport"))]
         let packet_loop_inputs = debug_channels.install(packet_loop_inputs);
+        let config = self.config;
         let packet_loop_config = PacketLoopConfig {
-            announced_ip: self.announced_ip,
-            max_bitrate_in: self.max_bitrate_in,
-            max_bitrate_out: self.max_bitrate_out,
-            video_bitrate_limits: self.video_bitrate_limits,
-            rtc_port_range: self.rtc_port_range,
-            rtc_udp_io_backend: self.rtc_udp_io_backend,
-            codec_flags: self.codec_flags,
-            codec_preferences: self.codec_preferences,
-            media_quality_interval: self.media_quality_interval,
-            media_id_base: self.media_id_base,
+            worker: config,
             diagnostics: Arc::clone(&self.diagnostics),
             packet_sink_registry: Arc::clone(&self.packet_sink_registry),
             source_policy_signal: Arc::clone(&self.source_policy_signal),
@@ -324,16 +316,16 @@ impl RtcWorker {
         };
         info!(
             relay_target_id = ?self.relay_target_id,
-            announced_ip = %self.announced_ip,
-            max_bitrate_in_bps = self.max_bitrate_in.as_bps(),
-            max_bitrate_out_bps = self.max_bitrate_out.as_bps(),
-            rtc_port_range_min = self.rtc_port_range.min(),
-            rtc_port_range_max = self.rtc_port_range.max(),
-            rtc_udp_io_backend = self.rtc_udp_io_backend.wire_name(),
+            announced_ip = %config.announced_ip,
+            max_bitrate_in_bps = config.bitrate_limits.max_bitrate_in().as_bps(),
+            max_bitrate_out_bps = config.bitrate_limits.max_bitrate_out().as_bps(),
+            rtc_port_range_min = config.rtc_port_range.min(),
+            rtc_port_range_max = config.rtc_port_range.max(),
+            rtc_udp_io_backend = config.rtc_udp_io_backend.wire_name(),
             "booted rtc packet loop worker"
         );
         let thread_name = format!("rtc-packet-loop-{:?}", self.relay_target_id);
-        match self.rtc_udp_io_backend {
+        match config.rtc_udp_io_backend {
             RtcUdpIoBackend::Tokio => spawn_tokio_packet_loop(
                 thread_name,
                 packet_loop_config,

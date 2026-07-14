@@ -10,10 +10,9 @@ pub use crate::{
         },
     },
     options::{
-        AudioCodecPreference, CodecOptions, CodecPreferences, CoreOptions, LocalSpilloverPolicy,
-        LocalSpilloverPolicyError, LocalSpilloverPolicyParts, MediaCodecFlags, MediaOptions,
-        ObservabilityOptions, RoomMediaLimits, RoomMediaLimitsError, RoomSpilloverMode,
-        RoomWorkerPolicy, RoutingOptions, RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags,
+        AudioCodecPreference, CodecPreferences, LocalSpilloverPolicy, LocalSpilloverPolicyError,
+        LocalSpilloverPolicyParts, MediaCodecFlags, RoomMediaLimits, RoomMediaLimitsError,
+        RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags,
         SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
     },
     sfu::{

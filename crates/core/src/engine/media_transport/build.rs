@@ -1,0 +1,90 @@
+//! media transport construction and startup validation
+
+use std::sync::Arc;
+
+use thiserror::Error;
+
+use super::{
+    MediaTransport, SourcePolicySignal,
+    config::{MediaTransportConfig, MediaTransportDeps},
+    rtc::RtcWorker,
+};
+use crate::{MediaWorkerId, RtcUdpIoBackend};
+
+/// distance between worker media-id allocation ranges
+///
+/// the fixed gap keeps worker media-id ranges disjoint under realistic lifetime
+/// load because cross-worker routes use transport media ids as keys
+const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
+
+impl MediaTransport {
+    /// builds the runtime media transport from owner configuration and process services
+    ///
+    /// validation completes before any worker is created while worker packet
+    /// loops remain lazy until media work first addresses them
+    ///
+    /// # Errors
+    ///
+    /// returns [`MediaTransportBuildError`] when worker topology is invalid or
+    /// the selected UDP backend is unavailable on this target
+    pub fn build(
+        config: MediaTransportConfig,
+        deps: MediaTransportDeps,
+    ) -> Result<Self, MediaTransportBuildError> {
+        if config.rtc_udp_io_backend == RtcUdpIoBackend::IoUring && !cfg!(target_os = "linux") {
+            return Err(MediaTransportBuildError::UnsupportedUdpIoBackend {
+                backend: config.rtc_udp_io_backend,
+            });
+        }
+        if config.worker_count == 0 {
+            return Err(MediaTransportBuildError::InvalidWorkerCount);
+        }
+        let worker_ranges = config
+            .rtc_port_range
+            .split_for_workers(config.worker_count)
+            .ok_or(MediaTransportBuildError::InvalidPortSplit {
+                worker_count: config.worker_count,
+                port_count: config.rtc_port_range.port_count(),
+            })?;
+        let source_policy_signal = Arc::new(SourcePolicySignal::default());
+        let workers: Arc<[_]> = (0_u16..u16::MAX)
+            .zip(worker_ranges)
+            .map(|(worker_index, range)| {
+                Arc::new(RtcWorker::new(
+                    &config,
+                    range,
+                    &deps,
+                    Arc::clone(&source_policy_signal),
+                    u64::from(worker_index) * MEDIA_ID_STRIDE,
+                    MediaWorkerId::from_raw(usize::from(worker_index)),
+                ))
+            })
+            .collect();
+        Ok(Self {
+            workers,
+            metrics: deps.metrics,
+            #[cfg(test)]
+            media_control_batches: Arc::default(),
+            source_policy_signal,
+        })
+    }
+}
+
+/// invalid construction inputs for the media transport
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum MediaTransportBuildError {
+    /// a transport cannot be built without at least one RTC worker
+    #[error("media transport worker count must be at least one")]
+    InvalidWorkerCount,
+    /// the configured UDP range cannot provide one port to every worker
+    #[error(
+        "media transport cannot split {port_count} UDP ports across {worker_count} media workers"
+    )]
+    InvalidPortSplit {
+        worker_count: usize,
+        port_count: u16,
+    },
+    /// the selected UDP I/O backend is not available on this build target
+    #[error("rtc UDP I/O backend `{backend}` is not supported on this target")]
+    UnsupportedUdpIoBackend { backend: RtcUdpIoBackend },
+}

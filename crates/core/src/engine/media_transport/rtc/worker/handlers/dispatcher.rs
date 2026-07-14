@@ -6,9 +6,8 @@
 //! through the immutable runtime context that those handlers need.
 
 use std::{
-    net::IpAddr,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use tokio::sync::oneshot;
@@ -17,6 +16,7 @@ use tokio::sync::oneshot;
 use super::publication;
 use super::{
     super::super::{
+        RtcWorkerConfig,
         bitrate::BitrateRegistry,
         commands::RtcWorkerCommand,
         state::{PacketLoopState, RtcSnapshotState},
@@ -25,51 +25,40 @@ use super::{
     negotiation::{self, OfferBootstrapConfig},
     session,
 };
-use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
-    engine::{
-        media_transport::{TransportMediaId, TransportResult, TransportSourceActivitySnapshot},
-        metrics::RuntimeMetrics,
-    },
+use crate::engine::{
+    media_transport::{TransportMediaId, TransportResult, TransportSourceActivitySnapshot},
+    metrics::RuntimeMetrics,
 };
 
 pub struct WorkerCommandContext<'a> {
     pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     pub now: Instant,
-    pub announced_ip: IpAddr,
-    pub max_bitrate_in: Bitrate,
-    pub max_bitrate_out: Bitrate,
-    pub video_bitrate_limits: VideoBitrateLimits,
-    pub rtc_port_range: RtcPortRange,
-    pub rtc_udp_io_backend: RtcUdpIoBackend,
-    pub codec_flags: MediaCodecFlags,
-    pub codec_preferences: CodecPreferences,
-    pub media_quality_interval: Option<Duration>,
+    pub config: &'a RtcWorkerConfig,
     pub metrics: &'a RuntimeMetrics,
 }
 
 impl WorkerCommandContext<'_> {
     fn offer_bootstrap_config(&self) -> OfferBootstrapConfig<'_> {
         OfferBootstrapConfig {
-            announced_ip: self.announced_ip,
-            max_bitrate_out: self.max_bitrate_out,
-            video_bitrate_limits: self.video_bitrate_limits,
-            rtc_port_range: self.rtc_port_range,
-            rtc_udp_io_backend: self.rtc_udp_io_backend,
-            codec_flags: self.codec_flags,
-            codec_preferences: self.codec_preferences,
-            media_quality_interval: self.media_quality_interval,
+            announced_ip: self.config.announced_ip,
+            max_bitrate_out: self.config.bitrate_limits.max_bitrate_out(),
+            video_bitrate_limits: self.config.video_bitrate_limits,
+            rtc_port_range: self.config.rtc_port_range,
+            rtc_udp_io_backend: self.config.rtc_udp_io_backend,
+            codec_flags: self.config.codec_flags,
+            codec_preferences: self.config.codec_preferences,
+            media_quality_interval: self.config.media_quality_interval,
             metrics: self.metrics,
         }
     }
 
     fn recv_media_policy(&self) -> media::RecvMediaPolicy {
         media::RecvMediaPolicy {
-            max_bitrate_in: self.max_bitrate_in,
-            video_bitrate_limits: self.video_bitrate_limits,
-            codec_flags: self.codec_flags,
-            codec_preferences: self.codec_preferences,
+            max_bitrate_in: self.config.bitrate_limits.max_bitrate_in(),
+            video_bitrate_limits: self.config.video_bitrate_limits,
+            codec_flags: self.config.codec_flags,
+            codec_preferences: self.config.codec_preferences,
         }
     }
 }
@@ -131,7 +120,7 @@ pub fn handle_worker_command(
             response,
             negotiation::worker_apply_session_answer(
                 state,
-                context.max_bitrate_in,
+                context.config.bitrate_limits.max_bitrate_in(),
                 &session_key,
                 &answer_sdp,
             ),
@@ -265,7 +254,7 @@ fn handle_resource_command(
             Ok(media::apply_media_control_batch(
                 state,
                 context.metrics,
-                context.max_bitrate_out,
+                context.config.bitrate_limits.max_bitrate_out(),
                 context.now,
                 batch,
             )),

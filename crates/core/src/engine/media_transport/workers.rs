@@ -18,58 +18,18 @@ use super::rtc::{RtcWorker, RtcWorkerCommand};
 use crate::engine::{
     MediaWorkerId, RoomInstanceId,
     media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, MediaTransport, MediaTransportConfig,
-        MediaTransportDeps, ReceiverBandwidthSnapshot, SourcePolicySignal,
-        SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySnapshot,
-        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
-        TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
-        TransportTeardown, TransportWorkerPressureSnapshot,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, MediaTransport,
+        ReceiverBandwidthSnapshot, SourcePolicyUpdateSubscription, TransportAdapterError,
+        TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
+        TransportQualitySnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
+        TransportSessionHealth, TransportSessionKey, TransportSourceActivitySnapshot,
+        TransportSourceKey, TransportTeardown, TransportWorkerPressureSnapshot,
     },
 };
-
-/// Distance between two worker media-id allocation ranges.
-///
-/// The value only needs to be large enough that one worker cannot exhaust its
-/// range during a process lifetime under realistic load. Keeping the gap fixed
-/// lets cross-worker route maps keep using `TransportMediaId` as their source
-/// key while still avoiding collisions between spillover workers.
-const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 
 type RelayRegistrationWorkers = Option<(Arc<RtcWorker>, Arc<RtcWorker>)>;
 
 impl MediaTransport {
-    #[must_use]
-    pub fn new(
-        transport: &MediaTransportConfig,
-        deps: &MediaTransportDeps,
-        worker_ranges: Vec<crate::RtcPortRange>,
-    ) -> Self {
-        let source_policy_signal = Arc::new(SourcePolicySignal::default());
-        let workers = worker_ranges
-            .into_iter()
-            .enumerate()
-            .map(|(worker_index, range)| {
-                let media_worker_id = MediaWorkerId::from_raw(worker_index);
-                Arc::new(RtcWorker::new(
-                    &transport.with_rtc_port_range(range),
-                    deps,
-                    Arc::clone(&source_policy_signal),
-                    media_id_base_for_worker_index(worker_index),
-                    media_worker_id,
-                ))
-            })
-            .collect::<Vec<_>>()
-            .into();
-        Self {
-            workers,
-            metrics: deps.metrics(),
-            #[cfg(test)]
-            media_control_batches: Arc::default(),
-            source_policy_signal,
-        }
-    }
-
     /// Selects the worker that owns a transport session.
     ///
     /// The mapping is deterministic and depends only on the runtime-assigned
@@ -411,18 +371,6 @@ impl MediaTransport {
     pub(super) fn all_workers(&self) -> impl Iterator<Item = &Arc<RtcWorker>> {
         self.workers.iter()
     }
-}
-
-/// first media id reserved for one worker index
-///
-/// The fallback clamps extreme indexes to the highest representable stride
-/// base. Normal startup validates worker counts long before this point, so the
-/// saturating behavior is only a defensive guard for transitional callers that
-/// bypass the builder.
-fn media_id_base_for_worker_index(worker_index: usize) -> u64 {
-    u64::try_from(worker_index)
-        .unwrap_or(u64::MAX / MEDIA_ID_STRIDE)
-        .saturating_mul(MEDIA_ID_STRIDE)
 }
 
 pub(super) fn signaling_to_str0m_media_kind(kind: o_sfu_router::MediaKind) -> Str0mMediaKind {

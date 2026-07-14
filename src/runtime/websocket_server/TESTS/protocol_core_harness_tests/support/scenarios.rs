@@ -240,10 +240,7 @@ pub(crate) async fn setup_real_rtc_protocol_peers(
     alice_port: u16,
     bob_port: u16,
 ) -> Option<ProtocolPeerSetup> {
-    let server = TestServerBuilder::new()
-        .media_transport(build_real_rtc_media_transport())
-        .spawn()
-        .await?;
+    let server = TestServerBuilder::new().spawn().await?;
     let alice = ProtocolHarnessPeer::with_real_rtc_negotiation(alice_port)?;
     let bob = ProtocolHarnessPeer::with_real_rtc_negotiation(bob_port)?;
     Box::pin(setup_protocol_peers_with(

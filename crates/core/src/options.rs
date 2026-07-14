@@ -1,20 +1,15 @@
 mod codecs;
-mod core;
+mod features;
 mod media;
-mod observability;
 mod routing;
 
-pub use core::CoreOptions;
-
-pub use codecs::{
-    AudioCodecPreference, CodecOptions, CodecPreferences, MediaCodecFlags, VideoCodecPreference,
-};
+pub use codecs::{AudioCodecPreference, CodecPreferences, MediaCodecFlags, VideoCodecPreference};
+pub use features::RuntimeFeatureFlags;
 pub use media::{
-    MediaOptions, RoomMediaLimits, RoomMediaLimitsError, RtcPortRange, RtcUdpIoBackend,
-    SessionBitrateLimits, VideoBitrateLimits,
+    RoomMediaLimits, RoomMediaLimitsError, RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits,
+    VideoBitrateLimits,
 };
-pub use observability::{ObservabilityOptions, RuntimeFeatureFlags};
 pub use routing::{
     LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts, RoomSpilloverMode,
-    RoomWorkerPolicy, RoutingOptions,
+    RoomWorkerPolicy,
 };

@@ -11,16 +11,13 @@ use crate::{
         RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
     },
     runtime::{
-        DiagnosticsStore, MediaTransport, RoomPacketSinkRegistry, RuntimeMetrics, RuntimeState,
-        media_transport::{
-            MediaTransportConfig, MediaTransportDeps, SessionBitrateLimits,
-            test_support::test_rtc_port_range,
-        },
+        MediaTransport, RuntimeServices, RuntimeState, build_media_transport, build_room_manager,
+        build_room_runtime_policy,
+        media_transport::test_support::test_rtc_port_range,
         options::RuntimeConfig,
         room::{
             DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-            RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps,
-            RoomRuntimePolicy, UserOutboundReceiver, UserOutboundSender, rtp_capabilities,
+            RoomManager, UserOutboundReceiver, UserOutboundSender,
         },
     },
 };
@@ -36,7 +33,6 @@ pub(super) struct RuntimeTestState {
 
 pub(super) struct RuntimeTestBuilder {
     config: Config,
-    media_transport: Option<MediaTransport>,
 }
 
 impl RuntimeTestBuilder {
@@ -80,7 +76,6 @@ impl RuntimeTestBuilder {
                 telemetry: TelemetryConfig::default(),
                 diagnostics: DiagnosticsConfig::default(),
             },
-            media_transport: None,
         }
     }
 
@@ -124,47 +119,27 @@ impl RuntimeTestBuilder {
         self
     }
 
-    pub(super) fn media_transport(mut self, value: MediaTransport) -> Self {
-        self.media_transport = Some(value);
-        self
-    }
-
+    #[allow(
+        clippy::panic,
+        reason = "runtime tests use validated in-process RTC fixtures and should fail loudly if construction becomes invalid"
+    )]
     pub(super) fn build_state(self) -> RuntimeTestState {
-        let diagnostics = Arc::new(DiagnosticsStore::default());
-        let metrics = Arc::new(RuntimeMetrics::default());
-        let packet_sink_registry = Arc::new(RoomPacketSinkRegistry::default());
-        let media_transport = self.media_transport.unwrap_or_else(|| {
-            build_real_media_transport_for_test_config(
-                &self.config,
-                Arc::clone(&diagnostics),
-                Arc::clone(&metrics),
-                Arc::clone(&packet_sink_registry),
-            )
-        });
-        let room_manager = Arc::new(RoomManager::new(
-            RoomManagerConfig::new(
-                self.config.transport.rtc_media_worker_count,
-                RoomRuntimePolicy::new(
-                    RoomAdmissionPolicy::new(self.config.user.room_size),
-                    self.config.features,
-                    rtp_capabilities::router_rtp_capabilities_with_preferences(
-                        self.config.codecs.flags,
-                        self.config.codecs.preferences,
-                    ),
-                )
-                .with_room_worker_policy(self.config.transport.room_worker_policy),
-            ),
-            RoomManagerDeps {
-                diagnostics: Arc::clone(&diagnostics),
-                metrics: Arc::clone(&metrics),
-            },
-        ));
+        let services = RuntimeServices::default();
+        let media_transport = match build_media_transport(&self.config, &services) {
+            Ok(transport) => transport,
+            Err(error) => panic!("runtime test RTC transport config should be valid: {error}"),
+        };
+        let room_manager = build_room_manager(
+            &self.config,
+            build_room_runtime_policy(&self.config),
+            &services,
+        );
         let runtime_config = RuntimeConfig::from_config(&self.config);
         let state = RuntimeState::from_parts(
             &runtime_config,
             Arc::clone(&room_manager),
-            diagnostics,
-            metrics,
+            Arc::clone(&services.diagnostics),
+            Arc::clone(&services.metrics),
             media_transport.clone(),
         );
         RuntimeTestState {
@@ -185,43 +160,6 @@ impl RuntimeTestBuilder {
 )]
 fn next_runtime_test_rtc_port_range() -> RtcPortRange {
     test_rtc_port_range(1).unwrap_or_else(|| panic!("runtime test RTC ports should be available"))
-}
-
-#[allow(
-    clippy::panic,
-    reason = "runtime tests use validated in-process RTC fixtures and should fail loudly if construction becomes invalid"
-)]
-fn build_real_media_transport_for_test_config(
-    config: &Config,
-    diagnostics: Arc<DiagnosticsStore>,
-    metrics: Arc<RuntimeMetrics>,
-    packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-) -> MediaTransport {
-    match MediaTransport::builder()
-        .transport_config(MediaTransportConfig {
-            announced_ip: config.transport.announced_ip,
-            bitrate_limits: SessionBitrateLimits::new(
-                config.transport.max_bitrate_in,
-                config.transport.max_bitrate_out,
-            ),
-            video_bitrate_limits: config.transport.video_bitrate_limits,
-            rtc_port_range: config.transport.rtc_port_range,
-            rtc_udp_io_backend: config.transport.rtc_udp_io_backend,
-            codec_flags: config.codecs.flags,
-            codec_preferences: config.codecs.preferences,
-            media_quality_interval: config.telemetry.media_quality_interval,
-        })
-        .deps(MediaTransportDeps {
-            diagnostics,
-            packet_sink_registry,
-            metrics,
-        })
-        .worker_count(config.transport.rtc_media_worker_count)
-        .build()
-    {
-        Ok(transport) => transport,
-        Err(error) => panic!("runtime test RTC transport config should be valid: {error}"),
-    }
 }
 
 pub(super) fn test_outbound_sender(
