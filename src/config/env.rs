@@ -61,6 +61,7 @@ impl<'a> Env<'a> {
             lookup: self.lookup.as_ref(),
             key: EnvKey::new(key),
             checks: Vec::new(),
+            aliases: Vec::new(),
         }
     }
 }
@@ -69,6 +70,7 @@ pub(super) struct Var<'env, 'lookup, T> {
     lookup: &'lookup Lookup<'env>,
     key: EnvKey,
     checks: Vec<fn(EnvKey, T) -> Result<T>>,
+    aliases: Vec<EnvKey>,
 }
 
 impl<T> Var<'_, '_, T>
@@ -77,6 +79,11 @@ where
 {
     pub(super) fn check(mut self, check: fn(EnvKey, T) -> Result<T>) -> Self {
         self.checks.push(check);
+        self
+    }
+
+    pub(super) fn alias(mut self, alias: &'static str) -> Self {
+        self.aliases.push(EnvKey::new(alias));
         self
     }
 
@@ -99,7 +106,12 @@ where
     }
 
     fn load(&self) -> Option<EnvValue> {
-        self.load_key(self.key)
+        self.load_key(self.key).or_else(|| {
+            self.aliases
+                .iter()
+                .copied()
+                .find_map(|alias| self.load_key(alias))
+        })
     }
 
     fn load_key(&self, key: EnvKey) -> Option<EnvValue> {
