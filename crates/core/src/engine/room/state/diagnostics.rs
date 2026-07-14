@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use o_sfu_router::rtp::{MediaFormat, Ssrc};
+use o_sfu_rfc::rtp::Ssrc;
+use o_sfu_router::rtp::MediaFormat;
 
 use super::shared::RoomState;
 use crate::{

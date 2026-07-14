@@ -31,6 +31,8 @@
 
 use std::fmt;
 
+use crate::webrtc::sdp::rid;
+
 /// RTP version defined by RFC 3550 section 5.1.
 pub const RTP_VERSION: u8 = 2;
 
@@ -168,8 +170,177 @@ impl From<PayloadType> for u8 {
     }
 }
 
+/// Synchronization source identifier for a media stream (RFC 3550).
+///
+/// Every distinct stream of packets (e.g. one audio track, one camera layer)
+/// is assigned a random 32-bit SSRC. This allows multiple streams to be
+/// multiplexed over a single transport (e.g. one UDP port).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ssrc(u32);
+
+impl Ssrc {
+    #[must_use]
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for Ssrc {
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Ssrc> for u32 {
+    fn from(value: Ssrc) -> Self {
+        value.value()
+    }
+}
+
+/// Restriction identifier (RFC 8851).
+///
+/// Used in "Simulcast" to label different encodings of the same source (e.g.
+/// "low" and "high" resolution). Unlike SSRC which is a random number that
+/// can change if a collision occurs, RID is a stable string label.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Rid(String);
+
+impl Rid {
+    #[must_use]
+    pub fn try_new(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        rid::is_id(value.as_str()).then_some(Self(value))
+    }
+
+    /// Builds a RID using the RFC 8851 `rid-id` grammar corrected by RFC Editor errata 7132.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` is empty, too long or contains a non-alphanumeric
+    /// byte.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        let value = value.into();
+        assert!(rid::is_id(value.as_str()));
+        Self(value)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<&str> for Rid {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Rid {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+/// Media identification (RFC 9143).
+///
+/// Ties an RTP stream to a specific "m=" section in the SDP. This is
+/// critical for "BUNDLE" where multiple media sections share one transport,
+/// as it provides a stable way to route packets to the correct logical track.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Mid(String);
+
+impl Mid {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<&str> for Mid {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Mid {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+/// Local 4-bit identifier for a header extension (RFC 8285).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HeaderExtensionId(u8);
+
+impl HeaderExtensionId {
+    #[must_use]
+    pub const fn try_new(value: u8) -> Option<Self> {
+        if header_extension::is_one_byte_id(value) {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    /// Builds a one-byte RTP header-extension id.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` is padding, reserved or outside the RFC 8285
+    /// one-byte element id range.
+    #[must_use]
+    pub const fn new(value: u8) -> Self {
+        assert!(header_extension::is_one_byte_id(value));
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for HeaderExtensionId {
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<HeaderExtensionId> for u8 {
+    fn from(value: HeaderExtensionId) -> Self {
+        value.value()
+    }
+}
+
+/// RTP clock rate used by the supported video payload formats
+///
+/// Reference: IANA RTP Payload Format Media Types registry
+pub const RTP_VIDEO_CLOCK_RATE_HZ: u32 = 90_000;
+
 /// RTP payload-format MIME subtype names commonly used by WebRTC endpoints.
 pub mod codec_name {
+    /// PCMU RTP payload-format subtype.
+    ///
+    /// Reference: RFC 3551.
+    pub const PCMU: &str = "PCMU";
+
+    /// PCMA RTP payload-format subtype.
+    ///
+    /// Reference: RFC 3551.
+    pub const PCMA: &str = "PCMA";
+
     /// Opus RTP payload-format subtype.
     ///
     /// Reference: RFC 7587.
@@ -185,10 +356,33 @@ pub mod codec_name {
     /// Reference: RFC 6184.
     pub const H264: &str = "H264";
 
+    /// H265 RTP payload-format subtype.
+    ///
+    /// Reference: RFC 7798.
+    pub const H265: &str = "H265";
+
+    /// VP9 RTP payload-format subtype.
+    ///
+    /// Reference: RFC 9628.
+    pub const VP9: &str = "VP9";
+
+    /// AV1 RTP payload-format subtype.
+    ///
+    /// Reference: IANA Media Types registry.
+    pub const AV1: &str = "AV1";
+
     /// RTX retransmission RTP payload-format subtype.
     ///
     /// Reference: RFC 4588.
     pub const RTX: &str = "rtx";
+}
+
+/// G.711 RTP payload-format constants
+pub mod g711 {
+    /// RTP clock rate for the static PCMU and PCMA RTP/AVP payload types
+    ///
+    /// Reference: RFC 3551 section 6
+    pub const RTP_CLOCK_RATE_HZ: u32 = 8_000;
 }
 
 /// Opus RTP payload-format constants.
@@ -200,6 +394,11 @@ pub mod opus {
     ///
     /// Reference: RFC 7587 section 4.1.
     pub const RTP_CLOCK_RATE_HZ: u32 = 48_000;
+
+    /// Opus channel count signaled in SDP `rtpmap` attributes.
+    ///
+    /// Reference: RFC 7587 section 7.
+    pub const RTPMAP_CHANNEL_COUNT: u16 = 2;
 
     /// Opus packet frame-count codes from the table-of-contents byte.
     ///
@@ -337,12 +536,49 @@ pub mod vp8 {
     }
 }
 
+/// VP9 profile identifier defined by RFC 9628 section 6
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Vp9ProfileId(u8);
+
+impl Vp9ProfileId {
+    /// VP9 Profile 0
+    pub const PROFILE_0: Self = Self(0);
+
+    /// VP9 Profile 1
+    pub const PROFILE_1: Self = Self(1);
+
+    /// VP9 Profile 2
+    pub const PROFILE_2: Self = Self(2);
+
+    /// VP9 Profile 3
+    pub const PROFILE_3: Self = Self(3);
+
+    #[must_use]
+    pub const fn try_new(value: u8) -> Option<Self> {
+        if value <= Self::PROFILE_3.value() {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        self.0
+    }
+}
+
 /// RTP payload-format MIME subtype names commonly used by WebRTC endpoints.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CodecName {
+    Pcmu,
+    Pcma,
     Opus,
     Vp8,
     H264,
+    H265,
+    Vp9,
+    Av1,
     Rtx,
     Other(String),
 }
@@ -351,9 +587,14 @@ impl CodecName {
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
+            Self::Pcmu => codec_name::PCMU,
+            Self::Pcma => codec_name::PCMA,
             Self::Opus => codec_name::OPUS,
             Self::Vp8 => codec_name::VP8,
             Self::H264 => codec_name::H264,
+            Self::H265 => codec_name::H265,
+            Self::Vp9 => codec_name::VP9,
+            Self::Av1 => codec_name::AV1,
             Self::Rtx => codec_name::RTX,
             Self::Other(name) => name.as_str(),
         }
@@ -367,6 +608,12 @@ impl CodecName {
 
 impl From<&str> for CodecName {
     fn from(value: &str) -> Self {
+        if value.eq_ignore_ascii_case(codec_name::PCMU) {
+            return Self::Pcmu;
+        }
+        if value.eq_ignore_ascii_case(codec_name::PCMA) {
+            return Self::Pcma;
+        }
         if value.eq_ignore_ascii_case(codec_name::OPUS) {
             return Self::Opus;
         }
@@ -375,6 +622,15 @@ impl From<&str> for CodecName {
         }
         if value.eq_ignore_ascii_case(codec_name::H264) {
             return Self::H264;
+        }
+        if value.eq_ignore_ascii_case(codec_name::H265) {
+            return Self::H265;
+        }
+        if value.eq_ignore_ascii_case(codec_name::VP9) {
+            return Self::Vp9;
+        }
+        if value.eq_ignore_ascii_case(codec_name::AV1) {
+            return Self::Av1;
         }
         if value.eq_ignore_ascii_case(codec_name::RTX) {
             return Self::Rtx;
@@ -430,13 +686,13 @@ pub mod fmtp {
 
     /// VP9 profile-id parameter.
     ///
-    /// Reference: RFC 9628 section 4.2.
+    /// Reference: RFC 9628 section 6.
     pub const VP9_PROFILE_ID: &str = "profile-id";
 
     /// Default VP9 profile when `profile-id` is omitted.
     ///
-    /// Reference: RFC 9628 section 4.2.
-    pub const VP9_DEFAULT_PROFILE_ID: u8 = 0;
+    /// Reference: RFC 9628 section 6.
+    pub const VP9_DEFAULT_PROFILE_ID: super::Vp9ProfileId = super::Vp9ProfileId::PROFILE_0;
 
     /// Opus in-band FEC parameter
     ///

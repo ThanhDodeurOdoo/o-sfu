@@ -442,7 +442,13 @@ fn str0m_codec(codec_name: &CodecName) -> Option<Codec> {
         CodecName::Opus => Some(Codec::Opus),
         CodecName::Vp8 => Some(Codec::Vp8),
         CodecName::H264 => Some(Codec::H264),
-        CodecName::Rtx | CodecName::Other(_) => None,
+        CodecName::Pcmu
+        | CodecName::Pcma
+        | CodecName::H265
+        | CodecName::Vp9
+        | CodecName::Av1
+        | CodecName::Rtx
+        | CodecName::Other(_) => None,
     }
 }
 
