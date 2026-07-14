@@ -99,3 +99,28 @@ fn env_runs_chained_checks_in_order() {
         Some("COUNT_ENV must be less than ten")
     );
 }
+
+#[test]
+fn env_alias() {
+    let env = Env::new(|key| match key {
+        "PRIMARY_ENV" => Some("primary".to_owned()),
+        "SECOND_ALIAS_ENV" => Some("second alias".to_owned()),
+        _ => None,
+    });
+
+    assert_eq!(
+        env.var("MISSING_ENV")
+            .alias("FIRST_ALIAS_ENV")
+            .alias("SECOND_ALIAS_ENV")
+            .required()
+            .ok(),
+        Some("second alias".to_owned())
+    );
+    assert_eq!(
+        env.var("PRIMARY_ENV")
+            .alias("SECOND_ALIAS_ENV")
+            .required()
+            .ok(),
+        Some("primary".to_owned())
+    );
+}
