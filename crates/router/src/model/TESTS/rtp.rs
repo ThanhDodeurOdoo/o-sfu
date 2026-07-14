@@ -407,31 +407,33 @@ fn consumer_negotiation_rejects_vp9_profile_mismatch() {
 }
 
 #[test]
-fn consumer_negotiation_treats_missing_vp9_profile_id_as_profile_zero() {
-    let consumable_parameters = MediaStream::new(
-        vec![
-            MediaFormat::new(MediaKind::Video, "VP9", pt(98), 90_000)
-                .with_parameter("profile-id", "2")
-                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
-        ],
-        vec![],
-        vec![StreamBinding::new().with_ssrc(5678)],
-    );
-    let consumer_capabilities = MediaCapabilities::new(
-        vec![
-            MediaCodecCapability::new(MediaKind::Video, "VP9", 90_000)
-                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
-        ],
-        vec![],
-    );
+fn consumer_negotiation_rejects_vp9_profiles_incompatible_with_omission() {
+    for profile_id in ["2", "4"] {
+        let consumable_parameters = MediaStream::new(
+            vec![
+                MediaFormat::new(MediaKind::Video, "VP9", pt(98), 90_000)
+                    .with_parameter("profile-id", profile_id)
+                    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+            ],
+            vec![],
+            vec![StreamBinding::new().with_ssrc(5678)],
+        );
+        let consumer_capabilities = MediaCapabilities::new(
+            vec![
+                MediaCodecCapability::new(MediaKind::Video, "VP9", 90_000)
+                    .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None)),
+            ],
+            vec![],
+        );
 
-    let negotiated_result =
-        negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
-    assert_eq!(
-        negotiated_result,
-        Err(RtpNegotiationError::NoCompatibleConsumerCodec)
-    );
-    assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+        let negotiated_result =
+            negotiate_consumer_rtp_parameters(&consumable_parameters, &consumer_capabilities);
+        assert_eq!(
+            negotiated_result,
+            Err(RtpNegotiationError::NoCompatibleConsumerCodec)
+        );
+        assert!(!can_consume(&consumable_parameters, &consumer_capabilities));
+    }
 }
 
 #[test]

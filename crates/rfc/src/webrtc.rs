@@ -439,51 +439,6 @@ impl fmt::Display for RtpStreamDirection {
     }
 }
 
-/// DTLS `setup` roles used by current WebRTC transport payloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DtlsRole {
-    Auto,
-    Client,
-    Server,
-}
-
-impl DtlsRole {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Client => "client",
-            Self::Server => "server",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(token: &str) -> Option<Self> {
-        match token {
-            "auto" => Some(Self::Auto),
-            "client" => Some(Self::Client),
-            "server" => Some(Self::Server),
-            _ => None,
-        }
-    }
-}
-
-impl AsRef<str> for DtlsRole {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Auto => "auto",
-            Self::Client => "client",
-            Self::Server => "server",
-        }
-    }
-}
-
-impl fmt::Display for DtlsRole {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_ref())
-    }
-}
-
 /// DTLS fingerprint algorithms currently supported by the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DtlsFingerprintAlgorithm {
@@ -519,14 +474,6 @@ impl fmt::Display for DtlsFingerprintAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_ref())
     }
-}
-
-/// SCTP transport dictionary defaults preserved by the current WebRTC bootstrap payload.
-pub mod data_channel {
-    pub const SCTP_PORT: u16 = 5_000;
-    pub const OUTGOING_STREAMS: u16 = 1_024;
-    pub const INCOMING_STREAMS: u16 = 1_024;
-    pub const MAX_MESSAGE_SIZE: u32 = 262_144;
 }
 
 /// RTP header-extension URIs commonly needed by WebRTC endpoints.

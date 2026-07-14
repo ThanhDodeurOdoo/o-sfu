@@ -79,7 +79,7 @@ fn capabilities_include_enabled_optional_codecs() {
         .filter(|codec| codec.codec_name() == "VP9")
         .map(|codec| {
             codec.settings().find_map(|setting| match setting {
-                CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
+                CodecSetting::Vp9ProfileId(profile_id) => Some(profile_id.value()),
                 _ => None,
             })
         })

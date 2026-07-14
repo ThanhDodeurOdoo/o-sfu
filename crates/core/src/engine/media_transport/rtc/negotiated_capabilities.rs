@@ -1,7 +1,7 @@
-use o_sfu_rfc::webrtc as rfc_webrtc;
+use o_sfu_rfc::{rtp::HeaderExtensionId, webrtc as rfc_webrtc};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
-    rtp::{HeaderExtension as RouterHeaderExtension, HeaderExtensionId, MediaCapabilities},
+    rtp::{HeaderExtension as RouterHeaderExtension, MediaCapabilities},
 };
 use str0m::{
     change::SdpAnswer,

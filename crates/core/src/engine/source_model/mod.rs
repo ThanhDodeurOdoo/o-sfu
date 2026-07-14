@@ -7,8 +7,8 @@
 //! the source identity.
 //!
 //! A published media stream is modeled as one [`PublishedSourceId`] plus one or
-//! more [`SourceEncodingId`] values. [`o_sfu_router::rtp::Mid`],
-//! [`o_sfu_router::rtp::Rid`] and [`o_sfu_router::rtp::Ssrc`] stay as negotiated
+//! more [`SourceEncodingId`] values. [`o_sfu_rfc::rtp::Mid`],
+//! [`o_sfu_rfc::rtp::Rid`] and [`o_sfu_rfc::rtp::Ssrc`] stay as negotiated
 //! or transport-facing attachment points. Keeping those identities separate
 //! lets later same-room spillover and recording consume the same source
 //! inventory without redefining it around local worker placement.

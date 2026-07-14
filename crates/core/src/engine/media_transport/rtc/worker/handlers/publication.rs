@@ -10,13 +10,12 @@ use std::{
     mem,
 };
 
-use o_sfu_rfc::webrtc as rfc_webrtc;
+use o_sfu_rfc::{rtp::HeaderExtensionId, webrtc as rfc_webrtc};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{
-        HeaderExtension as RouterHeaderExtension, HeaderExtensionId,
-        MediaFormat as RouterMediaFormat, MediaStream as RouterRtpParameters, PayloadType,
-        StreamBinding,
+        HeaderExtension as RouterHeaderExtension, MediaFormat as RouterMediaFormat,
+        MediaStream as RouterRtpParameters, PayloadType, StreamBinding,
     },
 };
 use str0m::{

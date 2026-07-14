@@ -8,6 +8,7 @@
 //! negotiation
 
 use bitflags::bitflags;
+use o_sfu_rfc::rtp::codec_name;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,9 +120,9 @@ impl AudioCodecPreference {
     #[must_use]
     pub const fn wire_name(self) -> &'static str {
         match self {
-            Self::Opus => "opus",
-            Self::Pcmu => "PCMU",
-            Self::Pcma => "PCMA",
+            Self::Opus => codec_name::OPUS,
+            Self::Pcmu => codec_name::PCMU,
+            Self::Pcma => codec_name::PCMA,
         }
     }
 
@@ -160,11 +161,11 @@ impl VideoCodecPreference {
     #[must_use]
     pub const fn wire_name(self) -> &'static str {
         match self {
-            Self::Vp8 => "VP8",
-            Self::H264 => "H264",
-            Self::H265 => "H265",
-            Self::Vp9 => "VP9",
-            Self::Av1 => "AV1",
+            Self::Vp8 => codec_name::VP8,
+            Self::H264 => codec_name::H264,
+            Self::H265 => codec_name::H265,
+            Self::Vp9 => codec_name::VP9,
+            Self::Av1 => codec_name::AV1,
         }
     }
 

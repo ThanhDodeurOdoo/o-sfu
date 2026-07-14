@@ -45,11 +45,11 @@ where
 }
 
 fn audio_codec_preference(codec_name: &str) -> Option<AudioCodecPreference> {
-    if codec_name.eq_ignore_ascii_case("opus") {
+    if codec_name.eq_ignore_ascii_case(AudioCodecPreference::Opus.wire_name()) {
         Some(AudioCodecPreference::Opus)
-    } else if codec_name.eq_ignore_ascii_case("pcmu") {
+    } else if codec_name.eq_ignore_ascii_case(AudioCodecPreference::Pcmu.wire_name()) {
         Some(AudioCodecPreference::Pcmu)
-    } else if codec_name.eq_ignore_ascii_case("pcma") {
+    } else if codec_name.eq_ignore_ascii_case(AudioCodecPreference::Pcma.wire_name()) {
         Some(AudioCodecPreference::Pcma)
     } else {
         None
@@ -57,15 +57,15 @@ fn audio_codec_preference(codec_name: &str) -> Option<AudioCodecPreference> {
 }
 
 fn video_codec_preference(codec_name: &str) -> Option<VideoCodecPreference> {
-    if codec_name.eq_ignore_ascii_case("vp8") {
+    if codec_name.eq_ignore_ascii_case(VideoCodecPreference::Vp8.wire_name()) {
         Some(VideoCodecPreference::Vp8)
-    } else if codec_name.eq_ignore_ascii_case("h264") {
+    } else if codec_name.eq_ignore_ascii_case(VideoCodecPreference::H264.wire_name()) {
         Some(VideoCodecPreference::H264)
-    } else if codec_name.eq_ignore_ascii_case("h265") {
+    } else if codec_name.eq_ignore_ascii_case(VideoCodecPreference::H265.wire_name()) {
         Some(VideoCodecPreference::H265)
-    } else if codec_name.eq_ignore_ascii_case("vp9") {
+    } else if codec_name.eq_ignore_ascii_case(VideoCodecPreference::Vp9.wire_name()) {
         Some(VideoCodecPreference::Vp9)
-    } else if codec_name.eq_ignore_ascii_case("av1") {
+    } else if codec_name.eq_ignore_ascii_case(VideoCodecPreference::Av1.wire_name()) {
         Some(VideoCodecPreference::Av1)
     } else {
         None

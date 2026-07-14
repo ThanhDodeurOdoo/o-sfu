@@ -1,7 +1,5 @@
-use o_sfu_router::{
-    MediaKind,
-    rtp::{MediaFormat, Mid, Rid, Ssrc},
-};
+use o_sfu_rfc::rtp::{Mid, Rid, Ssrc};
+use o_sfu_router::{MediaKind, rtp::MediaFormat};
 use thiserror::Error;
 
 use super::{

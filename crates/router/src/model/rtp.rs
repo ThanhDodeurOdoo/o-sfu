@@ -38,7 +38,7 @@
 use std::borrow::Cow;
 
 use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
-pub use rfc_rtp::PayloadType;
+pub use rfc_rtp::{HeaderExtensionId, Mid, PayloadType, Rid, Ssrc};
 
 use super::MediaKind;
 
@@ -92,160 +92,6 @@ impl RtcpFeedback {
     }
 }
 
-/// Synchronization source identifier for a media stream (RFC 3550).
-///
-/// Every distinct stream of packets (e.g. one audio track, one camera layer)
-/// is assigned a random 32-bit SSRC. This allows multiple streams to be
-/// multiplexed over a single transport (e.g. one UDP port).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Ssrc(u32);
-
-impl Ssrc {
-    #[must_use]
-    pub const fn new(value: u32) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn value(self) -> u32 {
-        self.0
-    }
-}
-
-impl From<u32> for Ssrc {
-    fn from(value: u32) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<Ssrc> for u32 {
-    fn from(value: Ssrc) -> Self {
-        value.value()
-    }
-}
-
-/// Restriction identifier (RFC 8853).
-///
-/// Used in "Simulcast" to label different encodings of the same source (e.g.
-/// "low" and "high" resolution). Unlike SSRC which is a random number that
-/// can change if a collision occurs, RID is a stable string label.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Rid(String);
-
-impl Rid {
-    #[must_use]
-    pub fn try_new(value: impl Into<String>) -> Option<Self> {
-        let value = value.into();
-        rfc_webrtc::sdp::rid::is_id(value.as_str()).then_some(Self(value))
-    }
-
-    /// Builds a RID after applying the RFC 8852 stream-id grammar.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `value` is empty, too long or contains a non-alphanumeric
-    /// byte.
-    #[must_use]
-    pub fn new(value: impl Into<String>) -> Self {
-        let value = value.into();
-        assert!(rfc_webrtc::sdp::rid::is_id(value.as_str()));
-        Self(value)
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl From<&str> for Rid {
-    fn from(value: &str) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<String> for Rid {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-/// Media identification (RFC 8843).
-///
-/// Ties an RTP stream to a specific "m=" section in the SDP. This is
-/// critical for "BUNDLE" where multiple media sections share one transport,
-/// as it provides a stable way to route packets to the correct logical track.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Mid(String);
-
-impl Mid {
-    #[must_use]
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl From<&str> for Mid {
-    fn from(value: &str) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<String> for Mid {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-/// Local 4-bit identifier for a header extension (RFC 8285).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct HeaderExtensionId(u8);
-
-impl HeaderExtensionId {
-    #[must_use]
-    pub const fn try_new(value: u8) -> Option<Self> {
-        if rfc_rtp::header_extension::is_one_byte_id(value) {
-            Some(Self(value))
-        } else {
-            None
-        }
-    }
-
-    /// Builds a one-byte RTP header-extension id.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `value` is padding, reserved or outside the RFC 8285
-    /// one-byte element id range.
-    #[must_use]
-    pub const fn new(value: u8) -> Self {
-        assert!(rfc_rtp::header_extension::is_one_byte_id(value));
-        Self(value)
-    }
-
-    #[must_use]
-    pub const fn value(self) -> u8 {
-        self.0
-    }
-}
-
-impl From<u8> for HeaderExtensionId {
-    fn from(value: u8) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<HeaderExtensionId> for u8 {
-    fn from(value: HeaderExtensionId) -> Self {
-        value.value()
-    }
-}
-
 /// Typed codec parameter that affects interoperability.
 ///
 /// These correspond to "a=fmtp" parameters in SDP. Mismatched settings
@@ -259,7 +105,7 @@ pub enum CodecSetting {
     /// H264 profile and level (e.g. "42e01f" for Constrained Baseline Level 3.1)
     H264ProfileLevelId(String),
     /// VP9-specific profile identifier
-    Vp9ProfileId(u8),
+    Vp9ProfileId(rfc_rtp::Vp9ProfileId),
     /// OPUS-specific flag for in-band forward error correction
     UseInBandFec(bool),
     /// Generic catch-all for unknown or vendor parameters
@@ -285,7 +131,7 @@ impl CodecSetting {
             Self::RtxAssociation(payload_type) => Cow::Owned(payload_type.value().to_string()),
             Self::H264PacketizationMode(mode) => Cow::Owned(mode.fmtp_value().to_string()),
             Self::H264ProfileLevelId(profile_level_id) => Cow::Borrowed(profile_level_id.as_str()),
-            Self::Vp9ProfileId(profile_id) => Cow::Owned(profile_id.to_string()),
+            Self::Vp9ProfileId(profile_id) => Cow::Owned(profile_id.value().to_string()),
             Self::UseInBandFec(enabled) => Cow::Borrowed(if *enabled {
                 rfc_rtp::fmtp::VALUE_ENABLED
             } else {
@@ -405,7 +251,8 @@ impl MediaCodecCapability {
 
     #[must_use]
     pub fn with_parameter(self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.with_setting(codec_setting_from_wire(name.into(), value.into()))
+        let setting = codec_setting_from_wire(&self.codec, name.into(), value.into());
+        self.with_setting(setting)
     }
 
     #[must_use]
@@ -551,7 +398,8 @@ impl MediaFormat {
 
     #[must_use]
     pub fn with_parameter(self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.with_setting(codec_setting_from_wire(name.into(), value.into()))
+        let setting = codec_setting_from_wire(&self.codec, name.into(), value.into());
+        self.with_setting(setting)
     }
 
     #[must_use]
@@ -758,7 +606,7 @@ impl MediaStream {
     }
 }
 
-fn codec_setting_from_wire(key: String, value: String) -> CodecSetting {
+fn codec_setting_from_wire(codec: &MediaCodec, key: String, value: String) -> CodecSetting {
     match key.as_str() {
         rfc_rtp::fmtp::RTX_ASSOCIATION => value
             .parse::<u8>()
@@ -777,10 +625,14 @@ fn codec_setting_from_wire(key: String, value: String) -> CodecSetting {
                 CodecSetting::H264PacketizationMode,
             ),
         rfc_rtp::fmtp::H264_PROFILE_LEVEL_ID => CodecSetting::H264ProfileLevelId(value),
-        rfc_rtp::fmtp::VP9_PROFILE_ID => value.parse::<u8>().map_or(
-            CodecSetting::Other { key, value },
-            CodecSetting::Vp9ProfileId,
-        ),
+        rfc_rtp::fmtp::VP9_PROFILE_ID if codec == &MediaCodec::Vp9 => value
+            .parse::<u8>()
+            .ok()
+            .and_then(rfc_rtp::Vp9ProfileId::try_new)
+            .map_or(
+                CodecSetting::Other { key, value },
+                CodecSetting::Vp9ProfileId,
+            ),
         rfc_rtp::fmtp::OPUS_USE_IN_BAND_FEC => match value.as_str() {
             rfc_rtp::fmtp::VALUE_ENABLED | rfc_rtp::fmtp::VALUE_TRUE => {
                 CodecSetting::UseInBandFec(true)

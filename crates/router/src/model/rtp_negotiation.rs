@@ -426,9 +426,7 @@ fn critical_codec_settings_match(
 ) -> bool {
     match format.codec() {
         MediaCodec::H264 => h264_critical_settings_match(format, capability_format),
-        MediaCodec::Other(codec_name) if codec_name.eq_ignore_ascii_case("VP9") => {
-            vp9_critical_settings_match(format, capability_format)
-        }
+        MediaCodec::Vp9 => vp9_critical_settings_match(format, capability_format),
         _ => true,
     }
 }
@@ -501,29 +499,23 @@ fn vp9_critical_settings_match(
     format: &MediaFormat,
     capability_format: &MediaCodecCapability,
 ) -> bool {
-    // for both "VP9_DEFAULT_PROFILE_ID" below:
-    //
-    // Important: omitted `profile-id` is not "any profile".
-    // RFC 9628 defines omission as Profile 0, so both sides must be normalized
-    // before comparison. Without that normalization, omission would accidentally
-    // behave like a wildcard and admit incompatible VP9 profiles.
-    let format_profile_id = format
-        .settings()
-        .find_map(|setting| match setting {
-            CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
-            _ => None,
-        })
-        .unwrap_or(rfc_rtp::fmtp::VP9_DEFAULT_PROFILE_ID);
-    let capability_profile_id = capability_format
-        .settings()
-        .find_map(|setting| match setting {
-            CodecSetting::Vp9ProfileId(profile_id) => Some(*profile_id),
-            _ => None,
-        })
-        .unwrap_or(rfc_rtp::fmtp::VP9_DEFAULT_PROFILE_ID);
-    // RFC 9628 section 4.2 defines omitted VP9 `profile-id` as Profile 0 rather than a wildcard,
-    // so both sides are normalized before comparing compatibility.
-    format_profile_id == capability_profile_id
+    effective_vp9_profile_id(format.settings())
+        .zip(effective_vp9_profile_id(capability_format.settings()))
+        .is_some_and(|(format_profile, capability_profile)| format_profile == capability_profile)
+}
+
+fn effective_vp9_profile_id<'a>(
+    settings: impl Iterator<Item = &'a CodecSetting>,
+) -> Option<rfc_rtp::Vp9ProfileId> {
+    let mut profile_id = None;
+    for setting in settings {
+        match setting {
+            CodecSetting::Vp9ProfileId(value) => profile_id = Some(*value),
+            CodecSetting::Other { key, .. } if key == rfc_rtp::fmtp::VP9_PROFILE_ID => return None,
+            _ => {}
+        }
+    }
+    Some(profile_id.unwrap_or(rfc_rtp::fmtp::VP9_DEFAULT_PROFILE_ID))
 }
 
 /// `apt` is not optional metadata for RTX.
