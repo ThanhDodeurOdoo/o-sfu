@@ -48,7 +48,7 @@ pub struct UserConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportConfig {
-    pub public_ip: IpAddr,
+    pub announced_ip: IpAddr,
     pub max_bitrate_in: Bitrate,
     pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,

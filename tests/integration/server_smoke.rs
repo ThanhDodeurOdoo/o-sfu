@@ -133,7 +133,9 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
 #[tokio::test]
 async fn websocket_offer_advertises_configured_public_ip_in_rtc_mode() -> TestResult {
     let mut config = test_config(1_000, 10);
-    config.transport.public_ip = "203.0.113.44".parse().unwrap_or(config.transport.public_ip);
+    config.transport.announced_ip = "203.0.113.44"
+        .parse()
+        .unwrap_or(config.transport.announced_ip);
     let (server, room) = server_with_configured_room(config, "issuer-public-ip").await?;
     let mut client = client_in_room(&server, &room, UserId::Integer(702)).await?;
     let request = initial_offer(&mut client).await?;

@@ -137,7 +137,7 @@ pub struct RtcWorker {
     pub(super) relay_target_id: RelayTargetId,
     /// first transport media id reserved for this worker's packet loop
     pub(super) media_id_base: u64,
-    pub(super) public_ip: IpAddr,
+    pub(super) announced_ip: IpAddr,
     pub(super) max_bitrate_in: Bitrate,
     pub(super) max_bitrate_out: Bitrate,
     pub(super) video_bitrate_limits: VideoBitrateLimits,
@@ -178,7 +178,7 @@ impl RtcWorker {
                 NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed),
             ),
             media_id_base,
-            public_ip: config.public_ip,
+            announced_ip: config.announced_ip,
             max_bitrate_in: config.bitrate_limits.max_bitrate_in(),
             max_bitrate_out: config.bitrate_limits.max_bitrate_out(),
             video_bitrate_limits: config.video_bitrate_limits,
@@ -372,7 +372,7 @@ impl fmt::Debug for RtcWorker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RtcWorker")
-            .field("public_ip", &self.public_ip)
+            .field("announced_ip", &self.announced_ip)
             .field("rtc_port_range", &self.rtc_port_range)
             .field("rtc_udp_io_backend", &self.rtc_udp_io_backend)
             .finish_non_exhaustive()

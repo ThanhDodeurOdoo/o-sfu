@@ -62,7 +62,7 @@ impl RuntimeTestBuilder {
                     outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
                 },
                 transport: TransportConfig {
-                    public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
                     rtc_port_range,
                     max_bitrate_in: Bitrate::from_mbps(8),
                     max_bitrate_out: Bitrate::from_mbps(10),
@@ -199,7 +199,7 @@ fn build_real_media_transport_for_test_config(
 ) -> MediaTransport {
     match MediaTransport::builder()
         .transport_config(MediaTransportConfig {
-            public_ip: config.transport.public_ip,
+            announced_ip: config.transport.announced_ip,
             bitrate_limits: SessionBitrateLimits::new(
                 config.transport.max_bitrate_in,
                 config.transport.max_bitrate_out,

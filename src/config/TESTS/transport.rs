@@ -20,7 +20,7 @@ fn load_transport_config_with_defaults(overrides: &[(&str, &str)]) -> Result<Tra
             .find(|(name, _value)| *name == key)
             .map(|(_name, value)| (*value).to_owned())
             .or_else(|| match key {
-                "PUBLIC_IP" => Some("127.0.0.1".to_owned()),
+                "ANNOUNCED_IP" => Some("127.0.0.1".to_owned()),
                 _ => None,
             })
     })
@@ -44,14 +44,14 @@ fn assert_invalid_transport_cases(cases: &[InvalidTransportCase<'_>]) {
 #[test]
 fn load_transport_config_accepts_public_ip_and_defaults() {
     let config = load_transport_config(|key| match key {
-        "PUBLIC_IP" => Some("203.0.113.10".to_owned()),
+        "ANNOUNCED_IP" => Some("203.0.113.10".to_owned()),
         _ => None,
     });
     let worker_count = default_rtc_media_worker_count();
     assert_eq!(
         config.ok(),
         Some(TransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
+            announced_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)),
             max_bitrate_in: Bitrate::from_mbps(8),
             max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),
@@ -241,13 +241,13 @@ fn load_transport_config_rejects_invalid_transport_values() {
         },
         InvalidTransportCase {
             name: "unspecified public IP",
-            overrides: &[("PUBLIC_IP", "0.0.0.0")],
-            message: "PUBLIC_IP must be a concrete advertised address",
+            overrides: &[("ANNOUNCED_IP", "0.0.0.0")],
+            message: "ANNOUNCED_IP must be a concrete advertised address",
         },
         InvalidTransportCase {
             name: "multicast public IP",
-            overrides: &[("PUBLIC_IP", "239.1.1.1")],
-            message: "PUBLIC_IP cannot be a multicast address",
+            overrides: &[("ANNOUNCED_IP", "239.1.1.1")],
+            message: "ANNOUNCED_IP cannot be a multicast address",
         },
         InvalidTransportCase {
             name: "inverted RTC port range",

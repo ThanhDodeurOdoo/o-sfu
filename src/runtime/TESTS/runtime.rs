@@ -81,7 +81,7 @@ fn test_config() -> Config {
             outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
         },
         transport: TransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             max_bitrate_in: Bitrate::from_mbps(8),
             max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),

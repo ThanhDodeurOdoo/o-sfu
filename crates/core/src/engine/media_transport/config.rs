@@ -31,11 +31,11 @@ use crate::{
 /// policy.
 #[derive(Debug, Clone)]
 pub struct MediaTransportConfig {
-    /// Public address advertised in ICE candidates.
+    /// Client-routable address advertised in ICE candidates.
     ///
     /// This is deployment policy, not a local bind address. A wrong value can
     /// make otherwise valid sessions unreachable from browsers.
-    pub public_ip: IpAddr,
+    pub announced_ip: IpAddr,
     /// Per-user ingress and egress bitrate ceilings enforced by the transport.
     pub bitrate_limits: SessionBitrateLimits,
     /// Default video bitrate policy used while building negotiated offers.
@@ -60,7 +60,7 @@ impl MediaTransportConfig {
     #[must_use]
     pub fn from_core_options(options: &CoreOptions) -> Self {
         Self {
-            public_ip: options.media.public_ip,
+            announced_ip: options.media.announced_ip,
             bitrate_limits: options.media.bitrate_limits,
             video_bitrate_limits: options.media.video_bitrate_limits,
             rtc_port_range: options.media.rtc_port_range,
@@ -79,7 +79,7 @@ impl MediaTransportConfig {
     #[must_use]
     pub(super) fn with_rtc_port_range(&self, rtc_port_range: RtcPortRange) -> Self {
         Self {
-            public_ip: self.public_ip,
+            announced_ip: self.announced_ip,
             bitrate_limits: self.bitrate_limits,
             video_bitrate_limits: self.video_bitrate_limits,
             rtc_port_range,

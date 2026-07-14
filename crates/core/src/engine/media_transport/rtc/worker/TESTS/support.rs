@@ -370,7 +370,7 @@ impl RtcWorkerTestBuilder {
     pub(crate) fn build(self) -> RtcWorker {
         RtcWorker::new(
             &MediaTransportConfig {
-                public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 bitrate_limits: SessionBitrateLimits::new(
                     self.max_bitrate_in,
                     self.max_bitrate_out,

@@ -37,7 +37,7 @@ pub struct WorkerCommandContext<'a> {
     pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     pub now: Instant,
-    pub public_ip: IpAddr,
+    pub announced_ip: IpAddr,
     pub max_bitrate_in: Bitrate,
     pub max_bitrate_out: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
@@ -52,7 +52,7 @@ pub struct WorkerCommandContext<'a> {
 impl WorkerCommandContext<'_> {
     fn offer_bootstrap_config(&self) -> OfferBootstrapConfig<'_> {
         OfferBootstrapConfig {
-            public_ip: self.public_ip,
+            announced_ip: self.announced_ip,
             max_bitrate_out: self.max_bitrate_out,
             video_bitrate_limits: self.video_bitrate_limits,
             rtc_port_range: self.rtc_port_range,

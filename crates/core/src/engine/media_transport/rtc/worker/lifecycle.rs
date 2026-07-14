@@ -304,7 +304,7 @@ impl RtcWorker {
         #[cfg(any(test, feature = "testing-transport"))]
         let packet_loop_inputs = debug_channels.install(packet_loop_inputs);
         let packet_loop_config = PacketLoopConfig {
-            public_ip: self.public_ip,
+            announced_ip: self.announced_ip,
             max_bitrate_in: self.max_bitrate_in,
             max_bitrate_out: self.max_bitrate_out,
             video_bitrate_limits: self.video_bitrate_limits,
@@ -324,7 +324,7 @@ impl RtcWorker {
         };
         info!(
             relay_target_id = ?self.relay_target_id,
-            public_ip = %self.public_ip,
+            announced_ip = %self.announced_ip,
             max_bitrate_in_bps = self.max_bitrate_in.as_bps(),
             max_bitrate_out_bps = self.max_bitrate_out.as_bps(),
             rtc_port_range_min = self.rtc_port_range.min(),

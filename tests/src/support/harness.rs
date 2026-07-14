@@ -412,7 +412,7 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
             outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
         },
         transport: TransportConfig {
-            public_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             rtc_port_range: unique_rtc_port_range(1),
             max_bitrate_in: Bitrate::from_mbps(8),
             max_bitrate_out: Bitrate::from_mbps(10),
