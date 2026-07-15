@@ -176,15 +176,18 @@ for Docker Compose, publish the same UDP range as the RTC env range:
 
 ```yaml
 x-logging: &bounded-logs
-  driver: local
+  driver: json-file
   options:
     max-size: "20m"
     max-file: "5"
+    labels: "com.odoo.sfu.component"
 
 services:
   o-sfu:
     image: ghcr.io/<owner>/o-sfu:<tag>
     restart: unless-stopped
+    labels:
+      com.odoo.sfu.component: server
     logging: *bounded-logs
     env_file: /etc/o-sfu/o-sfu.env
     expose:
@@ -193,48 +196,120 @@ services:
       - "40000-40099:40000-40099/udp"
 ```
 
-the `logging` block bounds the container stdout/stderr log store at the source
-with the Docker `local` driver
+the service litsens on `8070` inside the compose network
 
-use `TELEMETRY_LOG_FORMAT=json` for the telemetry stack
+expose that port to other containers, but only publish it to the host when the
+reverse proxy also runs on the host
 
-`o-sfu` does not choose a `.jsonl` path and does not write one itself
-the deployment layer must route stdout/stderr to a rotated JSONL source when the
-telemetry collector should ingest logs
+### host NGINX
 
-for the reference `o-sfu-telemetry` stack, the collector side reads `*.jsonl`
-files from the directory configured by `O_SFU_LOG_DIR`
-
-the VPS profile can feed that source by mounting the telemetry log directory
-into the SFU container and appending stdout/stderr with `tee`
+if NGINX runs on the host, publish the HTTP listener on loopback with a local
+compose overlay:
 
 ```yaml
 services:
   o-sfu:
-    volumes:
-      - /opt/o-sfu-telemetry/data/logs:/var/log/o-sfu
-    command:
-      - sh
-      - -lc
-      - o-sfu 2>&1 | tee -a /var/log/o-sfu/o-sfu.jsonl
+    ports:
+      - "127.0.0.1:8070:8070/tcp"
 ```
 
-bound that JSONL file with logrotate, because `tee -a` does not rotate files
+this keeps the SFU HTTP listener off the public interface while still letting
+host NGINX proxy to `http://127.0.0.1:8070`
 
-```conf
-/opt/o-sfu-telemetry/data/logs/o-sfu.jsonl {
-    size 20M
-    rotate 5
-    missingok
-    notifempty
-    copytruncate
-    compress
-    delaycompress
-    su root root
+### containerized NGINX
+
+containerized NGINX should instead join the compose network and proxy to
+`http://o-sfu:8070`
+
+do not publish `8070/tcp` on the host for this layout
+
+only the reverse proxy should expose public HTTP andTLS
+
+### Docker log ingestion
+
+the `logging` block bounds the container stdout and stderr log store at the
+source with the Docker `json-file` driver
+
+the `com.odoo.sfu.component=server` label is copied into Docker log records
+because the logging options include `labels: "com.odoo.sfu.component"`
+
+the reference `o-sfu-telemetry` VPS profile uses that label to ingest only SFU
+container logs from Docker's rotated `json-file` log store
+
+use `TELEMETRY_LOG_FORMAT=json` for structured `o-sfu` log bodies
+
+with that setting, `o-sfu` writes one JSON object per stdout or stderr line
+
+the Docker `json-file` driver wraps each line in its own record
+
+collectors that read Docker log files must parse the outter Docker record first,
+then parse the inner `log` string as the `o-sfu` JSON payload
+
+the outer Docker record looks like this:
+
+```json
+{
+  "log": "{\"timestamp\":\"2026-07-09T10:12:34.567890123Z\",\"level\":\"INFO\",\"target\":\"o_sfu::runtime::http_server::controller\",\"event\":\"http.listener.ready\",\"message\":\"booted HTTP and WebSocket listener\",\"service.name\":\"o-sfu\",\"service.version\":\"0.7.0\",\"service.instance.id\":\"pid-1\",\"deployment.environment\":\"production\",\"bind_address\":\"0.0.0.0:8070\",\"local_address\":\"0.0.0.0:8070\",\"trust_proxy_headers\":true}\n",
+  "stream": "stdout",
+  "time": "2026-07-09T10:12:34.568000000Z"
 }
 ```
 
-when `o-sfu` runs under systemd without a container, make sure the same UDP range is allowed by the cloud and host firewalls
+after decoding the outer `log` field, parse the resulting string as the inner
+`o-sfu` payload
+
+that payload is not the default nested `tracing-subscriber` JSON
+shape because rutnime event fields are flattened at the top level
+
+```json
+{
+  "timestamp": "2026-07-09T10:12:34.567890123Z",
+  "level": "INFO",
+  "target": "o_sfu::runtime::http_server::controller",
+  "event": "http.listener.ready",
+  "message": "booted HTTP and WebSocket listener",
+  "service.name": "o-sfu",
+  "service.version": "0.7.0",
+  "service.instance.id": "pid-1",
+  "deployment.environment": "production",
+  "bind_address": "0.0.0.0:8070",
+  "local_address": "0.0.0.0:8070",
+  "trust_proxy_headers": true
+}
+```
+
+common fields are:
+
+| field | type | value |
+| --- | --- | --- |
+| `timestamp` | string | RFC 3339 UTC timestamp generated when the event is formatted |
+| `level` | string | tracing level such as `INFO`, `WARN` or `ERROR` |
+| `target` | string | Rust tracing target that emitted the event |
+| `event` | string | stable `o-sfu` event name or `runtime.log` when the call site has no explicit event |
+| `message` | string | optional human log message |
+| `service.name` | string | `TELEMETRY_SERVICE_NAME` defaulting to `o-sfu` |
+| `service.version` | string | compiled `o-sfu` crate version |
+| `service.instance.id` | string | `TELEMETRY_SERVICE_INSTANCE_ID` defaulting to `pid-<pid>` |
+| `deployment.environment` | string | `TELEMETRY_DEPLOYMENT_ENVIRONMENT` defaulting to `local` |
+| `trace_id` | string | optional active trace id when tracing context exists |
+
+event-specific fields are also top-level keys
+
+examples include `room_id`, `user_id`, `connection_id`, `remote_address`,
+`operation`, `outcome`, `reason`, `close_code`, `error_kind`, `duration_ms`,
+`transport_media_id` and `media_worker_id`
+
+operator tooling should use `event` as the discriminator, require only the
+common fields it needs and tolerate unknown extra keys
+
+the reviewed event and field catalog lives in `crates/telemetry/src/schema.rs`
+the formatter is in `crates/telemetry/src/setup.rs`
+
+### systemd deployment
+
+when `o-sfu` runs without Docker, bind HTTP according to the reverse proxy
+layout and make sure the configured UDP range is allowed by both cloud and host
+firewalls
 
 ## NGINX public edge
 
@@ -267,6 +342,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
 
         proxy_set_header Upgrade $http_upgrade;
@@ -331,6 +407,7 @@ network:
 - the VM has the `sfu-server` network tag when the SFU firewall rule targets it
 - host firewall such as UFW allows the configured RTC UDP range
 - Docker or systemd exposes the same UDP range as `RTC_MIN_PORT` and `RTC_MAX_PORT`
+- host NGINX deployments publish `o-sfu` HTTP only on `127.0.0.1:8070`
 
 proxy:
 
@@ -338,7 +415,7 @@ proxy:
 - NGINX proxies to the actual `BIND_ADDRESS`
 - NGINX uses HTTP/1.1 upstream for WebSocket upgrade support
 - NGINX forwards `Upgrade` and `Connection`
-- NGINX overwrites `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Real-IP` and `Host`
+- NGINX overwrites `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP` and `Host`
 - `/metrics` is not public
 - `/internal/diagnostics/...` is not public
 
@@ -348,6 +425,8 @@ runtime:
 - `ANNOUNCED_IP` is not the NGINX domain
 - `ANNOUNCED_IP` is not `0.0.0.0`
 - Docker Compose logging uses explicit `max-size` and `max-file` limits
+- Docker Compose logging uses `json-file` when `o-sfu-telemetry` ingests Docker logs
+- `o-sfu` has the `com.odoo.sfu.component=server` Docker label
 - `PROXY=true` is set only behind the trusted NGINX edge
 - `AUTH_KEY` matches the Odoo caller configuration
 - `AUTH_KEY` decodes to at least 32 bytes generated with cryptographically safe randomness
