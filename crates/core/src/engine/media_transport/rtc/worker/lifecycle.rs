@@ -303,17 +303,8 @@ impl RtcWorker {
             packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown_token);
         #[cfg(any(test, feature = "testing-transport"))]
         let packet_loop_inputs = debug_channels.install(packet_loop_inputs);
-        let config = self.config;
-        let packet_loop_config = PacketLoopConfig {
-            worker: config,
-            diagnostics: Arc::clone(&self.diagnostics),
-            packet_sink_registry: Arc::clone(&self.packet_sink_registry),
-            source_policy_signal: Arc::clone(&self.source_policy_signal),
-            metrics: Arc::clone(&self.metrics),
-            rtp_metrics: Arc::clone(&self.rtp_metrics),
-            rtc_metrics: Arc::clone(&self.rtc_metrics),
-            packet_loop_lag,
-        };
+        let config = self.config.clone();
+        let rtc_udp_io_backend = config.rtc_udp_io_backend;
         info!(
             relay_target_id = ?self.relay_target_id,
             announced_ip = %config.announced_ip,
@@ -324,8 +315,18 @@ impl RtcWorker {
             rtc_udp_io_backend = config.rtc_udp_io_backend.wire_name(),
             "booted rtc packet loop worker"
         );
+        let packet_loop_config = PacketLoopConfig {
+            worker: config,
+            diagnostics: Arc::clone(&self.diagnostics),
+            packet_sink_registry: Arc::clone(&self.packet_sink_registry),
+            source_policy_signal: Arc::clone(&self.source_policy_signal),
+            metrics: Arc::clone(&self.metrics),
+            rtp_metrics: Arc::clone(&self.rtp_metrics),
+            rtc_metrics: Arc::clone(&self.rtc_metrics),
+            packet_loop_lag,
+        };
         let thread_name = format!("rtc-packet-loop-{:?}", self.relay_target_id);
-        match config.rtc_udp_io_backend {
+        match rtc_udp_io_backend {
             RtcUdpIoBackend::Tokio => spawn_tokio_packet_loop(
                 thread_name,
                 packet_loop_config,

@@ -7,7 +7,7 @@ use thiserror::Error;
 use super::{
     MediaTransport, SourcePolicySignal,
     config::{MediaTransportConfig, MediaTransportDeps},
-    rtc::RtcWorker,
+    rtc::{RtcWorker, RtpProfile},
 };
 use crate::{MediaWorkerId, RtcUdpIoBackend};
 
@@ -25,8 +25,8 @@ impl MediaTransport {
     ///
     /// # Errors
     ///
-    /// returns [`MediaTransportBuildError`] when worker topology is invalid or
-    /// the selected UDP backend is unavailable on this target
+    /// returns [`MediaTransportBuildError`] when worker topology or the
+    /// code-controlled RTP profile is invalid or the selected UDP backend is unavailable
     pub fn build(
         config: MediaTransportConfig,
         deps: MediaTransportDeps,
@@ -46,12 +46,17 @@ impl MediaTransport {
                 worker_count: config.worker_count,
                 port_count: config.rtc_port_range.port_count(),
             })?;
+        let profile = Arc::new(
+            RtpProfile::compile(config.codec_flags, config.codec_preferences)
+                .map_err(|_error| MediaTransportBuildError::InvalidRtpProfile)?,
+        );
         let source_policy_signal = Arc::new(SourcePolicySignal::default());
         let workers: Arc<[_]> = (0_u16..u16::MAX)
             .zip(worker_ranges)
             .map(|(worker_index, range)| {
                 Arc::new(RtcWorker::new(
                     &config,
+                    Arc::clone(&profile),
                     range,
                     &deps,
                     Arc::clone(&source_policy_signal),
@@ -62,6 +67,7 @@ impl MediaTransport {
             .collect();
         Ok(Self {
             workers,
+            profile,
             metrics: deps.metrics,
             #[cfg(test)]
             media_control_batches: Arc::default(),
@@ -87,4 +93,7 @@ pub enum MediaTransportBuildError {
     /// the selected UDP I/O backend is not available on this build target
     #[error("rtc UDP I/O backend `{backend}` is not supported on this target")]
     UnsupportedUdpIoBackend { backend: RtcUdpIoBackend },
+    /// the code-controlled RTC profile cannot be projected for router policy
+    #[error("media transport RTP profile is invalid")]
+    InvalidRtpProfile,
 }

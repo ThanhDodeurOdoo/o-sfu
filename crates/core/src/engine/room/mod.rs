@@ -13,7 +13,6 @@ mod outbound;
 mod placement;
 mod read_model;
 mod recording;
-pub mod rtp_capabilities;
 mod source_policy;
 mod state;
 mod transition;

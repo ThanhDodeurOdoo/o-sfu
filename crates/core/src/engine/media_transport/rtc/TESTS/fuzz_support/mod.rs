@@ -11,7 +11,7 @@ use super::{
     state::{PacketLoopState, RtcSnapshotState},
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
         media_transport::TransportSessionKey,
@@ -75,7 +75,6 @@ impl IngressDemuxFuzzFixture {
             &session_key,
             candidate_addr,
             Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
         );
         let metrics = RuntimeMetrics::default();
         Self {

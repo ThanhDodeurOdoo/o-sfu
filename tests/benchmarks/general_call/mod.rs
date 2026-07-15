@@ -26,7 +26,7 @@ use o_sfu_core::{
         packet_sinks::RoomPacketSinkRegistry,
         room::{
             JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
-            RoomRuntimePolicy, UserOutboundReceiver, UserOutboundSender, rtp_capabilities,
+            RoomRuntimePolicy, UserOutboundReceiver, UserOutboundSender,
             test_support::{
                 TestSourceKind, TestSubscriptionStates, stream_id_for_source,
                 subscription_intents_from_test_states,
@@ -195,7 +195,7 @@ impl GeneralCallScenario {
     async fn new() -> Result<Self> {
         let media_transport = media_transport()?;
         let source_policy_updates = media_transport.source_policy_subscription();
-        let manager = room_manager()?;
+        let manager = room_manager(&media_transport)?;
         let room = manager
             .serve_room(
                 "general-call-benchmark",
@@ -644,7 +644,7 @@ fn media_transport() -> Result<MediaTransport> {
         .map_err(|error| anyhow!("benchmark media transport build failed: {error}"))
 }
 
-fn room_manager() -> Result<Arc<RoomManager>> {
+fn room_manager(media_transport: &MediaTransport) -> Result<Arc<RoomManager>> {
     let media_limits = RoomMediaLimits::try_new(4, 3)?;
     Ok(Arc::new(RoomManager::for_test_with_config(
         RoomManagerConfig::new(
@@ -652,7 +652,7 @@ fn room_manager() -> Result<Arc<RoomManager>> {
             RoomRuntimePolicy::new(
                 RoomAdmissionPolicy::new(12),
                 RuntimeFeatureFlags::default(),
-                rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+                media_transport.router_rtp_capabilities(),
             )
             .with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(WORKER_COUNT))
             .with_media_limits(media_limits),

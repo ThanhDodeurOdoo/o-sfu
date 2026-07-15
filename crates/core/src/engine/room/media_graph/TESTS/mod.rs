@@ -23,7 +23,7 @@ use super::{
     ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup, ValidatedPublish,
 };
 use crate::{
-    Bitrate, MediaCodecFlags, RoomMediaLimits,
+    Bitrate, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
         media_transport::{
@@ -32,7 +32,7 @@ use crate::{
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
-            rtp_capabilities::router_rtp_capabilities, state::RoomState,
+            state::RoomState,
         },
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
@@ -88,7 +88,7 @@ fn test_state_with_media_limits(media_limits: RoomMediaLimits) -> RoomState {
         &runtime_context,
         RoomAdmissionPolicy::new(4),
         media_limits,
-        router_rtp_capabilities(MediaCodecFlags::default()),
+        sample_client_rtp_capabilities(),
     )
 }
 

@@ -26,7 +26,7 @@ use super::{
     request_kf_for_target, worker_add_send_media, worker_remove_media,
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate,
     engine::{
         UserId,
         media_transport::{
@@ -955,7 +955,6 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
             &consumer_session,
             SocketAddr::from(([127, 0, 0, 1], 47_101)),
             Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
         )
         .is_ok()
     );
@@ -1052,7 +1051,6 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
             &consumer_session,
             SocketAddr::from(([127, 0, 0, 1], 47_102)),
             Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
         )
         .is_ok()
     );

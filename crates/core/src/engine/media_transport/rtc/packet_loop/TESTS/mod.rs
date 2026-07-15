@@ -53,7 +53,7 @@ use crate::{
         media_transport::{
             SourcePolicySignal, TransportMediaId, TransportSessionKey, TransportSourceKey,
             rtc::{
-                RtcWorkerConfig,
+                RtcWorkerConfig, RtpProfile,
                 bitrate::BitrateRegistry,
                 bootstrap,
                 commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
@@ -190,7 +190,6 @@ fn create_rtc_session(state: &mut PacketLoopState, session: &TransportSessionKey
         session,
         SocketAddr::from(([127, 0, 0, 1], port)),
         Bitrate::from_mbps(10),
-        MediaCodecFlags::default(),
     )
     .expect("test session should enter RTC state");
     assert!(created, "test session should be newly created");
@@ -714,8 +713,10 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
             rtc_port_range: test_rtc_port_range(1)
                 .unwrap_or_else(|| panic!("test RTC port range should be available")),
             rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
-            codec_flags: MediaCodecFlags::default(),
-            codec_preferences: CodecPreferences::default(),
+            profile: Arc::new(
+                RtpProfile::compile(MediaCodecFlags::default(), CodecPreferences::default())
+                    .unwrap_or_else(|_error| panic!("test RTP profile should compile")),
+            ),
             media_quality_interval: None,
             media_id_base: 0,
         },
@@ -1375,7 +1376,6 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
                 &session,
                 candidate_addr,
                 Bitrate::from_mbps(10),
-                MediaCodecFlags::default(),
             )
             .is_ok()
         );

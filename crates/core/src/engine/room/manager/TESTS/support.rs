@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
+use o_sfu_router::test_support::rtp_samples::sample_client_rtp_capabilities;
+
 #[cfg(test)]
 use super::JoinPlacementTestGate;
 use super::{
-    super::{RoomAdmissionPolicy, RoomRuntimePolicy, rtp_capabilities::router_rtp_capabilities},
+    super::{RoomAdmissionPolicy, RoomRuntimePolicy},
     RoomManager, RoomManagerConfig, RoomManagerDeps,
 };
 #[cfg(test)]
 use crate::engine::sync::lock_unpoisoned;
 use crate::{
-    MediaCodecFlags, RoomMediaLimits, RuntimeFeatureFlags,
+    RoomMediaLimits, RuntimeFeatureFlags,
     engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
 };
 
@@ -67,6 +69,6 @@ fn test_runtime_policy(admission_policy: RoomAdmissionPolicy) -> RoomRuntimePoli
     RoomRuntimePolicy::new(
         admission_policy,
         RuntimeFeatureFlags::default(),
-        router_rtp_capabilities(MediaCodecFlags::default()),
+        sample_client_rtp_capabilities(),
     )
 }

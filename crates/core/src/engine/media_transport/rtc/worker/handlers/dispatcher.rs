@@ -46,19 +46,17 @@ impl WorkerCommandContext<'_> {
             video_bitrate_limits: self.config.video_bitrate_limits,
             rtc_port_range: self.config.rtc_port_range,
             rtc_udp_io_backend: self.config.rtc_udp_io_backend,
-            codec_flags: self.config.codec_flags,
-            codec_preferences: self.config.codec_preferences,
+            profile: self.config.profile.as_ref(),
             media_quality_interval: self.config.media_quality_interval,
             metrics: self.metrics,
         }
     }
 
-    fn recv_media_policy(&self) -> media::RecvMediaPolicy {
+    fn recv_media_policy(&self) -> media::RecvMediaPolicy<'_> {
         media::RecvMediaPolicy {
             max_bitrate_in: self.config.bitrate_limits.max_bitrate_in(),
             video_bitrate_limits: self.config.video_bitrate_limits,
-            codec_flags: self.config.codec_flags,
-            codec_preferences: self.config.codec_preferences,
+            profile: self.config.profile.as_ref(),
         }
     }
 }

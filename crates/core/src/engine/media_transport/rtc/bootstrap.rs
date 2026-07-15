@@ -15,28 +15,23 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_rfc::{rtp::h264::PacketizationMode, webrtc};
-use str0m::{
-    Candidate, Rtc,
-    bwe::Bitrate as Str0mBitrate,
-    format::{Codec, CodecConfig, FormatParams},
-    media::Frequency,
-};
+use o_sfu_rfc::webrtc;
+use str0m::{Candidate, bwe::Bitrate as Str0mBitrate};
 use tracing::info;
 
 use super::{
+    RtpProfile,
     local_send_rewrite::ConsumerStreamStore,
     packet_loop::{RtcUdpSocket, UdpIngress},
     slots::SessionStore,
     state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket},
 };
 use crate::{
-    Bitrate, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend,
-    engine::{
-        media_transport::{TransportAdapterError, TransportSessionKey},
-        rtp::{h264::H264_PAYLOAD_SPECS, payload_type},
-    },
+    Bitrate, RtcPortRange, RtcUdpIoBackend,
+    engine::media_transport::{TransportAdapterError, TransportSessionKey},
 };
+#[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
+use crate::{CodecPreferences, MediaCodecFlags};
 
 /// bind the shared worker UDP socket and return the advertised candidate tuple
 ///
@@ -120,14 +115,14 @@ pub(super) fn ensure_session_rtc_state(
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
     max_bitrate_out: Bitrate,
-    codec_flags: MediaCodecFlags,
 ) -> Result<bool, TransportAdapterError> {
+    let profile = RtpProfile::compile(MediaCodecFlags::default(), CodecPreferences::default())?;
     ensure_session_rtc_state_with_stats_interval(
         users,
         session_key,
         candidate_addr,
         max_bitrate_out,
-        codec_flags,
+        &profile,
         None,
     )
 }
@@ -137,14 +132,18 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
     max_bitrate_out: Bitrate,
-    codec_flags: MediaCodecFlags,
+    profile: &RtpProfile,
     stats_interval: Option<Duration>,
 ) -> Result<bool, TransportAdapterError> {
     if users.contains_key(session_key) {
         return Ok(false);
     }
     let started_at = Instant::now();
-    let mut rtc = rtc_builder(codec_flags, stats_interval)
+    let mut config = profile.session_config();
+    if let Some(stats_interval) = stats_interval {
+        config = config.set_stats_interval(Some(stats_interval));
+    }
+    let mut rtc = config
         .enable_bwe(Some(Str0mBitrate::bps(max_bitrate_out.as_bps())))
         .set_ice_lite(true)
         .build(started_at);
@@ -175,59 +174,3 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
     );
     Ok(true)
 }
-
-/// build the codec and RTP configuration used for newly created sessions
-///
-/// codec flags are applied before any media is declared so initial offers and
-/// later staged media additions share one capability surface
-/// the builder runs
-/// in RTP mode because the SFU forwards RTP packets through worker-local str0m
-/// sessions instead of using data channels or peer-connection media sources
-fn rtc_builder(codec_flags: MediaCodecFlags, stats_interval: Option<Duration>) -> str0m::RtcConfig {
-    let mut config = Rtc::builder()
-        .clear_codecs()
-        .enable_opus(codec_flags.opus_enabled())
-        .enable_pcmu(codec_flags.pcmu_enabled())
-        .enable_pcma(codec_flags.pcma_enabled())
-        .set_rtp_mode(true);
-    if let Some(stats_interval) = stats_interval {
-        config = config.set_stats_interval(Some(stats_interval));
-    }
-    if codec_flags.vp8_enabled() {
-        config.codec_config().add_config(
-            payload_type::VP8.value().into(),
-            None,
-            Codec::Vp8,
-            Frequency::NINETY_KHZ,
-            None,
-            FormatParams::default(),
-        );
-    }
-    if codec_flags.h264_enabled() {
-        add_h264_codecs_without_rtx(config.codec_config());
-    }
-    config
-        .enable_h265(codec_flags.h265_enabled())
-        .enable_vp9(codec_flags.vp9_enabled())
-        .enable_av1(codec_flags.av1_enabled())
-}
-
-/// register the h264 payload types that match the existing browser contract
-///
-/// these entries omit RTX because local forwarding projects one
-/// receiver-safe RTP stream per consumer and does not model retransmission as a
-/// separate negotiated payload in this bootstrap path
-fn add_h264_codecs_without_rtx(codec_config: &mut CodecConfig) {
-    for spec in H264_PAYLOAD_SPECS {
-        codec_config.add_h264(
-            spec.payload_type().value().into(),
-            None,
-            matches!(spec.packetization_mode(), PacketizationMode::NonInterleaved),
-            spec.profile_level_id().packed_value(),
-        );
-    }
-}
-
-#[cfg(test)]
-#[path = "TESTS/bootstrap.rs"]
-mod tests;

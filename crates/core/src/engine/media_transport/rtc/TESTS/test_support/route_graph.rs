@@ -10,7 +10,7 @@ use super::super::{
     slots::ConsumerStreamHandle, source_route::MediaRouteDestination, state::PacketLoopState,
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate,
     engine::media_transport::{TransportMediaId, TransportSessionKey},
 };
 
@@ -41,7 +41,6 @@ pub fn prepare_source_session_with_rid(
             src_key,
             candidate_addr,
             Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
         )
         .is_ok()
     );

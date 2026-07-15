@@ -11,7 +11,7 @@ use {
                 SessionStreamTxSsrcProbe,
             },
         },
-        WorkerCommandContext,
+        RtpProfile, WorkerCommandContext,
     },
     crate::{
         CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
@@ -367,7 +367,13 @@ impl RtcWorkerTestBuilder {
     }
 
     #[must_use]
+    #[allow(
+        clippy::expect_used,
+        reason = "test setup uses a code-controlled RTP profile"
+    )]
     pub(crate) fn build(self) -> RtcWorker {
+        let profile = RtpProfile::compile(self.codec_flags, self.codec_preferences)
+            .expect("test RTP profile should compile");
         RtcWorker::new(
             &MediaTransportConfig {
                 worker_count: 1,
@@ -383,6 +389,7 @@ impl RtcWorkerTestBuilder {
                 codec_preferences: self.codec_preferences,
                 media_quality_interval: None,
             },
+            Arc::new(profile),
             self.rtc_port_range,
             &MediaTransportDeps {
                 diagnostics: Arc::new(DiagnosticsStore::default()),

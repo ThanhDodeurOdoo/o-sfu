@@ -11,7 +11,7 @@ use str0m::media::{Mid, Rid};
 
 use super::*;
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate,
     engine::{
         UserId,
         media_transport::rtc::{
@@ -37,7 +37,6 @@ fn install_test_session(
             session_key,
             SocketAddr::from(([127, 0, 0, 1], 9)),
             Bitrate::from_bps(1_000_000),
-            MediaCodecFlags::default(),
         )
         .is_ok()
     );

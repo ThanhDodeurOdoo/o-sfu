@@ -16,7 +16,6 @@ mod observability;
 pub mod packet_sink_registry;
 pub mod recording;
 pub mod room;
-mod rtp;
 pub mod source_model;
 pub mod sync;
 

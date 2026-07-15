@@ -16,7 +16,7 @@ use o_sfu_router::{
 
 use super::*;
 use crate::{
-    MediaCodecFlags, RoomMediaLimits,
+    RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
         media_transport::{TransportMediaId, TransportSourceKey, TransportTeardown},
@@ -24,7 +24,6 @@ use crate::{
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
             media_graph::{ConsumerSetupOrigin, ConsumerSetupOutcome, ValidatedPublish},
-            rtp_capabilities::router_rtp_capabilities,
         },
         source_model::{PublishedSourceId, test_support::source_publish_intent_for_source},
     },
@@ -43,7 +42,7 @@ fn test_state() -> RoomState {
         &runtime_context,
         RoomAdmissionPolicy::new(4),
         RoomMediaLimits::default(),
-        router_rtp_capabilities(MediaCodecFlags::default()),
+        sample_client_rtp_capabilities(),
     )
 }
 

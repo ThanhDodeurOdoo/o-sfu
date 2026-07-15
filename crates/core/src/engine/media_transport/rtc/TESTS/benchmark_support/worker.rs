@@ -15,7 +15,7 @@ use str0m::media::MediaKind;
 use tokio::runtime::{Builder, Runtime};
 
 use super::{
-    super::{RtcWorker, test_support::test_transport_session_key},
+    super::{RtcWorker, RtpProfile, test_support::test_transport_session_key},
     FanoutBenchTopology,
 };
 use crate::{
@@ -37,6 +37,25 @@ pub const WORKER_COMMAND_ROUNDTRIPS: usize = 128;
 pub const WORKER_PACKET_COMMAND_MIX_PACKETS: usize = 512;
 const PACKETS_PER_LIFECYCLE_BURST: usize = 32;
 const WORKER_PACKET_COMMAND_MIX_FANOUT: usize = 8;
+
+#[allow(
+    clippy::expect_used,
+    reason = "benchmark setup uses a code-controlled RTP profile"
+)]
+fn benchmark_worker(rtc_port_range: RtcPortRange) -> RtcWorker {
+    let config = test_media_transport_config(1, rtc_port_range);
+    let profile = RtpProfile::compile(config.codec_flags, config.codec_preferences)
+        .expect("benchmark RTP profile should compile");
+    RtcWorker::new(
+        &config,
+        Arc::new(profile),
+        rtc_port_range,
+        &test_media_transport_deps(),
+        Arc::new(SourcePolicySignal::default()),
+        0,
+        MediaWorkerId::from_raw(0),
+    )
+}
 
 /// current-thread packet-loop fixture for whole-worker investigation benchmarks
 ///
@@ -76,14 +95,7 @@ impl WorkerLoopBenchFixture {
         let session_key = test_transport_session_key(91, 0, 92, UserId::Integer(93));
         let fixture = Self {
             runtime,
-            worker: RtcWorker::new(
-                &test_media_transport_config(1, rtc_port_range),
-                rtc_port_range,
-                &test_media_transport_deps(),
-                Arc::new(SourcePolicySignal::default()),
-                0,
-                MediaWorkerId::from_raw(0),
-            ),
+            worker: benchmark_worker(rtc_port_range),
             session_key,
         };
         fixture.bootstrap_worker();
@@ -171,14 +183,7 @@ impl WorkerPacketCommandMixBenchFixture {
         let rtc_port_range = RtcPortRange::new(46_200, 46_220);
         let mut fixture = Self {
             runtime,
-            worker: RtcWorker::new(
-                &test_media_transport_config(1, rtc_port_range),
-                rtc_port_range,
-                &test_media_transport_deps(),
-                Arc::new(SourcePolicySignal::default()),
-                0,
-                MediaWorkerId::from_raw(0),
-            ),
+            worker: benchmark_worker(rtc_port_range),
             base_session_key: benchmark_session_key(10_000),
             fanout: FanoutBenchTopology::with_local_destinations(WORKER_PACKET_COMMAND_MIX_FANOUT),
             next_session_id: 10_001,

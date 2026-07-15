@@ -17,8 +17,8 @@
 //!
 //! - `worker`: worker API, lazy lifecycle, command handlers and
 //!   production/test support entry points.
-//! - `bootstrap`, `commands` and `state`: offer/answer bootstrap, mailbox
-//!   contracts and pure RTC session state.
+//! - `profile`, `bootstrap`, `commands` and `state`: compiled RTP policy,
+//!   offer/answer bootstrap, mailbox contracts and pure RTC session state.
 //! - `packet_loop`, `demux`, `source_route`, `forwarded_packet`, `forwarding_destination`,
 //!   `forwarding_planner` and `local_forwarding`: UDP/RTP
 //!   ingress, source route facts, fanout planning, local sends, recording
@@ -26,15 +26,12 @@
 //! - `media_registry`, `relay_registry`, `route_control`, `routing_miss`,
 //!   `bitrate`, `negotiated_capabilities` and `rtp_projection`: transport media ownership,
 //!   relay mailbox and target primitives, packet gates, active-speaker observations,
-//!   unknown-source recovery, observability snapshots plus answer-derived router RTP projection.
+//!   unknown-source recovery, observability snapshots plus profile and answer RTP projection.
 //! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
-use std::{net::IpAddr, time::Duration};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
-use crate::{
-    CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits,
-    VideoBitrateLimits,
-};
+use crate::{RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits, VideoBitrateLimits};
 
 #[cfg(test)]
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
@@ -58,6 +55,7 @@ mod local_send_rewrite;
 mod media_registry;
 mod negotiated_capabilities;
 mod packet_loop;
+mod profile;
 mod relay_registry;
 mod route_control;
 mod route_table;
@@ -79,18 +77,18 @@ pub use commands::{
 pub use forwarded_packet::ForwardedPacket;
 #[cfg(any(test, feature = "fuzzing"))]
 pub use negotiated_capabilities::client_rtp_capabilities_from_answer;
+pub(super) use profile::RtpProfile;
 pub(super) use route_control::PacketLayerGate;
 pub use worker::RtcWorker;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct RtcWorkerConfig {
     announced_ip: IpAddr,
     bitrate_limits: SessionBitrateLimits,
     video_bitrate_limits: VideoBitrateLimits,
     rtc_port_range: RtcPortRange,
     rtc_udp_io_backend: RtcUdpIoBackend,
-    codec_flags: MediaCodecFlags,
-    codec_preferences: CodecPreferences,
+    profile: Arc<RtpProfile>,
     media_quality_interval: Option<Duration>,
     media_id_base: u64,
 }

@@ -1,17 +1,38 @@
-use o_sfu_rfc::rtp as rfc_rtp;
+use o_sfu_rfc::{
+    rtp::{self as rfc_rtp, HeaderExtensionId},
+    webrtc as rfc_webrtc,
+};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{
-        CodecSetting, MediaCodecCapability, MediaFormat as RouterMediaFormat, PayloadType,
-        RtcpFeedback, RtcpFeedbackKind,
+        CodecSetting, HeaderExtension as RouterHeaderExtension, MediaCodecCapability,
+        MediaFormat as RouterMediaFormat, PayloadType, RtcpFeedback, RtcpFeedbackKind,
     },
 };
-use str0m::format::PayloadParams;
+use str0m::{format::PayloadParams, rtp::Extension};
 
 use crate::engine::media_transport::TransportAdapterError;
 
 pub(super) fn router_payload_type(value: u8) -> Result<PayloadType, TransportAdapterError> {
     PayloadType::try_new(value).ok_or(TransportAdapterError::InvalidInput)
+}
+
+pub(super) fn media_kind(payload: &PayloadParams) -> RouterMediaKind {
+    if payload.spec().codec.is_audio() {
+        RouterMediaKind::Audio
+    } else {
+        RouterMediaKind::Video
+    }
+}
+
+pub(super) fn header_extension(
+    (id, extension): (u8, &Extension),
+) -> Result<RouterHeaderExtension, TransportAdapterError> {
+    let id = HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
+    Ok(RouterHeaderExtension::new(
+        rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
+        id,
+    ))
 }
 
 pub(super) fn media_capability(

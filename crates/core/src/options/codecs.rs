@@ -1,7 +1,7 @@
 //! codec policy shared by server config and RTC transport construction
 //!
-//! server configuration parses operator input into these values then the room
-//! and transport owners consume them during capability and session bootstrap
+//! server configuration parses operator input into these values then
+//! `MediaTransport::build` compiles them into one private RTP profile
 
 use bitflags::bitflags;
 use o_sfu_rfc::rtp::codec_name;
@@ -20,29 +20,25 @@ bitflags! {
     }
 }
 
-/// enablign set for codecs that may enter the RTC capability surface
+/// enabling set for codecs that may enter the RTC capability surface
 ///
-/// values are copyable because this policy is read during session
-/// bootstrap and passed through test or benchmark fixtures, disabling a codec
-/// removes it from newly created RTC configurations, existing sessions keep the
-/// state they already negotiated
+/// values are copyable so configuration and fixtures can assemble policy
+/// directly before media transport construction compiles the immutable profile
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaCodecFlags {
     enabled: MediaCodecSet,
 }
 
-// gives each codec a paired `*_enabled` reader and `with_*` builder so config
-// parsing, tests and RTC bootstrap all use the same public flag surface
 macro_rules! media_codec_accessors {
     ($($enabled:ident => $with:ident => $flag:ident),+ $(,)?) => {
         $(
-            #[doc = concat!("returns whether `", stringify!($flag), "` may be advertised by new RTC sessions")]
+            #[doc = concat!("returns whether `", stringify!($flag), "` may enter the compiled RTP profile")]
             #[must_use]
             pub fn $enabled(self) -> bool {
                 self.enabled.contains(MediaCodecSet::$flag)
             }
 
-            #[doc = concat!("returns a copy with `", stringify!($flag), "` enabled or disabled for new RTC sessions")]
+            #[doc = concat!("returns a copy with `", stringify!($flag), "` enabled or disabled for profile compilation")]
             #[must_use]
             pub fn $with(self, enabled: bool) -> Self {
                 self.with_flag(MediaCodecSet::$flag, enabled)
@@ -84,9 +80,8 @@ impl Default for MediaCodecFlags {
 
 /// audio codec entry used to rank the negotiated audio capability surface
 ///
-/// preference values are not a promise that a codec is available, callers must
-/// combine the order with [`MediaCodecFlags`] through [`Self::enabled_by`] before
-/// building an RTC offer
+/// the private RTP profile compiler filters this order through
+/// [`MediaCodecFlags`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioCodecPreference {
     /// default audio codec for browser RTC sessions
@@ -98,7 +93,7 @@ pub enum AudioCodecPreference {
 }
 
 impl AudioCodecPreference {
-    /// canonical codec token used at config and SDP-adjacent boundaries
+    /// canonical operator-configuration token for this codec
     #[must_use]
     pub const fn wire_name(self) -> &'static str {
         match self {
@@ -108,7 +103,7 @@ impl AudioCodecPreference {
         }
     }
 
-    /// returns whether this preference can participate in a new RTC offer
+    /// returns whether this preference enters the compiled RTP profile
     #[must_use]
     pub fn enabled_by(self, flags: MediaCodecFlags) -> bool {
         match self {
@@ -121,9 +116,8 @@ impl AudioCodecPreference {
 
 /// video codec entry used to rank the negotiated video capability surface
 ///
-/// the order is a policy preference only, codec support still depends on
-/// [`MediaCodecFlags`] and on the RTC bootstrap path that installs concrete
-/// payload configurations
+/// the private RTP profile compiler filters this order through
+/// [`MediaCodecFlags`] before installing concrete payload configurations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoCodecPreference {
     /// default video codec for browser RTC sessions
@@ -139,7 +133,7 @@ pub enum VideoCodecPreference {
 }
 
 impl VideoCodecPreference {
-    /// canonical codec token used at config and SDP-adjacent boundaries
+    /// canonical operator-configuration token for this codec
     #[must_use]
     pub const fn wire_name(self) -> &'static str {
         match self {
@@ -151,7 +145,7 @@ impl VideoCodecPreference {
         }
     }
 
-    /// returns whether this preference can participate in a new RTC offer
+    /// returns whether this preference enters the compiled RTP profile
     #[must_use]
     pub fn enabled_by(self, flags: MediaCodecFlags) -> bool {
         match self {
@@ -164,7 +158,7 @@ impl VideoCodecPreference {
     }
 }
 
-/// complete audio and video codec ordering for offer construction
+/// complete audio and video codec ordering for RTP profile compilation
 ///
 /// callers may provide a partial preferred order, [`CodecPreferences`] fills the
 /// remaining codecs with the canonical defaults so downstream code never has to

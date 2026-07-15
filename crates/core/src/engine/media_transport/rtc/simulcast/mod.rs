@@ -10,11 +10,17 @@ mod vp8;
 
 pub use common::{NegotiatedRid, SimulcastAnswerError};
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
-use str0m::media::{MediaKind, Mid, Simulcast as Str0mSimulcast};
+use str0m::{
+    format::Codec,
+    media::{MediaKind, Mid, Simulcast as Str0mSimulcast},
+};
 
 use crate::{
-    MediaCodecFlags, VideoBitrateLimits,
-    engine::media_transport::{SessionUploadEncoding, rtc::route_control::PacketLayerGate},
+    VideoBitrateLimits,
+    engine::media_transport::{
+        SessionUploadEncoding,
+        rtc::{RtpProfile, route_control::PacketLayerGate},
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,20 +32,21 @@ enum SimulcastCodecProfile {
 impl SimulcastCodecProfile {
     fn bootstrap(
         media_kind: MediaKind,
-        codec_flags: MediaCodecFlags,
+        rtp_profile: &RtpProfile,
         video_bitrate_limits: VideoBitrateLimits,
     ) -> Option<Self> {
         if !media_kind.is_video() {
             return None;
         }
-        if codec_flags.vp8_enabled() {
-            return Some(Self::Vp8(vp8::Vp8SimulcastProfile::new(
+        match rtp_profile.simulcast_codec()? {
+            Codec::Vp8 => Some(Self::Vp8(vp8::Vp8SimulcastProfile::new(
                 video_bitrate_limits,
-            )));
+            ))),
+            Codec::H264 => Some(Self::H264(h264::H264SimulcastProfile::new(
+                video_bitrate_limits,
+            ))),
+            _ => None,
         }
-        codec_flags
-            .h264_enabled()
-            .then(|| Self::H264(h264::H264SimulcastProfile::new(video_bitrate_limits)))
     }
 
     fn publish(
@@ -118,19 +125,19 @@ impl SimulcastCodecProfile {
 
 pub(super) fn bootstrap_recv_simulcast(
     media_kind: MediaKind,
-    codec_flags: MediaCodecFlags,
+    rtp_profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) -> Option<Str0mSimulcast> {
-    SimulcastCodecProfile::bootstrap(media_kind, codec_flags, video_bitrate_limits)
+    SimulcastCodecProfile::bootstrap(media_kind, rtp_profile, video_bitrate_limits)
         .and_then(|profile| profile.recv_simulcast(None))
 }
 
 pub(super) fn bootstrap_upload_encodings(
     media_kind: MediaKind,
-    codec_flags: MediaCodecFlags,
+    rtp_profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) -> Vec<SessionUploadEncoding> {
-    SimulcastCodecProfile::bootstrap(media_kind, codec_flags, video_bitrate_limits)
+    SimulcastCodecProfile::bootstrap(media_kind, rtp_profile, video_bitrate_limits)
         .map_or_else(Vec::new, |profile| profile.upload_encodings(None))
 }
 
@@ -145,12 +152,12 @@ pub(super) fn publish_recv_simulcast(
 pub(super) fn publish_recv_simulcast_or_default(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-    codec_flags: MediaCodecFlags,
+    rtp_profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) -> Option<Str0mSimulcast> {
     publish_recv_simulcast(media_kind, rtp_parameters).or_else(|| {
         publish_uses_default_profile(rtp_parameters)
-            .then(|| bootstrap_recv_simulcast(media_kind, codec_flags, video_bitrate_limits))
+            .then(|| bootstrap_recv_simulcast(media_kind, rtp_profile, video_bitrate_limits))
             .flatten()
     })
 }
@@ -168,14 +175,14 @@ pub(super) fn publish_upload_encodings(
 pub(super) fn publish_upload_encodings_or_default(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-    codec_flags: MediaCodecFlags,
+    rtp_profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) -> Vec<SessionUploadEncoding> {
     let encodings = publish_upload_encodings(media_kind, rtp_parameters);
     if !encodings.is_empty() || !publish_uses_default_profile(rtp_parameters) {
         return encodings;
     }
-    bootstrap_upload_encodings(media_kind, codec_flags, video_bitrate_limits)
+    bootstrap_upload_encodings(media_kind, rtp_profile, video_bitrate_limits)
 }
 
 pub(super) fn send_rids_for_mid(

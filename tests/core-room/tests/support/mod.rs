@@ -24,7 +24,7 @@ use o_sfu_core::{
         packet_sinks::RoomPacketSinkRegistry,
         room::{
             JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
-            RoomRuntimePolicy, UserOutboundReceiver, UserOutboundSender, rtp_capabilities,
+            RoomRuntimePolicy, UserOutboundReceiver, UserOutboundSender,
             test_support::{TestSourceKind, source_publish_intent_for_source},
         },
         session::{UserId, UserPermissions},
@@ -37,8 +37,8 @@ use o_sfu_core::{
 use o_sfu_router::{
     rtp::MediaStream,
     test_support::rtp_samples::{
-        sample_audio_rtp_parameters, sample_simulcast_video_rtp_parameters,
-        sample_video_rtp_parameters,
+        sample_audio_rtp_parameters, sample_client_rtp_capabilities,
+        sample_simulcast_video_rtp_parameters, sample_video_rtp_parameters,
     },
 };
 
@@ -87,7 +87,7 @@ pub fn manager_with_policy_and_worker_count(
     let runtime_policy = RoomRuntimePolicy::new(
         RoomAdmissionPolicy::new(DEFAULT_MAX_SESSIONS),
         RuntimeFeatureFlags::default(),
-        rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+        sample_client_rtp_capabilities(),
     )
     .with_room_worker_policy(policy);
     RoomManager::for_test_with_config(RoomManagerConfig::new(worker_count, runtime_policy))
