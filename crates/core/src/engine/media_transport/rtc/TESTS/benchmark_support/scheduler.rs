@@ -8,7 +8,7 @@ use super::super::{
     test_support::test_transport_session_key,
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate,
     engine::{UserId, media_transport::TransportSessionKey},
 };
 
@@ -48,7 +48,6 @@ impl SchedulerBenchFixture {
                 &session_key,
                 candidate_addr,
                 Bitrate::from_mbps(10),
-                MediaCodecFlags::default(),
             );
             if let Some(handle) = state.users.handle_for_key(&session_key) {
                 handles.push(handle);

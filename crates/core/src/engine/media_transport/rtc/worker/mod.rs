@@ -60,7 +60,7 @@ use str0m::media::MediaKind;
 use tokio::sync::mpsc;
 
 use super::{
-    RtcWorkerConfig,
+    RtcWorkerConfig, RtpProfile,
     bitrate::BitrateRegistry,
     commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
     packet_loop::PacketLoopLagSnapshot,
@@ -155,6 +155,7 @@ impl RtcWorker {
     /// process-wide unique across local relay routes
     pub fn new(
         config: &MediaTransportConfig,
+        profile: Arc<RtpProfile>,
         rtc_port_range: RtcPortRange,
         deps: &MediaTransportDeps,
         source_policy_signal: Arc<SourcePolicySignal>,
@@ -172,8 +173,7 @@ impl RtcWorker {
                 video_bitrate_limits: config.video_bitrate_limits,
                 rtc_port_range,
                 rtc_udp_io_backend: config.rtc_udp_io_backend,
-                codec_flags: config.codec_flags,
-                codec_preferences: config.codec_preferences,
+                profile,
                 media_quality_interval: config.media_quality_interval,
                 media_id_base,
             },

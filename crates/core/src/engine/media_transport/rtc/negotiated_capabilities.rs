@@ -1,8 +1,4 @@
-use o_sfu_rfc::{rtp::HeaderExtensionId, webrtc as rfc_webrtc};
-use o_sfu_router::{
-    MediaKind as RouterMediaKind,
-    rtp::{HeaderExtension as RouterHeaderExtension, MediaCapabilities},
-};
+use o_sfu_router::{MediaKind as RouterMediaKind, rtp::MediaCapabilities};
 use str0m::{
     change::SdpAnswer,
     format::{Codec, PayloadParams},
@@ -44,11 +40,7 @@ pub(super) fn client_rtp_capabilities_from_sdp_answer(
             }
         }
         for (id, extension) in media_line.extmaps() {
-            let id = HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
-            let header_extension = RouterHeaderExtension::new(
-                rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
-                id,
-            );
+            let header_extension = rtp_projection::header_extension((id, extension))?;
             if !header_extensions.contains(&header_extension) {
                 header_extensions.push(header_extension);
             }
@@ -67,13 +59,7 @@ fn media_kind_label(payloads: &[PayloadParams]) -> Option<RouterMediaKind> {
         .iter()
         .find(|payload| payload.spec().codec != Codec::Rtx)
         .or_else(|| payloads.first())
-        .map(|payload| {
-            if payload.spec().codec.is_audio() {
-                RouterMediaKind::Audio
-            } else {
-                RouterMediaKind::Video
-            }
-        })
+        .map(rtp_projection::media_kind)
 }
 
 #[cfg(test)]

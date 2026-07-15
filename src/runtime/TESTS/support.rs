@@ -131,7 +131,7 @@ impl RuntimeTestBuilder {
         };
         let room_manager = build_room_manager(
             &self.config,
-            build_room_runtime_policy(&self.config),
+            build_room_runtime_policy(&self.config, &media_transport),
             &services,
         );
         let runtime_config = RuntimeConfig::from_config(&self.config);

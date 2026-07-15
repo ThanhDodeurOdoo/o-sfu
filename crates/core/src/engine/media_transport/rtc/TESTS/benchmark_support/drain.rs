@@ -25,7 +25,7 @@ use super::super::{
     test_support::{sample_forwarded_packet, test_transport_session_key},
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate,
     engine::{
         UserId,
         diagnostics::DiagnosticsStore,
@@ -65,7 +65,6 @@ impl SessionDrainBenchFixture {
                 &session_key,
                 candidate_addr,
                 Bitrate::from_mbps(10),
-                MediaCodecFlags::default(),
             );
             state.mark_session_dirty(&session_key);
         }

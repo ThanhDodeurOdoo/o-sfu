@@ -77,7 +77,7 @@ pub mod room {
             RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound,
             UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind,
             UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
-            UserOutboundSender, rtp_capabilities,
+            UserOutboundSender,
         },
     };
 }

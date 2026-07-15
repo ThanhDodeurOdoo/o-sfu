@@ -11,9 +11,9 @@ use str0m::{
     media::Frequency,
 };
 
-use super::fixtures::*;
+use super::{super::RtpProfile, fixtures::*};
 use crate::{
-    VideoCodecPreference,
+    AudioCodecPreference, VideoCodecPreference,
     engine::media_transport::{SessionUploadSlot, TransportMediaId},
 };
 
@@ -110,7 +110,7 @@ async fn rtc_session_answer_rejects_invalid_sdp() {
 
 #[tokio::test]
 async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
-    let adapter = RtcWorker::default();
+    let adapter = rtc_with_codec_flags(MediaCodecFlags::default().with_h264(true));
     let session_key = transport_key(1, 134, UserId::Integer(134));
 
     let (offer_sdp, upload_slots) = adapter
@@ -159,7 +159,10 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
         .iter()
         .find(|slot| slot.kind == RouterMediaKind::Video)
         .expect("initial offer should include a video upload slot");
-    assert_eq!(video_slot.codecs, vec![String::from("VP8")]);
+    assert_eq!(
+        video_slot.codecs,
+        vec![String::from("VP8"), String::from("H264")]
+    );
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
     assert_eq!(
@@ -234,37 +237,74 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disable
     assert_eq!(video_slot.simulcast_encodings[1].resolution_scale, None);
 }
 
+#[allow(
+    clippy::redundant_closure_for_method_calls,
+    reason = "str0m keeps the media-line type private so its method cannot be named here"
+)]
 #[tokio::test]
 async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
-    let adapter = rtc_with_codec_policy(
-        MediaCodecFlags::default()
-            .with_h264(true)
-            .with_vp9(true)
-            .with_av1(true),
-        CodecPreferences::default()
-            .with_video_order(&[VideoCodecPreference::H264, VideoCodecPreference::Vp9]),
-    );
+    let codec_flags = MediaCodecFlags::default()
+        .with_pcmu(true)
+        .with_pcma(true)
+        .with_h264(true)
+        .with_h265(true)
+        .with_vp9(true)
+        .with_av1(true);
+    let codec_preferences = CodecPreferences::default()
+        .with_audio_order(&[
+            AudioCodecPreference::Pcma,
+            AudioCodecPreference::Pcmu,
+            AudioCodecPreference::Opus,
+        ])
+        .with_video_order(&[
+            VideoCodecPreference::Av1,
+            VideoCodecPreference::Vp9,
+            VideoCodecPreference::H265,
+            VideoCodecPreference::H264,
+            VideoCodecPreference::Vp8,
+        ]);
+    let adapter = rtc_with_codec_policy(codec_flags, codec_preferences);
     let session_key = transport_key(1, 137, UserId::Integer(137));
 
-    let (_offer_sdp, upload_slots) = adapter
+    let (offer_sdp, upload_slots) = adapter
         .create_initial_session_offer(&session_key)
         .await
         .expect("initial offer should succeed")
         .into_parts();
 
-    let video_slot = upload_slots
-        .iter()
-        .find(|slot| slot.kind == RouterMediaKind::Video)
-        .expect("initial offer should include a video upload slot");
-    assert_eq!(
-        video_slot.codecs,
-        vec![
-            String::from("H264"),
-            String::from("VP9"),
-            String::from("VP8"),
-            String::from("AV1"),
-        ]
-    );
+    let offer = SdpOffer::from_sdp_string(&offer_sdp).expect("initial offer should parse");
+    let profile = RtpProfile::compile(codec_flags, codec_preferences)
+        .expect("test RTP profile should compile");
+    let router_capabilities = profile.router_capabilities();
+    for (kind, expected) in [
+        (RouterMediaKind::Audio, "PCMA,PCMU,opus"),
+        (RouterMediaKind::Video, "AV1,VP9,H265,H264,VP8"),
+    ] {
+        let video = kind == RouterMediaKind::Video;
+        let mut sdp_names = offer
+            .media_lines
+            .iter()
+            .flat_map(|media| media.rtp_params())
+            .filter(|payload| {
+                payload.spec().codec != Codec::Rtx && payload.spec().codec.is_video() == video
+            })
+            .map(|payload| payload.spec().codec.to_string())
+            .collect::<Vec<_>>();
+        let mut router_names = router_capabilities
+            .codecs()
+            .filter(|codec| codec.media_kind() == kind && codec.codec_name() != "rtx")
+            .map(|codec| codec.codec_name().to_owned())
+            .collect::<Vec<_>>();
+        sdp_names.dedup();
+        router_names.dedup();
+        let slot = upload_slots
+            .iter()
+            .find(|slot| slot.kind == kind)
+            .expect("initial offer should include the media upload slot");
+        assert_eq!(sdp_names.join(","), expected);
+        assert_eq!(router_names, sdp_names);
+        assert_eq!(slot.codecs, sdp_names);
+    }
 }
 
 #[tokio::test]
@@ -322,8 +362,10 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
 
 #[tokio::test]
 async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
-    let adapter =
-        rtc_with_bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333));
+    let adapter = RtcWorker::test_builder()
+        .bitrate_limits(Bitrate::from_bps(2_222_222), Bitrate::from_bps(3_333_333))
+        .codec_flags(MediaCodecFlags::default().with_vp8(false).with_h264(true))
+        .build();
     let session_key = transport_key(1, 135, UserId::Integer(135));
 
     let mut remote = complete_initial_offer_answer(&adapter, &session_key, 55_135).await;
@@ -341,12 +383,16 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .await
         .expect("simulcast publish should expose the staged mid");
 
-    let renegotiation_offer = adapter
+    let (renegotiation_offer, upload_slots) = adapter
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("staged simulcast renegotiation offer should be available")
-        .into_parts()
-        .0;
+        .into_parts();
+    let video_slot = upload_slots
+        .iter()
+        .find(|slot| slot.kind == RouterMediaKind::Video)
+        .expect("simulcast publish should expose a video slot");
+    assert_eq!(video_slot.codecs, vec![String::from("VP8")]);
     assert!(
         renegotiation_offer.contains(&sdp_rid_line(
             "lo",

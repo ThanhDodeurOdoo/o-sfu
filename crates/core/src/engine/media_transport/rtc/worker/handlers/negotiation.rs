@@ -23,6 +23,7 @@ use tracing::debug;
 
 use super::{
     super::super::{
+        RtpProfile,
         bitrate::BitrateRegistry,
         bootstrap, negotiated_capabilities, simulcast,
         state::{PacketLoopState, RtcSnapshotState},
@@ -31,7 +32,7 @@ use super::{
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
+    Bitrate, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
     engine::{
         media_transport::{
             AppliedProducer, AppliedSessionAnswer, SessionOffer, SessionUploadEncoding,
@@ -51,8 +52,7 @@ pub(super) struct OfferBootstrapConfig<'a> {
     pub(super) video_bitrate_limits: VideoBitrateLimits,
     pub(super) rtc_port_range: RtcPortRange,
     pub(super) rtc_udp_io_backend: RtcUdpIoBackend,
-    pub(super) codec_flags: MediaCodecFlags,
-    pub(super) codec_preferences: CodecPreferences,
+    pub(super) profile: &'a RtpProfile,
     pub(super) media_quality_interval: Option<Duration>,
     pub(super) metrics: &'a RuntimeMetrics,
 }
@@ -90,7 +90,7 @@ pub(super) fn worker_create_initial_session_offer(
         ensure_initial_negotiation_media(
             bootstrap_mids,
             &mut sdp_api,
-            config.codec_flags,
+            config.profile,
             config.video_bitrate_limits,
         );
         sdp_api
@@ -107,8 +107,7 @@ pub(super) fn worker_create_initial_session_offer(
     Ok(
         SessionOffer::new(offer.to_sdp_string()).with_upload_slots(initial_upload_slots(
             bootstrap_mids,
-            config.codec_flags,
-            config.codec_preferences,
+            config.profile,
             config.video_bitrate_limits,
         )),
     )
@@ -367,7 +366,7 @@ fn stage_queued_removal_offer(session_state: &mut super::super::super::state::Rt
 fn ensure_initial_negotiation_media(
     bootstrap_mids: &mut Vec<Mid>,
     sdp_api: &mut SdpApi<'_>,
-    codec_flags: MediaCodecFlags,
+    profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) {
     if !bootstrap_mids.is_empty() {
@@ -381,7 +380,7 @@ fn ensure_initial_negotiation_media(
                 INITIAL_NEGOTIATION_DIRECTION,
                 None,
                 None,
-                simulcast::bootstrap_recv_simulcast(media_kind, codec_flags, video_bitrate_limits),
+                simulcast::bootstrap_recv_simulcast(media_kind, profile, video_bitrate_limits),
             )
         })
         .collect();
@@ -389,8 +388,7 @@ fn ensure_initial_negotiation_media(
 
 fn initial_upload_slots(
     bootstrap_mids: &[Mid],
-    codec_flags: MediaCodecFlags,
-    codec_preferences: CodecPreferences,
+    profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) -> Vec<SessionUploadSlot> {
     INITIAL_NEGOTIATION_MEDIA_KINDS
@@ -399,10 +397,10 @@ fn initial_upload_slots(
         .map(|(media_kind, mid)| SessionUploadSlot {
             mid: mid.to_string(),
             kind: upload_kind(*media_kind),
-            codecs: offered_codecs(*media_kind, codec_flags, codec_preferences),
+            codecs: profile.codec_names(*media_kind).to_vec(),
             simulcast_encodings: simulcast::bootstrap_upload_encodings(
                 *media_kind,
-                codec_flags,
+                profile,
                 video_bitrate_limits,
             ),
         })
@@ -415,27 +413,6 @@ pub(super) fn upload_kind(media_kind: MediaKind) -> ProtocolMediaKind {
     } else {
         ProtocolMediaKind::Audio
     }
-}
-
-pub(super) fn offered_codecs(
-    media_kind: MediaKind,
-    codec_flags: MediaCodecFlags,
-    codec_preferences: CodecPreferences,
-) -> Vec<String> {
-    if media_kind.is_video() {
-        return codec_preferences
-            .video_order()
-            .into_iter()
-            .filter(|codec| codec.enabled_by(codec_flags))
-            .map(|codec| codec.wire_name().to_owned())
-            .collect();
-    }
-    codec_preferences
-        .audio_order()
-        .into_iter()
-        .filter(|codec| codec.enabled_by(codec_flags))
-        .map(|codec| codec.wire_name().to_owned())
-        .collect()
 }
 
 fn ensure_session_ready_for_offer(
@@ -462,7 +439,7 @@ fn ensure_session_ready_for_offer(
         session_key,
         candidate_addr,
         config.max_bitrate_out,
-        config.codec_flags,
+        config.profile,
         config.media_quality_interval,
     )?;
     if let Ok(mut snapshot) = snapshot_state.lock() {

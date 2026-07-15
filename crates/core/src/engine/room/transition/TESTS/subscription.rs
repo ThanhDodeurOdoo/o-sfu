@@ -16,7 +16,7 @@ use super::super::super::{
     transition::PublishStageOutcome,
 };
 use crate::{
-    MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
+    RoomWorkerPolicy, RuntimeFeatureFlags,
     engine::{
         ConnectionId, TestSourceKind, UserId, UserPermissions,
         media_transport::{
@@ -148,9 +148,7 @@ async fn setup_spillover_subscription_room() -> (
             RoomRuntimePolicy::new(
                 RoomAdmissionPolicy::new(100),
                 RuntimeFeatureFlags::default(),
-                super::super::super::rtp_capabilities::router_rtp_capabilities(
-                    MediaCodecFlags::default(),
-                ),
+                sample_client_rtp_capabilities(),
             )
             .with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(2)),
         )),

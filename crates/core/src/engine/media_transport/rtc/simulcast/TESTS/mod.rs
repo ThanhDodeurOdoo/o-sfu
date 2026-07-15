@@ -457,34 +457,6 @@ fn h264_profile_accepts_only_the_promoted_chromium_matrix() {
     }
 }
 
-#[test]
-fn h264_only_bootstrap_gets_default_simulcast_metadata() {
-    let codec_flags = MediaCodecFlags::default().with_vp8(false).with_h264(true);
-    let encodings =
-        bootstrap_upload_encodings(MediaKind::Video, codec_flags, VideoBitrateLimits::default());
-    assert!(
-        bootstrap_recv_simulcast(MediaKind::Video, codec_flags, VideoBitrateLimits::default())
-            .is_some()
-    );
-    assert_eq!(
-        encodings,
-        vec![
-            SessionUploadEncoding {
-                rid: common::DEFAULT_LOW_RID.to_owned(),
-                max_bitrate: Some(common::DEFAULT_LOW_MAX_BITRATE),
-                resolution_scale: None,
-                max_framerate: None,
-            },
-            SessionUploadEncoding {
-                rid: common::DEFAULT_HIGH_RID.to_owned(),
-                max_bitrate: Some(VideoBitrateLimits::default().max_video_bitrate()),
-                resolution_scale: None,
-                max_framerate: None,
-            },
-        ]
-    );
-}
-
 fn vp8_parameters() -> RouterRtpParameters {
     video_parameters(MediaFormat::new(
         RouterMediaKind::Video,

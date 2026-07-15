@@ -19,7 +19,7 @@ use super::super::{
     },
 };
 use crate::{
-    Bitrate, MediaCodecFlags,
+    Bitrate,
     engine::{
         UserId,
         metrics::{RtcMetricsRecorder, RuntimeMetrics},
@@ -78,7 +78,6 @@ impl IngressRoutingBenchFixture {
             &session_key,
             candidate_addr,
             Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
         )
         .is_ok();
         let packet = if bootstrap_succeeded {

@@ -33,7 +33,10 @@ use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 pub use build::MediaTransportBuildError;
 pub use config::{MediaTransportConfig, MediaTransportDeps};
-use o_sfu_router::{MediaKind, rtp::MediaStream as RouterRtpParameters};
+use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaCapabilities, MediaStream as RouterRtpParameters},
+};
 pub use policy_invalidation::{
     SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
 };
@@ -54,7 +57,7 @@ pub mod fuzz_support {
         client_rtp_capabilities_from_answer, fuzz_support::route_packet_loop_ingress_demux,
     };
 }
-use rtc::{RtcWorker, RtcWorkerCommand, RtcWorkerResponse};
+use rtc::{RtcWorker, RtcWorkerCommand, RtcWorkerResponse, RtpProfile};
 use tracing::warn;
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
@@ -84,6 +87,7 @@ use crate::engine::{RoomInstanceId, metrics::RuntimeMetrics};
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
     workers: Arc<[Arc<RtcWorker>]>,
+    profile: Arc<RtpProfile>,
     metrics: Arc<RuntimeMetrics>,
     #[cfg(test)]
     media_control_batches: test_support::MediaControlBatchLog,
@@ -115,6 +119,12 @@ fn warn_session_command_failed(
 }
 
 impl MediaTransport {
+    /// returns the router capability snapshot compiled from the RTC wire profile
+    #[must_use]
+    pub fn router_rtp_capabilities(&self) -> MediaCapabilities {
+        self.profile.router_capabilities()
+    }
+
     async fn request_session_command<T>(
         &self,
         session_key: &TransportSessionKey,

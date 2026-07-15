@@ -5,7 +5,7 @@ use tokio::{sync::Notify, task::yield_now, time::timeout};
 
 use super::{super::manager::JoinPlacementTestGate, api::NegotiatedPublish, fixtures::*};
 use crate::{
-    LocalSpilloverPolicy, MediaCodecFlags, RoomWorkerPolicy, RuntimeFeatureFlags,
+    LocalSpilloverPolicy, RoomWorkerPolicy, RuntimeFeatureFlags,
     engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
     prelude::LocalSpilloverPolicyParts,
 };
@@ -48,7 +48,7 @@ fn manager_with_room_worker_policy_and_worker_count(
         super::super::RoomRuntimePolicy::new(
             RoomAdmissionPolicy::new(100),
             RuntimeFeatureFlags::default(),
-            super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+            test_client_rtp_capabilities(),
         )
         .with_room_worker_policy(room_worker_policy),
     ))
@@ -123,7 +123,7 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
             super::super::RoomRuntimePolicy::new(
                 RoomAdmissionPolicy::new(2),
                 RuntimeFeatureFlags::default(),
-                super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+                test_client_rtp_capabilities(),
             ),
         ),
         super::super::RoomManagerDeps {
@@ -151,7 +151,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
             super::super::RoomRuntimePolicy::new(
                 RoomAdmissionPolicy::new(1),
                 RuntimeFeatureFlags::default(),
-                super::super::rtp_capabilities::router_rtp_capabilities(MediaCodecFlags::default()),
+                test_client_rtp_capabilities(),
             ),
         ),
         super::super::RoomManagerDeps {

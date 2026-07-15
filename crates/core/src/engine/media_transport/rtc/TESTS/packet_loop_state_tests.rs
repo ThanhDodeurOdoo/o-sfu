@@ -13,7 +13,6 @@ fn insert_live_session(state: &mut PacketLoopState, session_key: &TransportSessi
             session_key,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 40_000),
             Bitrate::from_mbps(10),
-            MediaCodecFlags::default(),
         ),
         Ok(true)
     ));

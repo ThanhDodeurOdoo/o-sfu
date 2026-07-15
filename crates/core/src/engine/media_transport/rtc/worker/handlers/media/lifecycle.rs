@@ -27,6 +27,7 @@ use tracing::{debug, warn};
 use super::{
     super::{
         super::super::{
+            RtpProfile,
             bitrate::BitrateRegistry,
             media_registry::RegisteredMediaHandle,
             simulcast,
@@ -43,7 +44,7 @@ use super::{
     },
 };
 use crate::{
-    Bitrate, CodecPreferences, MediaCodecFlags, VideoBitrateLimits,
+    Bitrate, VideoBitrateLimits,
     engine::media_transport::{
         SessionUploadSlot, TransportAdapterError, TransportMediaId, TransportResult,
         TransportSessionKey,
@@ -51,11 +52,10 @@ use crate::{
 };
 
 #[derive(Clone, Copy)]
-pub struct RecvMediaPolicy {
+pub struct RecvMediaPolicy<'a> {
     pub max_bitrate_in: Bitrate,
     pub video_bitrate_limits: VideoBitrateLimits,
-    pub codec_flags: MediaCodecFlags,
-    pub codec_preferences: CodecPreferences,
+    pub profile: &'a RtpProfile,
 }
 
 #[derive(Clone)]
@@ -273,7 +273,7 @@ fn worker_stage_native_media_removal(
 pub fn worker_add_recv_media(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    policy: RecvMediaPolicy,
+    policy: RecvMediaPolicy<'_>,
     session_key: &TransportSessionKey,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
@@ -286,8 +286,7 @@ pub fn worker_add_recv_media(
             session_state,
             media_kind,
             rtp_parameters,
-            policy.codec_flags,
-            policy.codec_preferences,
+            policy.profile,
             policy.video_bitrate_limits,
         )?
     } else {
@@ -339,8 +338,7 @@ fn worker_stage_native_recv_media(
     session_state: &mut RtcSessionState,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-    codec_flags: MediaCodecFlags,
-    codec_preferences: CodecPreferences,
+    profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) -> TransportResult<Mid> {
     if offer_is_awaiting_answer(session_state) {
@@ -360,7 +358,7 @@ fn worker_stage_native_recv_media(
         simulcast::publish_recv_simulcast_or_default(
             media_kind,
             rtp_parameters,
-            codec_flags,
+            profile,
             video_bitrate_limits,
         ),
     );
@@ -373,8 +371,7 @@ fn worker_stage_native_recv_media(
         mid,
         media_kind,
         rtp_parameters,
-        codec_flags,
-        codec_preferences,
+        profile,
         video_bitrate_limits,
     )];
     let pending_streams = recv_encoding_identities(rtp_parameters)
@@ -590,18 +587,17 @@ fn upload_slot(
     mid: Mid,
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-    codec_flags: MediaCodecFlags,
-    codec_preferences: CodecPreferences,
+    profile: &RtpProfile,
     video_bitrate_limits: VideoBitrateLimits,
 ) -> SessionUploadSlot {
     SessionUploadSlot {
         mid: mid.to_string(),
         kind: negotiation::upload_kind(media_kind),
-        codecs: upload_codecs(media_kind, rtp_parameters, codec_flags, codec_preferences),
+        codecs: upload_codecs(media_kind, rtp_parameters, profile),
         simulcast_encodings: simulcast::publish_upload_encodings_or_default(
             media_kind,
             rtp_parameters,
-            codec_flags,
+            profile,
             video_bitrate_limits,
         ),
     }
@@ -610,8 +606,7 @@ fn upload_slot(
 fn upload_codecs(
     media_kind: MediaKind,
     rtp_parameters: &RouterRtpParameters,
-    codec_flags: MediaCodecFlags,
-    codec_preferences: CodecPreferences,
+    profile: &RtpProfile,
 ) -> Vec<String> {
     let mut codecs = Vec::new();
     for format in rtp_parameters.formats() {
@@ -624,7 +619,7 @@ fn upload_codecs(
         }
     }
     if codecs.is_empty() {
-        negotiation::offered_codecs(media_kind, codec_flags, codec_preferences)
+        profile.codec_names(media_kind).to_vec()
     } else {
         codecs
     }

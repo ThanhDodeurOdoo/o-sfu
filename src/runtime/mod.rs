@@ -44,7 +44,6 @@ pub(crate) use o_sfu_telemetry::{self as telemetry, prometheus};
 use options::{RuntimeConfig, effective_feature_flags};
 use room::{
     RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
-    rtp_capabilities,
 };
 use telemetry::{init_tracing, schema::event as telemetry_event};
 
@@ -126,7 +125,7 @@ impl Runtime {
         let runtime_config = RuntimeConfig::from_config(config);
         let services = RuntimeServices::default();
         let media_transport = build_media_transport(config, &services)?;
-        let room_runtime_policy = build_room_runtime_policy(config);
+        let room_runtime_policy = build_room_runtime_policy(config, &media_transport);
         info!(
             event = telemetry_event::RUNTIME_BOOT,
             rtc_udp_io_backend = config.transport.rtc_udp_io_backend.wire_name(),
@@ -392,14 +391,14 @@ fn build_media_transport(config: &Config, services: &RuntimeServices) -> Result<
     )?)
 }
 
-fn build_room_runtime_policy(config: &Config) -> RoomRuntimePolicy {
+fn build_room_runtime_policy(
+    config: &Config,
+    media_transport: &MediaTransport,
+) -> RoomRuntimePolicy {
     RoomRuntimePolicy::new(
         RoomAdmissionPolicy::new(config.user.room_size),
         effective_feature_flags(config.features),
-        rtp_capabilities::router_rtp_capabilities_with_preferences(
-            config.codecs.flags,
-            config.codecs.preferences,
-        ),
+        media_transport.router_rtp_capabilities(),
     )
     .with_room_worker_policy(config.transport.room_worker_policy)
     .with_media_limits(config.transport.room_media_limits)

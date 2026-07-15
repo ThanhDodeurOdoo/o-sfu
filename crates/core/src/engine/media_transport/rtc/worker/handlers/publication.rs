@@ -10,7 +10,6 @@ use std::{
     mem,
 };
 
-use o_sfu_rfc::{rtp::HeaderExtensionId, webrtc as rfc_webrtc};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{
@@ -22,7 +21,6 @@ use str0m::{
     change::SdpAnswer,
     format::PayloadParams,
     media::{Direction, MediaKind as Str0mMediaKind, Mid, Rid},
-    rtp::Extension,
 };
 #[cfg(test)]
 use {
@@ -66,7 +64,7 @@ pub(super) fn answer_producer_projection(
                 header_extensions: media_line
                     .extmaps()
                     .into_iter()
-                    .map(project_header_extension)
+                    .map(rtp_projection::header_extension)
                     .collect::<Result<Vec<_>, _>>()?,
                 primary_ssrcs: media_line
                     .ssrc_info()
@@ -247,16 +245,6 @@ fn project_media_formats(
         }
     }
     Ok(formats)
-}
-
-fn project_header_extension(
-    (id, extension): (u8, &Extension),
-) -> Result<RouterHeaderExtension, TransportAdapterError> {
-    let id = HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
-    Ok(RouterHeaderExtension::new(
-        rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
-        id,
-    ))
 }
 
 fn project_bindings(
