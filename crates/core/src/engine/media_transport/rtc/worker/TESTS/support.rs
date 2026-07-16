@@ -396,7 +396,7 @@ impl RtcWorkerTestBuilder {
                 packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
                 metrics: Arc::new(RuntimeMetrics::default()),
             },
-            Arc::new(SourcePolicySignal::default()),
+            SourcePolicySignal::default(),
             0,
             MediaWorkerId::from_raw(0),
         )

@@ -46,7 +46,7 @@ impl<'a> SourcePolicySnapshot<'a> {
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
-        let ranked_sources = rank_active_speaker_sources(active_speaker_sources);
+        let ranked_sources = rank_room_active_speakers(state, active_speaker_sources);
         let media_limits = state.media_limits;
         let active_speakers = active_speaker_media_ids(&ranked_sources);
         let admitted_audio_speakers =
@@ -125,9 +125,18 @@ fn receiver_bandwidth_by_connection(
         .collect()
 }
 
-fn rank_active_speaker_sources(sources: &[ActiveSpeakerSource]) -> Vec<ActiveSpeakerSource> {
+fn rank_room_active_speakers(
+    state: &RoomState,
+    sources: &[ActiveSpeakerSource],
+) -> Vec<ActiveSpeakerSource> {
     let mut sources = sources.to_vec();
-    sources.sort_by_key(|source| {
+    sources.retain(|source| {
+        state
+            .topology
+            .source_for_transport_media(source.transport_media_id())
+            .is_some()
+    });
+    sources.sort_unstable_by_key(|source| {
         (
             Reverse(source.observed_at()),
             Reverse(source.last_audio_level_dbov().unwrap_or(i8::MIN)),

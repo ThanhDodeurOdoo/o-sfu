@@ -50,12 +50,15 @@ impl ActiveSpeakerRank {
             .find_map(|entry| (entry.expires_at > now).then_some(entry.expires_at))
     }
 
-    pub(super) fn expired_srcs(&self, now: Instant) -> Vec<TransportMediaId> {
+    pub(super) fn take_expired(&mut self, now: Instant) -> Vec<TransportMediaId> {
+        let active_len = self.active_len(now);
+        let by_src = &mut self.by_src;
         self.entries
-            .iter()
-            .rev()
-            .take_while(|entry| entry.expires_at <= now)
-            .map(|entry| entry.source_id)
+            .drain(active_len..)
+            .map(|entry| {
+                by_src.remove(&entry.source_id);
+                entry.source_id
+            })
             .collect()
     }
 

@@ -29,7 +29,7 @@ pub mod test_support;
 mod types;
 mod workers;
 
-use std::{collections::BTreeSet, sync::Arc, time::Instant};
+use std::sync::Arc;
 
 pub use build::MediaTransportBuildError;
 pub use config::{MediaTransportConfig, MediaTransportDeps};
@@ -37,9 +37,7 @@ use o_sfu_router::{
     MediaKind,
     rtp::{MediaCapabilities, MediaStream as RouterRtpParameters},
 };
-pub use policy_invalidation::{
-    SourcePolicyDirtyState, SourcePolicySignal, SourcePolicyUpdateSubscription,
-};
+pub use policy_invalidation::{SourcePolicySignal, SourcePolicyUpdateSubscription};
 pub(crate) use route_control::{
     ConsumerRouteControl, ConsumerRouteControlOutcome, MediaControlPlan,
 };
@@ -72,7 +70,7 @@ pub use types::{
 };
 
 use self::workers::signaling_to_str0m_media_kind;
-use crate::engine::{RoomInstanceId, metrics::RuntimeMetrics};
+use crate::engine::metrics::RuntimeMetrics;
 
 /// Opaque runtime media transport handle.
 ///
@@ -91,9 +89,8 @@ pub struct MediaTransport {
     metrics: Arc<RuntimeMetrics>,
     #[cfg(test)]
     media_control_batches: test_support::MediaControlBatchLog,
-    /// Shared wakeup signal used by every worker to notify room-level source
-    /// policy tasks about transport-observed changes without polling every room.
-    source_policy_signal: Arc<SourcePolicySignal>,
+    /// Coalesces transport observations for room policy.
+    source_policy_signal: SourcePolicySignal,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -451,26 +448,6 @@ impl MediaTransport {
         self.active_speaker_diagnostic_snapshot_from_workers().await
     }
 
-    /// Returns the next known deadline for active-speaker expiry work.
-    ///
-    /// Runtimes use this to schedule source-policy wakeups without polling all
-    /// rooms on a fixed cadence.
-    pub async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        self.next_active_speaker_deadline_from_workers().await
-    }
-
-    /// Returns rooms whose transport-observed active-speaker state expired by
-    /// `now`.
-    ///
-    /// The returned ids identify room instances that should resync room
-    /// source policy after transport observations changed.
-    pub async fn expired_active_speaker_room_instance_ids(
-        &self,
-        now: Instant,
-    ) -> BTreeSet<RoomInstanceId> {
-        self.expired_active_speaker_rooms_from_workers(now).await
-    }
-
     /// Returns the latest known transport health for one session.
     ///
     /// Health is connectivity evidence only. It should not be used as the
@@ -486,7 +463,7 @@ impl MediaTransport {
     /// workers.
     #[must_use]
     pub fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
-        self.source_policy_subscription_from_workers()
+        self.source_policy_signal.subscribe()
     }
 }
 

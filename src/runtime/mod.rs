@@ -6,15 +6,10 @@
 //! request handlers receive [`RuntimeState`] so they cannot depend on process
 //! boot details or full lifecycle ownership
 
-use std::{future::Future, process, sync::Arc, time::Instant as StdInstant};
+use std::{future::Future, process, sync::Arc};
 
 use anyhow::Result;
-use tokio::{
-    net::TcpListener,
-    runtime::Builder,
-    task::JoinHandle,
-    time::{self, Instant},
-};
+use tokio::{net::TcpListener, runtime::Builder, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -202,7 +197,6 @@ impl RuntimeTasks {
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
             Arc::clone(&runtime.room_manager),
             runtime.media_transport.clone(),
-            runtime.media_transport.source_policy_subscription(),
             shutdown_token.child_token(),
         );
         Self {
@@ -272,50 +266,25 @@ impl RuntimeState {
     }
 }
 
-/// room state decides which producer layers should remain routable from room-level
-/// facts like membership and publication state while transport owns the
-/// active-speaker observations that can change without room mutation
-/// this task
-/// waits on explicit transport-side updates plus the current active-speaker expiry
-/// deadline instead of polling the whole process on a fixed interval
+/// Recomputes room packet policy after transport observations change.
 fn spawn_source_packet_policy_update_task(
     rooms: Arc<RoomManager>,
     media_transport: MediaTransport,
-    updates: media_transport::SourcePolicyUpdateSubscription,
     shutdown_token: CancellationToken,
 ) -> JoinHandle<()> {
     info!("booted source packet policy update task");
+    let updates = media_transport.source_policy_subscription();
     tokio::spawn(async move {
         loop {
-            let next_deadline = media_transport.next_active_speaker_deadline().await;
-            let mut dirty_room_instance_ids = match next_deadline {
-                Some(next_deadline) => {
-                    tokio::select! {
-                        biased;
-                        () = shutdown_token.cancelled() => return,
-                        dirty_room_instance_ids = updates.wait_for_update() => dirty_room_instance_ids,
-                        () = time::sleep_until(Instant::from_std(next_deadline)) => {
-                            media_transport
-                                .expired_active_speaker_room_instance_ids(StdInstant::now())
-                                .await
-                        }
-                    }
-                }
-                None => {
-                    tokio::select! {
-                        biased;
-                        () = shutdown_token.cancelled() => return,
-                        dirty_room_instance_ids = updates.wait_for_update() => dirty_room_instance_ids,
-                    }
-                }
+            let mut dirty_rooms = tokio::select! {
+                biased;
+                () = shutdown_token.cancelled() => return,
+                dirty_rooms = updates.wait_for_update() => dirty_rooms,
             };
-            dirty_room_instance_ids.extend(updates.take_pending_updates());
-            if dirty_room_instance_ids.is_empty() {
-                continue;
-            }
+            dirty_rooms.extend(updates.take_pending_updates());
             rooms
                 .sync_source_packet_selection_policies_for_runtime_ids(
-                    &dirty_room_instance_ids,
+                    &dirty_rooms,
                     &media_transport,
                 )
                 .await;

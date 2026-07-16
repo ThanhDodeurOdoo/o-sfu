@@ -7,7 +7,7 @@
 //! fire-and-forget route controls are best-effort because they may target a
 //! worker that has already torn down the corresponding relay or session
 
-use std::{collections::BTreeSet, sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
@@ -18,7 +18,6 @@ use super::{
     route_control::PacketLayerGate,
 };
 use crate::engine::{
-    RoomInstanceId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
         ConsumerRouteControl, ConsumerRouteControlOutcome, ProducerRouteControl,
@@ -231,21 +230,6 @@ pub enum RtcWorkerCommand {
     SourceActivitySnapshot {
         transport_media_ids: Vec<TransportMediaId>,
         response: RtcWorkerResponse<TransportSourceActivitySnapshot>,
-    },
-    /// read the next active-speaker expiry deadline owned by this worker
-    ///
-    /// schedulers use this to sleep until packet-loop observations need a
-    /// room-level refresh instead of polling every live worker
-    NextActiveSpeakerDeadline {
-        response: RtcWorkerResponse<Option<Instant>>,
-    },
-    /// collect room ids whose active-speaker observations expired by `now`
-    ///
-    /// the command keeps expiry calculation beside the worker-local observation
-    /// state and returns only the rooms that need an external wakeup
-    ExpiredActiveSpeakerRoomInstanceIds {
-        now: Instant,
-        response: RtcWorkerResponse<BTreeSet<RoomInstanceId>>,
     },
     /// accept the answer for the current pending local offer
     ///

@@ -64,7 +64,7 @@ pub struct PacketLoopConfig {
     pub worker: RtcWorkerConfig,
     pub diagnostics: Arc<DiagnosticsStore>,
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-    pub source_policy_signal: Arc<SourcePolicySignal>,
+    pub source_policy_signal: SourcePolicySignal,
     pub metrics: Arc<RuntimeMetrics>,
     pub rtp_metrics: Arc<RtpMetricsRecorder>,
     pub rtc_metrics: Arc<RtcMetricsRecorder>,
@@ -178,6 +178,9 @@ impl PacketLoopTurn {
             &config.rtp_metrics,
             &mut self.buffers,
         );
+        config
+            .source_policy_signal
+            .mark_dirty_rooms(state.take_expired_speaker_rooms(now));
         drain_due_kf_retries(state, &*config.rtc_metrics, &mut self.buffers, now);
         // sink routes are refreshed once per turn so recording lookups do not take
         // the shared registry lock per packet
@@ -564,8 +567,8 @@ fn handle_control_input(
 ///
 /// dirty sessions are always due immediately because a previous input or local
 /// send has queued more `str0m` output
-/// otherwise the deadline is the earlier of the next `str0m` timeout and the
-/// next delayed selected-RID keyframe refresh or pending keyframe retry
+/// otherwise returns the earliest `str0m`, selected-RID refresh, keyframe retry
+/// or active-speaker expiry deadline
 #[cfg(test)]
 pub(super) fn next_timeout_deadline(state: &mut PacketLoopState) -> Option<Instant> {
     next_timeout_deadline_at(state, Instant::now())
@@ -579,6 +582,7 @@ fn next_timeout_deadline_at(state: &mut PacketLoopState, now: Instant) -> Option
         state.next_timeout_deadline(),
         state.routes.next_rid_refresh_deadline(),
         state.routes.next_kf_deadline(),
+        state.routes.next_active_speaker_deadline(now),
     ]
     .into_iter()
     .flatten()

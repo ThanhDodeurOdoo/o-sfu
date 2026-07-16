@@ -357,9 +357,9 @@ impl PacketLoopState {
         }
     }
 
-    pub(super) fn expired_active_speaker_rooms(&self, now: Instant) -> BTreeSet<RoomInstanceId> {
+    pub(super) fn take_expired_speaker_rooms(&mut self, now: Instant) -> BTreeSet<RoomInstanceId> {
         self.routes
-            .expired_active_speaker_srcs(now)
+            .take_expired_speakers(now)
             .into_iter()
             .filter_map(|src_media| self.source_room_instance_id(src_media))
             .collect()

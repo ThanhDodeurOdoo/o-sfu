@@ -66,10 +66,11 @@ use crate::{
                 state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
                 test_support::{
                     DebugProbe, DebugProbeRequest, collect_ready_session_keys,
-                    sample_already_relayed_packet, sample_forwarded_packet,
-                    sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_rid,
-                    sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
-                    sample_rtp_packet, serialize_stun_message, test_transport_session_key,
+                    sample_already_relayed_audio_packet_at, sample_already_relayed_packet,
+                    sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
+                    sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
+                    sample_local_forwarded_packet, sample_rtp_packet, serialize_stun_message,
+                    test_transport_session_key,
                 },
             },
             test_support::test_rtc_port_range,
@@ -202,6 +203,21 @@ fn bind_std_socket() -> Result<StdUdpSocket, &'static str> {
         .set_nonblocking(true)
         .map_err(|_error| "UDP socket should become nonblocking")?;
     Ok(socket)
+}
+
+fn attach_test_socket(state: &mut PacketLoopState) -> Result<SocketAddr, &'static str> {
+    let socket = bind_std_socket()?;
+    let addr = socket
+        .local_addr()
+        .map_err(|_error| "test socket should have a local addr")?;
+    let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::Tokio)
+        .map_err(|_error| "test socket should convert")?;
+    state.shared_socket = Some(SharedRtcSocket {
+        ingress: UdpIngress::new(socket.clone(), addr, addr),
+        socket,
+        candidate_addr: addr,
+    });
+    Ok(addr)
 }
 
 fn run_packet_loop_io_test(
@@ -722,7 +738,7 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
         },
         diagnostics: Arc::new(DiagnosticsStore::default()),
         packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-        source_policy_signal: Arc::new(SourcePolicySignal::default()),
+        source_policy_signal: SourcePolicySignal::default(),
         metrics,
         rtp_metrics: outbound_recorder,
         rtc_metrics: datagram_recorder,
@@ -1339,6 +1355,57 @@ fn packet_loop_wakes_immediately_when_forwarding_marks_a_session_dirty() {
 }
 
 #[test]
+fn due_relay_observation_expires_in_same_pump() -> Result<(), &'static str> {
+    run_packet_loop_io_test(async {
+        let mut state = PacketLoopState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let config = packet_loop_config_for_test();
+        let subscription = config.source_policy_signal.subscribe();
+        let session = test_transport_session_key(400, 0, 401, UserId::Integer(402));
+        let source_id = TransportMediaId::new(403);
+        let (control_tx, _control_rx) = mpsc::channel(1);
+        state
+            .routes
+            .register_remote_source(
+                &TransportSourceKey::new(session.clone(), source_id),
+                RemoteSourceControl::new(control_tx, RelayTargetId::new(1)),
+            )
+            .map_err(|_error| "remote source should register")?;
+
+        attach_test_socket(&mut state)?;
+        let (relay_tx, mut relay_rx) = mpsc::channel(1);
+        let observed_at = Instant::now()
+            .checked_sub(Duration::from_millis(300))
+            .ok_or("test instant should support a short subtraction")?;
+        relay_tx
+            .send(sample_already_relayed_audio_packet_at(
+                session.clone(),
+                source_id,
+                observed_at,
+            ))
+            .await
+            .map_err(|_error| "relay packet should enqueue")?;
+
+        let snapshot = PacketLoopTurn::new(Instant::now())
+            .pump(&mut state, &snapshot_state, &config, &mut relay_rx)
+            .ok_or("packet loop should retain its socket")?;
+
+        assert!(
+            state
+                .routes
+                .active_speaker_sources(Instant::now())
+                .is_empty()
+        );
+        assert_eq!(
+            subscription.take_pending_updates(),
+            BTreeSet::from([session.room_instance_id()])
+        );
+        assert!(snapshot.next_timeout.is_none());
+        Ok(())
+    })
+}
+
+#[test]
 fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Result<(), &'static str>
 {
     run_packet_loop_io_test(async {
@@ -1355,21 +1422,9 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
             PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new())
                 .with_probe_receiver(probe_rx);
         let session = test_transport_session_key(418, 0, 419, UserId::Integer(420));
-        let socket = bind_std_socket()?;
-        let candidate_addr = socket
-            .local_addr()
-            .map_err(|_error| "packet-loop socket should have a local addr")?;
-        let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::Tokio)
-            .map_err(|_error| "packet-loop socket should convert")?;
-        let ingress = UdpIngress::new(socket.clone(), candidate_addr, candidate_addr);
+        let candidate_addr = attach_test_socket(&mut state)?;
         let (dirty_response, dirty_result) = oneshot::channel();
         let (queued_response, _queued_result) = oneshot::channel();
-
-        state.shared_socket = Some(SharedRtcSocket {
-            socket,
-            ingress,
-            candidate_addr,
-        });
         assert!(
             bootstrap::ensure_session_rtc_state(
                 &mut state.users,
@@ -1454,13 +1509,7 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
         let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let config = packet_loop_config_for_test();
         let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
-        let socket = bind_std_socket()?;
-        let socket_addr = socket
-            .local_addr()
-            .map_err(|_error| "socket should have a local addr")?;
-        let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::Tokio)
-            .map_err(|_error| "packet-loop socket should convert")?;
-        let ingress = UdpIngress::new(socket.clone(), socket_addr, socket_addr);
+        let socket_addr = attach_test_socket(&mut state)?;
         let sender = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .map_err(|_error| "sender socket should bind")?;
         let (_command_tx, command_rx) = mpsc::channel(1);
@@ -1468,12 +1517,6 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
         let mut inputs =
             PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new());
         let mut turn = PacketLoopTurn::new(Instant::now());
-        state.shared_socket = Some(SharedRtcSocket {
-            socket,
-            ingress,
-            candidate_addr: socket_addr,
-        });
-
         assert!(sender.send_to(b"one", socket_addr).is_ok());
         assert!(sender.send_to(b"second", socket_addr).is_ok());
 

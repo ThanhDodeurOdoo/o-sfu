@@ -1,9 +1,19 @@
 use std::time::{Duration, Instant};
 
 use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, StreamBinding};
+use tokio::sync::mpsc;
 
 use super::*;
-use crate::engine::{UserId, media_transport::rtc::test_support::test_transport_session_key};
+use crate::engine::{
+    UserId,
+    media_transport::{
+        TransportSourceKey,
+        rtc::{
+            commands::RemoteSourceControl, relay_registry::RelayTargetId,
+            test_support::test_transport_session_key,
+        },
+    },
+};
 
 fn rtp_parameters_with_ssrc(mid: Mid, ssrc: u32) -> RouterRtpParameters {
     RouterRtpParameters::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(ssrc)])
@@ -342,32 +352,35 @@ fn rejected_negotiated_ssrc_binding_does_not_clear_existing_owner() {
 }
 
 #[test]
-fn expired_active_speaker_channels_are_resolved_from_source_owners() {
+fn expired_local_and_relay_speakers_resolve_the_same_room_once() {
     let mut state = PacketLoopState::default();
-    let first_session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
-    let second_session = test_transport_session_key(34, 0, 35, UserId::Integer(36));
-    let first_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: first_session.clone(),
+    let session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
+    let local_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: session.clone(),
         mid: Mid::from("cam-up-a"),
     });
-    let second_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: second_session,
-        mid: Mid::from("cam-up-b"),
-    });
-    let start = Instant::now();
-
-    state
-        .routes
-        .observe_audio_activity(first_media_id, Some(true), None, start);
-    state.routes.observe_audio_activity(
-        second_media_id,
-        Some(true),
-        None,
-        start + Duration::from_millis(100),
+    let relay_id = TransportMediaId::new(40);
+    let (control_tx, _control_rx) = mpsc::channel(1);
+    assert!(
+        state
+            .routes
+            .register_remote_source(
+                &TransportSourceKey::new(session.clone(), relay_id),
+                RemoteSourceControl::new(control_tx, RelayTargetId::new(1)),
+            )
+            .is_ok()
     );
+    let observed_at = Instant::now();
+    for source_id in [local_id, relay_id] {
+        state
+            .routes
+            .observe_audio_activity(source_id, Some(true), None, observed_at);
+    }
+    let expired_at = observed_at + Duration::from_millis(251);
 
     assert_eq!(
-        state.expired_active_speaker_rooms(start + Duration::from_millis(251)),
-        BTreeSet::from([first_session.room_instance_id()])
+        state.take_expired_speaker_rooms(expired_at),
+        BTreeSet::from([session.room_instance_id()])
     );
+    assert!(state.take_expired_speaker_rooms(expired_at).is_empty());
 }

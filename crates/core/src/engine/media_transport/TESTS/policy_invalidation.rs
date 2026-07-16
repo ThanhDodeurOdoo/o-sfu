@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
-use tokio::{task::yield_now, time::timeout};
+use tokio::{sync::Barrier, time::timeout};
 
 use super::SourcePolicySignal;
 use crate::RoomInstanceId;
@@ -19,25 +19,31 @@ async fn wait_for_update_observes_dirty_state_marked_before_wait() {
 }
 
 #[tokio::test]
-async fn wait_for_update_wakes_task_after_cross_task_mark_dirty() {
-    let signal = Arc::new(SourcePolicySignal::default());
+async fn wait_for_update_merges_mark_after_first_drain() {
+    let signal = SourcePolicySignal::default();
     let subscription = signal.subscribe();
-
-    let waiter = tokio::spawn(async move {
-        timeout(Duration::from_secs(1), subscription.wait_for_update())
-            .await
-            .ok()
+    let after_first_drain = Arc::new(Barrier::new(2));
+    let producer_barrier = Arc::clone(&after_first_drain);
+    let producer_signal = signal.clone();
+    let producer = tokio::spawn(async move {
+        producer_barrier.wait().await;
+        producer_signal
+            .mark_dirty_rooms([RoomInstanceId::from_raw(9), RoomInstanceId::from_raw(10)]);
     });
 
-    yield_now().await;
     signal.mark_dirty(RoomInstanceId::from_raw(9));
-
-    let waiter_result = waiter.await;
-    assert!(waiter_result.is_ok());
-    let Ok(woke) = waiter_result else {
+    let first_update = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
+    assert!(first_update.is_ok());
+    let Ok(mut woke) = first_update else {
         return;
     };
-    assert_eq!(woke, Some(BTreeSet::from([RoomInstanceId::from_raw(9)])));
+    after_first_drain.wait().await;
+    assert!(producer.await.is_ok());
+    woke.extend(subscription.take_pending_updates());
+    assert_eq!(
+        woke,
+        BTreeSet::from([RoomInstanceId::from_raw(9), RoomInstanceId::from_raw(10)])
+    );
 }
 
 #[tokio::test]

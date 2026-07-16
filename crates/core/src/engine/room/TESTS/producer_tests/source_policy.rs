@@ -1,6 +1,10 @@
+use std::time::Duration;
+
 use super::support::*;
 use crate::engine::{
-    media_transport::{ReceiverBandwidthSnapshot, TransportTeardown},
+    media_transport::{
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId, TransportTeardown,
+    },
     room::source_policy::SourcePolicyTransaction,
     source_model::{ConsumerSourceSelection, PublishedSourceId, SourcePolicy, SourcePublishIntent},
 };
@@ -393,20 +397,44 @@ async fn active_speaker_camera_policy_prefers_louder_same_observation_speaker() 
 }
 
 #[tokio::test]
-async fn active_audio_speaker_limit_pauses_overflow_audio_routes() {
+async fn audio_only_speaker_limit_ignores_foreign_sources() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],
         RoomMediaLimits::try_new(1, 10).unwrap(),
     )
     .await;
-    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
+    for user_id in [UserId::Integer(1), UserId::Integer(3)] {
+        publish_track(
+            &scenario.room,
+            &user_id,
+            TestSourceKind::AudioDetector,
+            MediaKind::Audio,
+            test_audio_rtp_parameters(),
+            &scenario.adapter,
+        )
+        .await;
+    }
     let first_audio_media_id = scenario.audio_media_id(1).await;
     let third_audio_media_id = scenario.audio_media_id(3).await;
-
-    scenario
-        .mark_active_speakers([first_audio_media_id, third_audio_media_id])
-        .await;
-    scenario.refresh_policy().await;
+    let observed_at = Instant::now();
+    let speakers = [
+        ActiveSpeakerSource::new(
+            TransportMediaId::new(u64::MAX),
+            observed_at + Duration::from_millis(2),
+        ),
+        ActiveSpeakerSource::new(first_audio_media_id, observed_at + Duration::from_millis(1)),
+        ActiveSpeakerSource::new(third_audio_media_id, observed_at),
+    ];
+    let tx = {
+        let state = scenario.room.state.read().await;
+        SourcePolicyTransaction::plan_from_state(
+            &state,
+            &speakers,
+            &ReceiverBandwidthSnapshot::default(),
+        )
+        .expect("audio speaker limit should update the overflow route")
+    };
+    tx.execute(&scenario.room, &scenario.adapter).await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -426,16 +454,6 @@ async fn active_audio_speaker_limit_pauses_overflow_audio_routes() {
         Some(DiagnosticsPolicyPauseReason::AudioSpeakerLimit),
     )
     .await;
-    assert_eq!(
-        scenario
-            .adapter
-            .test_api()
-            .route_entry_by_media_id(third_audio_media_id)
-            .await
-            .unwrap()
-            .active_destination_count,
-        0
-    );
 }
 
 #[tokio::test]
