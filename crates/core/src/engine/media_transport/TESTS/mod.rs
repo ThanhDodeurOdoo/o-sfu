@@ -14,10 +14,8 @@ use str0m::media::Mid;
 use super::{
     MediaTransport, MediaTransportBuildError, TransportTeardown, route_control::reconcile_applied,
 };
-#[cfg(not(target_os = "linux"))]
-use crate::RtcUdpIoBackend;
 use crate::{
-    Bitrate, MediaWorkerId, RtcPortRange,
+    Bitrate, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
@@ -605,6 +603,25 @@ fn media_transport_ready_workers_bind_and_release_ports() {
         Some(MediaTransportBuildError::WorkerStartup { worker_index: 1 })
     );
     assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, first_port)).is_ok());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn media_transport_io_uring_worker_binds_before_first_offer() {
+    let range = test_rtc_range(1);
+    let port = range.min();
+    let mut config = test_media_transport_config(1, range);
+    config.rtc_udp_io_backend = RtcUdpIoBackend::IoUring;
+    let adapter = MediaTransport::build(config, test_media_transport_deps())
+        .unwrap_or_else(|error| panic!("io_uring media transport should start: {error}"));
+
+    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_err());
+    let session = test_session_key(1, 0, 1, UserId::Integer(1));
+    let offer = expect_initial_offer(&adapter, &session).await;
+    assert_eq!(expect_first_candidate_port(&offer.sdp), port);
+
+    drop(adapter);
+    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_ok());
 }
 
 #[cfg(not(target_os = "linux"))]
