@@ -179,13 +179,10 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
 }
 
 #[tokio::test]
-async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disabled() {
-    let adapter = rtc_with_codec_flags(
-        MediaCodecFlags::default()
-            .with_vp8(false)
-            .with_h264(true)
-            .with_vp9(true)
-            .with_av1(true),
+async fn rtc_initial_session_offer_advertises_h264_simulcast_when_h264_leads() {
+    let adapter = rtc_with_codec_policy(
+        MediaCodecFlags::default().with_h264(true),
+        CodecPreferences::default().with_video_order(&[VideoCodecPreference::H264]),
     );
     let session_key = transport_key(1, 136, UserId::Integer(136));
 
@@ -201,14 +198,14 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disable
             webrtc::sdp::rid::DIRECTION_RECV,
             Some(150_000)
         )),
-        "H264-only video offers should claim the low RID on the promoted matrix"
+        "H264-first video offers should claim the low RID on the promoted matrix"
     );
     assert!(
         offer_sdp.contains(&sdp_simulcast_line(
             webrtc::sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
-        "H264-only video offers should claim the promoted RID simulcast matrix"
+        "H264-first video offers should claim the promoted RID simulcast matrix"
     );
     let video_slot = upload_slots
         .iter()
@@ -216,11 +213,7 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_vp8_is_disable
         .expect("initial offer should include a video upload slot");
     assert_eq!(
         video_slot.codecs,
-        vec![
-            String::from("H264"),
-            String::from("VP9"),
-            String::from("AV1")
-        ]
+        vec![String::from("H264"), String::from("VP8")]
     );
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
@@ -304,7 +297,14 @@ async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
         assert_eq!(sdp_names.join(","), expected);
         assert_eq!(router_names, sdp_names);
         assert_eq!(slot.codecs, sdp_names);
+        if video {
+            assert!(slot.simulcast_encodings.is_empty());
+        }
     }
+    assert!(!offer_sdp.contains(&sdp_simulcast_line(
+        webrtc::sdp::simulcast::DIRECTION_RECV,
+        &["lo", "hi"]
+    )));
 }
 
 #[tokio::test]

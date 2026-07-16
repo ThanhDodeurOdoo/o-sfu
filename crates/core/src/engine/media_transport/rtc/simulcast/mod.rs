@@ -9,7 +9,7 @@ mod h264;
 mod vp8;
 
 pub use common::{NegotiatedRid, SimulcastAnswerError};
-use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::{MediaCodec, MediaStream as RouterRtpParameters};
 use str0m::{
     format::Codec,
     media::{MediaKind, Mid, Simulcast as Str0mSimulcast},
@@ -57,13 +57,19 @@ impl SimulcastCodecProfile {
         if !media_kind.is_video() {
             return None;
         }
-        if vp8::Vp8SimulcastProfile::layers_from_parameters(rtp_parameters).is_some() {
-            return Some(Self::Vp8(vp8::Vp8SimulcastProfile::new(
-                video_bitrate_limits,
-            )));
+        let primary_codec = rtp_parameters
+            .formats()
+            .find(|format| !format.codec().is_rtx())?
+            .codec();
+        match primary_codec {
+            MediaCodec::Vp8 => vp8::Vp8SimulcastProfile::layers_from_parameters(rtp_parameters)
+                .map(|_| Self::Vp8(vp8::Vp8SimulcastProfile::new(video_bitrate_limits))),
+            MediaCodec::H264 => {
+                h264::H264SimulcastProfile::from_parameters(rtp_parameters, video_bitrate_limits)
+                    .map(Self::H264)
+            }
+            _ => None,
         }
-        h264::H264SimulcastProfile::from_parameters(rtp_parameters, video_bitrate_limits)
-            .map(Self::H264)
     }
 
     fn recv_simulcast(
