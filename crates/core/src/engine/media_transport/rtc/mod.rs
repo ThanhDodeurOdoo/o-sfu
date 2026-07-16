@@ -6,8 +6,8 @@
 //! module to create offers, publish media, or inspect transport state unless
 //! they are writing focused RTC backend tests or backend integration code.
 //!
-//! The backend is worker-oriented. Each [`RtcWorker`] owns one lazy
-//! packet loop, command and relay mailboxes, worker-local relay target state,
+//! The backend is worker-oriented. Each [`RtcWorker`] owns one ready packet
+//! loop, command and relay mailboxes, worker-local relay target state,
 //! diagnostics hooks, packet-sink fanout, bitrate snapshots plus the state machines
 //! needed to drive Str0m. The surrounding media transport worker manager decides
 //! which session belongs to which worker and hides cross-worker relay setup
@@ -15,7 +15,7 @@
 //!
 //! Internal ownership is split by the kind of RTC work being performed:
 //!
-//! - `worker`: worker API, lazy lifecycle, command handlers and
+//! - `worker`: worker startup, command handlers and
 //!   production/test support entry points.
 //! - `profile`, `bootstrap`, `commands` and `state`: compiled RTP policy,
 //!   offer/answer bootstrap, mailbox contracts and pure RTC session state.
@@ -29,9 +29,9 @@
 //!   unknown-source recovery, observability snapshots plus profile and answer RTP projection.
 //! - `simulcast`: RTC-edge simulcast negotiation helpers.
 
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use crate::{RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits, VideoBitrateLimits};
+use crate::{SessionBitrateLimits, VideoBitrateLimits};
 
 #[cfg(test)]
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
@@ -83,11 +83,8 @@ pub use worker::RtcWorker;
 
 #[derive(Clone, Debug)]
 struct RtcWorkerConfig {
-    announced_ip: IpAddr,
     bitrate_limits: SessionBitrateLimits,
     video_bitrate_limits: VideoBitrateLimits,
-    rtc_port_range: RtcPortRange,
-    rtc_udp_io_backend: RtcUdpIoBackend,
     profile: Arc<RtpProfile>,
     media_quality_interval: Option<Duration>,
     media_id_base: u64,

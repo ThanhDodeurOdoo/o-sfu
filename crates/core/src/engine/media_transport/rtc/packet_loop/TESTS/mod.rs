@@ -9,7 +9,7 @@
 use std::{
     collections::BTreeSet,
     future::Future,
-    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket},
+    net::{SocketAddr, UdpSocket as StdUdpSocket},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -73,7 +73,6 @@ use crate::{
                     test_transport_session_key,
                 },
             },
-            test_support::test_rtc_port_range,
         },
         metrics::{
             RtcMetricsRecorder, RtcRouteControlMetrics, RtpForwardDestinationKind,
@@ -205,19 +204,18 @@ fn bind_std_socket() -> Result<StdUdpSocket, &'static str> {
     Ok(socket)
 }
 
-fn attach_test_socket(state: &mut PacketLoopState) -> Result<SocketAddr, &'static str> {
+fn test_socket() -> Result<SharedRtcSocket, &'static str> {
     let socket = bind_std_socket()?;
     let addr = socket
         .local_addr()
         .map_err(|_error| "test socket should have a local addr")?;
     let socket = RtcUdpSocket::from_std(socket, RtcUdpIoBackend::Tokio)
         .map_err(|_error| "test socket should convert")?;
-    state.shared_socket = Some(SharedRtcSocket {
+    Ok(SharedRtcSocket {
         ingress: UdpIngress::new(socket.clone(), addr, addr),
         socket,
         candidate_addr: addr,
-    });
-    Ok(addr)
+    })
 }
 
 fn run_packet_loop_io_test(
@@ -720,15 +718,11 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
     let datagram_recorder = metrics.register_rtc_worker();
     PacketLoopConfig {
         worker: RtcWorkerConfig {
-            announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             bitrate_limits: crate::SessionBitrateLimits::new(
                 Bitrate::from_mbps(8),
                 Bitrate::from_mbps(10),
             ),
             video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range: test_rtc_port_range(1)
-                .unwrap_or_else(|| panic!("test RTC port range should be available")),
-            rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
             profile: Arc::new(
                 RtpProfile::compile(MediaCodecFlags::default(), CodecPreferences::default())
                     .unwrap_or_else(|_error| panic!("test RTP profile should compile")),
@@ -824,6 +818,21 @@ fn malformed_udp_datagram_counts_as_malformed_drop_without_scan_metrics() {
     assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_source_rate_limited(), 0);
+}
+
+#[test]
+fn malformed_sources_do_not_allocate_zero_session_recovery_state() {
+    let mut harness = IngressRoutingHarness::new(45_101, 45_100);
+
+    for source_port in 45_101..45_614 {
+        harness.source_addr.set_port(source_port);
+        harness.route(&[0x01, 0x02, 0x03]);
+    }
+
+    assert_eq!(harness.demux.tracked_source_count(), 0);
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
+    assert_eq!(snapshot.rtc_datagram_drops_malformed(), 513);
 }
 
 #[test]
@@ -1372,7 +1381,6 @@ fn due_relay_observation_expires_in_same_pump() -> Result<(), &'static str> {
             )
             .map_err(|_error| "remote source should register")?;
 
-        attach_test_socket(&mut state)?;
         let (relay_tx, mut relay_rx) = mpsc::channel(1);
         let observed_at = Instant::now()
             .checked_sub(Duration::from_millis(300))
@@ -1386,9 +1394,12 @@ fn due_relay_observation_expires_in_same_pump() -> Result<(), &'static str> {
             .await
             .map_err(|_error| "relay packet should enqueue")?;
 
-        let snapshot = PacketLoopTurn::new(Instant::now())
-            .pump(&mut state, &snapshot_state, &config, &mut relay_rx)
-            .ok_or("packet loop should retain its socket")?;
+        let snapshot = PacketLoopTurn::new(Instant::now()).pump(
+            &mut state,
+            &snapshot_state,
+            &config,
+            &mut relay_rx,
+        );
 
         assert!(
             state
@@ -1422,7 +1433,8 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
             PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new())
                 .with_probe_receiver(probe_rx);
         let session = test_transport_session_key(418, 0, 419, UserId::Integer(420));
-        let candidate_addr = attach_test_socket(&mut state)?;
+        let mut shared_socket = test_socket()?;
+        let candidate_addr = shared_socket.candidate_addr;
         let (dirty_response, dirty_result) = oneshot::channel();
         let (queued_response, _queued_result) = oneshot::channel();
         assert!(
@@ -1458,7 +1470,14 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
         );
 
         let first_input = turn
-            .wait_for_next_input(None, None, &mut inputs)
+            .wait_for_next_input(
+                WaitPhaseSnapshot {
+                    next_timeout: None,
+                    turn_started_at: Instant::now(),
+                },
+                &mut shared_socket.ingress,
+                &mut inputs,
+            )
             .await
             .ok_or("first queued control input should wake the turn")?;
 
@@ -1467,8 +1486,10 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
                 packet_loop_state: &mut state,
                 bitrate_registry: &bitrate_registry,
                 snapshot_state: &snapshot_state,
+                candidate_addr,
                 config: &config,
                 demux: &mut demux,
+                ingress: &shared_socket.ingress,
                 inputs: &mut inputs,
             },
             first_input,
@@ -1478,22 +1499,14 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
             .map_err(|_error| "dirty probe response should arrive")?;
         assert!(state.has_dirty_sessions());
 
-        let snapshot = turn
-            .pump(&mut state, &snapshot_state, &config, inputs.relay_rx())
-            .ok_or("packet loop should keep the socket snapshot")?;
+        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
 
         assert!(!state.has_dirty_sessions());
 
-        let second_input = {
-            let ingress = &mut state
-                .shared_socket
-                .as_mut()
-                .ok_or("packet loop should still own its shared socket")?
-                .ingress;
-            turn.wait_for_next_input(Some(snapshot), Some(ingress), &mut inputs)
-                .await
-                .ok_or("second control input should wake after the pump")?
-        };
+        let second_input = turn
+            .wait_for_next_input(snapshot, &mut shared_socket.ingress, &mut inputs)
+            .await
+            .ok_or("second control input should wake after the pump")?;
 
         assert!(matches!(second_input, PacketLoopTurnInput::Control(_)));
         assert!(!state.has_dirty_sessions());
@@ -1509,7 +1522,8 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
         let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let config = packet_loop_config_for_test();
         let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
-        let socket_addr = attach_test_socket(&mut state)?;
+        let mut shared_socket = test_socket()?;
+        let socket_addr = shared_socket.candidate_addr;
         let sender = StdUdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .map_err(|_error| "sender socket should bind")?;
         let (_command_tx, command_rx) = mpsc::channel(1);
@@ -1520,23 +1534,17 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
         assert!(sender.send_to(b"one", socket_addr).is_ok());
         assert!(sender.send_to(b"second", socket_addr).is_ok());
 
-        let input = {
-            let ingress = &mut state
-                .shared_socket
-                .as_mut()
-                .ok_or("packet loop should own shared socket")?
-                .ingress;
-            turn.wait_for_next_input(
-                Some(WaitPhaseSnapshot {
+        let input = turn
+            .wait_for_next_input(
+                WaitPhaseSnapshot {
                     next_timeout: None,
                     turn_started_at: Instant::now(),
-                }),
-                Some(ingress),
+                },
+                &mut shared_socket.ingress,
                 &mut inputs,
             )
             .await
-            .ok_or("queued datagram should wake the turn")?
-        };
+            .ok_or("queued datagram should wake the turn")?;
 
         let first_payload = match input {
             PacketLoopTurnInput::Datagram(ref datagram) => datagram.packet.clone(),
@@ -1547,30 +1555,23 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
                 packet_loop_state: &mut state,
                 bitrate_registry: &bitrate_registry,
                 snapshot_state: &snapshot_state,
+                candidate_addr: shared_socket.candidate_addr,
                 config: &config,
                 demux: &mut demux,
+                ingress: &shared_socket.ingress,
                 inputs: &mut inputs,
             },
             input,
         );
-        let snapshot = turn
-            .pump(&mut state, &snapshot_state, &config, inputs.relay_rx())
-            .ok_or("packet loop should keep the socket snapshot")?;
+        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
 
-        let second_input = {
-            let ingress = &mut state
-                .shared_socket
-                .as_mut()
-                .ok_or("packet loop should still own shared socket")?
-                .ingress;
-            timeout(
-                Duration::from_secs(1),
-                turn.wait_for_next_input(Some(snapshot), Some(ingress), &mut inputs),
-            )
-            .await
-            .map_err(|_error| "second datagram should remain available for a later turn")?
-            .ok_or("second datagram input should be delivered")?
-        };
+        let second_input = timeout(
+            Duration::from_secs(1),
+            turn.wait_for_next_input(snapshot, &mut shared_socket.ingress, &mut inputs),
+        )
+        .await
+        .map_err(|_error| "second datagram should remain available for a later turn")?
+        .ok_or("second datagram input should be delivered")?;
 
         let second_payload = match second_input {
             PacketLoopTurnInput::Datagram(datagram) => datagram.packet,

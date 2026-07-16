@@ -202,11 +202,6 @@ pub fn route_pkt_to_session_at(
         );
         return;
     }
-    // unknown sources should have been learned through STUN before media reaches this path
-    if demux.should_rate_limit_source(datagram.source_addr, datagram.now) {
-        metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
-        return;
-    }
     let route = PacketRouteContext {
         snapshot_state,
         metrics,

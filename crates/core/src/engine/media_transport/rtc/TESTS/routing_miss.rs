@@ -8,6 +8,12 @@ use super::{
     UnknownSourceRateLimiter,
 };
 
+impl DemuxRecoveryState {
+    pub(crate) fn tracked_source_count(&self) -> usize {
+        self.source_rate_limiter.entries.len()
+    }
+}
+
 #[test]
 fn unknown_source_rate_limiter_blocks_after_burst_and_recovers_after_cooldown() {
     let source_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 44_000));
@@ -16,7 +22,7 @@ fn unknown_source_rate_limiter_blocks_after_burst_and_recovers_after_cooldown() 
 
     let mut now = start;
     for offset in 0..UNKNOWN_SOURCE_MISS_BURST_LIMIT {
-        assert!(limiter.allow_probe(source_addr, now));
+        assert!(!limiter.is_blocked(source_addr, now));
         assert_eq!(
             limiter.record_miss(source_addr, now),
             offset == UNKNOWN_SOURCE_MISS_BURST_LIMIT - 1
@@ -24,9 +30,9 @@ fn unknown_source_rate_limiter_blocks_after_burst_and_recovers_after_cooldown() 
         now += Duration::from_millis(1);
     }
 
-    assert!(!limiter.allow_probe(source_addr, start + Duration::from_millis(4)));
-    assert!(!limiter.allow_probe(source_addr, start + Duration::from_millis(199)));
-    assert!(limiter.allow_probe(source_addr, start + Duration::from_millis(203)));
+    assert!(limiter.is_blocked(source_addr, start + Duration::from_millis(4)));
+    assert!(limiter.is_blocked(source_addr, start + Duration::from_millis(199)));
+    assert!(!limiter.is_blocked(source_addr, start + Duration::from_millis(203)));
 }
 
 #[test]
@@ -47,9 +53,9 @@ fn route_success_clears_source_rate_limit_state() {
         now += Duration::from_millis(1);
     }
 
-    assert!(demux.should_rate_limit_source(source_addr, start + Duration::from_millis(4),));
+    assert!(demux.is_source_blocked(source_addr, start + Duration::from_millis(4),));
 
     demux.record_fallback_route_success(miss_key, &packet, source_addr);
 
-    assert!(!demux.should_rate_limit_source(source_addr, start + Duration::from_millis(5),));
+    assert!(!demux.is_source_blocked(source_addr, start + Duration::from_millis(5),));
 }

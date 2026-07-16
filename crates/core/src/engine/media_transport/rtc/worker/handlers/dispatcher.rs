@@ -6,6 +6,7 @@
 //! through the immutable runtime context that those handlers need.
 
 use std::{
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -33,6 +34,7 @@ use crate::engine::{
 pub struct WorkerCommandContext<'a> {
     pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub candidate_addr: SocketAddr,
     pub now: Instant,
     pub config: &'a RtcWorkerConfig,
     pub metrics: &'a RuntimeMetrics,
@@ -41,11 +43,9 @@ pub struct WorkerCommandContext<'a> {
 impl WorkerCommandContext<'_> {
     fn offer_bootstrap_config(&self) -> OfferBootstrapConfig<'_> {
         OfferBootstrapConfig {
-            announced_ip: self.config.announced_ip,
+            candidate_addr: self.candidate_addr,
             max_bitrate_out: self.config.bitrate_limits.max_bitrate_out(),
             video_bitrate_limits: self.config.video_bitrate_limits,
-            rtc_port_range: self.config.rtc_port_range,
-            rtc_udp_io_backend: self.config.rtc_udp_io_backend,
             profile: self.config.profile.as_ref(),
             media_quality_interval: self.config.media_quality_interval,
             metrics: self.metrics,

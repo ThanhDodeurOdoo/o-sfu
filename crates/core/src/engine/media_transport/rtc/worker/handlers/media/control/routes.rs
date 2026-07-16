@@ -187,7 +187,11 @@ pub(super) fn worker_remove_relay_target(
     target_id: RelayTargetId,
 ) -> Result<(), TransportAdapterError> {
     let src_media = source.transport_media_id();
-    ensure_local_producer_mid(state, source.session_key(), src_media)?;
+    match ensure_local_producer_mid(state, source.session_key(), src_media) {
+        Ok(_) => {}
+        Err(TransportAdapterError::TransportUnavailable) => return Ok(()),
+        Err(error) => return Err(error),
+    }
     state.routes.remove_relay_target(src_media, target_id);
     Ok(())
 }

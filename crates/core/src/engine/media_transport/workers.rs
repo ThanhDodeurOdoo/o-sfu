@@ -5,7 +5,7 @@
 //! coordinates cross-worker relay cleanup. Packet-loop hot paths live inside
 //! `engine::media_transport::rtc`.
 
-use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
+use std::{cmp::Reverse, collections::BTreeMap, ptr};
 
 use str0m::media::MediaKind as Str0mMediaKind;
 
@@ -22,7 +22,7 @@ use crate::engine::{
     },
 };
 
-type RelayRegistrationWorkers = Option<(Arc<RtcWorker>, Arc<RtcWorker>)>;
+type RelayRegistrationWorkers<'a> = Option<(&'a RtcWorker, &'a RtcWorker)>;
 
 impl MediaTransport {
     /// Selects the worker that owns a transport session.
@@ -30,10 +30,7 @@ impl MediaTransport {
     /// The mapping is deterministic and depends only on the runtime-assigned
     /// media-worker id in the session key. Room and signaling code must not
     /// infer topology from user identity.
-    pub(super) fn worker_for_user(
-        &self,
-        session_key: &TransportSessionKey,
-    ) -> Option<Arc<RtcWorker>> {
+    pub(super) fn worker_for_user(&self, session_key: &TransportSessionKey) -> Option<&RtcWorker> {
         self.worker_for_index(session_key.media_worker_id().as_usize())
     }
 
@@ -47,10 +44,10 @@ impl MediaTransport {
         &self,
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,
-    ) -> Result<RelayRegistrationWorkers, TransportAdapterError> {
+    ) -> Result<RelayRegistrationWorkers<'_>, TransportAdapterError> {
         let consumer_worker = self.require_worker_for_user(consumer_session_key)?;
         let source_worker = self.require_worker_for_user(source_session_key)?;
-        if Arc::ptr_eq(&consumer_worker, &source_worker) {
+        if ptr::eq(consumer_worker, source_worker) {
             return Ok(None);
         }
         Ok(Some((source_worker, consumer_worker)))
@@ -198,9 +195,8 @@ impl MediaTransport {
 
     /// Applies one cross-worker relay-route effect.
     ///
-    /// Relay installation starts the target worker to obtain its relay mailbox.
-    /// Release and activity updates address existing source-worker relay state
-    /// without booting the target worker.
+    /// Relay installation uses the target worker mailbox while release and
+    /// activity updates address source-worker relay state.
     pub(super) async fn execute_relay_route_effect(
         &self,
         effect: &TransportRelayRouteEffect,
@@ -216,10 +212,10 @@ impl MediaTransport {
         let source_worker = self.require_worker_for_user(effect.source.session_key())?;
         let target_worker =
             self.require_worker_for_media_worker_id(effect.target_media_worker_id)?;
-        if Arc::ptr_eq(&source_worker, &target_worker) {
+        if ptr::eq(source_worker, target_worker) {
             return Ok(());
         }
-        let request = target_worker.relay_route_request(effect.source.clone(), effect.action)?;
+        let request = target_worker.relay_route_request(effect.source.clone(), effect.action);
         source_worker
             .request_worker(|response| RtcWorkerCommand::RouteControl {
                 request,
@@ -269,7 +265,7 @@ impl MediaTransport {
     pub(super) fn require_worker_for_user(
         &self,
         session_key: &TransportSessionKey,
-    ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
+    ) -> Result<&RtcWorker, TransportAdapterError> {
         self.worker_for_user(session_key)
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
@@ -277,7 +273,7 @@ impl MediaTransport {
     pub(super) fn require_worker_for_media_worker_id(
         &self,
         media_worker_id: MediaWorkerId,
-    ) -> Result<Arc<RtcWorker>, TransportAdapterError> {
+    ) -> Result<&RtcWorker, TransportAdapterError> {
         self.worker_for_index(media_worker_id.as_usize())
             .ok_or(TransportAdapterError::TransportUnavailable)
     }
@@ -305,7 +301,7 @@ impl MediaTransport {
     ) {
         for (worker_index, worker_session_keys) in self.session_keys_by_worker(session_keys) {
             if let Some(worker) = self.worker_for_index(worker_index) {
-                visit(worker.as_ref(), &worker_session_keys);
+                visit(worker, &worker_session_keys);
             }
         }
     }
@@ -320,12 +316,12 @@ impl MediaTransport {
         Err(TransportAdapterError::InvalidInput)
     }
 
-    pub(super) fn worker_for_index(&self, worker_index: usize) -> Option<Arc<RtcWorker>> {
-        self.workers.get(worker_index).map(Arc::clone)
+    pub(super) fn worker_for_index(&self, worker_index: usize) -> Option<&RtcWorker> {
+        self.workers.get(worker_index)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub(super) fn all_workers(&self) -> impl Iterator<Item = &Arc<RtcWorker>> {
+    pub(super) fn all_workers(&self) -> impl Iterator<Item = &RtcWorker> {
         self.workers.iter()
     }
 }

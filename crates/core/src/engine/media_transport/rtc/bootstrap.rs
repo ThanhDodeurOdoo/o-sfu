@@ -1,9 +1,7 @@
 //! cold-path rtc socket and session bootstrap
 //!
-//! this module is the only production path that creates worker-local str0m state
-//! negotiation calls it before offer creation so the packet loop can
-//! later treat sockets, ICE credentials, codec configuration and per-session
-//! bookkeeping as already initialized worker-local state
+//! this module creates worker sockets during construction and session-local
+//! str0m state during negotiation
 //!
 //! bootstrap stops at transport setup
 //! room policy, media registration, SDP

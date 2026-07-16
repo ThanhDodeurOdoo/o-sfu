@@ -9,7 +9,7 @@
 use std::{
     collections::BTreeMap,
     mem,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -32,7 +32,7 @@ use super::{
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
-    Bitrate, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
+    Bitrate, VideoBitrateLimits,
     engine::{
         media_transport::{
             AppliedProducer, AppliedSessionAnswer, SessionOffer, SessionUploadEncoding,
@@ -47,11 +47,9 @@ const INITIAL_NEGOTIATION_MEDIA_KINDS: [MediaKind; 2] = [MediaKind::Audio, Media
 
 #[derive(Clone, Copy)]
 pub(super) struct OfferBootstrapConfig<'a> {
-    pub(super) announced_ip: IpAddr,
+    pub(super) candidate_addr: SocketAddr,
     pub(super) max_bitrate_out: Bitrate,
     pub(super) video_bitrate_limits: VideoBitrateLimits,
-    pub(super) rtc_port_range: RtcPortRange,
-    pub(super) rtc_udp_io_backend: RtcUdpIoBackend,
     pub(super) profile: &'a RtpProfile,
     pub(super) media_quality_interval: Option<Duration>,
     pub(super) metrics: &'a RuntimeMetrics,
@@ -422,22 +420,10 @@ fn ensure_session_ready_for_offer(
     config: OfferBootstrapConfig<'_>,
     session_key: &TransportSessionKey,
 ) -> Result<(), TransportAdapterError> {
-    let candidate_addr = if let Some(shared_socket) = state.shared_socket.as_ref() {
-        shared_socket.candidate_addr
-    } else {
-        let shared_socket = bootstrap::bind_shared_rtc_socket(
-            config.announced_ip,
-            config.rtc_port_range,
-            config.rtc_udp_io_backend,
-        )?;
-        let candidate_addr = shared_socket.candidate_addr;
-        state.shared_socket = Some(shared_socket);
-        candidate_addr
-    };
     let created_session = bootstrap::ensure_session_rtc_state_with_stats_interval(
         &mut state.users,
         session_key,
-        candidate_addr,
+        config.candidate_addr,
         config.max_bitrate_out,
         config.profile,
         config.media_quality_interval,
@@ -457,7 +443,7 @@ fn ensure_session_ready_for_offer(
             debug!(
                 user_id = ?session_key.user_id(),
                 media_worker_id = session_key.media_worker_id().as_usize(),
-                %candidate_addr,
+                candidate_addr = %config.candidate_addr,
                 local_ice_ufrag = %session_state.local_ice_ufrag,
                 created_session,
                 "prepared rtc user for offer generation"

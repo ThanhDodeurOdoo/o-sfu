@@ -3,7 +3,7 @@
     reason = "media transport tests fail loudly when fixed test setup is invalid"
 )]
 
-use std::sync::Arc;
+use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 
 use o_sfu_router::{
     MediaKind,
@@ -24,8 +24,8 @@ use crate::{
             ConsumerActivity, ConsumerRouteControl, MediaControlPlan, ProducerActivity,
             ReceiverBweTargetUpdate, RelayRouteActivity, SessionOffer, SourcePacketGate,
             TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-            TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionKey,
-            TransportSourceKey,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult,
+            TransportSessionKey, TransportSourceKey,
             rtc::{RtcWorker, WorkerMediaControlBatchOutcome},
             test_support::{
                 DebugPacketGate, test_media_transport as build_test_media_transport,
@@ -185,6 +185,13 @@ async fn assert_relay_target_counts(
     );
 }
 
+fn transport_cleanup_failures(adapter: &MediaTransport) -> Option<u64> {
+    adapter.metrics.snapshot().counter(
+        MetricName::TransportCleanupFailuresTotal,
+        &[("kind", "terminal")],
+    )
+}
+
 async fn assert_local_route_active(
     source_worker: &RtcWorker,
     source_session: &TransportSessionKey,
@@ -245,10 +252,10 @@ fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
         .unwrap_or_else(|| panic!("RTC offer should include a parseable ICE candidate port"))
 }
 
-fn expect_worker_for_user(
-    adapter: &MediaTransport,
+fn expect_worker_for_user<'a>(
+    adapter: &'a MediaTransport,
     session_key: &TransportSessionKey,
-) -> Arc<RtcWorker> {
+) -> &'a RtcWorker {
     let Some(worker) = adapter.worker_for_user(session_key) else {
         panic!("test session should be assigned to a media worker");
     };
@@ -263,43 +270,6 @@ async fn expect_initial_offer(
         .create_initial_session_offer(session_key)
         .await
         .unwrap_or_else(|error| panic!("test session should create an RTC offer: {error:?}"))
-}
-
-#[tokio::test]
-async fn media_transport_teardown_does_not_start_idle_workers() {
-    let adapter = test_media_transport(2, test_rtc_range(2));
-    let source_session = test_session_key(1, 0, 11, UserId::Integer(11));
-    let target_session = test_session_key(1, 1, 12, UserId::Integer(12));
-    let source_worker = expect_worker_for_user(&adapter, &source_session);
-    let target_worker = expect_worker_for_user(&adapter, &target_session);
-    let source_media_id = TransportMediaId::new(100);
-
-    adapter
-        .teardown([
-            TransportTeardown::CloseSession {
-                session_key: source_session.clone(),
-            },
-            TransportTeardown::RemoveMedia {
-                session_key: source_session.clone(),
-                transport_media_id: source_media_id,
-            },
-            TransportTeardown::ReleaseRelayRoute {
-                source: TransportSourceKey::new(source_session.clone(), source_media_id),
-                target_media_worker_id: target_session.media_worker_id(),
-            },
-        ])
-        .await;
-    apply_relay_route_effect(
-        &adapter,
-        &source_session,
-        source_media_id,
-        &target_session,
-        TransportRelayRouteAction::Release,
-    )
-    .await;
-
-    assert!(!source_worker.packet_loop_started());
-    assert!(!target_worker.packet_loop_started());
 }
 
 async fn assert_media_control_batch_bound(
@@ -363,7 +333,6 @@ async fn media_transport_plan_updates_source_route() {
     let consumer_session = test_session_key(60, 1, 2, UserId::Integer(2));
     let peer_source_session = test_session_key(60, 2, 3, UserId::Integer(3));
     let missing_session = test_session_key(60, 0, 4, UserId::Integer(4));
-    let idle_worker = expect_worker_for_user(&adapter, &missing_session);
     let source_rtp_parameters = sample_rtp_parameters("cam-up", 81_000);
     let consumer_rtp_parameters = sample_rtp_parameters("cam-down", 82_000);
 
@@ -519,17 +488,20 @@ async fn media_transport_plan_updates_source_route() {
     assert_eq!(
         *lock_unpoisoned(&adapter.media_control_batches),
         vec![
+            (0, "bwe", vec![3]),
             (1, "bwe", vec![0, 2]),
             (2, "bwe", vec![1]),
+            (0, "producer", vec![4]),
             (1, "producer", vec![0, 2]),
             (2, "producer", vec![1, 3]),
+            (0, "gates", vec![1]),
             (1, "gates", vec![3, 5, 7]),
             (2, "gates", vec![4, 6]),
+            (0, "consumer", vec![2]),
             (1, "consumer", vec![5, 7]),
             (2, "consumer", vec![4, 6]),
         ]
     );
-    assert!(!idle_worker.packet_loop_started());
     let route_entry = adapter
         .test_api()
         .route_entry_by_media_id(route.source_transport_media_id())
@@ -580,10 +552,65 @@ fn media_transport_build_rejects_invalid_port_split() {
     );
 }
 
+#[test]
+fn media_transport_ready_workers_bind_and_release_ports() {
+    let range = test_rtc_range(2);
+    let mut ports = range.ports();
+    let first_port = ports
+        .next()
+        .unwrap_or_else(|| panic!("test RTC range should contain a first port"));
+    let second_port = ports
+        .next()
+        .unwrap_or_else(|| panic!("test RTC range should contain a second port"));
+    let blocker = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, first_port))
+        .unwrap_or_else(|error| panic!("test RTC port should bind: {error}"));
+    let result = MediaTransport::build(
+        test_media_transport_config(1, RtcPortRange::new(first_port, first_port)),
+        test_media_transport_deps(),
+    );
+    assert_eq!(
+        result.err(),
+        Some(MediaTransportBuildError::WorkerStartup { worker_index: 0 })
+    );
+    drop(blocker);
+
+    let adapter = MediaTransport::build(
+        test_media_transport_config(2, range),
+        test_media_transport_deps(),
+    )
+    .unwrap_or_else(|error| panic!("test media transport should start: {error}"));
+
+    assert!(
+        range.ports().all(|port| {
+            UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_err()
+        })
+    );
+    drop(adapter);
+    assert!(
+        range.ports().all(|port| {
+            UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_ok()
+        })
+    );
+
+    let _blocker = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, second_port))
+        .unwrap_or_else(|error| panic!("second test RTC port should bind: {error}"));
+
+    let result = MediaTransport::build(
+        test_media_transport_config(2, range),
+        test_media_transport_deps(),
+    );
+
+    assert_eq!(
+        result.err(),
+        Some(MediaTransportBuildError::WorkerStartup { worker_index: 1 })
+    );
+    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, first_port)).is_ok());
+}
+
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn media_transport_build_rejects_non_linux_io_uring_backend() {
-    let mut config = test_media_transport_config(1, test_rtc_range(1));
+    let mut config = test_media_transport_config(1, RtcPortRange::new(46_230, 46_230));
     config.rtc_udp_io_backend = RtcUdpIoBackend::IoUring;
 
     let result = MediaTransport::build(config, test_media_transport_deps());
@@ -760,17 +787,18 @@ async fn media_transport_terminal_teardown_falls_back_and_continues_batch() {
             .await
             .is_ok()
     );
-    assert_eq!(
-        adapter.metrics.snapshot().counter(
-            MetricName::TransportCleanupFailuresTotal,
-            &[("kind", "terminal")],
-        ),
-        Some(1)
-    );
+    assert_eq!(transport_cleanup_failures(&adapter), Some(1));
+    worker.stop_for_test().await;
+    adapter
+        .teardown([TransportTeardown::CloseSession {
+            session_key: source_session,
+        }])
+        .await;
+    assert_eq!(transport_cleanup_failures(&adapter), Some(2));
 }
 
 #[tokio::test]
-async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
+async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() -> TransportResult<()> {
     let adapter = test_media_transport(2, test_rtc_range(2));
     let source_session = test_session_key(40, 0, 1, UserId::Integer(1));
     let local_consumer_session = test_session_key(40, 0, 2, UserId::Integer(2));
@@ -814,7 +842,7 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
     let source_worker = expect_worker_for_user(&adapter, &source_session);
     let remote_consumer_worker = expect_worker_for_user(&adapter, &remote_consumer_session);
 
-    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
+    assert_relay_target_counts(source_worker, source_media_id, 1, 1).await;
 
     set_remote_relay_and_consumer_active(
         &adapter,
@@ -826,16 +854,16 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
     )
     .await;
 
-    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 0).await;
+    assert_relay_target_counts(source_worker, source_media_id, 1, 0).await;
     assert_local_route_active(
-        source_worker.as_ref(),
+        source_worker,
         &source_session,
         &local_consumer_session,
         local_consumer_media_id,
     )
     .await;
     assert_remote_route_activity(
-        remote_consumer_worker.as_ref(),
+        remote_consumer_worker,
         source_media_id,
         &remote_consumer_session,
         remote_consumer_media_id,
@@ -852,15 +880,12 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
         true,
     )
     .await;
-    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
+    assert_relay_target_counts(source_worker, source_media_id, 1, 1).await;
 
-    assert!(
-        adapter
-            .remove_media(&remote_consumer_session, remote_consumer_media_id)
-            .await
-            .is_ok()
-    );
-    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
+    adapter
+        .remove_media(&remote_consumer_session, remote_consumer_media_id)
+        .await?;
+    assert_relay_target_counts(source_worker, source_media_id, 1, 1).await;
     let release = |session_key| TransportTeardown::ReleaseRelayRoute {
         source: TransportSourceKey::new(session_key, source_media_id),
         target_media_worker_id: remote_consumer_session.media_worker_id(),
@@ -868,15 +893,17 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() {
     adapter
         .teardown([release(local_consumer_session.clone())])
         .await;
-    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 1, 1).await;
-    assert!(
-        adapter
-            .create_initial_session_offer(&local_consumer_session)
-            .await
-            .is_ok()
-    );
+    assert_relay_target_counts(source_worker, source_media_id, 1, 1).await;
+    let _offer = adapter
+        .create_initial_session_offer(&local_consumer_session)
+        .await?;
     adapter.teardown([release(source_session.clone())]).await;
-    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 0, 0).await;
+    assert_relay_target_counts(source_worker, source_media_id, 0, 0).await;
+    adapter
+        .remove_media(&source_session, source_media_id)
+        .await?;
     adapter.teardown([release(source_session)]).await;
-    assert_relay_target_counts(source_worker.as_ref(), source_media_id, 0, 0).await;
+    assert_relay_target_counts(source_worker, source_media_id, 0, 0).await;
+    assert_eq!(transport_cleanup_failures(&adapter), Some(1));
+    Ok(())
 }

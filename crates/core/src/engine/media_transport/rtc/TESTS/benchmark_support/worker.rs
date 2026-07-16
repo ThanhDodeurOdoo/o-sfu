@@ -40,13 +40,13 @@ const WORKER_PACKET_COMMAND_MIX_FANOUT: usize = 8;
 
 #[allow(
     clippy::expect_used,
-    reason = "benchmark setup uses a code-controlled RTP profile"
+    reason = "benchmark setup must fail when its RTC profile or worker cannot start"
 )]
 fn benchmark_worker(rtc_port_range: RtcPortRange) -> RtcWorker {
     let config = test_media_transport_config(1, rtc_port_range);
     let profile = RtpProfile::compile(config.codec_flags, config.codec_preferences)
         .expect("benchmark RTP profile should compile");
-    RtcWorker::new(
+    RtcWorker::start(
         &config,
         Arc::new(profile),
         rtc_port_range,
@@ -55,12 +55,12 @@ fn benchmark_worker(rtc_port_range: RtcPortRange) -> RtcWorker {
         0,
         MediaWorkerId::from_raw(0),
     )
+    .expect("benchmark RTC worker should start")
 }
 
 /// current-thread packet-loop fixture for whole-worker investigation benchmarks
 ///
-/// setup builds a real `RtcWorker`, starts its lazy packet-loop task on a
-/// current-thread Tokio runtime and warms one bootstrap session before the
+/// setup builds a ready `RtcWorker` and warms one bootstrap session before the
 /// measured function runs
 /// the measured path sends read-only worker commands through the real mailbox
 /// so Callgrind sees packet-loop scheduling, command drain and response
