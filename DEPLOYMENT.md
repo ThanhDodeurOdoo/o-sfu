@@ -505,7 +505,6 @@ local room spillover:
 | `ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH` | `128` | relay mailbox pressure threshold, with `0` disabling this signal |
 | `ROOM_SPILLOVER_WORKER_PRESSURE` | `80` | worker pressure threshold from `0` to `100`, with `0` disabling this signal |
 | `ROOM_SPILLOVER_ACTIVATION_WINDOW` | `2` | consecutive pressure observations required before attaching another local router |
-| `ROOM_SPILLOVER_COOLDOWN_WINDOW` | `4` | consecutive idle cleanup observations required before draining idle spillover capacity |
 
 media policy and codecs:
 

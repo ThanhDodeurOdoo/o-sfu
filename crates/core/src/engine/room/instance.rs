@@ -10,14 +10,13 @@ use super::{
     state::RoomState,
 };
 use crate::{
-    RoomSpilloverMode, RoomWorkerPolicy,
+    RoomWorkerPolicy,
     engine::{
         AvailableFeatures, ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState,
         RoomInstanceId, UserId,
         diagnostics::DiagnosticsStore,
         media_transport::{MediaTransport, TransportSessionKey},
         metrics::RuntimeMetrics,
-        sync::lock_unpoisoned,
     },
 };
 
@@ -99,16 +98,6 @@ impl Room {
     #[must_use]
     pub fn uuid(&self) -> &str {
         self.definition.uuid()
-    }
-
-    pub async fn reconcile_spillover_routers(&self) {
-        let spillover = self.room_worker_policy().spillover();
-        if matches!(spillover, RoomSpilloverMode::StrictSingleRouter) {
-            return;
-        }
-        let mut state = self.state.write().await;
-        let mut placement = lock_unpoisoned(&self.load_triggered_placement);
-        state.reconcile_spillover_routers(spillover, &mut placement);
     }
 
     #[must_use]

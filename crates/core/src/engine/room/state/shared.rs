@@ -12,11 +12,11 @@ use super::super::{
     transition::StagedPublishes,
 };
 use crate::{
-    RoomMediaLimits, RoomSpilloverMode,
+    RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
         media_transport::TransportSessionKey,
-        room::placement::{LoadTriggeredPlacementState, PlacementSnapshot},
+        room::placement::PlacementSnapshot,
         source_model::{SourceSubscriptionIntent, UserStreamId},
     },
 };
@@ -187,15 +187,6 @@ impl RoomState {
             .source_fanout_pressure(max_fanout_per_source, |user_id| {
                 self.user_connection_id(user_id)
             })
-    }
-
-    pub fn reconcile_spillover_routers(
-        &mut self,
-        spillover: RoomSpilloverMode,
-        placement: &mut LoadTriggeredPlacementState,
-    ) {
-        self.topology
-            .reconcile_spillover_routers(spillover, placement);
     }
 
     pub fn user_connection_id(&self, user_id: &UserId) -> Option<ConnectionId> {

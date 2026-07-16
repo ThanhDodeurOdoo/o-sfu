@@ -6,12 +6,7 @@
 //! request handlers receive [`RuntimeState`] so they cannot depend on process
 //! boot details or full lifecycle ownership
 
-use std::{
-    future::Future,
-    process,
-    sync::Arc,
-    time::{Duration, Instant as StdInstant},
-};
+use std::{future::Future, process, sync::Arc, time::Instant as StdInstant};
 
 use anyhow::Result;
 use tokio::{
@@ -53,9 +48,6 @@ pub(crate) use self::{
     metrics::RuntimeMetrics,
     packet_sinks::RoomPacketSinkRegistry,
 };
-
-/// cadence for advancing load-triggered spillover cooldowns
-const SPILLOVER_COOLDOWN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// state for shared runtime services
 ///
@@ -202,7 +194,6 @@ impl Runtime {
 struct RuntimeTasks {
     shutdown_token: CancellationToken,
     source_packet_policy_sync: Option<JoinHandle<()>>,
-    spillover_cooldown: Option<JoinHandle<()>>,
 }
 
 impl RuntimeTasks {
@@ -214,14 +205,9 @@ impl RuntimeTasks {
             runtime.media_transport.source_policy_subscription(),
             shutdown_token.child_token(),
         );
-        let spillover_cooldown = spawn_spillover_cooldown_task(
-            Arc::clone(&runtime.room_manager),
-            shutdown_token.child_token(),
-        );
         Self {
             shutdown_token,
             source_packet_policy_sync: Some(source_packet_policy_sync),
-            spillover_cooldown: Some(spillover_cooldown),
         }
     }
 
@@ -235,9 +221,6 @@ impl RuntimeTasks {
         self.shutdown_token.cancel();
         if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
             wait_for_runtime_task(source_packet_policy_sync, "source packet policy update").await;
-        }
-        if let Some(spillover_cooldown) = self.spillover_cooldown.take() {
-            wait_for_runtime_task(spillover_cooldown, "spillover cooldown").await;
         }
     }
 }
@@ -260,9 +243,6 @@ impl Drop for RuntimeTasks {
         self.shutdown_token.cancel();
         if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
             source_packet_policy_sync.abort();
-        }
-        if let Some(spillover_cooldown) = self.spillover_cooldown.take() {
-            spillover_cooldown.abort();
         }
     }
 }
@@ -339,30 +319,6 @@ fn spawn_source_packet_policy_update_task(
                     &media_transport,
                 )
                 .await;
-        }
-    })
-}
-
-/// advances load-triggered spillover cooldowns from the runtime clock
-///
-/// missed ticks are skipped because each turn observes current room state
-/// rather than replaying elapsed work
-fn spawn_spillover_cooldown_task(
-    rooms: Arc<RoomManager>,
-    shutdown_token: CancellationToken,
-) -> JoinHandle<()> {
-    info!("booted spillover cooldown task");
-    tokio::spawn(async move {
-        let mut interval = time::interval(SPILLOVER_COOLDOWN_INTERVAL);
-        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                biased;
-                () = shutdown_token.cancelled() => return,
-                _ = interval.tick() => {
-                    rooms.advance_spillover_cooldowns().await;
-                }
-            }
         }
     })
 }

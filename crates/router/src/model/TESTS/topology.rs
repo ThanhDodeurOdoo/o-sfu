@@ -352,32 +352,12 @@ fn router_rejects_unknown_graph_identifiers_before_mutation() {
 }
 
 #[test]
-fn spillover_detachment_requires_an_empty_router() -> Result<(), RouterError> {
+fn session_retirement_keeps_spillover_placement() {
     let mut router = router();
-    let seed = UserId::Integer(5);
+    let primary = UserId::Integer(5);
     let user = UserId::Integer(10);
-    join(&mut router, &seed, 5, 9, 0);
-    router.remove_session(&seed)?;
-    join(&mut router, &user, 1, 10, 1);
-
-    router.detach_spillover_routers(&[RouterId(9), RouterId(10)]);
-    assert_eq!(router.router_count(), 2);
-
-    router.remove_session(&user)?;
-    assert_eq!(router.idle_spillover_routers(), vec![RouterId(10)]);
-    router.detach_spillover_routers(&[RouterId(10)]);
-
-    let view = InvariantView::new(&router);
-    assert_eq!(router.router_count(), 1);
-    assert!(view.is_valid());
-    Ok(())
-}
-
-#[test]
-fn retiring_a_matching_placement_removes_its_local_graph() {
-    let mut router = router();
-    let user = UserId::Integer(10);
-    join(&mut router, &user, 1, 9, 3);
+    join(&mut router, &primary, 5, 9, 0);
+    join(&mut router, &user, 1, 10, 3);
 
     assert_eq!(
         router.retire_committed_placement(&user, ConnectionId::from_raw(2)),
@@ -387,9 +367,13 @@ fn retiring_a_matching_placement_removes_its_local_graph() {
         router.retire_committed_placement(&user, ConnectionId::from_raw(1)),
         Some(MediaWorkerId::from_raw(3))
     );
+    assert_eq!(
+        router.placement_snapshot().assigned_placements(),
+        &[placement(9, 0), placement(10, 3)]
+    );
 
     let view = InvariantView::new(&router);
-    assert_eq!(view.session_count(RouterId(9)), Some(0));
+    assert!(!view.has_connection(ConnectionId::from_raw(1)));
     assert!(view.is_valid());
 }
 

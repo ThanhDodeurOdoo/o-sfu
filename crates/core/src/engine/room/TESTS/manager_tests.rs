@@ -65,7 +65,6 @@ fn load_triggered_policy_with_cap(
     min_receiver_count: usize,
     max_active_consumers_per_router: usize,
     activation_window: usize,
-    cooldown_window: usize,
     max_fanout_per_source: usize,
 ) -> RoomWorkerPolicy {
     let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
@@ -73,7 +72,6 @@ fn load_triggered_policy_with_cap(
         max_active_consumers_per_router,
         max_fanout_per_source,
         activation_window,
-        cooldown_window,
         ..LocalSpilloverPolicyParts::conservative()
     })
     .expect("test spillover policy should be valid");
@@ -271,7 +269,7 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
     const CONCURRENT_JOINS: usize = 12;
 
     let manager = Arc::new(manager_with_room_worker_policy_and_worker_count(
-        load_triggered_policy_with_cap(LOCAL_ROUTER_CAP, 1, 1, 1, 1, 48),
+        load_triggered_policy_with_cap(LOCAL_ROUTER_CAP, 1, 1, 1, 48),
         WORKER_COUNT,
     ));
     let media_transport = real_adapter();

@@ -44,7 +44,6 @@ pub struct LocalSpilloverPolicyParts {
     pub relay_mailbox_depth_threshold: usize,
     pub worker_pressure_threshold: u8,
     pub activation_window: usize,
-    pub cooldown_window: usize,
 }
 
 /// invalid load-triggered local spillover policy input
@@ -60,8 +59,6 @@ pub enum LocalSpilloverPolicyError {
     WorkerPressureThresholdTooHigh,
     #[error("activation window must be greater than zero")]
     ActivationWindowZero,
-    #[error("cooldown window must be greater than zero")]
-    CooldownWindowZero,
 }
 
 /// how a room interprets its local router placement cap
@@ -181,7 +178,6 @@ impl LocalSpilloverPolicy {
     pub const DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD: usize = 128;
     pub const DEFAULT_WORKER_PRESSURE_THRESHOLD: u8 = 80;
     pub const DEFAULT_ACTIVATION_WINDOW: usize = 2;
-    pub const DEFAULT_COOLDOWN_WINDOW: usize = 4;
 
     /// build a load-triggered spillover policy after validating its invariants
     ///
@@ -209,9 +205,6 @@ impl LocalSpilloverPolicy {
         }
         if parts.activation_window == 0 {
             return Err(LocalSpilloverPolicyError::ActivationWindowZero);
-        }
-        if parts.cooldown_window == 0 {
-            return Err(LocalSpilloverPolicyError::CooldownWindowZero);
         }
         Ok(Self { parts })
     }
@@ -245,7 +238,6 @@ impl LocalSpilloverPolicyParts {
                 LocalSpilloverPolicy::DEFAULT_RELAY_MAILBOX_DEPTH_THRESHOLD,
             worker_pressure_threshold: LocalSpilloverPolicy::DEFAULT_WORKER_PRESSURE_THRESHOLD,
             activation_window: LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW,
-            cooldown_window: LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW,
         }
     }
 }

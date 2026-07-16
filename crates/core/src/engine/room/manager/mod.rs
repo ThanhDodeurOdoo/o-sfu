@@ -5,7 +5,7 @@
 //! ```text
 //! /v1/channel -> serve_room -> directory
 //! websocket   -> join_user  -> RoomEffects
-//! background  -> source policy and spillover cooldown
+//! background  -> source policy
 //! ```
 //!
 //! callers receive cloned [`std::sync::Arc`] handles to [`Room`], but only
@@ -281,21 +281,6 @@ impl RoomManager {
             SourcePolicyTurn::packet_selection()
                 .execute(&room, Some(media_transport), Some(&active_speaker_sources))
                 .await;
-        }
-    }
-
-    /// advances load-triggered spillover cooldowns across current rooms
-    pub async fn advance_spillover_cooldowns(&self) {
-        for entry in self.directory_entries().await {
-            let room_id = entry.room.uuid();
-            self.run_current_room_mutation(
-                room_id,
-                |room| async move {
-                    room.reconcile_spillover_routers().await;
-                },
-                false,
-            )
-            .await;
         }
     }
 

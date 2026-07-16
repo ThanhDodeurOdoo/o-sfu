@@ -518,29 +518,6 @@ impl Router {
         }
     }
 
-    #[must_use]
-    pub fn idle_spillover_routers(&self) -> Vec<RouterId> {
-        self.routers
-            .iter()
-            .filter_map(|(router, local)| {
-                (*router != self.primary && local.sessions.is_empty()).then_some(*router)
-            })
-            .collect()
-    }
-
-    pub fn detach_spillover_routers(&mut self, routers: &[RouterId]) {
-        for router in routers {
-            if *router != self.primary
-                && self
-                    .routers
-                    .get(router)
-                    .is_some_and(|local| local.sessions.is_empty())
-            {
-                self.routers.remove(router);
-            }
-        }
-    }
-
     fn attach_placement(&mut self, placement: RouterPlacement) {
         match &mut self.placements {
             Some(placements) => placements.upsert(placement),

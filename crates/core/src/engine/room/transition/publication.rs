@@ -249,7 +249,6 @@ impl RoomUserOperation<'_> {
         RoomEffects::from_commit(self.room, RoomCommit::Unpublish(commit))
             .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
-        self.room.reconcile_spillover_routers().await;
         true
     }
 }

@@ -112,7 +112,6 @@
 //!     |
 //!     +-> spawn RuntimeTasks
 //!     |     +-> source-policy sync
-//!     |     +-> spillover cooldown
 //!     |
 //!     +-> serve HTTP and WebSocket
 //!     |
