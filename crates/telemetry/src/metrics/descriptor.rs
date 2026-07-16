@@ -24,9 +24,13 @@ macro_rules! metric_catalog {
         kind: $kind:ident,
         samples: |$metrics:ident| $samples:expr
     }),+ $(,)?) => {
+        /// identifiers for every exported Prometheus metric family.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum MetricName {
-            $($id),+
+            $(
+                #[doc = concat!("`", $name, "`\n\n", $help)]
+                $id,
+            )+
         }
 
         const DESCRIPTORS: &[MetricDescriptor] = &[
@@ -97,13 +101,13 @@ metric_catalog! {
     },
     HttpRoomRequestsTotal {
         name: "osfu_http_room_requests_total",
-        help: "Total HTTP requests received by /v1/room.",
+        help: "Total HTTP requests received by /v1/channel.",
         kind: Counter,
         samples: |metrics| vec![unlabeled_counter(metrics.http_requests.load(HttpRoute::Room))]
     },
     HttpRoomResponsesTotal {
         name: "osfu_http_room_responses_total",
-        help: "Total HTTP /v1/room responses by status.",
+        help: "Total HTTP /v1/channel responses by status.",
         kind: Counter,
         samples: |metrics| counter_family_samples(&metrics.http_room_responses, "status")
     },
@@ -247,13 +251,13 @@ metric_catalog! {
     },
     RoomsActive {
         name: "osfu_rooms_active",
-        help: "Current number of live rooms owned by this runtime.",
+        help: "Current number of active rooms owned by this runtime.",
         kind: Gauge,
         samples: |metrics| vec![unlabeled_gauge(metrics.active_rooms.load())]
     },
     UsersActive {
         name: "osfu_users_active",
-        help: "Current number of live room users owned by this runtime.",
+        help: "Current number of active room users owned by this runtime.",
         kind: Gauge,
         samples: |metrics| vec![unlabeled_gauge(metrics.active_users.load())]
     },
@@ -271,7 +275,7 @@ metric_catalog! {
     },
     TransportUsersActive {
         name: "osfu_transport_users_active",
-        help: "Current number of live RTC transport users on this runtime.",
+        help: "Current number of active RTC transport users on this runtime.",
         kind: Gauge,
         samples: |metrics| vec![unlabeled_gauge(metrics.active_transport_users.load())]
     },
@@ -496,7 +500,7 @@ metric_catalog! {
     },
     RtcDatagramDropsTotal {
         name: "osfu_rtc_datagram_drops_total",
-        help: "Total RTC UDP datagrams dropped before reaching a live user.",
+        help: "Total RTC UDP datagrams dropped by ingress routing before session delivery.",
         kind: Counter,
         samples: |metrics| snapshot_counter_samples(
             &metrics.rtc_metrics.snapshot(),

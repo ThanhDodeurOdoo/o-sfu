@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod route {
     pub const WEBSOCKET: &str = "/";
+    /// `GET` Prometheus text scrape with no application-layer authentication.
+    ///
+    /// this endpoint exposes samples and is not a `PromQL` query API.
+    /// see [`crate::http::telemetry::metrics`] for its query catalog and examples.
     pub const METRICS: &str = "/metrics";
 
     pub mod v1 {
@@ -16,14 +20,40 @@ pub mod route {
         pub const DISCONNECT: &str = "/v1/disconnect";
     }
 
+    /// diagnostics `GET` routes.
+    ///
+    /// requests require `Authorization: Bearer <token>` when a diagnostics
+    /// token is configured.
+    /// without a configured token, the server permits access only when its HTTP
+    /// listener is bound to a loopback address.
+    /// rejected requests return `401 Unauthorized` for a missing or invalid
+    /// configured token and `403 Forbidden` for a public listener without one.
+    /// successful requests return `200 OK` JSON.
     pub mod diagnostics {
+        /// returns [`crate::http::telemetry::diagnostics::DiagnosticsSummaryResponse`].
         pub const SUMMARY: &str = "/internal/diagnostics/summary";
+        /// returns a JSON array of
+        /// [`crate::http::telemetry::diagnostics::DiagnosticsRoomSummary`].
         pub const ROOMS: &str = "/internal/diagnostics/rooms";
+        /// returns a JSON array of
+        /// [`crate::http::telemetry::diagnostics::DiagnosticsWorkerSummary`].
         pub const WORKERS: &str = "/internal/diagnostics/workers";
+        /// returns [`crate::http::telemetry::diagnostics::DiagnosticsRoomDetail`]
+        /// or `404 Not Found`.
         pub const ROOM: &str = "/internal/diagnostics/rooms/{uuid}";
+        /// returns a JSON array of
+        /// [`crate::http::telemetry::diagnostics::DiagnosticsUserSummary`] or
+        /// `404 Not Found`.
         pub const ROOM_USERS: &str = "/internal/diagnostics/rooms/{uuid}/users";
+        /// returns a JSON object with `nodes` and `edges` arrays or `404 Not Found`.
         pub const ROOM_GRAPH: &str = "/internal/diagnostics/node-graph/rooms/{uuid}";
+        /// returns a JSON object with `nodes` and `edges` arrays or `404 Not Found`.
         pub const USER_GRAPH: &str = "/internal/diagnostics/node-graph/rooms/{uuid}/users/{id}";
+        /// returns [`crate::http::telemetry::diagnostics::DiagnosticsUserDetail`].
+        ///
+        /// missing users return `404 Not Found`.
+        /// ambiguous cross-room ids return `409 Conflict` with
+        /// [`crate::http::telemetry::diagnostics::DiagnosticsUserLookupConflict`].
         pub const USER: &str = "/internal/diagnostics/users/{id}";
     }
 }
