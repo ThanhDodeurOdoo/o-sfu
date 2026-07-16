@@ -124,7 +124,6 @@ fn load_transport_config_accepts_room_spillover_policy() -> Result<()> {
         ("ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH", "12"),
         ("ROOM_SPILLOVER_WORKER_PRESSURE", "50"),
         ("ROOM_SPILLOVER_ACTIVATION_WINDOW", "1"),
-        ("ROOM_SPILLOVER_COOLDOWN_WINDOW", "4"),
     ])?;
 
     assert_eq!(config.room_worker_policy.max_local_routers(), 2);
@@ -146,7 +145,6 @@ fn load_transport_config_accepts_room_spillover_policy() -> Result<()> {
     assert_eq!(policy.relay_mailbox_depth_threshold, 12);
     assert_eq!(policy.worker_pressure_threshold, 50);
     assert_eq!(policy.activation_window, 1);
-    assert_eq!(policy.cooldown_window, 4);
     Ok(())
 }
 

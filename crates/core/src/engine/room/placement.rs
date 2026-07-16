@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use o_sfu_router::RouterId;
 pub use o_sfu_router::topology::{
     PlacementSnapshot, RouterPlacement, RouterPlacements, RouterPlacementsError,
@@ -108,7 +106,6 @@ struct JoinPlacementPlan {
 pub struct LoadTriggeredPlacementState {
     activation_streak: usize,
     source_fanout_pressure: bool,
-    cooldown_by_router: BTreeMap<RouterId, usize>,
 }
 
 impl LoadTriggeredPlacementState {
@@ -123,33 +120,6 @@ impl LoadTriggeredPlacementState {
     fn record_pressure(&mut self, policy: LocalSpilloverPolicy) -> bool {
         self.activation_streak = self.activation_streak.saturating_add(1);
         self.activation_streak >= policy.parts().activation_window
-    }
-
-    pub fn cooldown_detachments(
-        &mut self,
-        idle_router_ids: &[RouterId],
-        cooldown_window: usize,
-    ) -> Vec<RouterId> {
-        self.cooldown_by_router
-            .retain(|router_id, _| idle_router_ids.contains(router_id));
-        let mut detached = Vec::new();
-        for router_id in idle_router_ids {
-            let cooldown = self.cooldown_by_router.entry(*router_id).or_default();
-            *cooldown = cooldown.saturating_add(1);
-            if *cooldown >= cooldown_window {
-                detached.push(*router_id);
-            }
-        }
-        for router_id in &detached {
-            self.cooldown_by_router.remove(router_id);
-        }
-        detached
-    }
-
-    pub fn clear_cooldowns(&mut self, router_ids: &[RouterId]) {
-        for router_id in router_ids {
-            self.cooldown_by_router.remove(router_id);
-        }
     }
 }
 

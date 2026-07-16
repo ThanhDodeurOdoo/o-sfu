@@ -18,7 +18,6 @@ const LARGE_ROOM_MIN_RECEIVER_COUNT: usize = 3;
 const LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 2;
 const LARGE_ROOM_MAX_FANOUT_PER_SOURCE: usize = 2;
 const LARGE_ROOM_ACTIVATION_WINDOW: usize = 1;
-const LARGE_ROOM_COOLDOWN_WINDOW: usize = 1;
 const LARGE_ROOM_MEDIA_LIMIT: usize = 2;
 
 pub(crate) struct SpilloverRoomFakePeers {
@@ -117,7 +116,6 @@ fn large_room_spillover_test_config() -> Config {
         max_active_consumers_per_router: LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
         max_fanout_per_source: LARGE_ROOM_MAX_FANOUT_PER_SOURCE,
         activation_window: LARGE_ROOM_ACTIVATION_WINDOW,
-        cooldown_window: LARGE_ROOM_COOLDOWN_WINDOW,
         ..LocalSpilloverPolicyParts::conservative()
     }) {
         Ok(policy) => policy,

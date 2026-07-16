@@ -32,13 +32,6 @@ fn local_spillover_policy_rejects_invalid_required_fields() {
             },
             LocalSpilloverPolicyError::ActivationWindowZero,
         ),
-        (
-            LocalSpilloverPolicyParts {
-                cooldown_window: 0,
-                ..valid_parts
-            },
-            LocalSpilloverPolicyError::CooldownWindowZero,
-        ),
     ];
 
     for (parts, error) in cases {

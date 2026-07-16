@@ -163,10 +163,6 @@ fn local_spillover_policy_from_env(env: &Env<'_>) -> Result<LocalSpilloverPolicy
             .var("ROOM_SPILLOVER_ACTIVATION_WINDOW")
             .check(positive)
             .default(LocalSpilloverPolicy::DEFAULT_ACTIVATION_WINDOW)?,
-        cooldown_window: env
-            .var("ROOM_SPILLOVER_COOLDOWN_WINDOW")
-            .check(positive)
-            .default(LocalSpilloverPolicy::DEFAULT_COOLDOWN_WINDOW)?,
     };
     LocalSpilloverPolicy::try_new(parts).map_err(local_spillover_policy_error)
 }
@@ -232,9 +228,6 @@ fn local_spillover_policy_error(error: LocalSpilloverPolicyError) -> anyhow::Err
         }
         LocalSpilloverPolicyError::ActivationWindowZero => {
             anyhow!("ROOM_SPILLOVER_ACTIVATION_WINDOW must be greater than zero")
-        }
-        LocalSpilloverPolicyError::CooldownWindowZero => {
-            anyhow!("ROOM_SPILLOVER_COOLDOWN_WINDOW must be greater than zero")
         }
     }
 }

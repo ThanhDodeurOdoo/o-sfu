@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Result, anyhow};
 use o_sfu_core::{
-    prelude::{RoomWorkerPolicy, SourceSubscriptionIntent, UserStreamId},
+    prelude::{SourceSubscriptionIntent, UserStreamId},
     server::{
         room::{
             JoinUserRequest, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerJoinError,
@@ -165,7 +165,7 @@ async fn manager_disconnect_users_removes_empty_room() -> Result<()> {
 
 #[tokio::test]
 async fn load_triggered_join_keeps_small_rooms_on_primary_worker() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(4, 1, 1, 48)?);
+    let manager = manager_with_policy(load_triggered_policy(4, 1, 48)?);
     let media_transport = media_transport()?;
     let room = serve_room(&manager, "issuer-load-small").await;
 
@@ -183,7 +183,6 @@ async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap(
     const MIN_RECEIVER_COUNT: usize = 3;
     const MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 2;
     const ACTIVATION_WINDOW: usize = 1;
-    const COOLDOWN_WINDOW: usize = 1;
     const MAX_FANOUT_PER_SOURCE: usize = 2;
 
     let manager = manager_with_policy_and_worker_count(
@@ -192,7 +191,6 @@ async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap(
             MIN_RECEIVER_COUNT,
             MAX_ACTIVE_CONSUMERS_PER_ROUTER,
             ACTIVATION_WINDOW,
-            COOLDOWN_WINDOW,
             MAX_FANOUT_PER_SOURCE,
         )?,
         LOCAL_ROUTER_CAP,
@@ -222,62 +220,23 @@ async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap(
 }
 
 #[tokio::test]
-async fn bounded_spillover_still_detaches_idle_router_immediately() -> Result<()> {
-    let manager = manager_with_policy(RoomWorkerPolicy::bounded_local_spillover(2));
+async fn next_join_uses_spillover_worker_after_leave() -> Result<()> {
+    let manager = manager_with_policy(load_triggered_policy(2, 1, 48)?);
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-bounded-detach").await;
+    let room = serve_room(&manager, "issuer-load-reuse").await;
     join_user(&manager, &room, 1, &media_transport).await?;
     let second_connection = join_user(&manager, &room, 2, &media_transport).await?;
-    assert_eq!(router_count(&room).await, 2);
+    assert_eq!(home_worker(&room, 2).await, Some(1));
 
     close_user(&manager, &room, 2, second_connection, &media_transport).await?;
-
-    assert_eq!(router_count(&room).await, 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_triggered_cooldown_delays_idle_spillover_detach() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(2, 1, 3, 48)?);
-    let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-cooldown").await;
-    join_user(&manager, &room, 1, &media_transport).await?;
-    let second_connection = join_user(&manager, &room, 2, &media_transport).await?;
-    assert_eq!(router_count(&room).await, 2);
-
-    close_user(&manager, &room, 2, second_connection, &media_transport).await?;
-    assert_eq!(router_count(&room).await, 2);
-
-    manager.advance_spillover_cooldowns().await;
-    assert_eq!(router_count(&room).await, 2);
-    manager.advance_spillover_cooldowns().await;
-    assert_eq!(router_count(&room).await, 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_triggered_activity_resets_spillover_cooldown() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(2, 1, 3, 48)?);
-    let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-cooldown-reset").await;
-    join_user(&manager, &room, 1, &media_transport).await?;
-    let second_connection = join_user(&manager, &room, 2, &media_transport).await?;
-
-    close_user(&manager, &room, 2, second_connection, &media_transport).await?;
-    assert_eq!(router_count(&room).await, 2);
-    let third_connection = join_user(&manager, &room, 3, &media_transport).await?;
+    join_user(&manager, &room, 3, &media_transport).await?;
     assert_eq!(home_worker(&room, 3).await, Some(1));
-
-    close_user(&manager, &room, 3, third_connection, &media_transport).await?;
-    manager.advance_spillover_cooldowns().await;
-
-    assert_eq!(router_count(&room).await, 2);
     Ok(())
 }
 
 #[tokio::test]
 async fn source_fanout_pressure_places_next_join_on_spillover_worker() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 1, 1, 1)?);
+    let manager = manager_with_policy(load_triggered_policy(99, 1, 1)?);
     let media_transport = media_transport()?;
     let room = serve_room(&manager, "issuer-load-fanout").await;
     seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
@@ -291,7 +250,7 @@ async fn source_fanout_pressure_places_next_join_on_spillover_worker() -> Result
 
 #[tokio::test]
 async fn source_fanout_pressure_clears_after_unpublish() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 1, 1, 1)?);
+    let manager = manager_with_policy(load_triggered_policy(99, 1, 1)?);
     let media_transport = media_transport()?;
     let room = serve_room(&manager, "issuer-load-fanout-clear").await;
     let stream_id = seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
@@ -311,7 +270,7 @@ async fn source_fanout_pressure_clears_after_unpublish() -> Result<()> {
 
 #[tokio::test]
 async fn source_fanout_pressure_clears_after_receiver_leave() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 1, 1, 1)?);
+    let manager = manager_with_policy(load_triggered_policy(99, 1, 1)?);
     let media_transport = media_transport()?;
     let room = serve_room(&manager, "issuer-load-fanout-leave").await;
     seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
@@ -326,7 +285,7 @@ async fn source_fanout_pressure_clears_after_receiver_leave() -> Result<()> {
 
 #[tokio::test]
 async fn source_fanout_pressure_clears_after_receiver_replacement() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 2, 1, 1)?);
+    let manager = manager_with_policy(load_triggered_policy(99, 2, 1)?);
     let media_transport = media_transport()?;
     let room = serve_room(&manager, "issuer-load-fanout-replace").await;
     seed_source_fanout_pressure(&manager, &room, &media_transport).await?;

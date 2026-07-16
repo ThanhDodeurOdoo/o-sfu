@@ -47,7 +47,6 @@ impl Room {
         RoomEffects::from_commit(self, RoomCommit::Join(commit))
             .execute(self, context)
             .await;
-        self.reconcile_spillover_routers().await;
         Ok(receipt)
     }
 
@@ -81,7 +80,6 @@ impl Room {
                 .execute(self, context)
                 .await;
         }
-        self.reconcile_spillover_routers().await;
         removed_current_user
     }
 
@@ -169,7 +167,6 @@ impl Room {
         RoomEffects::from_commit(self, RoomCommit::Disconnect(commit))
             .execute(self, context)
             .await;
-        self.reconcile_spillover_routers().await;
     }
 
     #[cfg(any(test, feature = "testing-transport"))]

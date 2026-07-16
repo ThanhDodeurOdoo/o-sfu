@@ -18,24 +18,20 @@ use super::{
     route_graph::{RelayRouteEffect, RouteGraph},
     source_index::PublishedSources,
 };
-use crate::{
-    RoomSpilloverMode,
-    engine::{
-        ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
-        media_transport::{
-            RelayRouteActivity, SessionUploadEncoding, TransportConsumerRoute, TransportMediaId,
-            TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey, TransportTeardown,
-        },
-        room::{
-            RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
-            effects::transport::RoomTransportPlan,
-            outbound::OutboundSender,
-            placement::{LoadTriggeredPlacementState, WorkerLoadIndex},
-        },
-        source_model::{
-            ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
-            PublishedSourceId, UserStreamId,
-        },
+use crate::engine::{
+    ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
+    media_transport::{
+        RelayRouteActivity, SessionUploadEncoding, TransportConsumerRoute, TransportMediaId,
+        TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey, TransportTeardown,
+    },
+    room::{
+        RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
+        effects::transport::RoomTransportPlan, outbound::OutboundSender,
+        placement::WorkerLoadIndex,
+    },
+    source_model::{
+        ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
+        PublishedSourceId, UserStreamId,
     },
 };
 
@@ -157,28 +153,6 @@ impl RoomTopology {
             .router
             .retire_committed_placement(user_id, connection_id)?;
         Some(self.transport_session_key(user_id.clone().into(), connection_id, media_worker))
-    }
-
-    pub fn reconcile_spillover_routers(
-        &mut self,
-        spillover: RoomSpilloverMode,
-        placement: &mut LoadTriggeredPlacementState,
-    ) {
-        match spillover {
-            RoomSpilloverMode::StrictSingleRouter => {}
-            RoomSpilloverMode::BoundedLocalSpillover => {
-                let idle_router_ids = self.router.idle_spillover_routers();
-                self.router.detach_spillover_routers(&idle_router_ids);
-                placement.clear_cooldowns(&idle_router_ids);
-            }
-            RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
-                let idle_router_ids = self.router.idle_spillover_routers();
-                let policy = policy.parts();
-                let detachments =
-                    placement.cooldown_detachments(&idle_router_ids, policy.cooldown_window);
-                self.router.detach_spillover_routers(&detachments);
-            }
-        }
     }
 
     #[must_use]

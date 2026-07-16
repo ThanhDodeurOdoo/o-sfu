@@ -96,7 +96,6 @@ pub fn manager_with_policy_and_worker_count(
 pub fn load_triggered_policy(
     min_receiver_count: usize,
     activation_window: usize,
-    cooldown_window: usize,
     max_fanout_per_source: usize,
 ) -> Result<RoomWorkerPolicy> {
     load_triggered_policy_with_cap(
@@ -104,7 +103,6 @@ pub fn load_triggered_policy(
         min_receiver_count,
         LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
         activation_window,
-        cooldown_window,
         max_fanout_per_source,
     )
 }
@@ -114,7 +112,6 @@ pub fn load_triggered_policy_with_cap(
     min_receiver_count: usize,
     max_active_consumers_per_router: usize,
     activation_window: usize,
-    cooldown_window: usize,
     max_fanout_per_source: usize,
 ) -> Result<RoomWorkerPolicy> {
     let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
@@ -122,7 +119,6 @@ pub fn load_triggered_policy_with_cap(
         max_active_consumers_per_router,
         max_fanout_per_source,
         activation_window,
-        cooldown_window,
         ..LocalSpilloverPolicyParts::conservative()
     })
     .map_err(|error| anyhow!("test spillover policy should be valid: {error}"))?;
