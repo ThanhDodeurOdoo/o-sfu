@@ -357,6 +357,13 @@ do not use `$proxy_add_x_forwarded_for` at the public edge unless an upstream tr
 
 ## private observability
 
+### query reference
+
+use the telemetry reference for exact queries and response shapes:
+
+- [Prometheus metrics](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/http/telemetry/metrics/index.html)
+- [HTTP diagnostics](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/http/telemetry/diagnostics/index.html)
+
 public routes:
 
 ```text
@@ -496,7 +503,7 @@ local room spillover:
 | --- | --- | --- |
 | `ROOM_MAX_LOCAL_ROUTERS` | `1` | maximum local routers one room may reserve |
 | `ROOM_SPILLOVER_MODE` | `load` when router cap is above `1` | `strict`, `load`, `load-triggered` or `bounded` |
-| `ROOM_SPILLOVER_MIN_RECEIVERS` | `16` | minimum live receiver count that can activate load-triggered spillover |
+| `ROOM_SPILLOVER_MIN_RECEIVERS` | `16` | minimum active receiver count that can activate load-triggered spillover |
 | `ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER` | `64` | active plus pending consumer-route pressure per active local router |
 | `ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE` | `48` | active plus pending receiver fan-out per source and receiver worker |
 | `ROOM_SPILLOVER_EGRESS_BITRATE_BPS` | `750000000` | room egress bitrate pressure threshold, with `0` disabling this signal |

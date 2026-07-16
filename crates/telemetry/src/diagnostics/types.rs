@@ -159,6 +159,7 @@ impl DiagnosticsActiveSpeaker {
 pub struct DiagnosticsIncomingBitrate {
     #[serde(default)]
     pub by_stream_bps: BTreeMap<String, u64>,
+    /// total bitrate serialized as `totalBps`.
     #[serde(rename = "totalBps")]
     pub total: u64,
 }
@@ -319,12 +320,16 @@ pub struct DiagnosticsUserView {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsTransportCounts {
+    /// connected count serialized as `connectedUsers`.
     #[serde(rename = "connectedUsers")]
     pub connected: usize,
+    /// disconnected count serialized as `disconnectedUsers`.
     #[serde(rename = "disconnectedUsers")]
     pub disconnected: usize,
+    /// total count serialized as `totalUsers`.
     #[serde(rename = "totalUsers")]
     pub total: usize,
+    /// unknown count serialized as `unknownUsers`.
     #[serde(rename = "unknownUsers")]
     pub unknown: usize,
 }
