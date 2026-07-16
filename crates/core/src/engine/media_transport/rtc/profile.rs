@@ -76,11 +76,21 @@ impl RtpProfile {
                 VideoCodecPreference::Av1 => codecs.enable_av1(true),
             }
         }
+        let simulcast_codec = preferences
+            .video_order()
+            .into_iter()
+            .find(|codec| codec.enabled_by(flags))
+            .and_then(|codec| match codec {
+                VideoCodecPreference::Vp8 => Some(Codec::Vp8),
+                VideoCodecPreference::H264 => Some(Codec::H264),
+                VideoCodecPreference::H265
+                | VideoCodecPreference::Vp9
+                | VideoCodecPreference::Av1 => None,
+            });
 
         let mut router_codecs = Vec::new();
         let mut audio_names = Vec::new();
         let mut video_names = Vec::new();
-        let mut simulcast_codec = None;
         for payload in config.codec_config().params() {
             let kind = rtp_projection::media_kind(payload);
             router_codecs.push(rtp_projection::media_capability(kind, payload)?);
@@ -93,11 +103,6 @@ impl RtpProfile {
             let name = payload.spec().codec.to_string();
             if !names.contains(&name) {
                 names.push(name);
-            }
-            match payload.spec().codec {
-                Codec::Vp8 => simulcast_codec = Some(Codec::Vp8),
-                Codec::H264 if simulcast_codec.is_none() => simulcast_codec = Some(Codec::H264),
-                _ => {}
             }
         }
         let header_extensions = config

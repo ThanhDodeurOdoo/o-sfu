@@ -1,3 +1,5 @@
+use std::iter;
+
 use o_sfu_rfc::{rtp as rfc_rtp, rtp::h264::PacketizationMode, webrtc};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
@@ -380,7 +382,7 @@ fn answer_send_rid_projection_rejects_extra_simulcast_streams() {
 }
 
 #[test]
-fn h264_and_vp8_profiles_are_promoted_simulcast_publication_paths() {
+fn publication_profile_follows_first_primary_codec() {
     let h264 = h264_parameters(PacketizationMode::NonInterleaved, "42e01f");
 
     assert!(publish_recv_simulcast(MediaKind::Video, &h264).is_some());
@@ -403,6 +405,32 @@ fn h264_and_vp8_profiles_are_promoted_simulcast_publication_paths() {
     );
 
     let vp8 = vp8_parameters();
+    let h264_then_vp8 = video_parameters(h264.formats().chain(vp8.formats()).cloned());
+    assert_eq!(
+        publish_upload_encodings(MediaKind::Video, &h264_then_vp8),
+        publish_upload_encodings(MediaKind::Video, &h264)
+    );
+    for codec in [
+        rfc_rtp::CodecName::Av1,
+        rfc_rtp::CodecName::Vp9,
+        rfc_rtp::CodecName::H265,
+    ] {
+        let parameters = video_parameters(
+            iter::once(MediaFormat::new(
+                RouterMediaKind::Video,
+                codec.clone(),
+                PayloadType::new(98),
+                90_000,
+            ))
+            .chain(vp8.formats().cloned()),
+        );
+        assert!(
+            publish_recv_simulcast(MediaKind::Video, &parameters).is_none(),
+            "{}-first publication should stay single-encoding",
+            codec.as_str()
+        );
+        assert!(publish_upload_encodings(MediaKind::Video, &parameters).is_empty());
+    }
 
     assert!(publish_recv_simulcast(MediaKind::Video, &vp8).is_some());
     assert_eq!(
@@ -458,35 +486,33 @@ fn h264_profile_accepts_only_the_promoted_chromium_matrix() {
 }
 
 fn vp8_parameters() -> RouterRtpParameters {
-    video_parameters(MediaFormat::new(
+    video_parameters([MediaFormat::new(
         RouterMediaKind::Video,
         rfc_rtp::CodecName::Vp8,
         PayloadType::new(96),
         90_000,
-    ))
+    )])
 }
 
 fn h264_parameters(
     packetization_mode: PacketizationMode,
     profile_level_id: &str,
 ) -> RouterRtpParameters {
-    video_parameters(
-        MediaFormat::new(
-            RouterMediaKind::Video,
-            rfc_rtp::CodecName::H264,
-            PayloadType::new(102),
-            90_000,
-        )
-        .with_setting(CodecSetting::H264PacketizationMode(packetization_mode))
-        .with_setting(CodecSetting::H264ProfileLevelId(
-            profile_level_id.to_owned(),
-        )),
+    video_parameters([MediaFormat::new(
+        RouterMediaKind::Video,
+        rfc_rtp::CodecName::H264,
+        PayloadType::new(102),
+        90_000,
     )
+    .with_setting(CodecSetting::H264PacketizationMode(packetization_mode))
+    .with_setting(CodecSetting::H264ProfileLevelId(
+        profile_level_id.to_owned(),
+    ))])
 }
 
-fn video_parameters(format: MediaFormat) -> RouterRtpParameters {
+fn video_parameters(formats: impl IntoIterator<Item = MediaFormat>) -> RouterRtpParameters {
     RouterRtpParameters::new(
-        vec![format],
+        formats.into_iter().collect(),
         Vec::new(),
         vec![
             StreamBinding::new().with_rid(common::DEFAULT_LOW_RID),

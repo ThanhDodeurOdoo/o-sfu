@@ -528,7 +528,7 @@ media policy and codecs:
 | `CODEC_VP9` | `false` | enables VP9 video |
 | `CODEC_AV1` | `false` | enables AV1 video |
 | `CODEC_AUDIO_PREFERENCE` | `opus,PCMU,PCMA` | optional comma-separated audio codec preference order |
-| `CODEC_VIDEO_PREFERENCE` | `VP8,H264,H265,VP9,AV1` | optional comma-separated video codec preference order |
+| `CODEC_VIDEO_PREFERENCE` | `VP8,H264,H265,VP9,AV1` | optional comma-separated video codec preference order. The first enabled entry selects layered upload eligibility |
 
 telemetry:
 
