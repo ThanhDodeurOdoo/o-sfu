@@ -49,9 +49,9 @@ pub(super) use {
 #[cfg(test)]
 pub(super) use {
     super::forwarded_packet::test_support::{
-        sample_already_relayed_packet, sample_forwarded_packet_with_audio_activity,
-        sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
-        sample_local_forwarded_packet,
+        sample_already_relayed_audio_packet_at, sample_already_relayed_packet,
+        sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_frame_mark,
+        sample_forwarded_packet_with_rid, sample_local_forwarded_packet,
     },
     packets::sample_rtp_packet,
 };

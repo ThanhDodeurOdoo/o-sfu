@@ -43,6 +43,21 @@ pub fn sample_already_relayed_packet(
 
 #[cfg(test)]
 #[must_use]
+pub fn sample_already_relayed_audio_packet_at(
+    src_key: TransportSessionKey,
+    src_media: TransportMediaId,
+    received_at: Instant,
+) -> ForwardedPacket {
+    let mut packet =
+        sample_forwarded_packet_with_audio_activity(src_key, "aud-up", Some(true), Some(-32), b"");
+    packet.src_media = Some(src_media);
+    packet.visits_origin_sinks = false;
+    packet.received_at = received_at;
+    packet
+}
+
+#[cfg(test)]
+#[must_use]
 pub fn sample_local_forwarded_packet(
     source_session_handle: SessionHandle,
     mid: &str,

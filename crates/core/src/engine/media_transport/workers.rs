@@ -5,25 +5,20 @@
 //! coordinates cross-worker relay cleanup. Packet-loop hot paths live inside
 //! `engine::media_transport::rtc`.
 
-use std::{
-    cmp::Reverse,
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-    time::Instant,
-};
+use std::{cmp::Reverse, collections::BTreeMap, sync::Arc};
 
 use str0m::media::MediaKind as Str0mMediaKind;
 
 use super::rtc::{RtcWorker, RtcWorkerCommand};
 use crate::engine::{
-    MediaWorkerId, RoomInstanceId,
+    MediaWorkerId,
     media_transport::{
         ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, MediaTransport,
-        ReceiverBandwidthSnapshot, SourcePolicyUpdateSubscription, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-        TransportQualitySnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
-        TransportSessionHealth, TransportSessionKey, TransportSourceActivitySnapshot,
-        TransportSourceKey, TransportTeardown, TransportWorkerPressureSnapshot,
+        ReceiverBandwidthSnapshot, TransportAdapterError, TransportBitrateSnapshot,
+        TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySnapshot,
+        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
+        TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
+        TransportTeardown, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -177,7 +172,7 @@ impl MediaTransport {
         for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_source_snapshot().await);
         }
-        snapshot.sort_by_key(|source| {
+        snapshot.sort_unstable_by_key(|source| {
             (
                 Reverse(source.observed_at()),
                 source.transport_media_id().as_u64(),
@@ -199,44 +194,6 @@ impl MediaTransport {
         snapshot.sort_by_key(|source| source.transport_media_id().as_u64());
         snapshot.dedup_by_key(|source| source.transport_media_id());
         snapshot
-    }
-
-    /// Returns the next active-speaker expiry deadline known by any worker.
-    ///
-    /// The runtime uses this to wake room source-policy sync without polling
-    /// every room on a fixed interval.
-    pub(super) async fn next_active_speaker_deadline_from_workers(&self) -> Option<Instant> {
-        let mut next_deadline: Option<Instant> = None;
-        for worker in self.workers.iter() {
-            let worker_deadline = worker.next_active_speaker_deadline().await;
-            next_deadline = match (next_deadline, worker_deadline) {
-                (Some(current), Some(candidate)) => Some(current.min(candidate)),
-                (Some(current), None) => Some(current),
-                (None, Some(candidate)) => Some(candidate),
-                (None, None) => None,
-            };
-        }
-        next_deadline
-    }
-
-    /// Returns room instances whose transport-observed active-speaker state has
-    /// expired by `now`.
-    ///
-    /// This bridges packet-loop observations back into room policy. The
-    /// room remains authoritative for layout and subscription decisions.
-    pub(super) async fn expired_active_speaker_rooms_from_workers(
-        &self,
-        now: Instant,
-    ) -> BTreeSet<RoomInstanceId> {
-        let mut room_instance_ids = BTreeSet::new();
-        for worker in self.workers.iter() {
-            room_instance_ids.extend(worker.expired_active_speaker_rooms(now).await);
-        }
-        room_instance_ids
-    }
-
-    pub(super) fn source_policy_subscription_from_workers(&self) -> SourcePolicyUpdateSubscription {
-        self.source_policy_signal.subscribe()
     }
 
     /// Applies one cross-worker relay-route effect.

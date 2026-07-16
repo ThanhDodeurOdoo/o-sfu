@@ -51,7 +51,7 @@ fn benchmark_worker(rtc_port_range: RtcPortRange) -> RtcWorker {
         Arc::new(profile),
         rtc_port_range,
         &test_media_transport_deps(),
-        Arc::new(SourcePolicySignal::default()),
+        SourcePolicySignal::default(),
         0,
         MediaWorkerId::from_raw(0),
     )

@@ -50,7 +50,7 @@ impl MediaTransport {
             RtpProfile::compile(config.codec_flags, config.codec_preferences)
                 .map_err(|_error| MediaTransportBuildError::InvalidRtpProfile)?,
         );
-        let source_policy_signal = Arc::new(SourcePolicySignal::default());
+        let source_policy_signal = SourcePolicySignal::default();
         let workers: Arc<[_]> = (0_u16..u16::MAX)
             .zip(worker_ranges)
             .map(|(worker_index, range)| {
@@ -59,7 +59,7 @@ impl MediaTransport {
                     Arc::clone(&profile),
                     range,
                     &deps,
-                    Arc::clone(&source_policy_signal),
+                    source_policy_signal.clone(),
                     u64::from(worker_index) * MEDIA_ID_STRIDE,
                     MediaWorkerId::from_raw(usize::from(worker_index)),
                 ))

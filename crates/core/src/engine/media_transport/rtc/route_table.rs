@@ -657,8 +657,8 @@ impl RouteTable {
         self.active.next_deadline(now)
     }
 
-    pub(super) fn expired_active_speaker_srcs(&self, now: Instant) -> Vec<TransportMediaId> {
-        self.active.expired_srcs(now)
+    pub(super) fn take_expired_speakers(&mut self, now: Instant) -> Vec<TransportMediaId> {
+        self.active.take_expired(now)
     }
 
     #[cfg(test)]

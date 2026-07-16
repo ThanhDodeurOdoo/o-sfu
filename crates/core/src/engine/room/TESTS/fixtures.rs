@@ -468,9 +468,12 @@ impl SourcePolicyScenario {
     }
 
     pub(super) async fn audio_media_id(&self, raw_user_id: i64) -> TransportMediaId {
-        let (audio_media_id, _camera_media_id) =
-            source_media_ids(&self.room, &UserId::Integer(raw_user_id)).await;
-        audio_media_id
+        source_media_id(
+            &self.room,
+            &UserId::Integer(raw_user_id),
+            TestSourceKind::AudioDetector,
+        )
+        .await
     }
 
     pub(super) async fn mark_active_speaker(&self, transport_media_id: TransportMediaId) {
@@ -612,15 +615,6 @@ pub(super) async fn publish_track(
         )
         .await
         .expect("publication should succeed")
-}
-
-pub(super) async fn source_media_ids(
-    room: &Arc<super::super::Room>,
-    user_id: &UserId,
-) -> (TransportMediaId, TransportMediaId) {
-    let audio_media_id = source_media_id(room, user_id, TestSourceKind::AudioDetector).await;
-    let camera_media_id = source_media_id(room, user_id, TestSourceKind::ScalableVideo).await;
-    (audio_media_id, camera_media_id)
 }
 
 pub(super) async fn source_media_id(

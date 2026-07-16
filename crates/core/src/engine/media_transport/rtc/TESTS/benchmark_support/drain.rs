@@ -39,7 +39,7 @@ pub struct SessionDrainBenchFixture {
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     diagnostics: Arc<DiagnosticsStore>,
     metrics: RuntimeMetrics,
-    source_policy_signal: Arc<SourcePolicySignal>,
+    source_policy_signal: SourcePolicySignal,
     buffers: PacketLoopBuffers,
     now: Instant,
 }
@@ -74,7 +74,7 @@ impl SessionDrainBenchFixture {
             snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
             diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: RuntimeMetrics::default(),
-            source_policy_signal: Arc::new(SourcePolicySignal::default()),
+            source_policy_signal: SourcePolicySignal::default(),
             buffers: PacketLoopBuffers::new(),
             now: Instant::now(),
         }

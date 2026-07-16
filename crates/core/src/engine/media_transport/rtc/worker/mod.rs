@@ -136,7 +136,7 @@ pub struct RtcWorker {
     config: RtcWorkerConfig,
     pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) packet_sink_registry: Arc<RoomPacketSinkRegistry>,
-    pub(super) source_policy_signal: Arc<SourcePolicySignal>,
+    pub(super) source_policy_signal: SourcePolicySignal,
     pub metrics: Arc<RuntimeMetrics>,
     pub(super) rtp_metrics: Arc<RtpMetricsRecorder>,
     pub(super) rtc_metrics: Arc<RtcMetricsRecorder>,
@@ -158,7 +158,7 @@ impl RtcWorker {
         profile: Arc<RtpProfile>,
         rtc_port_range: RtcPortRange,
         deps: &MediaTransportDeps,
-        source_policy_signal: Arc<SourcePolicySignal>,
+        source_policy_signal: SourcePolicySignal,
         media_id_base: u64,
         media_worker_id: MediaWorkerId,
     ) -> Self {

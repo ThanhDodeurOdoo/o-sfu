@@ -1,3 +1,7 @@
+use std::collections::BTreeSet;
+
+use tokio::time::timeout;
+
 use super::{super::route_control::PacketLayerGate, fixtures::*};
 
 fn assert_applied(outcome: WorkerMediaControlBatchOutcome) {
@@ -597,7 +601,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
 }
 
 #[tokio::test]
-async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
+async fn active_speaker_expiry_wakes_policy_without_input() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(9, 41, UserId::Integer(41));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 94_001);
@@ -613,19 +617,24 @@ async fn rtc_active_speaker_deadline_tracks_the_current_hold_window() {
         .add_recv_media(&session_key, Str0mMediaKind::Audio, &rtp_parameters)
         .await
         .expect("audio media should register");
-    let observed_at = Instant::now();
+    let updates = adapter.source_policy_signal.subscribe();
+    let room_instance_id = session_key.room_instance_id();
     adapter
-        .debug_observe_audio_activity(media_id, Some(true), None, observed_at)
+        .debug_observe_audio_activity(media_id, Some(true), None, Instant::now())
         .await;
 
-    let next_deadline = adapter
-        .next_active_speaker_deadline()
+    let observed_rooms = timeout(Duration::from_secs(1), updates.wait_for_update())
         .await
-        .expect("speaker activity should schedule a hold-window expiry");
-    assert!(next_deadline >= observed_at + Duration::from_millis(200));
-    assert!(next_deadline <= observed_at + Duration::from_millis(300));
-
-    sleep(Duration::from_millis(300)).await;
-
-    assert_eq!(adapter.next_active_speaker_deadline().await, None);
+        .expect("active-speaker observation should wake room policy");
+    assert_eq!(observed_rooms, BTreeSet::from([room_instance_id]));
+    let dirty_rooms = timeout(Duration::from_secs(1), updates.wait_for_update())
+        .await
+        .expect("active-speaker expiry should wake room policy");
+    assert_eq!(dirty_rooms, BTreeSet::from([room_instance_id]));
+    assert!(adapter.active_speaker_source_snapshot().await.is_empty());
+    assert!(
+        timeout(Duration::from_millis(50), updates.wait_for_update())
+            .await
+            .is_err()
+    );
 }

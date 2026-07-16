@@ -491,7 +491,7 @@ fn route_control_expired_rank_dirties_refresh_after_all_sources_expire() {
 }
 
 #[test]
-fn route_control_expiry_queries_use_cached_rank_tail() {
+fn route_control_expiry_consumes_cached_rank_tail() {
     let mut state = RouteTable::default();
     let first_src_media = TransportMediaId::new(139);
     let second_src_media = TransportMediaId::new(140);
@@ -513,7 +513,7 @@ fn route_control_expiry_queries_use_cached_rank_tail() {
         Some(refresh_at + Duration::from_millis(250))
     );
     assert_eq!(
-        state.expired_active_speaker_srcs(refresh_at),
+        state.take_expired_speakers(refresh_at),
         vec![first_src_media]
     );
 }

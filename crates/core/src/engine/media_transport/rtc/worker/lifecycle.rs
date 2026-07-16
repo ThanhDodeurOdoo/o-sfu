@@ -40,7 +40,6 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 use std::{
-    collections::BTreeSet,
     sync::{Arc, Mutex, mpsc as std_mpsc},
     thread,
     time::Instant,
@@ -65,14 +64,11 @@ use super::{
 };
 use crate::{
     Bitrate, MediaWorkerId, RtcUdpIoBackend,
-    engine::{
-        RoomInstanceId,
-        media_transport::{
-            ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
-            TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
-            TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportSessionKey,
-            TransportSourceActivitySnapshot, TransportWorkerPressureSnapshot,
-        },
+    engine::media_transport::{
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
+        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
+        TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportSessionKey,
+        TransportSourceActivitySnapshot, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -319,7 +315,7 @@ impl RtcWorker {
             worker: config,
             diagnostics: Arc::clone(&self.diagnostics),
             packet_sink_registry: Arc::clone(&self.packet_sink_registry),
-            source_policy_signal: Arc::clone(&self.source_policy_signal),
+            source_policy_signal: self.source_policy_signal.clone(),
             metrics: Arc::clone(&self.metrics),
             rtp_metrics: Arc::clone(&self.rtp_metrics),
             rtc_metrics: Arc::clone(&self.rtc_metrics),
@@ -561,37 +557,6 @@ impl RtcWorker {
                 transport_media_ids: transport_media_ids.to_vec(),
                 response,
             }
-        })
-        .await
-        .unwrap_or_default()
-    }
-
-    /// reads the next active-speaker expiry deadline from the packet loop
-    ///
-    /// `None` means no worker is running, no source has an expiry deadline or
-    /// the worker could not answer the read command
-    pub async fn next_active_speaker_deadline(&self) -> Option<Instant> {
-        let worker_handle = self.worker_handle().ok().flatten()?;
-        self.send_worker_command(&worker_handle, |response| {
-            RtcWorkerCommand::NextActiveSpeakerDeadline { response }
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-
-    /// reads room ids whose transport-observed source activity expired by `now`
-    ///
-    /// the packet loop owns expiry calculation because the timestamps are
-    /// produced by packet observation
-    /// dispatch failures return an empty set so schedulers can retry on the
-    /// next wakeup
-    pub async fn expired_active_speaker_rooms(&self, now: Instant) -> BTreeSet<RoomInstanceId> {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return BTreeSet::new();
-        };
-        self.send_worker_command(&worker_handle, |response| {
-            RtcWorkerCommand::ExpiredActiveSpeakerRoomInstanceIds { now, response }
         })
         .await
         .unwrap_or_default()
