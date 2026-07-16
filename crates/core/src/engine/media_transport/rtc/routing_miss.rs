@@ -241,10 +241,6 @@ impl UnknownSourceRateLimiter {
         self.insertion_order.clear();
     }
 
-    fn allow_probe(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
-        self.entry_mut(source_addr).allow_probe(now)
-    }
-
     /// check cooldown state without allocating for unseen sources
     fn is_blocked(&mut self, source_addr: SocketAddr, now: Instant) -> bool {
         self.entries
@@ -332,18 +328,6 @@ impl DemuxRecoveryState {
         packet: &[u8],
     ) -> bool {
         self.miss_cache.contains(miss_key, packet)
-    }
-
-    /// return whether the source is currently over its unknown-probe budget
-    ///
-    /// this mutates limiter state because expired cooldowns are cleared lazily
-    /// when the source is next seen
-    pub(super) fn should_rate_limit_source(
-        &mut self,
-        source_addr: SocketAddr,
-        now: Instant,
-    ) -> bool {
-        !self.source_rate_limiter.allow_probe(source_addr, now)
     }
 
     /// check whether a source is blocked before packet fingerprinting

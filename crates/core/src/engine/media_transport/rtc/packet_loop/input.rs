@@ -22,8 +22,8 @@ use super::super::{
 
 /// Receive-side input bundle for one packet-loop worker.
 ///
-/// `RtcWorker` builds this bundle when it lazily boots a worker. After
-/// that point the packet loop is the only receiver owner, while worker methods,
+/// `RtcWorker` builds this bundle during startup. The packet loop is then the
+/// only receiver owner, while worker methods,
 /// relay-control handles and test-support helpers retain sender-side handles.
 ///
 /// Keeping these receivers together makes the loop driver depend on a single
@@ -46,8 +46,8 @@ pub struct PacketLoopInputReceivers {
     woken_relay_packet: Option<ForwardedPacket>,
     /// Cancellation signal for the worker task.
     ///
-    /// The token is cloned into the worker handle so session cleanup can stop a
-    /// drained worker without closing ordinary command senders first.
+    /// [`RtcWorker::drop`](super::super::worker::RtcWorker) cancels this token
+    /// before joining the packet-loop thread
     shutdown_token: CancellationToken,
     /// Test-only worker probes for deterministic inspection and state setup.
     ///
@@ -200,9 +200,8 @@ impl PacketLoopControlInput {
 /// Wait on production mailbox inputs.
 ///
 /// Shutdown is biased ahead of commands so teardown can interrupt an idle
-/// worker. A closed command receiver ends the worker because worker command
-/// delivery is the production lifetime owner. A closed relay receiver is
-/// ignored because relay traffic is optional for single-worker rooms.
+/// worker. A closed command receiver is also terminal. A closed relay receiver
+/// is ignored because relay traffic is optional for single-worker rooms.
 async fn recv_production_mailbox(
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,

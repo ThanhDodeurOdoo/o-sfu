@@ -5,13 +5,14 @@ use str0m::media::Mid;
 use {
     super::{
         super::{
+            RtpProfile,
             state::PacketLoopState,
             test_support::{
                 RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
                 SessionStreamTxSsrcProbe,
             },
         },
-        RtpProfile, WorkerCommandContext,
+        WorkerCommandContext,
     },
     crate::{
         CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
@@ -58,6 +59,17 @@ use crate::engine::{media_transport::TransportSessionKey, metrics};
 
 impl RtcWorker {
     #[cfg(test)]
+    pub(in crate::engine::media_transport::rtc) fn test_handle(&self) -> &super::RtcWorkerHandle {
+        &self.handle
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn stop_for_test(&self) {
+        self.shutdown.cancel();
+        self.handle.command_tx.closed().await;
+    }
+
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn test_builder() -> RtcWorkerTestBuilder {
         RtcWorkerTestBuilder::default()
@@ -68,10 +80,7 @@ impl RtcWorker {
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return;
-        };
-        let Ok(mut snapshot_state) = worker_handle.snapshot_state.lock() else {
+        let Ok(mut snapshot_state) = self.handle.snapshot_state.lock() else {
             return;
         };
         let previous = snapshot_state.set_transport_health(session_key, health);
@@ -85,8 +94,7 @@ impl RtcWorker {
     where
         P: DebugProbe,
     {
-        let worker_handle = self.ensure_packet_loop_started().ok()?;
-        worker_handle.debug_handle.probe(probe).await
+        self.handle.debug_handle.probe(probe).await
     }
 
     #[cfg(test)]
@@ -369,12 +377,12 @@ impl RtcWorkerTestBuilder {
     #[must_use]
     #[allow(
         clippy::expect_used,
-        reason = "test setup uses a code-controlled RTP profile"
+        reason = "test setup must fail when its RTC profile or worker cannot start"
     )]
     pub(crate) fn build(self) -> RtcWorker {
         let profile = RtpProfile::compile(self.codec_flags, self.codec_preferences)
             .expect("test RTP profile should compile");
-        RtcWorker::new(
+        RtcWorker::start(
             &MediaTransportConfig {
                 worker_count: 1,
                 announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -400,6 +408,7 @@ impl RtcWorkerTestBuilder {
             0,
             MediaWorkerId::from_raw(0),
         )
+        .expect("test RTC worker should start")
     }
 }
 

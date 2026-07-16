@@ -84,7 +84,7 @@ use crate::engine::metrics::RuntimeMetrics;
 /// context such as session keys, media ids and SDP lengths.
 #[derive(Debug, Clone)]
 pub struct MediaTransport {
-    workers: Arc<[Arc<RtcWorker>]>,
+    workers: Arc<[RtcWorker]>,
     profile: Arc<RtpProfile>,
     metrics: Arc<RuntimeMetrics>,
     #[cfg(test)]
@@ -299,12 +299,12 @@ impl MediaTransport {
             Self::ensure_same_room(consumer_session_key, source_session_key)?;
             let relay_route =
                 self.relay_registration_workers(consumer_session_key, source_session_key)?;
-            let remote_source_control = relay_route
-                .as_ref()
-                .map(|(source_worker, consumer_worker)| {
-                    source_worker.remote_source_control(consumer_worker.as_ref())
-                })
-                .transpose()?;
+            let remote_source_control =
+                relay_route
+                    .as_ref()
+                    .map(|(source_worker, consumer_worker)| {
+                        source_worker.remote_source_control(consumer_worker)
+                    });
             self.require_worker_for_user(consumer_session_key)?
                 .request_worker(|response| RtcWorkerCommand::AddSendMedia {
                     consumer_key: consumer_session_key.clone(),

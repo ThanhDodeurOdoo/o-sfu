@@ -21,6 +21,7 @@
 
 use std::{
     mem::take,
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -35,7 +36,7 @@ use super::{
         forwarded_packet::ForwardedPacket,
         forwarding_planner::plan_forwards,
         routing_miss::DemuxRecoveryState,
-        state::{PacketLoopState, RtcSnapshotState},
+        state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
         worker::{WorkerCommandContext, drain_due_rid_kf_refreshes},
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
@@ -115,8 +116,10 @@ pub(super) struct PacketLoopApplyContext<'a> {
     pub packet_loop_state: &'a mut PacketLoopState,
     pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub candidate_addr: SocketAddr,
     pub config: &'a PacketLoopConfig,
     pub demux: &'a mut DemuxRecoveryState,
+    pub ingress: &'a UdpIngress,
     pub inputs: &'a mut PacketLoopInputReceivers,
 }
 
@@ -143,10 +146,9 @@ impl PacketLoopTurn {
         snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
         config: &PacketLoopConfig,
         relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
-    ) -> Option<WaitPhaseSnapshot> {
+    ) -> WaitPhaseSnapshot {
         let turn_started_at = Instant::now();
         self.buffers.clear();
-        state.shared_socket.as_ref()?;
         if let Some(packet) = self.staged_relay_packet.take() {
             // the packet that woke the wait phase enters the same batch as packets
             // drained from the relay mailbox below
@@ -207,10 +209,10 @@ impl PacketLoopTurn {
             &config.rtc_metrics,
             &self.buffers,
         );
-        Some(WaitPhaseSnapshot {
+        WaitPhaseSnapshot {
             next_timeout: next_timeout_deadline_at(state, now),
             turn_started_at,
-        })
+        }
     }
 
     /// flushes the async outputs produced by the pump phase
@@ -219,27 +221,22 @@ impl PacketLoopTurn {
     /// ends
     async fn flush_outputs(
         &mut self,
-        snapshot: Option<&WaitPhaseSnapshot>,
-        socket: Option<&RtcUdpSocket>,
+        snapshot: &WaitPhaseSnapshot,
+        socket: &RtcUdpSocket,
         packet_loop_lag: &PacketLoopLagSnapshot,
     ) {
-        let (Some(info), Some(socket)) = (snapshot, socket) else {
-            return;
-        };
         self.flush_staged_transmits(socket).await;
         self.lag_publisher
-            .observe(packet_loop_lag, info.turn_started_at, Instant::now());
+            .observe(packet_loop_lag, snapshot.turn_started_at, Instant::now());
     }
 
     /// waits for the next event that should resume the worker loop
     ///
     /// shutdown and control input are biased ahead of ingress receive
-    /// when no socket has been opened yet, only mailbox input or shutdown can wake
-    /// the worker
     pub async fn wait_for_next_input(
         &mut self,
-        snapshot: Option<WaitPhaseSnapshot>,
-        ingress: Option<&mut UdpIngress>,
+        snapshot: WaitPhaseSnapshot,
+        ingress: &mut UdpIngress,
         inputs: &mut PacketLoopInputReceivers,
     ) -> Option<PacketLoopTurnInput> {
         if inputs.shutdown_cancelled() {
@@ -249,12 +246,7 @@ impl PacketLoopTurn {
             return Some(PacketLoopTurnInput::Control(input));
         }
 
-        let (Some(info), Some(ingress)) = (snapshot, ingress) else {
-            // without a socket there is no media path to poll
-            // the worker waits for lifecycle input that can create a session
-            return inputs.recv_control_or_relay().await.map(mailbox_to_input);
-        };
-        if let Some(next_timeout) = info.next_timeout
+        if let Some(next_timeout) = snapshot.next_timeout
             && next_timeout <= Instant::now()
             && self.ready_now_budget > 0
         {
@@ -273,7 +265,7 @@ impl PacketLoopTurn {
         tokio::select! {
             biased;
             next_input = inputs.recv_control_or_relay() => next_input.map(mailbox_to_input),
-            next_input = self.wait_for_ingress_input(&info, ingress) => Some(next_input),
+            next_input = self.wait_for_ingress_input(&snapshot, ingress) => Some(next_input),
         }
     }
 
@@ -303,6 +295,7 @@ impl PacketLoopTurn {
                     context.packet_loop_state,
                     context.bitrate_registry,
                     context.snapshot_state,
+                    context.candidate_addr,
                     context.config,
                     command,
                     context.demux,
@@ -312,7 +305,14 @@ impl PacketLoopTurn {
                 self.staged_relay_packet = context.inputs.take_woken_relay_packet();
             }
             PacketLoopTurnInput::Datagram(datagram) => {
-                route_received_datagram(context, datagram);
+                let packet = route_datagram_to_session(
+                    context.packet_loop_state,
+                    context.snapshot_state,
+                    context.demux,
+                    &context.config.rtc_metrics,
+                    datagram,
+                );
+                context.ingress.recycle(packet);
             }
         }
     }
@@ -414,6 +414,7 @@ const MAX_READY_NOW_INPUTS_BEFORE_YIELD: usize = 32;
 /// ingress indefinitely
 pub async fn run_packet_loop(
     config: PacketLoopConfig,
+    mut shared_socket: SharedRtcSocket,
     bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     mut inputs: PacketLoopInputReceivers,
@@ -437,8 +438,10 @@ pub async fn run_packet_loop(
                     packet_loop_state: &mut packet_loop_state,
                     bitrate_registry: &bitrate_registry,
                     snapshot_state: &snapshot_state,
+                    candidate_addr: shared_socket.candidate_addr,
                     config: &config,
                     demux: &mut demux,
+                    ingress: &shared_socket.ingress,
                     inputs: &mut inputs,
                 },
                 input,
@@ -452,19 +455,11 @@ pub async fn run_packet_loop(
             inputs.relay_rx(),
         );
 
-        let socket = packet_loop_state
-            .shared_socket
-            .as_ref()
-            .map(|shared_socket| shared_socket.socket.clone());
-        turn.flush_outputs(snapshot.as_ref(), socket.as_ref(), &config.packet_loop_lag)
+        turn.flush_outputs(&snapshot, &shared_socket.socket, &config.packet_loop_lag)
             .await;
 
-        let ingress = packet_loop_state
-            .shared_socket
-            .as_mut()
-            .map(|shared_socket| &mut shared_socket.ingress);
         let input = turn
-            .wait_for_next_input(snapshot, ingress, &mut inputs)
+            .wait_for_next_input(snapshot, &mut shared_socket.ingress, &mut inputs)
             .await;
         let Some(input) = input else {
             // shutdown fired or the command receiver closed
@@ -472,19 +467,6 @@ pub async fn run_packet_loop(
             return;
         };
         next_input = Some(input);
-    }
-}
-
-fn route_received_datagram(context: &mut PacketLoopApplyContext<'_>, datagram: UdpDatagram) {
-    let packet = route_datagram_to_session(
-        context.packet_loop_state,
-        context.snapshot_state,
-        context.demux,
-        &context.config.rtc_metrics,
-        datagram,
-    );
-    if let Some(shared_socket) = context.packet_loop_state.shared_socket.as_ref() {
-        shared_socket.ingress.recycle(packet);
     }
 }
 
@@ -546,6 +528,7 @@ fn handle_control_input(
     packet_loop_state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    candidate_addr: SocketAddr,
     config: &PacketLoopConfig,
     command: PacketLoopControlInput,
     demux: &mut DemuxRecoveryState,
@@ -555,6 +538,7 @@ fn handle_control_input(
         &WorkerCommandContext {
             bitrate_registry,
             snapshot_state,
+            candidate_addr,
             now: Instant::now(),
             config: &config.worker,
             metrics: &config.metrics,

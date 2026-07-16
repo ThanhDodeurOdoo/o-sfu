@@ -16,7 +16,6 @@ pub(super) use o_sfu_router::rtp::{
     MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding,
 };
 pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
-pub(super) use tokio::time::sleep;
 
 pub(super) use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags,

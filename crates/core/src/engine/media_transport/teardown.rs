@@ -1,11 +1,10 @@
-use std::sync::Arc;
+use std::ptr;
 
 use tracing::warn;
 
 use super::{
     MediaTransport, TransportAdapterError, TransportMediaId, TransportRelayRouteAction,
-    TransportSessionKey, TransportSourceKey,
-    rtc::{RtcWorker, RtcWorkerCommand, RtcWorkerResponse},
+    TransportSessionKey, TransportSourceKey, rtc::RtcWorkerCommand,
 };
 use crate::engine::MediaWorkerId;
 
@@ -32,19 +31,6 @@ impl TransportTeardown {
             }
             Self::ReleaseRelayRoute { source, .. } => source.session_key(),
         }
-    }
-}
-
-async fn send_if_started(
-    worker: &RtcWorker,
-    build: impl FnOnce(RtcWorkerResponse<()>) -> RtcWorkerCommand,
-) -> Result<(), TransportAdapterError> {
-    let Some(handle) = worker.worker_handle()? else {
-        return Ok(());
-    };
-    match worker.send_worker_command(&handle, build).await {
-        Err(TransportAdapterError::TransportUnavailable) => Ok(()),
-        result => result,
     }
 }
 
@@ -109,11 +95,12 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
     ) -> Result<(), TransportAdapterError> {
         let worker = self.require_worker_for_user(session_key)?;
-        send_if_started(&worker, |response| RtcWorkerCommand::CloseSession {
-            session_key: session_key.clone(),
-            response,
-        })
-        .await
+        worker
+            .request_worker(|response| RtcWorkerCommand::CloseSession {
+                session_key: session_key.clone(),
+                response,
+            })
+            .await
     }
 
     pub(super) async fn remove_media(
@@ -122,12 +109,13 @@ impl MediaTransport {
         transport_media_id: TransportMediaId,
     ) -> Result<(), TransportAdapterError> {
         let worker = self.require_worker_for_user(session_key)?;
-        send_if_started(&worker, |response| RtcWorkerCommand::RemoveMedia {
-            session_key: session_key.clone(),
-            transport_media_id,
-            response,
-        })
-        .await
+        worker
+            .request_worker(|response| RtcWorkerCommand::RemoveMedia {
+                session_key: session_key.clone(),
+                transport_media_id,
+                response,
+            })
+            .await
     }
 
     async fn release_relay_route(
@@ -137,15 +125,16 @@ impl MediaTransport {
     ) -> Result<(), TransportAdapterError> {
         let source_worker = self.require_worker_for_user(source.session_key())?;
         let target_worker = self.require_worker_for_media_worker_id(target_media_worker_id)?;
-        if Arc::ptr_eq(&source_worker, &target_worker) {
+        if ptr::eq(source_worker, target_worker) {
             return Ok(());
         }
-        let request = target_worker
-            .relay_route_request(source.clone(), TransportRelayRouteAction::Release)?;
-        send_if_started(&source_worker, |response| RtcWorkerCommand::RouteControl {
-            request,
-            response: Some(response),
-        })
-        .await
+        let request =
+            target_worker.relay_route_request(source.clone(), TransportRelayRouteAction::Release);
+        source_worker
+            .request_worker(|response| RtcWorkerCommand::RouteControl {
+                request,
+                response: Some(response),
+            })
+            .await
     }
 }

@@ -188,8 +188,6 @@ pub(super) struct PendingRecvStream {
 /// generation-checked handles
 #[derive(Default)]
 pub(super) struct PacketLoopState {
-    /// lazily bound worker socket cleared when the last session leaves
-    pub(super) shared_socket: Option<SharedRtcSocket>,
     /// live worker-local RTC sessions
     pub(super) users: SessionStore,
     /// source-scoped packet routing, relay and recovery state

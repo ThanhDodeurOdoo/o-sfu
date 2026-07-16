@@ -493,9 +493,7 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
     adapter
         .debug_record_incoming_media(&session_key, transport_media_id, 64, now)
         .await;
-    let Some(worker_handle) = adapter.worker_handle().ok().flatten() else {
-        return;
-    };
+    let worker_handle = adapter.test_handle();
     let snapshot = {
         let Ok(bitrate_registry) = worker_handle.bitrate_registry.lock() else {
             return;

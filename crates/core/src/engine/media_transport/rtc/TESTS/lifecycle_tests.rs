@@ -22,20 +22,6 @@ fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
 }
 
 #[tokio::test]
-async fn rtc_initial_session_offer_starts_packet_loop() {
-    let adapter = RtcWorker::default();
-    let session_key = transport_key(1, 15, UserId::Integer(15));
-
-    assert!(!adapter.packet_loop_started());
-    adapter
-        .create_initial_session_offer(&session_key)
-        .await
-        .expect("initial offer should start the packet loop");
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
-}
-
-#[tokio::test]
 async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 13, UserId::Integer(13));
@@ -189,12 +175,7 @@ async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
             .await
             .is_ok()
     );
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
-
     assert!(adapter.close_session(&first_session_key).await.is_ok());
-    assert!(adapter.packet_loop_started());
-    assert!(matches!(adapter.worker_handle(), Ok(Some(_))));
 
     let second_session_key = transport_key(1, 142, UserId::Integer(142));
     assert!(
@@ -203,8 +184,6 @@ async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
             .await
             .is_ok()
     );
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -214,10 +193,7 @@ async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
     let second_session = transport_key(1, 145, UserId::Integer(145));
     let _offer = expect_initial_offer(&adapter, &first_session).await;
     let _offer = expect_initial_offer(&adapter, &second_session).await;
-    let worker_handle = adapter
-        .worker_handle()
-        .expect("worker handle should be readable")
-        .expect("worker should be started");
+    let worker_handle = adapter.test_handle();
 
     let (probe_entered_tx, probe_entered_rx) = oneshot::channel();
     let (release_probe_tx, release_probe_rx) = mpsc::channel();
@@ -305,7 +281,6 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
         adapter.session_transport_health(&second_session_key),
         Some(TransportSessionHealth::Disconnected)
     );
-    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test]
@@ -332,9 +307,6 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
     for result in results {
         assert!(result.is_ok());
     }
-
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
 }
 
 #[tokio::test]
@@ -355,8 +327,6 @@ async fn rtc_transport_concurrent_last_session_close_keeps_worker_reusable() {
             .await
             .is_ok()
     );
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
 
     let close_results = timeout(Duration::from_secs(1), async {
         tokio::join!(
@@ -372,10 +342,6 @@ async fn rtc_transport_concurrent_last_session_close_keeps_worker_reusable() {
     assert!(first_close.is_ok());
     assert!(second_close.is_ok());
 
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
-    assert!(matches!(adapter.worker_handle(), Ok(Some(_))));
-
     let next_session_key = transport_key(4, 303, UserId::Integer(303));
     assert!(
         adapter
@@ -383,6 +349,4 @@ async fn rtc_transport_concurrent_last_session_close_keeps_worker_reusable() {
             .await
             .is_ok()
     );
-    sleep(Duration::from_millis(5)).await;
-    assert!(adapter.packet_loop_started());
 }

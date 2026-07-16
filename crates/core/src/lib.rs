@@ -61,6 +61,9 @@
 //! # }
 //! ```
 //!
+//! `MediaTransport::build` returns after every worker runtime has bound its UDP
+//! socket. Session-local RTC state remains lazy.
+//!
 //! the example follows the production construction shape without opening a
 //! listener or starting an async server
 

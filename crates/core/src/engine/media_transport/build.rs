@@ -20,13 +20,14 @@ const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 impl MediaTransport {
     /// builds the runtime media transport from owner configuration and process services
     ///
-    /// validation completes before any worker is created while worker packet
-    /// loops remain lazy until media work first addresses them
+    /// validation completes before worker startup and every worker has a bound
+    /// socket when this function returns
     ///
     /// # Errors
     ///
     /// returns [`MediaTransportBuildError`] when worker topology or the
-    /// code-controlled RTP profile is invalid or the selected UDP backend is unavailable
+    /// code-controlled RTP profile is invalid, the selected UDP backend is
+    /// unavailable or a worker cannot start
     pub fn build(
         config: MediaTransportConfig,
         deps: MediaTransportDeps,
@@ -54,7 +55,7 @@ impl MediaTransport {
         let workers: Arc<[_]> = (0_u16..u16::MAX)
             .zip(worker_ranges)
             .map(|(worker_index, range)| {
-                Arc::new(RtcWorker::new(
+                RtcWorker::start(
                     &config,
                     Arc::clone(&profile),
                     range,
@@ -62,9 +63,12 @@ impl MediaTransport {
                     source_policy_signal.clone(),
                     u64::from(worker_index) * MEDIA_ID_STRIDE,
                     MediaWorkerId::from_raw(usize::from(worker_index)),
-                ))
+                )
+                .map_err(|_error| MediaTransportBuildError::WorkerStartup {
+                    worker_index: usize::from(worker_index),
+                })
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             workers,
             profile,
@@ -96,4 +100,7 @@ pub enum MediaTransportBuildError {
     /// the code-controlled RTC profile cannot be projected for router policy
     #[error("media transport RTP profile is invalid")]
     InvalidRtpProfile,
+    /// one worker could not create its runtime or bind its assigned UDP range
+    #[error("media transport worker {worker_index} failed to start")]
+    WorkerStartup { worker_index: usize },
 }

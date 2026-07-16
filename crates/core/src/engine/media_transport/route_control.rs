@@ -373,13 +373,10 @@ impl MediaTransport {
         batch: WorkerBatch,
     ) -> TransportResult<WorkerBatchOutcome> {
         let worker = self.worker_for_index(worker_index).ok_or(UNAVAILABLE)?;
-        let handle = worker.worker_handle()?.ok_or(UNAVAILABLE)?;
         #[cfg(test)]
         self.observe_media_control_batch(worker_index, &batch);
         worker
-            .send_worker_command(&handle, |response| {
-                RtcWorkerCommand::ApplyMediaControlBatch { batch, response }
-            })
+            .request_worker(|response| RtcWorkerCommand::ApplyMediaControlBatch { batch, response })
             .await
     }
 

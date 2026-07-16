@@ -1,25 +1,14 @@
-//! lazy lifecycle and mailbox runtime for one RTC transport worker
+//! construction and mailbox runtime for one RTC transport worker
 //!
-//! this module owns the publication contract for the worker handle and the
-//! request-response helpers used by the media transport command port and
-//! cfg-gated worker harnesses
-//! it is the only place where command dispatch can boot the packet loop, publish
-//! its mailboxes and translate a closed worker into [`TransportAdapterError`]
-//!
-//! the packet loop is started lazily so unused RTC workers do not bind sockets
-//! or allocate worker-local registries
-//! once a handle is published, callers clone it out of the slot before any
-//! `.await`
-//! this keeps the boot lock cold-path only and prevents mailbox sends from
-//! holding the publication lock
+//! [`RtcWorker::start`] returns only after its packet-loop runtime has bound the
+//! worker socket
+//! callers can therefore use one direct handle without a start slot or missing
+//! worker state
 //!
 //! command dispatch follows one pattern:
 //!
 //! ```text
 //! transport command port
-//!   |
-//!   v
-//! ensure worker handle exists
 //!   |
 //!   v
 //! build RtcWorkerCommand with oneshot response
@@ -30,17 +19,14 @@
 //!   v
 //! await worker response
 //! ```
-//!
-//! observability methods in this file deliberately avoid lazy boot
-//! a worker that has never started has no packet observations, so the snapshot
-//! surface returns empty or default values instead of creating transport state
 #[cfg(target_os = "linux")]
 use std::{
     any::Any,
     panic::{AssertUnwindSafe, catch_unwind},
 };
 use std::{
-    sync::{Arc, Mutex, mpsc as std_mpsc},
+    net::IpAddr,
+    sync::{Arc, Mutex, atomic::Ordering, mpsc as std_mpsc},
     thread,
     time::Instant,
 };
@@ -54,7 +40,9 @@ use tracing::{info, warn};
 
 use super::{
     super::{
+        RtcWorkerConfig, RtpProfile,
         bitrate::BitrateRegistry,
+        bootstrap,
         commands::{RtcWorkerCommand, RtcWorkerResponse},
         packet_loop::{self, PacketLoopConfig},
         relay_registry::{RELAY_MAILBOX_CAPACITY, RelayPacketMailbox, sender_backlog_depth},
@@ -63,61 +51,62 @@ use super::{
     RtcWorker, RtcWorkerHandle,
 };
 use crate::{
-    Bitrate, MediaWorkerId, RtcUdpIoBackend,
+    Bitrate, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
     engine::media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, ReceiverBandwidthSnapshot,
-        TransportAdapterError, TransportBitrateSnapshot, TransportMediaId,
-        TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportSessionKey,
-        TransportSourceActivitySnapshot, TransportWorkerPressureSnapshot,
+        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, MediaTransportConfig,
+        MediaTransportDeps, ReceiverBandwidthSnapshot, SourcePolicySignal, TransportAdapterError,
+        TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
+        TransportQualitySnapshot, TransportSessionKey, TransportSourceActivitySnapshot,
+        TransportWorkerPressureSnapshot,
     },
 };
 
-/// publication slot for the lazily booted packet-loop handle
-///
-/// the RTC worker publishes a fully constructed worker handle into this slot
-/// before any caller can start sending commands
-/// loom reuses the same slot logic with modeled synchronization primitives to
-/// check the publication contract
-#[derive(Debug, Clone)]
-pub struct WorkerHandleSlot<T> {
-    handle: Option<T>,
+struct PacketLoopStartup {
+    announced_ip: IpAddr,
+    rtc_port_range: RtcPortRange,
+    config: PacketLoopConfig,
+    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
+    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
+    inputs: packet_loop::PacketLoopInputReceivers,
 }
 
-impl<T> Default for WorkerHandleSlot<T> {
-    fn default() -> Self {
-        Self { handle: None }
-    }
-}
-
-impl<T: Clone> WorkerHandleSlot<T> {
-    pub fn worker_handle(&self) -> Option<T> {
-        self.handle.clone()
-    }
-
-    /// publishes a fully constructed worker handle and returns a clone
-    ///
-    /// callers use the returned handle after releasing the slot lock so command
-    /// dispatch never awaits while the publication lock is held
-    pub fn store(&mut self, handle: T) -> T {
-        self.handle = Some(handle.clone());
-        handle
-    }
-
-    #[cfg(test)]
-    pub fn is_started(&self) -> bool {
-        self.handle.is_some()
+impl PacketLoopStartup {
+    async fn run(
+        self,
+        backend: RtcUdpIoBackend,
+        startup_tx: std_mpsc::SyncSender<Result<(), TransportAdapterError>>,
+    ) {
+        let shared_socket = match bootstrap::bind_shared_rtc_socket(
+            self.announced_ip,
+            self.rtc_port_range,
+            backend,
+        ) {
+            Ok(shared_socket) => shared_socket,
+            Err(error) => {
+                let _ = startup_tx.send(Err(error));
+                return;
+            }
+        };
+        if startup_tx.send(Ok(())).is_err() {
+            return;
+        }
+        packet_loop::run_packet_loop(
+            self.config,
+            shared_socket,
+            self.bitrate_registry,
+            self.snapshot_state,
+            self.inputs,
+        )
+        .await;
     }
 }
 
 fn spawn_tokio_packet_loop(
     thread_name: String,
-    packet_loop_config: PacketLoopConfig,
-    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    packet_loop_inputs: packet_loop::PacketLoopInputReceivers,
-) -> Result<(), TransportAdapterError> {
+    startup: PacketLoopStartup,
+) -> Result<thread::JoinHandle<()>, TransportAdapterError> {
     let (startup_tx, startup_rx) = std_mpsc::sync_channel(1);
-    thread::Builder::new()
+    let thread = thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
             match TokioRuntimeBuilder::new_current_thread()
@@ -126,66 +115,56 @@ fn spawn_tokio_packet_loop(
                 .build()
             {
                 Ok(runtime) => {
-                    let _ = startup_tx.send(Ok(()));
-                    runtime.block_on(packet_loop::run_packet_loop(
-                        packet_loop_config,
-                        bitrate_registry,
-                        snapshot_state,
-                        packet_loop_inputs,
-                    ));
+                    runtime.block_on(startup.run(RtcUdpIoBackend::Tokio, startup_tx));
                 }
                 Err(error) => {
                     warn!(?error, "failed to boot rtc packet loop Tokio runtime");
-                    let _ = startup_tx.send(Err(()));
+                    let _ = startup_tx.send(Err(TransportAdapterError::TransportUnavailable));
                 }
             }
         })
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
-    wait_for_packet_loop_startup(&startup_rx)
+    wait_for_packet_loop_startup(thread, &startup_rx)
 }
 
 #[cfg(target_os = "linux")]
 fn spawn_io_uring_packet_loop(
     thread_name: String,
-    packet_loop_config: PacketLoopConfig,
-    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    packet_loop_inputs: packet_loop::PacketLoopInputReceivers,
-) -> Result<(), TransportAdapterError> {
+    startup: PacketLoopStartup,
+) -> Result<thread::JoinHandle<()>, TransportAdapterError> {
     let (startup_tx, startup_rx) = std_mpsc::sync_channel(1);
-    thread::Builder::new()
+    let thread = thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
             let startup_err_tx = startup_tx.clone();
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                tokio_uring::start(async move {
-                    let _ = startup_tx.send(Ok(()));
-                    packet_loop::run_packet_loop(
-                        packet_loop_config,
-                        bitrate_registry,
-                        snapshot_state,
-                        packet_loop_inputs,
-                    )
-                    .await;
-                });
+                tokio_uring::start(startup.run(RtcUdpIoBackend::IoUring, startup_tx));
             })) {
                 warn!(
                     panic = panic_message(payload.as_ref()),
                     "rtc packet loop io_uring runtime panicked"
                 );
-                let _ = startup_err_tx.send(Err(()));
+                let _ = startup_err_tx.send(Err(TransportAdapterError::TransportUnavailable));
             }
         })
         .map_err(|_error| TransportAdapterError::TransportUnavailable)?;
-    wait_for_packet_loop_startup(&startup_rx)
+    wait_for_packet_loop_startup(thread, &startup_rx)
 }
 
 fn wait_for_packet_loop_startup(
-    startup_rx: &std_mpsc::Receiver<Result<(), ()>>,
-) -> Result<(), TransportAdapterError> {
+    thread: thread::JoinHandle<()>,
+    startup_rx: &std_mpsc::Receiver<Result<(), TransportAdapterError>>,
+) -> Result<thread::JoinHandle<()>, TransportAdapterError> {
     match startup_rx.recv() {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(())) | Err(_) => Err(TransportAdapterError::TransportUnavailable),
+        Ok(Ok(())) => Ok(thread),
+        Ok(Err(error)) => {
+            let _ = thread.join();
+            Err(error)
+        }
+        Err(_) => {
+            let _ = thread.join();
+            Err(TransportAdapterError::TransportUnavailable)
+        }
     }
 }
 
@@ -200,82 +179,33 @@ fn panic_message(payload: &(dyn Any + Send)) -> &str {
     }
 }
 
-impl RtcWorker {
-    /// clones the current worker handle if the packet loop has been started
-    ///
-    /// this method never starts the worker
-    /// observability paths use it so read-only snapshots do not allocate
-    /// transport state just because a caller asked for diagnostics
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the handle
-    /// slot lock is poisoned
-    pub fn worker_handle(&self) -> Result<Option<RtcWorkerHandle>, TransportAdapterError> {
-        let Ok(worker_handle) = self.worker_handle.lock() else {
-            return Err(TransportAdapterError::TransportUnavailable);
-        };
-        Ok(worker_handle.worker_handle())
-    }
-
-    /// reports whether this worker has started its packet loop in tests
-    ///
-    /// a poisoned slot lock is treated as not started because tests use this as
-    /// a simple lifecycle observation rather than an error-reporting API
-    #[cfg(test)]
-    pub fn packet_loop_started(&self) -> bool {
-        let Ok(worker_handle) = self.worker_handle.lock() else {
-            return false;
-        };
-        worker_handle.is_started()
-    }
-
-    /// lazily boots the worker-local packet loop and returns its published handle
-    ///
-    /// this method is the publication boundary between cold-path worker calls
-    /// and the hot packet loop
-    /// it must publish exactly one complete handle before any caller can send
-    /// commands, then move the receiver halves into the spawned packet-loop
-    /// task
-    ///
-    /// boot order:
-    ///
-    /// ```text
-    /// lock worker slot
-    ///   |
-    ///   +-- return existing handle when another caller already started it
-    ///   +-- create command, relay and snapshot channels
-    ///   +-- spawn packet loop with receiver-side inputs
-    ///   `-- publish cloned sender-side handle in the slot
-    /// ```
-    ///
-    /// the slot lock stays held until publication so a second caller cannot
-    /// start another packet loop for the same worker
-    /// the worker starts before publication so spawn failure never exposes a
-    /// handle whose receiver task does not exist
-    ///
-    /// the published handle contains sender-side control and shared
-    /// observations
-    /// authoritative RTC state is created and owned by the spawned packet-loop
-    /// task
-    ///
-    /// this is a cold-path lifecycle method
-    /// packet-path allocations and routing state are owned by the spawned task
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the handle
-    /// slot is poisoned or when packet-loop thread creation fails
-    pub(super) fn ensure_packet_loop_started(
-        &self,
-    ) -> Result<RtcWorkerHandle, TransportAdapterError> {
-        // the slot lock is the single-start guard for this worker
-        let Ok(mut worker_slot) = self.worker_handle.lock() else {
-            return Err(TransportAdapterError::TransportUnavailable);
-        };
-        if let Some(worker_handle) = worker_slot.worker_handle() {
-            return Ok(worker_handle);
+impl Drop for RtcWorker {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
         }
+    }
+}
+
+impl RtcWorker {
+    /// starts one packet-loop worker and binds its socket before returning
+    ///
+    /// # Errors
+    ///
+    /// returns [`TransportAdapterError::TransportUnavailable`] when runtime
+    /// creation, socket binding or packet-loop thread startup fails
+    pub(crate) fn start(
+        config: &MediaTransportConfig,
+        profile: Arc<RtpProfile>,
+        rtc_port_range: RtcPortRange,
+        deps: &MediaTransportDeps,
+        source_policy_signal: SourcePolicySignal,
+        media_id_base: u64,
+        media_worker_id: MediaWorkerId,
+    ) -> Result<Self, TransportAdapterError> {
+        let relay_target_id =
+            super::RelayTargetId::new(super::NEXT_RELAY_TARGET_ID.fetch_add(1, Ordering::Relaxed));
         let (command_tx, command_rx) = mpsc::channel(64);
         #[cfg(any(test, feature = "testing-transport"))]
         let debug_channels = super::super::test_support::RtcWorkerDebugChannels::new();
@@ -285,8 +215,8 @@ impl RtcWorker {
         let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
         let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(Instant::now()));
-        let shutdown_token = CancellationToken::new();
-        let worker_handle = RtcWorkerHandle {
+        let shutdown = CancellationToken::new();
+        let handle = RtcWorkerHandle {
             command_tx,
             #[cfg(any(test, feature = "testing-transport"))]
             debug_handle: debug_channels.handle(),
@@ -296,96 +226,87 @@ impl RtcWorker {
             packet_loop_lag: Arc::clone(&packet_loop_lag),
         };
         let packet_loop_inputs =
-            packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown_token);
+            packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown.clone());
         #[cfg(any(test, feature = "testing-transport"))]
         let packet_loop_inputs = debug_channels.install(packet_loop_inputs);
-        let config = self.config.clone();
-        let rtc_udp_io_backend = config.rtc_udp_io_backend;
+        let metrics = &deps.metrics;
+        let rtc_metrics = metrics.register_rtc_worker();
+        #[cfg(test)]
+        let test_source_policy_signal = source_policy_signal.clone();
+        let packet_loop_config = PacketLoopConfig {
+            worker: RtcWorkerConfig {
+                bitrate_limits: config.bitrate_limits,
+                video_bitrate_limits: config.video_bitrate_limits,
+                profile,
+                media_quality_interval: config.media_quality_interval,
+                media_id_base,
+            },
+            diagnostics: Arc::clone(&deps.diagnostics),
+            packet_sink_registry: Arc::clone(&deps.packet_sink_registry),
+            source_policy_signal,
+            metrics: Arc::clone(metrics),
+            rtp_metrics: metrics.register_rtp_worker_for_media_worker(media_worker_id.as_usize()),
+            rtc_metrics: Arc::clone(&rtc_metrics),
+            packet_loop_lag,
+        };
+        let startup = PacketLoopStartup {
+            announced_ip: config.announced_ip,
+            rtc_port_range,
+            config: packet_loop_config,
+            bitrate_registry,
+            snapshot_state,
+            inputs: packet_loop_inputs,
+        };
+        let thread_name = format!("rtc-packet-loop-{relay_target_id:?}");
+        let thread = match config.rtc_udp_io_backend {
+            RtcUdpIoBackend::Tokio => spawn_tokio_packet_loop(thread_name, startup)?,
+            RtcUdpIoBackend::IoUring => {
+                #[cfg(target_os = "linux")]
+                {
+                    spawn_io_uring_packet_loop(thread_name, startup)?
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    return Err(TransportAdapterError::TransportUnavailable);
+                }
+            }
+        };
         info!(
-            relay_target_id = ?self.relay_target_id,
+            ?relay_target_id,
             announced_ip = %config.announced_ip,
             max_bitrate_in_bps = config.bitrate_limits.max_bitrate_in().as_bps(),
             max_bitrate_out_bps = config.bitrate_limits.max_bitrate_out().as_bps(),
-            rtc_port_range_min = config.rtc_port_range.min(),
-            rtc_port_range_max = config.rtc_port_range.max(),
+            rtc_port_range_min = rtc_port_range.min(),
+            rtc_port_range_max = rtc_port_range.max(),
             rtc_udp_io_backend = config.rtc_udp_io_backend.wire_name(),
-            "booted rtc packet loop worker"
+            "started rtc packet loop worker"
         );
-        let packet_loop_config = PacketLoopConfig {
-            worker: config,
-            diagnostics: Arc::clone(&self.diagnostics),
-            packet_sink_registry: Arc::clone(&self.packet_sink_registry),
-            source_policy_signal: self.source_policy_signal.clone(),
-            metrics: Arc::clone(&self.metrics),
-            rtp_metrics: Arc::clone(&self.rtp_metrics),
-            rtc_metrics: Arc::clone(&self.rtc_metrics),
-            packet_loop_lag,
-        };
-        let thread_name = format!("rtc-packet-loop-{:?}", self.relay_target_id);
-        match rtc_udp_io_backend {
-            RtcUdpIoBackend::Tokio => spawn_tokio_packet_loop(
-                thread_name,
-                packet_loop_config,
-                bitrate_registry,
-                snapshot_state,
-                packet_loop_inputs,
-            )?,
-            RtcUdpIoBackend::IoUring => {
-                #[cfg(target_os = "linux")]
-                spawn_io_uring_packet_loop(
-                    thread_name,
-                    packet_loop_config,
-                    bitrate_registry,
-                    snapshot_state,
-                    packet_loop_inputs,
-                )?;
-                #[cfg(not(target_os = "linux"))]
-                return Err(TransportAdapterError::TransportUnavailable);
-            }
-        }
-        // publication happens while the lock is held so competing callers see
-        // one complete handle
-        Ok(worker_slot.store(worker_handle))
+        Ok(Self {
+            relay_target_id,
+            handle,
+            shutdown,
+            thread: Some(thread),
+            #[cfg(any(test, feature = "testing-transport"))]
+            metrics: Arc::clone(metrics),
+            rtc_metrics,
+            #[cfg(test)]
+            source_policy_signal: test_source_policy_signal,
+        })
     }
 
-    /// sends a request command to the worker after starting it if needed
-    ///
-    /// use this for mutating worker operations where the absence of a worker
-    /// means transport state must be created before the command can run
+    /// sends a request command to the ready worker
     ///
     /// # Errors
     ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when worker boot,
-    /// command send or response receive fails
+    /// returns the command handler error, or
+    /// [`TransportAdapterError::TransportUnavailable`] when command delivery or
+    /// response receipt fails
     pub async fn request_worker<T, F>(&self, build_command: F) -> Result<T, TransportAdapterError>
     where
         F: FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
     {
-        let worker_handle = self.ensure_packet_loop_started()?;
-        self.send_worker_command(&worker_handle, build_command)
-            .await
-    }
-
-    /// sends a request command through an already acquired worker handle
-    ///
-    /// observability and close paths use this when they have already
-    /// decided whether a missing worker should be treated as empty state or
-    /// should be booted first
-    ///
-    /// # Errors
-    ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when the command
-    /// mailbox is closed or the response sender is dropped before answering
-    pub async fn send_worker_command<T, F>(
-        &self,
-        worker_handle: &RtcWorkerHandle,
-        build_command: F,
-    ) -> Result<T, TransportAdapterError>
-    where
-        F: FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,
-    {
         let (response_tx, response_rx) = oneshot::channel();
-        worker_handle
+        self.handle
             .command_tx
             .send(build_command(response_tx))
             .await
@@ -397,20 +318,16 @@ impl RtcWorker {
 }
 
 impl RtcWorker {
-    /// reads bitrate counters for the requested sessions without booting worker state
+    /// reads bitrate counters for the requested sessions
     ///
-    /// a missing worker, unavailable registry or missing session contributes no
-    /// bitrate
+    /// an unavailable registry or missing session contributes no bitrate
     /// callers must treat the result as a recent transport observation rather
     /// than an accounting source of truth
     pub fn transport_bitrate_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return TransportBitrateSnapshot::default();
-        };
-        let Ok(bitrate_registry) = worker_handle.bitrate_registry.lock() else {
+        let Ok(bitrate_registry) = self.handle.bitrate_registry.lock() else {
             return TransportBitrateSnapshot::default();
         };
         bitrate_registry.transport_bitrate_snapshot_at(session_keys, Instant::now())
@@ -425,10 +342,7 @@ impl RtcWorker {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return ReceiverBandwidthSnapshot::default();
-        };
-        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
+        let Ok(snapshot_state) = self.handle.snapshot_state.lock() else {
             return ReceiverBandwidthSnapshot::default();
         };
         snapshot_state.receiver_bandwidth_snapshot(session_keys)
@@ -439,10 +353,7 @@ impl RtcWorker {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportQualitySnapshot {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return TransportQualitySnapshot::default();
-        };
-        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
+        let Ok(snapshot_state) = self.handle.snapshot_state.lock() else {
             return TransportQualitySnapshot::default();
         };
         snapshot_state.transport_quality_snapshot(session_keys)
@@ -457,53 +368,43 @@ impl RtcWorker {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return TransportPlacementPressureSnapshot::default();
-        };
         let now = Instant::now();
-        let egress_bitrate = match worker_handle.bitrate_registry.lock() {
+        let egress_bitrate = match self.handle.bitrate_registry.lock() {
             Ok(bitrate_registry) => bitrate_registry.egress_bitrate_snapshot_at(session_keys, now),
             Err(_error) => Bitrate::zero(),
         };
-        pressure_snapshot(&worker_handle, egress_bitrate, now)
+        pressure_snapshot(&self.handle, egress_bitrate, now)
     }
 
     /// builds a pressure snapshot for the whole worker
     ///
     /// this is used by room placement to compare local workers
     /// the result is still best-effort and falls back to zero pressure when the
-    /// worker has not started
+    /// worker observations are unavailable
     pub fn worker_pressure_snapshot(
         &self,
         media_worker_id: MediaWorkerId,
     ) -> TransportWorkerPressureSnapshot {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return TransportWorkerPressureSnapshot::new(
-                media_worker_id,
-                TransportPlacementPressureSnapshot::default(),
-            );
-        };
         let now = Instant::now();
-        let egress_bitrate = match worker_handle.bitrate_registry.lock() {
+        let egress_bitrate = match self.handle.bitrate_registry.lock() {
             Ok(bitrate_registry) => bitrate_registry.total_egress_bitrate_snapshot_at(now),
             Err(_error) => Bitrate::zero(),
         };
         TransportWorkerPressureSnapshot::new(
             media_worker_id,
-            pressure_snapshot(&worker_handle, egress_bitrate, now),
+            pressure_snapshot(&self.handle, egress_bitrate, now),
         )
     }
 
     /// reads the latest transport health side-channel entry for one session
     ///
-    /// `None` means the worker is missing, the snapshot lock is unavailable or
-    /// no health event has been observed for the session
+    /// `None` means the snapshot lock is unavailable or no health event has
+    /// been observed for the session
     pub fn session_transport_health(
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        let worker_handle = self.worker_handle().ok().flatten()?;
-        let Ok(snapshot_state) = worker_handle.snapshot_state.lock() else {
+        let Ok(snapshot_state) = self.handle.snapshot_state.lock() else {
             return None;
         };
         snapshot_state.transport_health(session_key)
@@ -515,14 +416,9 @@ impl RtcWorker {
     /// the source activity ordering lives beside route-control state
     /// dispatch failures return an empty snapshot
     pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return Vec::new();
-        };
-        self.send_worker_command(&worker_handle, |response| {
-            RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response }
-        })
-        .await
-        .unwrap_or_default()
+        self.request_worker(|response| RtcWorkerCommand::ActiveSpeakerSourceSnapshot { response })
+            .await
+            .unwrap_or_default()
     }
 
     /// asks the packet loop for detailed active-speaker diagnostics
@@ -531,12 +427,9 @@ impl RtcWorker {
     /// as source snapshots
     /// dispatch failures return an empty diagnostic set
     pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return Vec::new();
-        };
-        self.send_worker_command(&worker_handle, |response| {
-            RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response }
-        })
+        self.request_worker(
+            |response| RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response },
+        )
         .await
         .unwrap_or_default()
     }
@@ -549,14 +442,9 @@ impl RtcWorker {
         &self,
         transport_media_ids: &[TransportMediaId],
     ) -> TransportSourceActivitySnapshot {
-        let Some(worker_handle) = self.worker_handle().ok().flatten() else {
-            return TransportSourceActivitySnapshot::default();
-        };
-        self.send_worker_command(&worker_handle, |response| {
-            RtcWorkerCommand::SourceActivitySnapshot {
-                transport_media_ids: transport_media_ids.to_vec(),
-                response,
-            }
+        self.request_worker(|response| RtcWorkerCommand::SourceActivitySnapshot {
+            transport_media_ids: transport_media_ids.to_vec(),
+            response,
         })
         .await
         .unwrap_or_default()
