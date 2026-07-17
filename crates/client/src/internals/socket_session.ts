@@ -43,11 +43,14 @@ export class SocketSession {
             if (this._activeSocket !== socket) {
                 return;
             }
-            const code = this._protocolCloseCode ?? event.code;
+            const protocolCloseCode = this._protocolCloseCode;
+            const code = protocolCloseCode ?? event.code;
             this._protocolCloseCode = null;
             this._activeSocket = null;
             this._log(CLIENT_LOG_LEVEL.INFO, `websocket closed with code ${code}`);
-            this._onClose(code);
+            if (protocolCloseCode === null) {
+                this._onClose(code);
+            }
         };
         socket.onerror = () => undefined;
         this._activeSocket = socket;
@@ -61,11 +64,18 @@ export class SocketSession {
     }
 
     close(code: number): void {
-        if (!this._activeSocket || this._activeSocket.readyState >= 2) {
+        const socket = this._activeSocket;
+        if (!socket || socket.readyState >= 2 || this._protocolCloseCode !== null) {
             return;
         }
         this._protocolCloseCode = code;
-        this._activeSocket.close(browserCloseCode(code));
+        try {
+            socket.close(browserCloseCode(code));
+        } catch (error) {
+            this._protocolCloseCode = null;
+            throw error;
+        }
+        this._onClose(code);
     }
 
     abort(code: number): void {

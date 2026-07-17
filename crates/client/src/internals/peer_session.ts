@@ -106,13 +106,13 @@ export class PeerSession {
 
     close(): void {
         const peer = this._activePeer;
+        this._activePeer = null;
+        this._uploads.clearPeerConnectionState();
+        this._media.clearPeerConnectionState();
         if (peer) {
             peer.close();
             this._log(CLIENT_LOG_LEVEL.INFO, "closed RTCPeerConnection");
         }
-        this._uploads.clearPeerConnectionState();
-        this._media.clearPeerConnectionState();
-        this._activePeer = null;
     }
 
     async getStats(): Promise<SfuStats> {

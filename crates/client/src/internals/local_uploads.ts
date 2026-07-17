@@ -17,6 +17,7 @@ export type UploadSlot = {
 export class LocalUploads {
     private _attachableTypes = new Set<StreamType>();
     private _localTracks = new Map<StreamType, MediaTrack>();
+    private _peerGeneration = 0;
     private _senderMidByType = new Map<StreamType, string>();
 
     setPublication(
@@ -51,6 +52,7 @@ export class LocalUploads {
     }
 
     clearPeerConnectionState(): void {
+        this._peerGeneration += 1;
         this._senderMidByType.clear();
         this._attachableTypes.clear();
     }
@@ -73,6 +75,7 @@ export class LocalUploads {
         if (!peerConnection) {
             throw new Error("cannot attach track without an active peer connection");
         }
+        const generation = this._peerGeneration;
         const track = this._localTracks.get(streamType) ?? null;
         const transceiver = peerConnection
             .getTransceivers()
@@ -81,6 +84,9 @@ export class LocalUploads {
             throw new Error(`missing transceiver for mid ${mid}`);
         }
         await transceiver.sender.replaceTrack(track);
+        if (generation !== this._peerGeneration) {
+            return;
+        }
         updateTransceiverDirection(transceiver, track);
         if (track) {
             await applyUploadPublicationPolicy(
@@ -88,6 +94,9 @@ export class LocalUploads {
                 transceiver,
                 uploadSlot?.simulcastEncodings ?? []
             );
+            if (generation !== this._peerGeneration) {
+                return;
+            }
         }
         this._senderMidByType.set(streamType, mid);
         this._attachableTypes.delete(streamType);
@@ -100,6 +109,7 @@ export class LocalUploads {
         if (!peerConnection) {
             return;
         }
+        const generation = this._peerGeneration;
         const boundMid = this._senderMidByType.get(streamType);
         if (!boundMid) {
             return;
@@ -109,6 +119,9 @@ export class LocalUploads {
             .find((candidate) => candidate.mid === boundMid);
         if (transceiver) {
             await transceiver.sender.replaceTrack(null);
+            if (generation !== this._peerGeneration) {
+                return;
+            }
             updateTransceiverDirection(transceiver, null);
         }
         this._senderMidByType.delete(streamType);
@@ -121,6 +134,7 @@ export class LocalUploads {
         peerConnection: ClientPeerConnection,
         uploadSlots: UploadSlot[]
     ): Promise<void> {
+        const generation = this._peerGeneration;
         const pendingStreamTypes = STREAM_TYPES.filter(
             (streamType) =>
                 this.hasPendingPublication(streamType) && this._attachableTypes.has(streamType)
@@ -154,6 +168,9 @@ export class LocalUploads {
             }
             const [slot] = remainingSlots.splice(slotIndex, 1);
             await this.attachTrack(peerConnection, slot.mid, streamType, slot);
+            if (generation !== this._peerGeneration) {
+                return;
+            }
         }
     }
 
