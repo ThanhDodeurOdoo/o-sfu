@@ -135,7 +135,7 @@ impl DiagnosticsStore {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
             .user_lookup
-            .entry(user_lookup_key(user_id))
+            .entry(user_id.path_segment().into_owned())
             .or_default()
             .entry(room_id.to_owned())
             .or_default()
@@ -214,18 +214,22 @@ impl DiagnosticsStore {
             room_id: room_id.to_owned(),
             user_id: user_id.clone(),
         });
-        let lookup_key = user_lookup_key(user_id);
-        let remove_lookup_key = state.user_lookup.get_mut(&lookup_key).is_some_and(|rooms| {
-            if let Some(users) = rooms.get_mut(room_id) {
-                users.remove(user_id);
-                if users.is_empty() {
-                    rooms.remove(room_id);
-                }
-            }
-            rooms.is_empty()
-        });
+        let lookup_key = user_id.path_segment();
+        let remove_lookup_key =
+            state
+                .user_lookup
+                .get_mut(lookup_key.as_ref())
+                .is_some_and(|rooms| {
+                    if let Some(users) = rooms.get_mut(room_id) {
+                        users.remove(user_id);
+                        if users.is_empty() {
+                            rooms.remove(room_id);
+                        }
+                    }
+                    rooms.is_empty()
+                });
         if remove_lookup_key {
-            state.user_lookup.remove(&lookup_key);
+            state.user_lookup.remove(lookup_key.as_ref());
         }
     }
 
@@ -276,13 +280,6 @@ impl DiagnosticsStore {
                 .with_media_worker_id(media_worker_id)
                 .insert_fields(fields),
         );
-    }
-}
-
-fn user_lookup_key(user_id: &UserId) -> String {
-    match user_id {
-        UserId::Integer(value) => value.to_string(),
-        UserId::String(value) => value.clone(),
     }
 }
 

@@ -53,12 +53,12 @@ impl MediaTransport {
         Ok(Some((source_worker, consumer_worker)))
     }
 
-    /// Builds a best-effort bitrate snapshot across the workers that own the
-    /// requested sessions.
+    /// Returns the latest bitrate estimates for the requested sessions.
     ///
-    /// The snapshot is observability data, not authoritative room state. It may
-    /// race with packet-loop updates and session cleanup.
-    pub(super) fn transport_bitrate_snapshot_from_workers(
+    /// Missing sessions are omitted from the snapshot. Estimates are suitable
+    /// for diagnostics and policy input, not for accounting.
+    #[must_use]
+    pub fn transport_bitrate_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportBitrateSnapshot {
@@ -71,11 +71,12 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Builds a best-effort receiver bandwidth snapshot across RTC workers.
+    /// Returns receiver-side bandwidth estimates for the requested sessions.
     ///
-    /// Room policy uses this as an input to source selection. Missing entries
-    /// mean the transport has no current estimate for that session.
-    pub(super) fn receiver_bandwidth_snapshot_from_workers(
+    /// Room policy may use these estimates as source-selection input. They are
+    /// best-effort observations from the transport backend.
+    #[must_use]
+    pub fn receiver_bandwidth_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> ReceiverBandwidthSnapshot {
@@ -87,7 +88,9 @@ impl MediaTransport {
         snapshot
     }
 
-    pub(super) fn transport_quality_snapshot_from_workers(
+    /// Returns sampled transport-quality observations for the requested sessions.
+    #[must_use]
+    pub fn transport_quality_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportQualitySnapshot {
@@ -99,7 +102,11 @@ impl MediaTransport {
         snapshot
     }
 
-    pub(super) async fn source_activity_snapshot_from_workers(
+    /// Returns packet activity for producer sources.
+    ///
+    /// This is a diagnostics-only view. Missing sources may be inactive,
+    /// removed or not yet observed on the packet path.
+    pub(crate) async fn source_activity_snapshot(
         &self,
         sources: &[TransportSourceKey],
     ) -> TransportSourceActivitySnapshot {
@@ -128,12 +135,12 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Builds a best-effort placement-pressure snapshot across RTC workers.
+    /// Returns transport-worker pressure for the workers that own the sessions.
     ///
-    /// Egress bitrate is additive across selected sessions. Saturation signals
-    /// use the hottest owning worker so one overloaded worker can activate
-    /// spillover.
-    pub(super) fn placement_pressure_snapshot_from_workers(
+    /// Room placement uses this as a best-effort load signal. Missing or drained
+    /// workers return no pressure because room membership remains authoritative.
+    #[must_use]
+    pub fn placement_pressure_snapshot(
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportPlacementPressureSnapshot {
@@ -145,9 +152,13 @@ impl MediaTransport {
         snapshot
     }
 
-    pub(super) fn worker_pressure_snapshots_from_workers(
-        &self,
-    ) -> Vec<TransportWorkerPressureSnapshot> {
+    /// Returns transport-worker pressure for every worker the backend can rank.
+    ///
+    /// Placement uses this as best-effort process-local load input. Missing
+    /// workers are treated by callers as idle because transport snapshots can
+    /// race with worker startup and teardown.
+    #[must_use]
+    pub fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
         self.workers
             .iter()
             .enumerate()
@@ -157,14 +168,8 @@ impl MediaTransport {
             .collect()
     }
 
-    /// Returns the latest active-speaker observations across all workers.
-    ///
-    /// This is a transport-observed snapshot. It is sorted newest first and
-    /// deduplicated by transport media id so room policy can consume it without
-    /// learning which worker observed the packet.
-    pub(super) async fn active_speaker_source_snapshot_from_workers(
-        &self,
-    ) -> Vec<ActiveSpeakerSource> {
+    /// Returns recent active-speaker sources observed by transport workers.
+    pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         let mut snapshot = Vec::new();
         for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_source_snapshot().await);
@@ -179,11 +184,8 @@ impl MediaTransport {
         snapshot
     }
 
-    /// The ordering is stable for operator output. Like other diagnostics this
-    /// is best-effort and can race with packet processing.
-    pub(super) async fn active_speaker_diagnostic_snapshot_from_workers(
-        &self,
-    ) -> Vec<ActiveSpeakerSourceDiagnostic> {
+    /// Returns diagnostic active-speaker state for operator-facing output.
+    pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
         let mut snapshot = Vec::new();
         for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_diagnostic_snapshot().await);
@@ -224,12 +226,11 @@ impl MediaTransport {
             .await
     }
 
-    /// Looks up the negotiated MID for a transport media handle.
+    /// Returns the negotiated MID for a transport media handle when known.
     ///
-    /// This is a best-effort observation used by diagnostics and compatibility
-    /// projections. `None` can mean the media no longer exists or that the
-    /// worker has not negotiated a MID for it.
-    pub(super) async fn transport_media_mid_from_worker(
+    /// `None` means the media id is unknown, no MID has been negotiated yet or
+    /// the backend has already removed the handle.
+    pub(crate) async fn transport_media_mid(
         &self,
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
@@ -244,12 +245,12 @@ impl MediaTransport {
             .flatten()
     }
 
-    /// Returns the latest known health for one transport session.
+    /// Returns the latest known transport health for one session.
     ///
-    /// Health is transport-observed and may lag room cleanup. Callers should use
-    /// it to decide whether media connectivity appears alive, not as membership
-    /// authority.
-    pub(super) fn session_transport_health_from_worker(
+    /// Health is connectivity evidence only. It should not be used as the
+    /// source of truth for whether a participant belongs to a room.
+    #[must_use]
+    pub fn session_transport_health(
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {

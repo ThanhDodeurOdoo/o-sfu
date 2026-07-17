@@ -4,7 +4,7 @@ use tracing::warn;
 
 use super::{
     BroadcastPayloadError, Room, RoomJoinError, UserOutboundSender,
-    effects::batch::{RoomCommit, RoomEffectContext, RoomEffects},
+    effects::batch::{RoomEffectContext, RoomEffects},
     media_graph::CommittedTransportReceipt,
     placement::JoinAdmissionTurn,
     state::{ConnectionCloseCommit, RemoteSourceRefresh},
@@ -44,7 +44,7 @@ impl Room {
         let joined_fanout = context.user_joined_fanout();
         let commit = admission.commit(self, joined_fanout).await?;
         let receipt = commit.receipt.clone();
-        RoomEffects::from_commit(self, RoomCommit::Join(commit))
+        RoomEffects::from_join(self, commit)
             .execute(self, context)
             .await;
         Ok(receipt)
@@ -76,7 +76,7 @@ impl Room {
         };
         let removed_current_user = matches!(&commit, Some(ConnectionCloseCommit::Current { .. }));
         if let Some(commit) = commit {
-            RoomEffects::from_commit(self, RoomCommit::ConnectionClose(commit))
+            RoomEffects::from_connection_close(self, commit)
                 .execute(self, context)
                 .await;
         }
@@ -132,7 +132,7 @@ impl Room {
             )
         };
         if let Some(commit) = commit {
-            RoomEffects::from_commit(self, RoomCommit::UserInfo(commit))
+            RoomEffects::from_presence(commit)
                 .execute(self, RoomEffectContext::runtime(media_transport))
                 .await;
         } else {
@@ -164,7 +164,7 @@ impl Room {
             let mut state = self.state.write().await;
             state.apply_disconnect_users(user_ids)
         };
-        RoomEffects::from_commit(self, RoomCommit::Disconnect(commit))
+        RoomEffects::from_disconnect(self, commit)
             .execute(self, context)
             .await;
     }

@@ -1,7 +1,0 @@
-error: missing `metrics` argument
- --> $WORKSPACE/crates/telemetry/tests/ui/fail/measure_duration_missing_metrics.rs
-  |
-  | #[measure_duration(record = "record_duration")]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: this error originates in the attribute macro `measure_duration` (in Nightly builds, run with -Z macro-backtrace for more info)

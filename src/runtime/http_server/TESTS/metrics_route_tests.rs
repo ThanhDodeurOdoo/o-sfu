@@ -1,5 +1,7 @@
 use super::fixtures::*;
-use crate::runtime::metrics::RuntimeMetricsSnapshot;
+use crate::runtime::metrics::{
+    MetricName, RuntimeMetricsSnapshot, test_support::RuntimeMetricsSnapshotLookup,
+};
 
 fn assert_metrics_payload(payload: &str) {
     assert_http_metrics_payload(payload);
@@ -9,6 +11,7 @@ fn assert_metrics_payload(payload: &str) {
 fn assert_http_metrics_payload(payload: &str) {
     assert!(payload.contains("# TYPE osfu_http_noop_requests_total counter"));
     assert!(payload.contains("osfu_http_noop_requests_total 1"));
+    assert!(payload.contains("osfu_http_stats_requests_total 1"));
     assert!(payload.contains("osfu_http_disconnect_requests_total 1"));
     assert!(
         payload.contains("osfu_http_disconnect_responses_total{status=\"unprocessable_entity\"} 1")
@@ -18,6 +21,8 @@ fn assert_http_metrics_payload(payload: &str) {
     assert!(payload.contains("osfu_http_inflight_requests{route=\"metrics\"} 1"));
     assert!(payload.contains("# TYPE osfu_http_request_duration_seconds histogram"));
     assert!(payload.contains("osfu_http_request_duration_seconds_count{route=\"noop\"} 1"));
+    assert!(payload.contains("osfu_http_request_duration_seconds_count{route=\"stats\"} 1"));
+    assert!(payload.contains("osfu_http_request_duration_seconds_count{route=\"disconnect\"} 1"));
     assert!(payload.contains("# TYPE osfu_ws_handshake_duration_seconds histogram"));
     assert!(payload.contains("osfu_ws_handshake_duration_seconds_count 0"));
     assert!(payload.contains("osfu_rooms_active 0"));
@@ -51,12 +56,27 @@ fn assert_transport_metrics_payload(payload: &str) {
 
 fn assert_metrics_snapshot(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.http_noop_requests(), 1);
+    assert_eq!(snapshot.http_stats_requests(), 1);
     assert_eq!(snapshot.http_disconnect_requests(), 1);
     assert_eq!(snapshot.http_disconnect_unprocessable_entity(), 1);
     assert_eq!(snapshot.http_metrics_requests(), 1);
     assert_eq!(snapshot.http_inflight().metrics, 0);
     assert_eq!(snapshot.http_request_duration().noop.count, 1);
+    assert_eq!(
+        snapshot.histogram_count_value(
+            MetricName::HttpRequestDurationSeconds,
+            &[("route", "stats")]
+        ),
+        1
+    );
     assert_eq!(snapshot.http_request_duration().metrics.count, 1);
+    assert_eq!(
+        snapshot.histogram_count_value(
+            MetricName::HttpRequestDurationSeconds,
+            &[("route", "disconnect")]
+        ),
+        1
+    );
     assert_eq!(snapshot.ws_handshake_duration().count, 0);
     assert_eq!(snapshot.active_rooms(), 0);
     assert_eq!(snapshot.active_users(), 0);
@@ -95,6 +115,15 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() -> TestRes
         Body::from("invalid-token"),
         StatusCode::UNPROCESSABLE_ENTITY,
         "invalid disconnect request should complete",
+    )
+    .await?;
+
+    route_status(
+        &state,
+        Request::get(route::v1::STATS),
+        Body::empty(),
+        StatusCode::OK,
+        "stats request should complete",
     )
     .await?;
 

@@ -10,7 +10,7 @@ use str0m::media::Mid;
 
 use super::fixtures::RuntimeMetricsSnapshotTestExt;
 use crate::engine::{
-    ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
+    UserId,
     media_transport::{
         TransportMediaId, TransportSessionKey,
         rtc::{
@@ -18,12 +18,11 @@ use crate::engine::{
             forwarding_destination::{ForwardingDestination, PacketForward},
             forwarding_planner::plan_forwards as plan_pkt_forwards,
             relay_registry::{RelayPacketMailbox, RelayTargetId},
-            route_control::{PacketLayerGate, PacketOperatingPointGate},
+            route_control::PacketLayerGate,
             state::PacketLoopState,
             test_support::{
                 MediaWorkerScenario, sample_already_relayed_packet, sample_forwarded_packet,
-                sample_forwarded_packet_with_frame_mark, sample_forwarded_packet_with_rid,
-                test_transport_session_key,
+                sample_forwarded_packet_with_rid, test_transport_session_key,
             },
         },
     },
@@ -139,44 +138,6 @@ fn assert_forward_plan(
 }
 
 #[test]
-fn plan_forwards_wraps_local_rtc_destinations_in_the_named_contract() {
-    let producer_session = TransportSessionKey::new(
-        RoomInstanceId::from_raw(12),
-        MediaWorkerId::from_raw(0),
-        ConnectionId::from_raw(13),
-        UserId::Integer(14),
-    );
-    let consumer_session = TransportSessionKey::new(
-        RoomInstanceId::from_raw(12),
-        MediaWorkerId::from_raw(0),
-        ConnectionId::from_raw(13),
-        UserId::Integer(15),
-    );
-    let mut state = PacketLoopState::default();
-    let packet_sink_registry = RoomPacketSinkRegistry::default();
-    let metrics = RuntimeMetrics::default();
-    let mut scenario = MediaWorkerScenario::new(&mut state);
-    let src_media = scenario.source(producer_session.clone(), Mid::from("aud-up"));
-    scenario.destination(src_media, consumer_session.clone(), Mid::from("aud-down"));
-    let forwards = plan_forwards(
-        &state,
-        &packet_sink_registry,
-        &metrics,
-        vec![sample_forwarded_packet(
-            producer_session,
-            "aud-up",
-            b"payload",
-        )],
-    );
-
-    assert_forward_plan(
-        &state,
-        &forwards,
-        &[(0, ExpectedForward::Local(&consumer_session))],
-    );
-}
-
-#[test]
 fn plan_forwards_keeps_recording_and_local_rtc_destinations_together() {
     let producer_session = test_transport_session_key(21, 0, 22, UserId::Integer(23));
     let consumer_session = test_transport_session_key(21, 0, 22, UserId::Integer(24));
@@ -236,7 +197,7 @@ fn plan_forwards_keeps_recording_and_local_rtc_destinations_together() {
 }
 
 #[test]
-fn plan_forwards_reserves_dense_fanout_before_pushing_destinations() {
+fn plan_forwards_preserves_dense_fanout() {
     const DESTINATION_COUNT: usize = 128;
 
     let producer_session = test_transport_session_key(25, 0, 26, UserId::Integer(27));
@@ -261,7 +222,6 @@ fn plan_forwards_reserves_dense_fanout_before_pushing_destinations() {
     );
 
     assert_eq!(forwards.len(), DESTINATION_COUNT);
-    assert!(forwards.capacity() >= DESTINATION_COUNT);
 }
 
 #[test]
@@ -541,72 +501,6 @@ fn plan_forwards_enforces_per_consumer_rid_gates_after_aggregate_admits() {
 
 #[allow(
     clippy::too_many_lines,
-    reason = "the temporal-ceiling route matrix is clearer as one complete planner regression"
-)]
-#[test]
-fn plan_forwards_enforces_per_consumer_temporal_ceilings_after_aggregate_admits() {
-    let producer_session = test_transport_session_key(86, 0, 87, UserId::Integer(88));
-    let base_consumer_session = test_transport_session_key(86, 0, 87, UserId::Integer(89));
-    let high_consumer_session = test_transport_session_key(86, 0, 87, UserId::Integer(90));
-    let mut state = PacketLoopState::default();
-    let packet_sink_registry = RoomPacketSinkRegistry::default();
-    let metrics = RuntimeMetrics::default();
-    let mut scenario = MediaWorkerScenario::new(&mut state);
-    let src_media = scenario.source(producer_session.clone(), Mid::from("cam-up"));
-    scenario.destination_with_gate(
-        src_media,
-        base_consumer_session.clone(),
-        Mid::from("cam-down-base"),
-        PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 0)),
-    );
-    scenario.destination_with_gate(
-        src_media,
-        high_consumer_session.clone(),
-        Mid::from("cam-down-high"),
-        PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 2)),
-    );
-    let mut pending_packets = vec![
-        sample_forwarded_packet_with_frame_mark(
-            producer_session.clone(),
-            "cam-up",
-            Some("hi"),
-            1_u32 << 24,
-            b"temporal-one",
-        ),
-        sample_forwarded_packet_with_frame_mark(
-            producer_session,
-            "cam-up",
-            Some("hi"),
-            0,
-            b"temporal-zero",
-        ),
-    ];
-    let mut forwards = Vec::new();
-
-    populate_forward_routes(
-        &state,
-        &packet_sink_registry,
-        &metrics,
-        &mut pending_packets,
-        &mut forwards,
-    );
-
-    assert_forward_plan(
-        &state,
-        &forwards,
-        &[
-            (0, ExpectedForward::Local(&high_consumer_session)),
-            (1, ExpectedForward::Local(&base_consumer_session)),
-            (1, ExpectedForward::Local(&high_consumer_session)),
-        ],
-    );
-    let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 2);
-    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
-}
-
-#[allow(
-    clippy::too_many_lines,
     reason = "the two-relay-target matrix is clearer as one complete planner regression"
 )]
 #[test]
@@ -742,54 +636,6 @@ fn plan_forwards_gates_only_the_selected_source_media() {
             (1, ExpectedForward::PacketSink),
             (1, ExpectedForward::Local(&open_consumer_session)),
         ],
-    );
-    let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);
-    assert_eq!(snapshot.rtc_route_control_layer_allowed(), 1);
-}
-
-#[test]
-fn plan_forwards_applies_operating_point_packet_gates() {
-    let producer_session = test_transport_session_key(71, 0, 72, UserId::Integer(73));
-    let consumer_session = test_transport_session_key(71, 0, 72, UserId::Integer(74));
-    let mut state = PacketLoopState::default();
-    let packet_sink_registry = RoomPacketSinkRegistry::default();
-    let metrics = RuntimeMetrics::default();
-    let mut scenario = MediaWorkerScenario::new(&mut state);
-    let src_media = scenario.source(producer_session.clone(), Mid::from("cam-up"));
-    scenario.destination(src_media, consumer_session.clone(), Mid::from("cam-down"));
-    state.routes.set_local_pkt_gate(
-        src_media,
-        Some(PacketLayerGate::OperatingPoint(
-            PacketOperatingPointGate::new(Some("hi".into()), 1),
-        )),
-    );
-    let forwards = plan_forwards(
-        &state,
-        &packet_sink_registry,
-        &metrics,
-        vec![
-            sample_forwarded_packet_with_frame_mark(
-                producer_session.clone(),
-                "cam-up",
-                Some("hi"),
-                2_u32 << 24,
-                b"high-temporal",
-            ),
-            sample_forwarded_packet_with_frame_mark(
-                producer_session,
-                "cam-up",
-                Some("hi"),
-                1_u32 << 24,
-                b"selected-temporal",
-            ),
-        ],
-    );
-
-    assert_forward_plan(
-        &state,
-        &forwards,
-        &[(1, ExpectedForward::Local(&consumer_session))],
     );
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 1);

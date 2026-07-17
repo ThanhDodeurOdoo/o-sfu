@@ -1203,7 +1203,6 @@ version = "0.8.0"
 dependencies = [
  "anyhow",
  "o-sfu-model",
- "o-sfu-telemetry-macros",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1213,15 +1212,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "o-sfu-telemetry-macros"
-version = "0.8.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

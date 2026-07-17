@@ -8,20 +8,6 @@ use crate::diagnostics::types::{
     DiagnosticsTransportHealth, DiagnosticsUserView,
 };
 
-pub(super) fn user_id_to_string(user_id: &UserId) -> String {
-    match user_id {
-        UserId::Integer(value) => value.to_string(),
-        UserId::String(value) => value.clone(),
-    }
-}
-
-pub(super) fn user_id_matches(user_id: &UserId, requested_user_id: &str) -> bool {
-    match user_id {
-        UserId::Integer(value) => value.to_string() == requested_user_id,
-        UserId::String(value) => value == requested_user_id,
-    }
-}
-
 const STREAM_COLOR_PALETTE: &[&str] =
     &["blue", "orange", "purple", "green", "yellow", "red", "gray"];
 

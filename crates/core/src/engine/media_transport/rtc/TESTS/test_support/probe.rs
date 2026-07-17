@@ -459,10 +459,6 @@ pub enum DebugPacketGate {
     Open,
     Block,
     Rid(String),
-    OperatingPoint {
-        rid: Option<String>,
-        max_temporal_layer_id: u8,
-    },
 }
 
 fn debug_route_entry(
@@ -495,9 +491,5 @@ fn debug_packet_gate(packet_gate: &PacketLayerGate) -> DebugPacketGate {
         PacketLayerGate::Open => DebugPacketGate::Open,
         PacketLayerGate::Block => DebugPacketGate::Block,
         PacketLayerGate::Rid(rid) => DebugPacketGate::Rid(rid.to_string()),
-        PacketLayerGate::OperatingPoint(operating_point) => DebugPacketGate::OperatingPoint {
-            rid: operating_point.rid().map(|rid| rid.to_string()),
-            max_temporal_layer_id: operating_point.max_temporal_layer_id(),
-        },
     }
 }

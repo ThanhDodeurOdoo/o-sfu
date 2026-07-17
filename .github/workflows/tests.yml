@@ -39,7 +39,6 @@ jobs:
               -p o-sfu-rfc
               -p o-sfu-router
               -p o-sfu-telemetry
-              -p o-sfu-telemetry-macros
           - id: root-tests
             name: root tests
             nextest: false
@@ -98,10 +97,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Prepare trybuild cache cleanup
-        if: always()
-        run: mkdir -p target/tests/target
-
   release-workspace-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -128,10 +123,6 @@ jobs:
 
       - name: Run release workspace tests
         run: cargo test --locked --workspace --release
-
-      - name: Prepare trybuild cache cleanup
-        if: always()
-        run: mkdir -p target/tests/target
 
   coverage-report:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
@@ -165,10 +156,6 @@ jobs:
 
       - name: Export coverage summary
         run: cargo llvm-cov report --json --summary-only --output-path coverage-summary.json
-
-      - name: Prepare trybuild cache cleanup
-        if: always()
-        run: mkdir -p target/tests/target
 
       - name: Upload coverage artifacts
         # actions/upload-artifact v4

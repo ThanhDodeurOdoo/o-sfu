@@ -13,10 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_core::{
     MediaWorkerId,
-    server::{
-        session::UserId,
-        transport::{MediaTransport, TransportPlacementPressureSnapshot},
-    },
+    server::transport::{MediaTransport, TransportPlacementPressureSnapshot},
 };
 
 use super::{
@@ -359,17 +356,10 @@ fn user_summaries(detail: &DiagnosticsRoomDetail) -> Vec<DiagnosticsUserSummary>
                 screen_incoming_bitrate_bps: stream_bitrate_bps(SCREEN_STREAM_LABEL),
                 subscription_count: user.subscriptions.len(),
                 user_id: user.user_id.clone(),
-                user_key: user_id_to_path_segment(&user.user_id),
+                user_key: user.user_id.path_segment().into_owned(),
             }
         })
         .collect()
-}
-
-fn user_id_to_path_segment(user_id: &UserId) -> String {
-    match user_id {
-        UserId::Integer(value) => value.to_string(),
-        UserId::String(value) => value.clone(),
-    }
 }
 
 fn transport_counts(users: &[DiagnosticsUserView]) -> DiagnosticsTransportCounts {

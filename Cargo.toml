@@ -7,7 +7,6 @@ members = [
     "crates/rfc",
     "crates/router",
     "crates/telemetry",
-    "crates/telemetry/macros",
     "tests",
     "tests/core-room",
     "tests/proofs",
@@ -140,7 +139,7 @@ o-sfu-protocol.workspace = true
 o-sfu-core.workspace = true
 o-sfu-rfc.workspace = true
 o-sfu-router.workspace = true
-o-sfu-telemetry = { workspace = true, features = ["macros"] }
+o-sfu-telemetry.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.0"

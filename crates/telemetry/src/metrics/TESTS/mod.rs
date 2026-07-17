@@ -268,6 +268,46 @@ fn metrics_snapshot_tracks_http_and_websocket_counters() {
 }
 
 #[test]
+fn metric_guards_finish_dropped_operations() {
+    let metrics = RuntimeMetrics::default();
+    let request = metrics.track_http_request(HttpRoute::Room);
+    assert_eq!(
+        metrics
+            .snapshot()
+            .gauge_value(MetricName::HttpInflightRequests, &[("route", "room")]),
+        1
+    );
+
+    drop(request);
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.http_room_requests(), 1);
+    assert_eq!(
+        snapshot.gauge_value(MetricName::HttpInflightRequests, &[("route", "room")]),
+        0
+    );
+    assert_eq!(
+        snapshot
+            .histogram_count_value(MetricName::HttpRequestDurationSeconds, &[("route", "room")]),
+        1
+    );
+
+    let ws_counts = || {
+        let snapshot = metrics.snapshot();
+        [
+            snapshot.ws_handshake_duration().count,
+            snapshot.ws_auth_duration().count,
+            snapshot.ws_user_initialize_duration().count,
+        ]
+    };
+    drop(metrics.track_ws_handshake());
+    assert_eq!(ws_counts(), [1, 0, 0]);
+    drop(metrics.track_ws_authentication());
+    assert_eq!(ws_counts(), [1, 1, 0]);
+    drop(metrics.track_ws_user_initialization());
+    assert_eq!(ws_counts(), [1, 1, 1]);
+}
+
+#[test]
 fn metrics_snapshot_tracks_websocket_outbound_queue_pressure() {
     let metrics = RuntimeMetrics::default();
     metrics.add_ws_outbound_queued_messages(2);

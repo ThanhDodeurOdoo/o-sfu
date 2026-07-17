@@ -148,7 +148,6 @@ impl MediaRouteDestination {
     pub(super) fn keyframe_target_rid(&self, open_rid: Option<Rid>) -> DestinationKeyframeTarget {
         let target_rid = match self.packet_gate {
             PacketLayerGate::Rid(rid) => Some(rid),
-            PacketLayerGate::OperatingPoint(operating_point) => operating_point.rid(),
             PacketLayerGate::Block => {
                 let Some(rid) = self
                     .pending_gate

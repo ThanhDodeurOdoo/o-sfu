@@ -157,13 +157,13 @@ async fn receive_auth_or_reject(
 ///
 /// the duration metric includes first-frame wait time plus JWT verification
 /// because both contribute to unauthenticated socket pressure
-#[o_sfu_telemetry::measure_duration(metrics = "state.metrics", record = "record_ws_auth_duration")]
 async fn receive_and_authenticate(
     state: &WebSocketServices,
     writer: &mut WsWriter,
     reader: &mut WsReader,
     remote_address: &str,
 ) -> Option<AuthenticatedJoin> {
+    let _guard = state.metrics.track_ws_authentication();
     let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
     verify_auth_or_reject(state, writer, &auth_payload, remote_address).await
 }

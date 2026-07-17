@@ -10,6 +10,4 @@ mod packet_gate;
 
 pub use active_speaker::SourceAudioPolicyState;
 pub use packet_gate::PacketLayerGate;
-#[cfg(test)]
-pub(super) use packet_gate::PacketOperatingPointGate;
-pub(super) use packet_gate::{PacketLayerMetadata, aggregate_packet_gates, intersect_packet_gates};
+pub(super) use packet_gate::{aggregate_packet_gates, intersect_packet_gates};

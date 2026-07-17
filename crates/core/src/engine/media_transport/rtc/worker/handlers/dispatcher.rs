@@ -65,6 +65,10 @@ impl WorkerCommandContext<'_> {
 ///
 /// Callers must already serialize access to `state`, this function assumes it
 /// runs on the packet-loop task that owns the worker.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exhaustive command match keeps dispatch compiler checked and auditable"
+)]
 pub fn handle_worker_command(
     state: &mut PacketLoopState,
     context: &WorkerCommandContext<'_>,
@@ -138,43 +142,6 @@ pub fn handle_worker_command(
                 .resolve_mid(transport_media_id)
                 .map(|mid| mid.to_string())),
         ),
-        RtcWorkerCommand::CloseSession { .. }
-        | RtcWorkerCommand::RemoveMedia { .. }
-        | RtcWorkerCommand::AddRecvMedia { .. }
-        | RtcWorkerCommand::AddSendMedia { .. }
-        | RtcWorkerCommand::ApplyMediaControlBatch { .. }
-        | RtcWorkerCommand::RouteControl { .. } => {
-            handle_resource_command(state, context, command);
-        }
-    }
-}
-
-fn respond<T>(response: oneshot::Sender<TransportResult<T>>, result: TransportResult<T>) {
-    let _ = response.send(result);
-}
-
-fn respond_source_activity_snapshot(
-    state: &PacketLoopState,
-    transport_media_ids: &[TransportMediaId],
-    now: Instant,
-    response: oneshot::Sender<TransportResult<TransportSourceActivitySnapshot>>,
-) {
-    respond(
-        response,
-        Ok(state.routes.source_activity_snapshot(
-            transport_media_ids,
-            now,
-            &state.incoming_bitrate_counters,
-        )),
-    );
-}
-
-fn handle_resource_command(
-    state: &mut PacketLoopState,
-    context: &WorkerCommandContext<'_>,
-    command: RtcWorkerCommand,
-) {
-    match command {
         RtcWorkerCommand::CloseSession {
             session_key,
             response,
@@ -253,6 +220,25 @@ fn handle_resource_command(
         RtcWorkerCommand::RouteControl { request, response } => {
             media::apply_route_control_request(state, context.metrics, request, response);
         }
-        _ => {}
     }
+}
+
+fn respond<T>(response: oneshot::Sender<TransportResult<T>>, result: TransportResult<T>) {
+    let _ = response.send(result);
+}
+
+fn respond_source_activity_snapshot(
+    state: &PacketLoopState,
+    transport_media_ids: &[TransportMediaId],
+    now: Instant,
+    response: oneshot::Sender<TransportResult<TransportSourceActivitySnapshot>>,
+) {
+    respond(
+        response,
+        Ok(state.routes.source_activity_snapshot(
+            transport_media_ids,
+            now,
+            &state.incoming_bitrate_counters,
+        )),
+    );
 }

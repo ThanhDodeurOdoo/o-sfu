@@ -1,5 +1,0 @@
-error: duplicate `metrics` argument
- --> $WORKSPACE/crates/telemetry/tests/ui/fail/measure_duration_duplicate_metrics.rs
-  |
-  |     metrics = "state.metrics",
-  |               ^^^^^^^^^^^^^^^

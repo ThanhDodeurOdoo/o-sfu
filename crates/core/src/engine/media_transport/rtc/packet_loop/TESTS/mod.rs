@@ -1100,8 +1100,8 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
     );
     assert_eq!(
         packet_without_extensions
-            .resolve_route_control_layer_metadata(&state)
-            .rid(),
+            .resolve_facts(&state)
+            .and_then(|facts| facts.rid),
         Some(Rid::from("hi"))
     );
 }

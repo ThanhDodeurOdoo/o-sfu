@@ -15,7 +15,6 @@ use crate::{
             DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState,
             DiagnosticsSource, DiagnosticsSourceEncoding, DiagnosticsSourceSelection,
             DiagnosticsSourceSelectionReason, DiagnosticsSourceSelector, DiagnosticsSubscription,
-            DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection,
             DiagnosticsUserTransport, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
             DiagnosticsVideoRoutePriority,
         },
@@ -292,8 +291,6 @@ fn source_encoding(
         policy_role: encoding
             .policy_role()
             .map(|role| role.as_wire_value().to_owned()),
-        max_temporal_layer_id: None,
-        temporal_layer_metadata: DiagnosticsTemporalLayerMetadata::Absent,
         payload_type: negotiated_format.map(MediaFormat::payload_type),
         primary_ssrc: encoding.primary_ssrc().map(Ssrc::value),
         repair_ssrc: encoding.repair_ssrc().map(Ssrc::value),
@@ -345,8 +342,6 @@ fn selection(
             .and_then(|encoding_id| source.encoding(encoding_id))
             .and_then(SourceEncodingDescriptor::rid)
             .map(|rid| rid.as_str().to_owned()),
-        selected_temporal_layer_id: None,
-        temporal_layer_selection: DiagnosticsTemporalLayerSelection::NotSelected,
         upgrade_observations: selection.upgrade_observations(),
     }
 }

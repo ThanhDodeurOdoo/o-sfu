@@ -1,24 +1,12 @@
-use super::{
-    PacketLayerGate, PacketLayerMetadata, PacketOperatingPointGate, aggregate_packet_gates,
-};
+use super::{PacketLayerGate, aggregate_packet_gates, intersect_packet_gates};
 
 #[test]
 fn packet_gate_only_forwards_the_selected_rid() {
     let gate = PacketLayerGate::Rid("hi".into());
 
-    assert!(gate.permits(PacketLayerMetadata::new(Some("hi".into()), None)));
-    assert!(!gate.permits(PacketLayerMetadata::new(Some("lo".into()), None)));
-    assert!(!gate.permits(PacketLayerMetadata::default()));
-}
-
-#[test]
-fn packet_gate_forwards_only_the_selected_operating_point() {
-    let gate = PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1));
-
-    assert!(gate.permits(PacketLayerMetadata::new(Some("hi".into()), Some(1))));
-    assert!(!gate.permits(PacketLayerMetadata::new(Some("hi".into()), Some(2))));
-    assert!(!gate.permits(PacketLayerMetadata::new(Some("lo".into()), Some(1))));
-    assert!(!gate.permits(PacketLayerMetadata::new(Some("hi".into()), None)));
+    assert!(gate.permits(Some("hi".into())));
+    assert!(!gate.permits(Some("lo".into())));
+    assert!(!gate.permits(None));
 }
 
 #[test]
@@ -49,21 +37,24 @@ fn aggregate_packet_gates_reopens_when_routes_disagree() {
 }
 
 #[test]
-fn aggregate_packet_gates_widens_shared_operating_points() {
-    assert_eq!(
-        aggregate_packet_gates([
-            &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 0,)),
-            &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 2,)),
-        ]),
-        Some(PacketLayerGate::OperatingPoint(
-            PacketOperatingPointGate::new(Some("hi".into()), 2)
-        ))
-    );
-    assert_eq!(
-        aggregate_packet_gates([
-            &PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(Some("hi".into()), 1,)),
-            &PacketLayerGate::Rid("hi".into()),
-        ]),
-        Some(PacketLayerGate::Rid("hi".into()))
-    );
+fn intersect_packet_gates_preserves_gate_algebra() {
+    let hi = Some(PacketLayerGate::Rid("hi".into()));
+    let lo = Some(PacketLayerGate::Rid("lo".into()));
+    let open = Some(PacketLayerGate::Open);
+    let block = Some(PacketLayerGate::Block);
+
+    for (first, second, expected) in [
+        (None, None, None),
+        (None, hi, hi),
+        (hi, None, hi),
+        (open, hi, hi),
+        (hi, open, hi),
+        (block, hi, block),
+        (hi, block, block),
+        (hi, hi, hi),
+        (hi, lo, block),
+        (lo, hi, block),
+    ] {
+        assert_eq!(intersect_packet_gates(first, second), expected);
+    }
 }

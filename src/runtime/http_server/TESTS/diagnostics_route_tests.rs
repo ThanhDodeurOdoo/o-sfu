@@ -28,10 +28,7 @@ use crate::{
             session::{UserId, UserInfo, UserPermissions},
         },
     },
-    runtime::{
-        diagnostics::types::{DiagnosticsTemporalLayerMetadata, DiagnosticsTemporalLayerSelection},
-        room::Room,
-    },
+    runtime::room::Room,
 };
 
 const TEST_DIAGNOSTICS_ROOM: &str = "test-room";
@@ -311,15 +308,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
     assert_eq!(detail.sources[0].source_id, 1);
     assert_eq!(detail.sources[0].encodings.len(), 2);
     assert_eq!(detail.sources[0].encodings[0].rid.as_deref(), Some("lo"));
-    assert_eq!(
-        detail.sources[0].encodings[0].temporal_layer_metadata,
-        DiagnosticsTemporalLayerMetadata::Absent
-    );
     assert_eq!(detail.sources[0].encodings[1].rid.as_deref(), Some("hi"));
-    assert_eq!(
-        detail.sources[0].encodings[1].temporal_layer_metadata,
-        DiagnosticsTemporalLayerMetadata::Absent
-    );
     assert!(
         detail
             .recent_events
@@ -350,7 +339,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
         &test_state.state,
         route::diagnostics::USER_GRAPH
             .replace("{uuid}", room.uuid())
-            .replace("{id}", &alice_user_id.clone().into_integer_string()),
+            .replace("{id}", alice_user_id.path_segment().as_ref()),
     )
     .await?;
     assert!(
@@ -371,7 +360,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
         &test_state.state,
         route::diagnostics::USER_GRAPH
             .replace("{uuid}", room.uuid())
-            .replace("{id}", &bob_user_id.clone().into_integer_string()),
+            .replace("{id}", bob_user_id.path_segment().as_ref()),
     )
     .await?;
     assert!(
@@ -385,7 +374,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let session_detail: DiagnosticsUserDetail = diagnostics_json(
         &test_state.state,
-        route::diagnostics::USER.replace("{id}", &alice_user_id.clone().into_integer_string()),
+        route::diagnostics::USER.replace("{id}", alice_user_id.path_segment().as_ref()),
     )
     .await?;
     assert_eq!(session_detail.room_id, room.uuid());
@@ -402,7 +391,7 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
 
     let bob_session_detail: DiagnosticsUserDetail = diagnostics_json(
         &test_state.state,
-        route::diagnostics::USER.replace("{id}", &bob_user_id.clone().into_integer_string()),
+        route::diagnostics::USER.replace("{id}", bob_user_id.path_segment().as_ref()),
     )
     .await?;
     assert_eq!(bob_session_detail.user.subscriptions.len(), 1);
@@ -410,11 +399,6 @@ async fn diagnostics_routes_return_live_room_and_user_details() -> TestResult {
     assert_eq!(subscription.source_id, 1);
     assert!(subscription.selection.selected_encoding_id.is_some());
     assert_eq!(subscription.selection.selected_rid.as_deref(), Some("hi"));
-    assert_eq!(subscription.selection.selected_temporal_layer_id, None);
-    assert_eq!(
-        subscription.selection.temporal_layer_selection,
-        DiagnosticsTemporalLayerSelection::NotSelected
-    );
     assert_eq!(
         subscription.selection.selection_reason,
         DiagnosticsSourceSelectionReason::ReceiverAdaptation
@@ -563,17 +547,4 @@ async fn diagnostics_user_lookup_drops_room_teardown_entries() -> TestResult {
         StatusCode::NOT_FOUND,
     )
     .await
-}
-
-trait SessionIdExt {
-    fn into_integer_string(self) -> String;
-}
-
-impl SessionIdExt for UserId {
-    fn into_integer_string(self) -> String {
-        match self {
-            UserId::Integer(value) => value.to_string(),
-            UserId::String(value) => value,
-        }
-    }
 }
