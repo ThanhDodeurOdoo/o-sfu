@@ -235,9 +235,11 @@
 //!
 //! # observability
 //!
+//! for documentation on the operator-facing telemetry http API, see: [`http::telemetry`]
+//!
 //! managed by the [`o_sfu_telemetry`] sub crate.
 //!
-//! the telemetry crate owns:
+//! the telemetry crate handles:
 //!
 //! - low-cardinality [`o_sfu_telemetry::metrics::RuntimeMetrics`] and
 //!   [`o_sfu_telemetry::prometheus::render_prometheus`]
@@ -251,10 +253,6 @@
 //! provisioned dashboards and Prometheus rules are maintained in the sibling
 //! `o-sfu-telemetry` repository
 //! terminal teardown observability requires a separate delivery there
-//!
-//! [`http::telemetry`] is the operator-facing query contract.
-//! metrics are Prometheus time series, while diagnostics expose current room and
-//! transport state.
 //!
 //! # scaling
 //!
