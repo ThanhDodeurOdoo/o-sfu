@@ -192,32 +192,29 @@ fn protocol_server_offer_request_round_trips_through_server_envelope() -> serde_
 
 #[test]
 fn protocol_server_offer_serializes_upload_slot_metadata() -> serde_json::Result<()> {
-    let envelope = ServerEnvelope::Request {
-        request_id: RequestId::new("offer-1"),
-        request: ServerRequest::Offer(SessionDescriptionPayload {
-            sdp: String::from("v=0\r\n"),
-            upload_slots: vec![NegotiationUploadSlot {
-                mid: String::from("video-1"),
-                kind: MediaKind::Video,
-                codecs: vec![String::from("VP8")],
-                simulcast_encodings: vec![
-                    NegotiationUploadEncoding {
-                        rid: String::from("lo"),
-                        max_bitrate: Some(150_000),
-                        resolution_scale: Some(4),
-                        max_framerate: None,
-                    },
-                    NegotiationUploadEncoding {
-                        rid: String::from("hi"),
-                        max_bitrate: Some(900_000),
-                        resolution_scale: Some(1),
-                        max_framerate: None,
-                    },
-                ],
-            }],
-        }),
-    }
-    .into_envelope()?;
+    let envelope = ServerRequest::Offer(SessionDescriptionPayload {
+        sdp: String::from("v=0\r\n"),
+        upload_slots: vec![NegotiationUploadSlot {
+            mid: String::from("video-1"),
+            kind: MediaKind::Video,
+            codecs: vec![String::from("VP8")],
+            simulcast_encodings: vec![
+                NegotiationUploadEncoding {
+                    rid: String::from("lo"),
+                    max_bitrate: Some(150_000),
+                    resolution_scale: Some(4),
+                    max_framerate: None,
+                },
+                NegotiationUploadEncoding {
+                    rid: String::from("hi"),
+                    max_bitrate: Some(900_000),
+                    resolution_scale: Some(1),
+                    max_framerate: None,
+                },
+            ],
+        }],
+    })
+    .into_envelope(RequestId::new("offer-1"))?;
 
     assert_eq!(
         serde_json::to_value(&envelope)?,
@@ -266,27 +263,6 @@ fn protocol_server_broadcast_message_round_trips_to_wire_envelope() -> serde_jso
                 "message": {
                     "text": "hello",
                 },
-            },
-        })
-    );
-    Ok(())
-}
-
-#[test]
-fn protocol_server_offer_request_serializes_to_wire_envelope() -> serde_json::Result<()> {
-    let offer = ServerRequest::Offer(SessionDescriptionPayload {
-        sdp: String::from("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"),
-        upload_slots: Vec::new(),
-    })
-    .into_envelope(RequestId::new("1"))?;
-
-    assert_eq!(
-        serde_json::to_value(&offer)?,
-        json!({
-            "t": "offer",
-            "q": "1",
-            "p": {
-                "sdp": "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
             },
         })
     );

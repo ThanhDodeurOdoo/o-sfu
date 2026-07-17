@@ -25,6 +25,12 @@ fn extract_pending_request(
     Some(request)
 }
 
+fn welcome(core: &mut ProtocolCore) -> CommandBatch {
+    core.on_ws_message(&encode_server_batch(ServerEnvelope::Message(
+        ServerMessage::Welcome(empty_welcome_payload()),
+    )))
+}
+
 #[test]
 fn recovery_replay_splits_session_and_publication_phases() {
     let mut core = ProtocolCore::new();
@@ -72,7 +78,7 @@ fn recovery_replay_splits_session_and_publication_phases() {
         .is_empty()
     );
 
-    let welcome_commands = core.on_welcome(empty_welcome_payload());
+    let welcome_commands = welcome(&mut core);
     assert_eq!(
         welcome_commands.first(),
         Some(&Command::EmitStateChange {
@@ -122,7 +128,7 @@ fn recovery_replay_splits_session_and_publication_phases() {
 fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(empty_welcome_payload());
+    let _ = welcome(&mut core);
 
     let start_result = core.start_recording(RecordingOptions {
         audio: Some(true),
@@ -174,7 +180,7 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
 fn negotiation_answer_mismatches_do_not_resolve_pending_request() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(empty_welcome_payload());
+    let _ = welcome(&mut core);
 
     let offer_frame = encode_server_batch(ServerEnvelope::Request {
         request_id: RequestId::new("offer-1"),
@@ -262,7 +268,7 @@ fn malformed_server_batches_close_the_socket_with_protocol_error() {
 fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(empty_welcome_payload());
+    let _ = welcome(&mut core);
     let _ = core.on_transport_ready();
 
     let binding = TrackBinding {

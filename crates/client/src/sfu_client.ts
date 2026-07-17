@@ -14,7 +14,6 @@ import {
     type SessionInfo,
     type SourceDescriptor,
     type SfuStats,
-    type SfuClientSurface,
     type StreamType,
     type UpdateInfoOptions
 } from "./public_api.js";
@@ -34,7 +33,7 @@ import {
 
 const CLIENT_LOG_SOURCE = "sfu_client";
 
-export class SfuClient extends EventTarget implements SfuClientSurface {
+export class SfuClient extends EventTarget {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
     public errors: Error[] = [];
     public recordingState: RecordingState = {};
@@ -105,10 +104,12 @@ export class SfuClient extends EventTarget implements SfuClientSurface {
         this._runtime.subscribe(sessionId, states);
     }
 
+    /** @deprecated Odoo compatibility alias. Use `publish()` for new code. */
     updateUpload(type: StreamType, track: MediaStreamTrack | null | undefined): void {
         this.publish(type, track);
     }
 
+    /** @deprecated Odoo compatibility alias. Use `subscribe()` for new code. */
     updateDownload(sessionId: SessionId, states: DownloadStates): void {
         this.subscribe(sessionId, states);
     }

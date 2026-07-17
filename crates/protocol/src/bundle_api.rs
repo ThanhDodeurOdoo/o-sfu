@@ -8,11 +8,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    shared::{JsonPayload, RecordingStateUpdate, StreamType, UserId, UserInfo},
+    shared::{JsonPayload, RecordingStateUpdate, UserId, UserInfo},
     signaling::{SourceDescriptor, TrackBinding},
 };
-
-pub type BundleMediaTrack = JsonPayload;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,16 +57,6 @@ pub struct BundleDisconnectUpdate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundleTrackUpdate {
-    #[serde(rename = "type")]
-    pub stream_type: StreamType,
-    #[serde(rename = "sessionId")]
-    pub user_id: UserId,
-    pub track: BundleMediaTrack,
-    pub active: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleSourceUpdate {
     pub sources: Vec<SourceDescriptor>,
 }
@@ -81,8 +69,6 @@ pub struct BundleRemoteMediaUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "payload")]
 pub enum BundleUpdate {
-    #[serde(rename = "track")]
-    Track(BundleTrackUpdate),
     #[serde(rename = "source")]
     Source(BundleSourceUpdate),
     #[serde(rename = "remote_media")]

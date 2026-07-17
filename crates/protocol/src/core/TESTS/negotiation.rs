@@ -178,7 +178,7 @@ fn protocol_core_keeps_pending_negotiation_after_mismatched_answer() {
 fn authenticated_core() -> ProtocolCore {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     core
 }
 

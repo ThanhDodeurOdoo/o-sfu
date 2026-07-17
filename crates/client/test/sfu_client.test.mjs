@@ -1775,7 +1775,7 @@ test("getStats exposes compatibility-shaped transport and producer stats", async
 
     await connectWithWelcome();
 
-    client.updateUpload("camera", createCameraTrack("camera-track-compat"));
+    client.publish("camera", createCameraTrack("camera-track"));
     await tick();
 
     await emitMessage("offer");

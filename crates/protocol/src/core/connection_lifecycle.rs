@@ -1,42 +1,13 @@
-//! lifecycle transitions for the protocol core connection state machine
+//! socket lifecycle transitions for [`ProtocolCore`]
 //!
-//! this module owns the outer client connection lifecycle for [`ProtocolCore`]:
-//! connect requests, transport readiness, websocket close events, explicit
-//! disconnects and recovery timer callbacks
+//! [`connect`] starts a user attempt and clears replayable intent
+//! [`disconnect`] ends that attempt and suppresses recovery
+//! [`on_ws_close`] maps terminal codes to [`BundleConnectionState::Closed`]
+//! while transient closes preserve the connect context for [`handle_recovery_timer`]
 //!
-//! it is a control-plane module
-//! it never opens sockets or advances transport work directly
-//! each transition returns ordered [`Command`] values the host must execute
-//! through the [`super::CommandBatch`] contract
-//!
-//! the main contract is:
-//!
-//! - a fresh [`connect`] starts a new user attempt and wipes replayable intent
-//! - explicit [`disconnect`] is terminal for that user attempt and clears saved context
-//! - terminal close codes move to [`BundleConnectionState::Closed`] without scheduling recovery
-//! - transient close events keep the saved connect context and enter
-//!   [`BundleConnectionState::Recovering`]
-//! - recovery timers only reconnect while the model is still [`BundleConnectionState::Recovering`]
-//!
-//! example flows:
-//!
-//! ```text
-//! Disconnected --> connect()--> Connecting --> on_welcome() --> Authenticated
-//! Authenticated --> on_transport_ready() --> Connected
-//! ```
-//!
-//! ```text
-//! Connected --> on_ws_close(1011) --> Recovering --> timer --> Connecting
-//! ```
-//!
-//! ```text
-//! Connected --> disconnect()--> Disconnected
-//! ```
-//!
-//! the last flow is different from [`on_ws_close`]: explicit
-//! disconnect wipes replayable intent and suppresses later recovery, while a
-//! transient socket loss keeps enough state around to reconnect and rebuild
-//! from saved state
+//! welcome messages enter through [`ProtocolCore::on_ws_message`]
+//! transport readiness enters through [`ProtocolCore::on_transport_ready`]
+//! each transition returns ordered [`Command`] values for the host
 
 use super::{
     Command, Commands, ConnectContext, INITIAL_RECOVERY_DELAY_MS, ProtocolCore, RECOVERY_TIMER_ID,
@@ -132,24 +103,6 @@ pub(super) fn connect(
     commands.push(state_change(core.state(), None));
     commands.push(Command::Connect { url: connect_url });
     commands
-}
-
-/// marks the transport side as ready after websocket authentication
-///
-/// this only accepts the `Authenticated -> Connected` step
-/// earlier states have not completed protocol admission yet and later states
-/// have already consumed this transition
-///
-/// ```text
-/// Connecting --on_welcome()--> Authenticated --on_transport_ready()--> Connected
-/// ```
-pub(super) fn on_transport_ready(core: &mut ProtocolCore) -> Commands {
-    if core.state() != BundleConnectionState::Authenticated {
-        return Vec::new();
-    }
-    core.phase
-        .apply_lifecycle_state(BundleConnectionState::Connected);
-    vec![state_change(core.state(), None)]
 }
 
 /// ends the current user attempt on purpose

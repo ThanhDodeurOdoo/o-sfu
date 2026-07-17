@@ -4,7 +4,7 @@ use super::*;
 fn protocol_core_tracks_recording_request_until_matching_response() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
 
     let commands = core.start_recording(RecordingOptions {
         audio: Some(true),
@@ -72,7 +72,7 @@ fn protocol_core_tracks_recording_request_until_matching_response() -> Result<()
 fn protocol_core_request_timeout_resolves_pending_request_as_failed() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
 
     let commands = core.stop_recording();
     let [
