@@ -26,6 +26,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 - [Rust Atomics and Locks](https://mara.nl/atomics/)
 - [The Tokio doc](https://docs.rs/tokio/latest/tokio/)
 - [Idiomatic Rust snippets](https://idiomatic-rust-snippets.org/)
+- [The Rust Performance Book by N. Nethercote](https://nnethercote.github.io/perf-book/introduction.html)
 - ["The Rust Programming Language" by Aaron Turon (video)](https://youtu.be/O5vzLKg7y-k)
 - ["Living with Rust Long-Term" by Jon Gjengset (video)](https://youtu.be/r35cBkPRNMI)
 - ["Rust makes cents" by No Boilerplate (video)](https://www.youtube.com/watch?v=4dvf6kM70qM)
