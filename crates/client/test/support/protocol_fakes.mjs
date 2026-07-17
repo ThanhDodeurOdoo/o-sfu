@@ -40,6 +40,7 @@ const remoteMediaUpdate = (bindings) => ({
 export class FakeProtocolCore {
     constructor() {
         this.features = { ...EMPTY_FEATURES };
+        this.broadcasts = [];
         this.recordingState = {};
         this.state = "disconnected";
         this.disconnectCalls = 0;
@@ -55,7 +56,8 @@ export class FakeProtocolCore {
         this.wsCloseCodes = [];
     }
 
-    broadcast() {
+    broadcast(message) {
+        this.broadcasts.push(message);
         return [];
     }
 
@@ -79,7 +81,7 @@ export class FakeProtocolCore {
     }
 
     onTransportReady() {
-        if (this.pendingNegotiationKind === "offer") {
+        if (this.pendingNegotiationKind === "offer" || this.state === "connected") {
             return [];
         }
         this.transportReadyCalls += 1;

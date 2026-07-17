@@ -62,6 +62,38 @@ test("ignored duplicate connect keeps the accepted ICE server config", async () 
     assert.deepEqual(peerConnections[0].config.iceServers, iceServers);
 });
 
+test("immediate disconnect prevents pending connect and subscription", async () => {
+    const core = new FakeProtocolCore();
+    core.disconnect = () => [];
+    const { client, sockets } = createSfuClientHarness({ protocolCore: core });
+
+    client.connect("ws://example.test/ws", "jwt-token", { channelUUID: "channel-a" });
+    client.subscribe(42, { camera: false });
+    client.disconnect();
+    await tick();
+
+    assert.deepEqual(sockets, []);
+    assert.deepEqual(core.subscriptionUpdates, []);
+});
+
+test("last same-turn disconnect drops a queued reconnect without canceling cleanup", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections, sockets } = harness;
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    client.disconnect();
+    client.connect("ws://other.example.test/ws", "jwt-token", { channelUUID: "channel-b" });
+    client.disconnect();
+    await tick();
+
+    assert.equal(client.state, "disconnected");
+    assert.equal(sockets.length, 1);
+    assert.equal(sockets[0].closeCode, WS_CLOSE_CODE.CLEAN);
+    assert.equal(peerConnections[0].closed, true);
+});
+
 test("oversized server text frames close before protocol decoding", async () => {
     const core = new FakeProtocolCore();
     let decoded = false;
@@ -109,12 +141,50 @@ for (const [name, startRequest, ok, expected] of [
 
 test("recording requests without protocol registration resolve false", async () => {
     const core = new FakeProtocolCore();
-    core.startRecording = () => [];
+    core.startRecording = (options) => {
+        assert.deepEqual(options, { audio: true });
+        return [];
+    };
     core.stopRecording = () => [];
     const { client } = createSfuClientHarness({ protocolCore: core });
+    const options = { audio: true };
 
-    assert.equal(await client.startRecording({ audio: true }), false);
+    const recording = client.startRecording(options);
+    options.audio = false;
+    assert.equal(await recording, false);
     assert.equal(await client.stopRecording(), false);
+});
+
+test("disconnect resolves a registered recording request", { timeout: 2_000 }, async () => {
+    const harness = createRecoveryHarness();
+    const { client, timers } = harness;
+
+    await connectRealWithWelcome(harness);
+    const recording = client.startRecording({ audio: true });
+    await tick();
+
+    assert.equal(timers.hasDelay(5000), true);
+    client.disconnect();
+
+    assert.equal(await recording, false);
+    assert.equal(timers.hasDelay(5000), false);
+});
+
+test("socket recovery resolves a registered recording request", { timeout: 2_000 }, async () => {
+    const harness = createRecoveryHarness();
+    const { client, sockets, timers } = harness;
+
+    await connectRealWithWelcome(harness);
+    const recording = client.startRecording({ audio: true });
+    await tick();
+
+    assert.equal(timers.hasDelay(5000), true);
+    sockets[0].emitClose(1011);
+
+    assert.equal(await recording, false);
+    await tick();
+    assert.equal(timers.hasDelay(5000), false);
+    assert.equal(client.state, "recovering");
 });
 
 test("duplicate recording request id is handled as a runtime error", async () => {
@@ -209,6 +279,16 @@ test("recording request timer setup failures reject through the public promise",
     assert.equal(handledErrors.length, 1);
     assert.match(handledErrors[0].message, /timer setup failed/);
     assert.deepEqual(unhandledRejections, []);
+});
+
+test("startRecording rejects when the protocol core throws undefined", async () => {
+    const core = new FakeProtocolCore();
+    core.startRecording = () => {
+        throw undefined;
+    };
+    const { client } = createSfuClientHarness({ protocolCore: core });
+
+    await assert.rejects(client.startRecording(), (error) => error === undefined);
 });
 
 test("default runtime creates the protocol core from generated wasm bindings", () => {
@@ -310,10 +390,10 @@ function lastSentEnvelope(socket) {
     return decodeSentFrame(socket, socket.sent.length - 1).at(-1);
 }
 
-function hasSentPublish(socket) {
-    return socket.sent.some((_, index) =>
-        decodeSentFrame(socket, index).some((envelope) => envelope.t === "publish")
-    );
+function sentPublishCount(socket) {
+    return socket.sent
+        .flatMap((_, index) => decodeSentFrame(socket, index))
+        .filter((envelope) => envelope.t === "publish").length;
 }
 
 function assertLastNegotiationResponse(socket, tag, responseTo) {
@@ -336,6 +416,19 @@ async function emitOfferWithBinding({ core, emitMessage }, binding = {}) {
     });
     await emitMessage("offer");
 }
+
+test("authenticated publication waits for transport readiness", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, sockets } = harness;
+
+    await connectRealWithWelcome(harness);
+    client.publish("camera", createCameraTrack("camera-track"));
+    await tick();
+
+    assert.equal(sentPublishCount(sockets[0]), 0);
+    await emitMessage(buildNegotiationFrame("offer", "server-initial", "1"));
+    assert.equal(sentPublishCount(sockets[0]), 1);
+});
 
 test("real protocol core replays sticky publish after recovery transport readiness", async () => {
     const harness = createRecoveryHarness();
@@ -447,7 +540,7 @@ test("real protocol core waits for transport-ready replay before binding recover
             .some((section) => section.senderTrack === track),
         false
     );
-    assert.equal(hasSentPublish(sockets[1]), true);
+    assert.equal(sentPublishCount(sockets[1]), 1);
 
     await emitMessage(buildVideoRenegotiationFrame("server-republish", { mid: "2" }), 1);
 
@@ -622,6 +715,160 @@ test("offer waits for the ICE-complete local description before replying", async
             sdp: "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
         }
     ]);
+});
+
+test("protocol inputs wait for an in-flight negotiation to finish", async () => {
+    const { promise: answerGate, resolve: releaseAnswer } = Promise.withResolvers();
+    const callOrder = [];
+    class GatedPeerConnection extends FakePeerConnection {
+        async createAnswer() {
+            await answerGate;
+            return super.createAnswer();
+        }
+    }
+    class LoggingProtocolCore extends FakeProtocolCore {
+        onWsMessage(frame) {
+            callOrder.push(`onWsMessage:${frame}`);
+            return super.onWsMessage(frame);
+        }
+
+        submitNegotiationAnswer(...args) {
+            callOrder.push("submitNegotiationAnswer");
+            super.submitNegotiationAnswer(...args);
+            return [{ kind: "sendWebSocket", frame: "answer-feedback" }];
+        }
+    }
+    const { connect, emitMessage, open, sockets } = createSfuClientHarness({
+        createPeerConnection: (config) => new GatedPeerConnection(config),
+        protocolCore: new LoggingProtocolCore()
+    });
+
+    await connect();
+    await open();
+    await emitMessage("welcome");
+    const send = sockets[0].send.bind(sockets[0]);
+    sockets[0].send = (frame) => {
+        callOrder.push(`send:${frame}`);
+        send(frame);
+    };
+    await emitMessage("offer");
+    sockets[0].emitMessage("peer-left");
+    await tick();
+
+    assert.equal(callOrder.includes("onWsMessage:peer-left"), false);
+
+    releaseAnswer();
+    await tick();
+
+    assert.deepEqual(callOrder.slice(-3), [
+        "submitNegotiationAnswer",
+        "send:answer-feedback",
+        "onWsMessage:peer-left"
+    ]);
+});
+
+test("reentrant disconnect cannot reorder a subscription behind cleanup", async () => {
+    const core = new FakeProtocolCore();
+    const calls = [];
+    const subscribe = core.subscribe.bind(core);
+    core.subscribe = (...args) => {
+        calls.push("subscribe");
+        return subscribe(...args);
+    };
+    const { client, connectWithWelcome, emitMessage, peerConnections } = createSfuClientHarness({
+        protocolCore: core
+    });
+
+    await connectWithWelcome();
+    await emitOfferWithBinding({ core, emitMessage });
+    peerConnections[0].emitTrack(createCameraTrack("camera-track"), "0");
+    await tick();
+
+    client.addEventListener("update", (event) => {
+        if (event.detail.name === CLIENT_UPDATE.TRACK && !event.detail.payload.active) {
+            calls.push("disconnect");
+            client.disconnect();
+        }
+    });
+    client.subscribe(42, { camera: false });
+    await tick();
+
+    assert.deepEqual(calls, ["subscribe", "disconnect"]);
+    assert.equal(core.disconnectCalls, 1);
+});
+
+test("reentrant disconnect cancels publication signaling", async () => {
+    const core = new FakeProtocolCore();
+    const { client, connectWithWelcome } = createSfuClientHarness({ protocolCore: core });
+
+    await connectWithWelcome();
+    client.addEventListener("log", () => client.disconnect(), { once: true });
+    client.publish("camera", createCameraTrack("camera-track"));
+    await tick();
+
+    assert.equal(core.disconnectCalls, 1);
+    assert.deepEqual(core.publicationUpdates, []);
+});
+
+test("socket close cancels an in-flight negotiation before recovery", async () => {
+    const { promise: answerGate, resolve: releaseAnswer } = Promise.withResolvers();
+    const core = new FakeProtocolCore();
+    core.transportFailureState = "recovering";
+    const onWsClose = core.onWsClose.bind(core);
+    core.onWsClose = (code) => [{ kind: "closePeerConnection" }, ...onWsClose(code)];
+    class GatedPeerConnection extends FakePeerConnection {
+        async createAnswer() {
+            await answerGate;
+            return super.createAnswer();
+        }
+    }
+    const { client, connectWithWelcome, emitMessage, handledErrors, peerConnections, sockets } =
+        createSfuClientHarness({
+            createPeerConnection: (config) => new GatedPeerConnection(config),
+            protocolCore: core
+        });
+
+    await connectWithWelcome();
+    await emitMessage("offer");
+    const socket = sockets[0];
+    socket.close = (code) => {
+        socket.closeCode = code;
+        socket.readyState = 2;
+    };
+    peerConnections[0].emitConnectionState("failed");
+    releaseAnswer();
+    await tick();
+
+    assert.equal(client.state, "recovering");
+    assert.equal(peerConnections[0].closed, true);
+    assert.deepEqual(core.wsCloseCodes, [4000]);
+    assert.deepEqual(core.submittedAnswers, []);
+    assert.deepEqual(handledErrors, []);
+
+    socket.readyState = 3;
+    socket.onclose?.({ code: socket.closeCode });
+    await tick();
+
+    assert.deepEqual(core.wsCloseCodes, [4000]);
+});
+
+test("same-turn recovery retains queued sticky inputs", async () => {
+    const core = new FakeProtocolCore();
+    core.transportFailureState = "recovering";
+    const { client, connectWithWelcome, sockets } = createSfuClientHarness({ protocolCore: core });
+
+    await connectWithWelcome();
+    client.publish("camera", createCameraTrack("camera-before-recovery"));
+    client.subscribe(42, { camera: false });
+    client.updateInfo({ isCameraOn: false });
+    client.broadcast({ dropped: true });
+    sockets[0].emitClose(1011);
+    await tick();
+
+    assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
+    assert.deepEqual(core.subscriptionUpdates, [{ sessionId: 42, states: { camera: false } }]);
+    assert.deepEqual(core.updateInfoCalls, [{ isCameraOn: false }]);
+    assert.deepEqual(core.broadcasts, []);
 });
 
 test("info_change map payloads are normalized into plain objects", async () => {
@@ -926,12 +1173,15 @@ test("subscribe overlays local download state onto existing remote tracks", asyn
 
 test("subscribe forwards additive video layout intent to the protocol core", async () => {
     const { client, core } = createSfuClientHarness();
-
-    client.subscribe(42, {
+    const states = {
         camera: true,
         cameraLayout: "pinned",
         screenLayout: "hidden"
-    });
+    };
+
+    client.subscribe(42, states);
+    states.camera = false;
+    await tick();
 
     assert.deepEqual(core.subscriptionUpdates, [
         {
@@ -982,6 +1232,47 @@ test("subscribe preferences apply to future remote track bindings", async () => 
         }
     ]);
     assert.equal(client._consumers.get(42).camera.track, track);
+});
+
+test("fresh connect clears subscription overlays from the previous session", async () => {
+    const { client, core, connectWithWelcome, emitMessage, peerConnections, updates } =
+        createSfuClientHarness();
+
+    client.subscribe(42, { camera: false });
+    await tick();
+    await connectWithWelcome();
+    await emitOfferWithBinding({ core, emitMessage });
+    peerConnections[0].emitTrack(createCameraTrack("camera-track"), "0");
+    await tick();
+
+    assert.equal(updates.at(-1).payload.active, true);
+});
+
+test("recovery retains subscription overlays for rebound tracks", async () => {
+    const core = new FakeProtocolCore();
+    core.transportFailureState = "recovering";
+    const onWsClose = core.onWsClose.bind(core);
+    core.onWsClose = (code) => [
+        { kind: "closePeerConnection" },
+        ...onWsClose(code),
+        { kind: "connect", url: "ws://example.test/recovery" }
+    ];
+    const { client, connectWithWelcome, emitMessage, open, peerConnections, sockets, updates } =
+        createSfuClientHarness({ protocolCore: core });
+
+    await connectWithWelcome();
+    client.subscribe(42, { camera: false });
+    await tick();
+    sockets[0].emitClose(1011);
+    await tick();
+    await open(1);
+    await emitMessage("welcome", 1);
+    core.trackBindings.set("0", { active: true, mid: "0", sessionId: 42, type: "camera" });
+    await emitMessage("offer", 1);
+    peerConnections[0].emitTrack(createCameraTrack("rebound-camera"), "0");
+    await tick();
+
+    assert.equal(updates.at(-1).payload.active, false);
 });
 
 test("offer waits for peer connection transport readiness before emitting connected", async () => {
@@ -1106,6 +1397,7 @@ test("stale peer connection callbacks cannot affect the active session", async (
 
     assert.equal(peerConnections.length, 2);
     assert.equal(stalePeerConnection.closed, true);
+    const transportReadyCalls = core.transportReadyCalls;
 
     stalePeerConnection.emitTrack(createCameraTrack("stale-camera"), "0");
     stalePeerConnection.emitConnectionState("connected");
@@ -1113,7 +1405,7 @@ test("stale peer connection callbacks cannot affect the active session", async (
     await tick();
 
     assert.deepEqual(updates, []);
-    assert.equal(core.transportReadyCalls, 2);
+    assert.equal(core.transportReadyCalls, transportReadyCalls);
     assert.equal(sockets.length, 1);
     assert.equal(sockets[0].closeCode, null);
     assert.equal(client.state, "connected");
@@ -1362,6 +1654,98 @@ test("publish replaces an already attached local sender track without re-publish
     );
 });
 
+test("cancelled track replacement cannot retain a stale peer binding", async () => {
+    const { promise: replacementGate, resolve: releaseReplacement } = Promise.withResolvers();
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections, sockets } = harness;
+    const firstTrack = createCameraTrack("camera-before-recovery");
+    const secondTrack = createCameraTrack("camera-after-recovery");
+
+    await connectRealWithWelcome(harness);
+    client.publish("camera", firstTrack);
+    await tick();
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    const sender = peerConnections[0].transceivers[1].sender;
+    const replaceTrack = sender.replaceTrack.bind(sender);
+    let replacementStarted = false;
+    sender.replaceTrack = async (track) => {
+        if (track === secondTrack) {
+            replacementStarted = true;
+            await replacementGate;
+        }
+        await replaceTrack(track);
+    };
+
+    client.publish("camera", secondTrack);
+    await tick();
+    assert.equal(replacementStarted, true);
+    sockets[0].emitClose(1011);
+    await tick();
+    releaseReplacement();
+    await tick();
+
+    await finishRecovery(harness);
+    await emitMessage(buildNegotiationFrame("offer", "recovery-offer", "1"), 1);
+    await emitMessage(
+        buildVideoRenegotiationFrame("recovery-renegotiation", {
+            simulcastEncodings: []
+        }),
+        1
+    );
+
+    assert.equal(
+        peerConnections[1].transceivers.find((transceiver) => transceiver.mid === "2").sender.track,
+        secondTrack
+    );
+});
+
+test("cancelled track detach cannot clear a recovered peer binding", async () => {
+    const { promise: detachGate, resolve: releaseDetach } = Promise.withResolvers();
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections, sockets } = harness;
+    const secondTrack = createCameraTrack("camera-after-recovery");
+    const thirdTrack = createCameraTrack("camera-after-stale-detach");
+
+    await connectRealWithWelcome(harness);
+    client.publish("camera", createCameraTrack("camera-before-recovery"));
+    await tick();
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    const sender = peerConnections[0].transceivers[1].sender;
+    const replaceTrack = sender.replaceTrack.bind(sender);
+    let detachStarted = false;
+    sender.replaceTrack = async (track) => {
+        if (track === null) {
+            detachStarted = true;
+            await detachGate;
+        }
+        await replaceTrack(track);
+    };
+
+    client.publish("camera", null);
+    await tick();
+    assert.equal(detachStarted, true);
+    sockets[0].emitClose(1011);
+    await tick();
+    client.publish("camera", secondTrack);
+    await tick();
+
+    await finishRecovery(harness);
+    await emitMessage(buildNegotiationFrame("offer", "recovery-offer", "1"), 1);
+    await emitMessage(buildVideoRenegotiationFrame("recovery-renegotiation", { mid: "2" }), 1);
+    releaseDetach();
+    await tick();
+
+    client.publish("camera", thirdTrack);
+    await tick();
+
+    const recoveredSender = peerConnections[1].transceivers.find(
+        (transceiver) => transceiver.mid === "2"
+    ).sender;
+    assert.equal(recoveredSender.track, thirdTrack);
+});
+
 test("publish detaches the local sender before signaling unpublish", async () => {
     const track = createCameraTrack("camera-track-1");
     const { client, core, emitMessage, open, peerConnections, sockets, connect } =
@@ -1495,14 +1879,14 @@ test("explicit disconnect clears publication intent before reconnect", async () 
             .some((section) => section.senderTrack === track),
         false
     );
-    assert.equal(hasSentPublish(sockets[1]), false);
+    assert.equal(sentPublishCount(sockets[1]), 0);
 
     client.publish("camera", track);
     await tick();
     timers.fireByDelay(100);
     await tick();
 
-    assert.equal(hasSentPublish(sockets[1]), true);
+    assert.equal(sentPublishCount(sockets[1]), 1);
 
     await emitMessage(buildVideoRenegotiationFrame("10", { mid: "2", simulcastEncodings: [] }), 1);
 
@@ -1533,7 +1917,7 @@ test("pre-connect publish does not survive a fresh connect", async () => {
             .some((section) => section.senderTrack === track),
         false
     );
-    assert.equal(hasSentPublish(sockets[0]), false);
+    assert.equal(sentPublishCount(sockets[0]), 0);
 });
 
 test("canceling pending camera publish does not detach an attached screen sender", async () => {
@@ -1792,8 +2176,10 @@ test("getStats exposes compatibility-shaped transport and producer stats", async
 
 test("updateInfo keeps the legacy needRefresh option as a compatibility no-op", async () => {
     const { client, core } = createSfuClientHarness();
+    const info = { isCameraOn: true, isRaisingHand: true };
 
-    client.updateInfo({ isCameraOn: true, isRaisingHand: true }, { needRefresh: true });
+    client.updateInfo(info, { needRefresh: true });
+    info.isCameraOn = false;
     await tick();
 
     assert.deepEqual(core.updateInfoCalls, [
@@ -1802,6 +2188,102 @@ test("updateInfo keeps the legacy needRefresh option as a compatibility no-op", 
             isRaisingHand: true
         }
     ]);
+});
+
+test("broadcast snapshots nested payloads at call time", async () => {
+    const { client, core } = createSfuClientHarness();
+    const message = { metadata: { label: "before" } };
+
+    client.broadcast(message);
+    message.metadata.label = "after";
+    await tick();
+
+    assert.deepEqual(core.broadcasts, [{ metadata: { label: "before" } }]);
+});
+
+test("broadcast clone failures use the runtime error boundary", async () => {
+    const { client, handledErrors } = createSfuClientHarness();
+
+    client.broadcast(() => undefined);
+    await tick();
+
+    assert.equal(handledErrors.length, 1);
+    assert.equal(handledErrors[0].name, "DataCloneError");
+});
+
+test("same-turn disconnect preserves fatal cleanup effects", async () => {
+    const harness = createRecoveryHarness();
+    const { client, handledErrors } = harness;
+    const stateChanges = [];
+    client.addEventListener("stateChange", (event) => stateChanges.push(event.detail.state));
+
+    await connectRealWithWelcome(harness);
+    client.broadcast(() => undefined);
+    client.disconnect();
+    await tick();
+
+    assert.equal(handledErrors.length, 1);
+    assert.equal(stateChanges.at(-1), "disconnected");
+});
+
+test("fatal cleanup runs before a reconnect requested by teardown callbacks", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, sockets } = harness;
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+    client.addEventListener("log", (event) => {
+        if (event.detail.message === "closed RTCPeerConnection") {
+            client.connect("ws://other.example.test/ws", "jwt-token", {
+                channelUUID: "channel-b"
+            });
+        }
+    });
+
+    client.broadcast(() => undefined);
+    await tick();
+
+    assert.equal(sockets.length, 2);
+    assert.equal(sockets[1].closeCode, null);
+});
+
+test("repeated fatal inputs preserve installed cleanup effects", async () => {
+    const harness = createRecoveryHarness();
+    const { client, handledErrors } = harness;
+    const stateChanges = [];
+    client.addEventListener("stateChange", (event) => stateChanges.push(event.detail.state));
+
+    await connectRealWithWelcome(harness);
+    client.broadcast(() => undefined);
+    client.broadcast(() => undefined);
+    await tick();
+
+    assert.equal(handledErrors.length, 2);
+    assert.equal(stateChanges.at(-1), "disconnected");
+});
+
+test("fatal teardown clears the active peer before logging", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, handledErrors } = harness;
+    let closeLogs = 0;
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+    client.addEventListener("log", (event) => {
+        if (event.detail.message !== "closed RTCPeerConnection") {
+            return;
+        }
+        closeLogs += 1;
+        if (closeLogs === 1) {
+            client.broadcast(() => undefined);
+        }
+    });
+
+    client.broadcast(() => undefined);
+    await tick();
+
+    assert.equal(closeLogs, 1);
+    assert.equal(handledErrors.length, 2);
 });
 
 test("fatal runtime errors reset the public client surface", async () => {
@@ -1858,35 +2340,55 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.deepEqual(core.wsCloseCodes, []);
 });
 
-test("fatal runtime errors ignore stale remote-description failures after abort", async () => {
-    let rejectRemoteDescription;
-    const { client, core, connect, emitMessage, handledErrors, open } = createSfuClientHarness({
+test(
+    "disconnect cancels a stalled negotiation and ignores late failures",
+    { timeout: 2_000 },
+    async () => {
+        const { promise: remoteDescription, reject: rejectRemoteDescription } =
+            Promise.withResolvers();
+        const harness = createRecoveryHarness({
+            createPeerConnection(config) {
+                const peerConnection = new FakePeerConnection(config);
+                peerConnection.setRemoteDescription = () => remoteDescription;
+                return peerConnection;
+            }
+        });
+        const { client, emitMessage, handledErrors, peerConnections, sockets } = harness;
+
+        await connectRealWithWelcome(harness);
+        await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+        client.disconnect();
+        await tick();
+
+        assert.equal(client.state, "disconnected");
+        assert.equal(peerConnections[0].closed, true);
+        assert.equal(sockets[0].closeCode, WS_CLOSE_CODE.CLEAN);
+        assert.equal(handledErrors.length, 0);
+
+        rejectRemoteDescription(new Error("late negotiation failure"));
+        await tick();
+
+        assert.equal(handledErrors.length, 0);
+    }
+);
+
+test("fatal abort ignores late negotiation failures", async () => {
+    const { promise: remoteDescription, reject: rejectRemoteDescription } = Promise.withResolvers();
+    const { client, connectWithWelcome, emitMessage, handledErrors } = createSfuClientHarness({
         createPeerConnection(config) {
             const peerConnection = new FakePeerConnection(config);
-            peerConnection.setRemoteDescription = () =>
-                new Promise((_, reject) => {
-                    rejectRemoteDescription = reject;
-                });
+            peerConnection.setRemoteDescription = () => remoteDescription;
             return peerConnection;
         }
     });
 
-    await connect();
-    await open();
-    await emitMessage("welcome");
-    await emitMessage("source-descriptors");
+    await connectWithWelcome();
     await emitMessage("offer");
-
-    await emitMessage("explode");
-
-    assert.equal(client.state, "disconnected");
-    assert.deepEqual(client.sourceDescriptors, []);
-    assert.equal(handledErrors.length, 1);
-
+    client.broadcast(() => undefined);
     rejectRemoteDescription(new Error("late negotiation failure"));
     await tick();
 
-    assert.equal(core.disconnectCalls, 1);
     assert.equal(handledErrors.length, 1);
 });
 

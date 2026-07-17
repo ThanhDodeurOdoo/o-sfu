@@ -6,31 +6,24 @@ export class PendingRequests {
     private _pendingRequestResolvers = new Map<string, PendingRequestCallbacks>();
 
     constructor(
-        private readonly _enqueueCommands: (commands: HostCommand[]) => void,
-        private readonly _enqueueRequest: (
-            commands: HostCommand[],
-            begin: () => void
-        ) => Promise<void>,
+        private readonly _enqueueRequest: (getCommands: () => HostCommand[]) => Promise<void>,
         private readonly _scheduleTimer: (timeoutTimerId: number, timeoutMs: number) => void
     ) {}
 
-    drainRequestCommands(commands: HostCommand[]): Promise<boolean> {
-        const first = commands[0];
-        if (first?.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
-            this._enqueueCommands(commands);
-            return Promise.resolve(false);
-        }
-
-        const req = first.request;
+    drainRequestCommands(getCommands: () => HostCommand[]): Promise<boolean> {
         let completion: Promise<boolean> | undefined;
-        return this._enqueueRequest(commands.slice(1), () => {
-            completion = this.register(req);
+        return this._enqueueRequest(() => {
+            const commands = getCommands();
+            const first = commands[0];
+            if (first?.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
+                return commands;
+            }
+            completion = this.register(first.request);
             void completion.catch(() => undefined);
-            this._scheduleTimer(req.timeoutTimerId, req.timeoutMs);
+            this._scheduleTimer(first.request.timeoutTimerId, first.request.timeoutMs);
+            return commands.slice(1);
         }).then(
-            () =>
-                completion ??
-                Promise.reject(new Error("pending request skipped before registration")),
+            () => completion ?? false,
             (error) => completion ?? Promise.reject(error)
         );
     }

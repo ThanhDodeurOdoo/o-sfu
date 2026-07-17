@@ -32,6 +32,7 @@ import { PendingRequests } from "./pending_requests.js";
 import { PeerSession } from "./peer_session.js";
 import { RemoteMedia } from "./remote_media.js";
 import { SocketSession } from "./socket_session.js";
+import { TurnQueue, type TurnGuard } from "./turn_queue.js";
 
 type BrowserRuntimeContext = {
     onLog: (detail: ClientLogDetail) => void;
@@ -45,15 +46,28 @@ type PublicState = Pick<ProtocolCoreBindings, "state" | "features" | "recordingS
     sourceDescriptors: readonly SourceDescriptor[];
 };
 
+const TURN_POLICY = {
+    DROP_ON_RECOVERY: "dropOnRecovery",
+    RETAIN_ON_RECOVERY: "retainOnRecovery"
+} as const;
+
+type TurnPolicy = (typeof TURN_POLICY)[keyof typeof TURN_POLICY];
+
 const CLIENT_RECOVERABLE_CLOSE_CODE = 4000;
 const BROWSER_RUNTIME_LOG_SOURCE = "browser_runtime";
 
 export class BrowserRuntime {
     private readonly _clearTimer: (handle: TimerHandle) => void;
     private readonly _core: ProtocolCoreBindings;
+    private readonly _turnQueue = new TurnQueue<TurnPolicy>((error) =>
+        this.handleRuntimeError(error)
+    );
     private readonly _pendingRequests = new PendingRequests(
-        (commands) => this.enqueue(commands),
-        (commands, begin) => this.enqueueRequest(commands, begin),
+        (getCommands) =>
+            this._turnQueue.enqueueAndWait(
+                (isCurrent) => this.processCommands(getCommands(), isCurrent),
+                TURN_POLICY.DROP_ON_RECOVERY
+            ),
         (id, ms) => this.scheduleTimer(id, ms)
     );
     private readonly _media = new RemoteMedia();
@@ -64,9 +78,6 @@ export class BrowserRuntime {
     private readonly _socketSession: SocketSession;
     private readonly _context: BrowserRuntimeContext;
 
-    private _lastAbortError: Error | undefined;
-    private _commandQueue: Promise<void> = Promise.resolve();
-    private _epoch = 0;
     private _timerHandles = new Map<number, TimerHandle>();
 
     constructor(context: BrowserRuntimeContext, dependencies: SfuClientDependencies = {}) {
@@ -82,7 +93,7 @@ export class BrowserRuntime {
             log,
             () => this.enqueueProtocolCommands(() => this._core.onWsOpen()),
             (frame) => this.enqueueProtocolCommands(() => this._core.onWsMessage(frame)),
-            (code) => this.enqueueProtocolCommands(() => this._core.onWsClose(code))
+            (code) => this.handleSocketClose(code)
         );
         this._peerSession = new PeerSession(
             dependencies.createPeerConnection ??
@@ -107,6 +118,7 @@ export class BrowserRuntime {
             const commands = this._core.connect(url, jwt, room);
             if (commands.some((command) => command.kind === COMMAND_KIND.CONNECT)) {
                 this._peerSession.clearPublications();
+                this._media.resetAll();
                 this._peerSession.setIceServers(iceServers);
             }
             return commands;
@@ -114,30 +126,49 @@ export class BrowserRuntime {
     }
 
     disconnect(): void {
-        this.enqueueProtocolCommands(() => this._core.disconnect());
+        const commands = this.tryControlTransition(() => this._core.disconnect());
+        if (!commands) {
+            return;
+        }
+        this.interrupt(commands, false);
     }
 
     subscribe(sessionId: SessionId, states: DownloadStates): void {
-        this.enqueueTask(() => {
-            this._media.updateSubscriptionStates(sessionId, states, this._context.onUpdate);
-        });
-        this.enqueueProtocolCommands(() => this._core.subscribe(sessionId, states));
+        const snapshot = { ...states };
+        this._turnQueue.enqueue((isCurrent) => {
+            const commands = this._core.subscribe(sessionId, snapshot);
+            if (!isCurrent()) {
+                return;
+            }
+            this._media.updateSubscriptionStates(sessionId, snapshot, this._context.onUpdate);
+            return this.processCommands(commands, isCurrent);
+        }, TURN_POLICY.RETAIN_ON_RECOVERY);
     }
 
     updateInfo(info: SessionInfo): void {
-        this.enqueueProtocolCommands(() => this._core.updateInfo(info));
+        const snapshot = { ...info };
+        this.enqueueProtocolCommands(
+            () => this._core.updateInfo(snapshot),
+            TURN_POLICY.RETAIN_ON_RECOVERY
+        );
     }
 
     broadcast(message: unknown): void {
-        this.enqueueProtocolCommands(() => this._core.broadcast(message));
+        try {
+            const snapshot = structuredClone(message);
+            this.enqueueProtocolCommands(() => this._core.broadcast(snapshot));
+        } catch (error) {
+            this.handleRuntimeError(error);
+        }
     }
 
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
-        return this.processRequestCommands(() => this._core.startRecording(options));
+        const input = { ...options };
+        return this._pendingRequests.drainRequestCommands(() => this._core.startRecording(input));
     }
 
     stopRecording(): Promise<boolean> {
-        return this.processRequestCommands(() => this._core.stopRecording());
+        return this._pendingRequests.drainRequestCommands(() => this._core.stopRecording());
     }
 
     async getStats(): Promise<SfuStats> {
@@ -145,22 +176,26 @@ export class BrowserRuntime {
     }
 
     publish(type: StreamType, track: MediaStreamTrack | null): void {
-        const { active, peerTask } = this._peerSession.setPublication(
-            type,
-            track,
-            this._core.state
-        );
-        if (peerTask) {
-            this.enqueueTask(peerTask);
-        }
-        if (active !== undefined) {
-            this.enqueueProtocolCommands(() => this._core.publish(type, active));
-        }
+        this._turnQueue.enqueue(async (isCurrent) => {
+            const { active, peerTask } = this._peerSession.setPublication(
+                type,
+                track,
+                this._core.state
+            );
+            if (!isCurrent()) {
+                return;
+            }
+            const commands = active === undefined ? undefined : this._core.publish(type, active);
+            if (peerTask) {
+                await peerTask();
+            }
+            if (commands) {
+                return this.processCommands(commands, isCurrent);
+            }
+        }, TURN_POLICY.RETAIN_ON_RECOVERY);
     }
 
-    private abort(): void {
-        this._epoch += 1;
-        this._commandQueue = Promise.resolve();
+    private abortResources(): void {
         this._timerHandles.forEach((handle) => this._clearTimer(handle));
         this._timerHandles.clear();
         this._peerSession.close();
@@ -169,65 +204,61 @@ export class BrowserRuntime {
         this._socketSession.abort(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
-    private processRequestCommands(getCommands: () => HostCommand[]): Promise<boolean> {
-        let commands: HostCommand[];
+    private enqueueProtocolCommands(
+        getCommands: () => HostCommand[],
+        policy: TurnPolicy = TURN_POLICY.DROP_ON_RECOVERY
+    ): void {
+        this._turnQueue.enqueue(
+            (isCurrent) => this.processCommands(getCommands(), isCurrent),
+            policy
+        );
+    }
+
+    private handleSocketClose(code: number): void {
+        const commands = this.tryControlTransition(() => this._core.onWsClose(code));
+        if (!commands?.length) {
+            return;
+        }
+        this.interrupt(commands, this._core.state === SFU_CLIENT_STATE.RECOVERING);
+    }
+
+    private tryControlTransition(getCommands: () => HostCommand[]): HostCommand[] | undefined {
         try {
-            commands = getCommands();
+            return getCommands();
         } catch (error) {
             this.handleRuntimeError(error);
-            return Promise.reject(error);
-        }
-        return this._pendingRequests.drainRequestCommands(commands);
-    }
-
-    private enqueueProtocolCommands(getCommands: () => HostCommand[]): void {
-        try {
-            this.enqueue(getCommands());
-        } catch (error) {
-            this.handleRuntimeError(error);
+            return undefined;
         }
     }
 
-    private enqueue(commands: HostCommand[]): void {
-        this.enqueueTask((epoch) => this.processCommands(commands, epoch));
+    private interrupt(commands: HostCommand[], recovering: boolean, error?: Error): void {
+        if (commands.length === 0 && this._turnQueue.hasControlTurn) {
+            this._turnQueue.cancelPending(error);
+            return;
+        }
+        this._turnQueue.interrupt(
+            (isCurrent) => this.processCommands(commands, isCurrent),
+            (policy) => recovering && policy === TURN_POLICY.RETAIN_ON_RECOVERY,
+            error
+        );
     }
 
-    private enqueueRequest(commands: HostCommand[], begin: () => void): Promise<void> {
-        return this.enqueueTask((epoch) => {
-            begin();
-            return commands.length === 0 ? undefined : this.processCommands(commands, epoch);
-        });
-    }
-
-    private enqueueTask(operation: (epoch: number) => void | Promise<void>): Promise<void> {
-        const epoch = this._epoch;
-        const task = this._commandQueue.then(() => {
-            if (!this.isCurrent(epoch)) {
-                throw this._lastAbortError ?? new Error("runtime command skipped after abort");
-            }
-            return operation(epoch);
-        });
-        this._commandQueue = task.catch((error: unknown) => {
-            if (this.isCurrent(epoch)) {
-                this.handleRuntimeError(error);
-            }
-        });
-        return task;
-    }
-
-    private async processCommands(commands: HostCommand[], epoch: number): Promise<void> {
+    private async processCommands(commands: HostCommand[], isCurrent: TurnGuard): Promise<void> {
+        if (!isCurrent()) {
+            return;
+        }
         const pending = [...commands];
         if (pending.length === 0) {
             this.syncPublicState();
             return;
         }
         for (let index = 0; index < pending.length; index += 1) {
-            if (!this.isCurrent(epoch)) {
+            if (!isCurrent()) {
                 return;
             }
             const command = pending[index];
-            const followUp = await this.executeCommand(command);
-            if (!this.isCurrent(epoch)) {
+            const followUp = await this.executeCommand(command, isCurrent);
+            if (!isCurrent()) {
                 return;
             }
             this.syncPublicState();
@@ -235,7 +266,10 @@ export class BrowserRuntime {
         }
     }
 
-    private async executeCommand(command: HostCommand): Promise<HostCommand[]> {
+    private async executeCommand(
+        command: HostCommand,
+        isCurrent: TurnGuard
+    ): Promise<HostCommand[]> {
         switch (command.kind) {
             case COMMAND_KIND.SEND_WEB_SOCKET:
                 this._socketSession.send(command.frame);
@@ -247,7 +281,7 @@ export class BrowserRuntime {
                     command.sdp,
                     command.uploadSlots
                 );
-                if (!result) {
+                if (!result || !isCurrent()) {
                     return [];
                 }
                 const commands = this._core.submitNegotiationAnswer(
@@ -275,6 +309,7 @@ export class BrowserRuntime {
                     command.state === SFU_CLIENT_STATE.DISCONNECTED
                 ) {
                     this._peerSession.clearPublications();
+                    this._media.resetAll();
                 }
                 this._context.onStateChange(command.state, command.cause);
                 return [];
@@ -337,7 +372,6 @@ export class BrowserRuntime {
 
     private handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
-        this._lastAbortError = resolvedError;
         this._pendingRequests.rejectAll(resolvedError);
         let disconnectCommands: HostCommand[] | undefined;
         try {
@@ -348,11 +382,9 @@ export class BrowserRuntime {
                 `protocol disconnect failed: ${String(disconnectError)}`
             );
         }
-        this.abort();
+        this.interrupt(disconnectCommands ?? [], false, resolvedError);
+        this.abortResources();
         this.syncPublicState();
-        if (disconnectCommands) {
-            this.enqueue(disconnectCommands);
-        }
         this._context.onRuntimeError(resolvedError);
     }
 
@@ -371,9 +403,5 @@ export class BrowserRuntime {
             level,
             message
         });
-    }
-
-    private isCurrent(epoch: number): boolean {
-        return epoch === this._epoch;
     }
 }

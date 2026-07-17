@@ -538,13 +538,13 @@ impl ProtocolCore {
         command_batch(commands)
     }
 
-    /// Stores the desired publication state and sends it when signaling is ready.
+    /// Stores the desired publication state and sends it when the media transport is ready.
     ///
     /// Publish intent is sticky across reconnects, which lets UI toggles be issued
     /// before authentication completes without losing the latest desired state.
     pub fn publish(&mut self, stream_type: StreamType, active: bool) -> CommandBatch {
         self.sticky_replay.set_publish_active(stream_type, active);
-        if !self.can_send_client_messages() {
+        if !matches!(&self.phase, ProtocolPhase::Connected(_)) {
             return CommandBatch::default();
         }
         let message = if active {

@@ -81,6 +81,23 @@ fn protocol_core_publish_and_unpublish_flush_only_websocket_envelopes() -> Resul
     Ok(())
 }
 
+#[test]
+fn protocol_core_defers_publish_until_transport_ready() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.accept_welcome(sample_welcome_payload());
+
+    assert!(core.publish(StreamType::Camera, true).is_empty());
+    assert_sent_client_envelopes(
+        &core.on_transport_ready(),
+        vec![ClientEnvelope::Message(ClientMessage::Publish(
+            StreamIntentPayload {
+                stream_type: StreamType::Camera,
+            },
+        ))],
+    );
+}
+
 fn expect_flush_timer(commands: &[Command], label: &str) -> Result<u32, String> {
     let [
         Command::ScheduleTimer {
