@@ -44,21 +44,20 @@ use serde_json::{Value, json};
 use super::common::{
     download_main_stat, push_unique_edge, push_unique_node, route_state_color, route_state_label,
     source_by_id, stream_id_color, stream_id_label, transport_health_label, user_by_id,
-    user_id_matches, user_id_to_string,
 };
 use crate::diagnostics::types::{
     DiagnosticsRoomDetail, DiagnosticsSource, DiagnosticsSubscription, DiagnosticsUserView,
 };
 
 fn path_user_node(room_uuid: &str, user: &DiagnosticsUserView, selected: bool) -> Value {
-    let session_id = user_id_to_string(&user.user_id);
+    let session_id = user.user_id.path_segment();
     let title = if selected {
         format!("{session_id} selected")
     } else {
-        session_id
+        session_id.to_string()
     };
     json!({
-        "id": format!("user:{}:{}", room_uuid, user_id_to_string(&user.user_id)),
+        "id": format!("user:{}:{}", room_uuid, session_id),
         "title": title,
         "subtitle": transport_health_label(user.transport.health.as_ref()),
         "mainStat": format!("{} bps", user.transport.quality_summary.current_incoming_bitrate.total),
@@ -100,7 +99,7 @@ fn path_source_node(room_uuid: &str, source: &DiagnosticsSource) -> Value {
         "subtitle": format!("{:?}", source.media_kind).to_lowercase(),
         "mainStat": format!("{} bps", source.current_incoming_bitrate_bps),
         "secondaryStat": format!("{} encodings", source.encodings.len()),
-        "detail__owner_user": user_id_to_string(&source.owner_user_id),
+        "detail__owner_user": source.owner_user_id.path_segment(),
         "detail__stream_id": stream_id,
         "detail__transport_media_id": source.transport_media_id,
     })
@@ -114,7 +113,7 @@ fn ensure_path_user(
     selected: bool,
 ) {
     let room_uuid = detail.summary.uuid.as_str();
-    let user_id = user_id_to_string(&user.user_id);
+    let user_id = user.user_id.path_segment();
     push_unique_node(
         nodes,
         seen_nodes,
@@ -137,7 +136,7 @@ fn push_user_transport_edge(
     direction: &str,
 ) {
     let room_uuid = detail.summary.uuid.as_str();
-    let user_id = user_id_to_string(&user.user_id);
+    let user_id = user.user_id.path_segment();
     let edge_id = format!(
         "transport:{room_uuid}:{user_id}:{}",
         user.transport.media_worker_id
@@ -186,7 +185,7 @@ fn push_publish_path(
             "mainStat": format!("{} upload", stream_id_label(&source.stream_id)),
             "secondaryStat": format!("{} bps", source.current_incoming_bitrate_bps),
             "color": stream_id_color(&source.stream_id),
-            "detail__owner_user": user_id_to_string(&owner.user_id),
+            "detail__owner_user": owner.user_id.path_segment(),
             "detail__stream_id": &source.stream_id,
             "detail__transport_media_id": source.transport_media_id,
         }),
@@ -202,7 +201,7 @@ fn push_subscription_delivery_path(
     direction: &str,
 ) {
     let room_uuid = detail.summary.uuid.as_str();
-    let receiver_id = user_id_to_string(&receiver.user_id);
+    let receiver_id = receiver.user_id.path_segment();
     let deliver_edge_id = format!("deliver:{room_uuid}:{}:{receiver_id}", sub.source_id);
     push_unique_edge(
         edges,
@@ -226,7 +225,7 @@ fn push_subscription_delivery_path(
     let consume_edge_id = format!(
         "consume:{room_uuid}:{}:{}",
         sub.source_id,
-        user_id_to_string(&receiver.user_id)
+        receiver.user_id.path_segment()
     );
     push_unique_edge(
         edges,
@@ -235,7 +234,7 @@ fn push_subscription_delivery_path(
         json!({
             "id": consume_edge_id,
             "source": format!("worker:{}", receiver.transport.media_worker_id),
-            "target": format!("user:{}:{}", room_uuid, user_id_to_string(&receiver.user_id)),
+            "target": format!("user:{}:{}", room_uuid, receiver.user_id.path_segment()),
             "mainStat": "consume",
             "secondaryStat": direction,
             "color": route_state_color(&sub.state),
@@ -315,7 +314,7 @@ pub fn build_user_graph(detail: &DiagnosticsRoomDetail, requested_user_id: &str)
     let selected_user = detail
         .users
         .iter()
-        .find(|user| user_id_matches(&user.user_id, requested_user_id))?;
+        .find(|user| user.user_id.path_segment().as_ref() == requested_user_id)?;
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut seen_nodes = HashSet::new();

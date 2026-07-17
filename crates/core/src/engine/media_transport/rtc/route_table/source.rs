@@ -895,14 +895,7 @@ fn remote_pkt_gate_for_route(
     local_packet_gate: Option<PacketLayerGate>,
 ) -> PacketLayerGate {
     match (route_entry, local_packet_gate) {
-        (
-            Some(_),
-            Some(
-                PacketLayerGate::Open
-                | PacketLayerGate::Rid(_)
-                | PacketLayerGate::OperatingPoint(_),
-            ),
-        ) => PacketLayerGate::Open,
+        (Some(_), Some(PacketLayerGate::Open | PacketLayerGate::Rid(_))) => PacketLayerGate::Open,
         (Some(route_entry), Some(PacketLayerGate::Block))
             if route_entry
                 .destinations

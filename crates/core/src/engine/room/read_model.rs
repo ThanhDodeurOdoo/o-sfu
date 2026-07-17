@@ -138,7 +138,7 @@ impl Room {
         self.diagnostics_user_views(transport)
             .await
             .into_iter()
-            .find(|user| user_id_matches(&user.user_id, requested_user_id))
+            .find(|user| user.user_id.path_segment().as_ref() == requested_user_id)
             .map(|user| {
                 let user_id = user.user_id.clone();
                 (user, user_id)
@@ -201,12 +201,5 @@ fn diagnostics_quality_summary(
         egress_loss_ppm: quality_sample.egress_loss_ppm,
         egress_jitter_rtp_timestamp_units: quality_sample.egress_jitter_rtp_timestamp_units,
         sample_count: quality_sample.sample_count,
-    }
-}
-
-fn user_id_matches(user_id: &UserId, requested_user_id: &str) -> bool {
-    match user_id {
-        UserId::Integer(value) => value.to_string() == requested_user_id,
-        UserId::String(value) => value == requested_user_id,
     }
 }

@@ -150,7 +150,6 @@ impl FromRequestParts<RuntimeState> for DiagnosticsAccess {
 }
 
 fn record_room_rejection(state: &RuntimeState, status: StatusCode) -> StatusCode {
-    state.metrics.record_http_room_request();
     match status {
         StatusCode::UNAUTHORIZED => state.metrics.record_http_room_unauthorized(),
         StatusCode::FORBIDDEN => state.metrics.record_http_room_forbidden(),
@@ -161,7 +160,6 @@ fn record_room_rejection(state: &RuntimeState, status: StatusCode) -> StatusCode
 }
 
 fn record_disconnect_rejection(state: &RuntimeState, status: StatusCode) -> Response {
-    state.metrics.record_http_disconnect_request();
     match status {
         StatusCode::BAD_REQUEST => state.metrics.record_http_disconnect_bad_request(),
         StatusCode::UNPROCESSABLE_ENTITY => {

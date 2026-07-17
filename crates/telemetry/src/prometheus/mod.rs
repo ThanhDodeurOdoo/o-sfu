@@ -4,19 +4,15 @@
 //! text exposition format usedby the server `/metrics` route
 //!
 //! ```
-//! use std::time::Duration;
-//!
 //! use o_sfu_telemetry::{
 //!     metrics::{HttpRoute, RuntimeMetrics},
 //!     prometheus::render_prometheus,
 //! };
 //!
 //! let metrics = RuntimeMetrics::default();
-//! metrics.record_http_noop_request();
-//! metrics.add_http_inflight_requests(HttpRoute::Noop, 1);
-//! metrics.record_http_request_duration(HttpRoute::Noop, Duration::from_millis(25));
-//!
+//! let request = metrics.track_http_request(HttpRoute::Noop);
 //! let rendered = render_prometheus(&metrics);
+//! drop(request);
 //!
 //! let expected_lines = [
 //!     "# TYPE osfu_http_noop_requests_total counter",
@@ -24,8 +20,7 @@
 //!     "# TYPE osfu_http_inflight_requests gauge",
 //!     "osfu_http_inflight_requests{route=\"noop\"} 1",
 //!     "# TYPE osfu_http_request_duration_seconds histogram",
-//!     "osfu_http_request_duration_seconds_bucket{route=\"noop\",le=\"0.05\"} 1",
-//!     "osfu_http_request_duration_seconds_count{route=\"noop\"} 1",
+//!     "osfu_http_request_duration_seconds_count{route=\"noop\"} 0",
 //! ];
 //!
 //! for line in expected_lines {

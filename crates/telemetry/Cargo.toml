@@ -10,8 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-default = ["macros"]
-macros = ["dep:o-sfu-telemetry-macros"]
+default = []
 test-support = []
 otel-tracing = [
     "dep:opentelemetry",
@@ -23,7 +22,6 @@ otel-tracing = [
 [dependencies]
 anyhow.workspace = true
 o-sfu-model.workspace = true
-o-sfu-telemetry-macros = { path = "macros", optional = true }
 opentelemetry = { version = "0.32", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"], optional = true }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace"], optional = true }

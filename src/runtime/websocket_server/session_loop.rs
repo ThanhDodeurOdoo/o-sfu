@@ -59,23 +59,26 @@ impl ActiveWebSocketSession {
         remote_address: Arc<str>,
         pre_auth_permit: PreAuthWebSocketPermit,
     ) -> Option<Self> {
-        let started_at = Instant::now();
-        let session = async {
-            let (mut writer, mut reader) = socket.split();
-            let auth =
-                handshake::receive(&services, &mut writer, &mut reader, remote_address.as_ref())
-                    .await?;
-            drop(pre_auth_permit);
+        let session = {
+            let _guard = services.metrics.track_ws_handshake();
+            async {
+                let (mut writer, mut reader) = socket.split();
+                let auth = handshake::receive(
+                    &services,
+                    &mut writer,
+                    &mut reader,
+                    remote_address.as_ref(),
+                )
+                .await?;
+                drop(pre_auth_permit);
 
-            let accepted =
-                AcceptedUser::establish(&services, auth, remote_address, &mut writer).await?;
+                let accepted =
+                    AcceptedUser::establish(&services, auth, remote_address, &mut writer).await?;
 
-            Some((writer, reader, accepted))
-        }
-        .await;
-        services
-            .metrics
-            .record_ws_handshake_duration(started_at.elapsed());
+                Some((writer, reader, accepted))
+            }
+            .await
+        };
         session.map(|(writer, reader, accepted)| Self {
             writer,
             reader,

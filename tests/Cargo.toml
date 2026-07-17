@@ -33,7 +33,6 @@ str0m.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util.workspace = true
-trybuild = "1.0.116"
 
 [dev-dependencies]
 o-sfu-core = { path = "../crates/core", features = ["internal-benchmarks"] }
@@ -73,10 +72,6 @@ path = "integration/server_smoke.rs"
 [[test]]
 name = "full_stack"
 path = "integration/full_stack.rs"
-
-[[test]]
-name = "telemetry_ui"
-path = "integration/telemetry_ui.rs"
 
 [[test]]
 name = "miri_auth_codec"

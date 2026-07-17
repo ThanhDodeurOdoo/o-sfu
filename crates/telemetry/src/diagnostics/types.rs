@@ -72,20 +72,6 @@ pub enum DiagnosticsOverBudgetExceptionReason {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DiagnosticsTemporalLayerMetadata {
-    Absent,
-    Advertised,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiagnosticsTemporalLayerSelection {
-    NotSelected,
-    Selected,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum DiagnosticsVideoLayoutRole {
     Pinned,
     Featured,
@@ -219,9 +205,6 @@ pub struct DiagnosticsSourceEncoding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_temporal_layer_id: Option<u8>,
-    pub temporal_layer_metadata: DiagnosticsTemporalLayerMetadata,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_type: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_ssrc: Option<u32>,
@@ -283,9 +266,6 @@ pub struct DiagnosticsSourceSelection {
     pub selected_encoding_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_rid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_temporal_layer_id: Option<u8>,
-    pub temporal_layer_selection: DiagnosticsTemporalLayerSelection,
     pub upgrade_observations: u8,
 }
 

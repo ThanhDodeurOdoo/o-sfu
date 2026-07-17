@@ -23,13 +23,14 @@
 //! so the flush step can still identify the last destination for payload move
 //! versus clone decisions.
 
+use str0m::media::Rid;
 use tracing::debug;
 
 use super::{
     forwarded_packet::ForwardedPacket,
     forwarding_destination::PacketForward,
     relay_registry::{ActiveRelayTarget, RelayTargetId},
-    route_control::{PacketLayerGate, PacketLayerMetadata},
+    route_control::PacketLayerGate,
     source_route::MediaRouteEntry,
     state::PacketLoopState,
 };
@@ -91,15 +92,22 @@ pub(super) fn plan_forwards(
     if !has_routed_forward(relay_targets, route_entry) {
         return;
     }
-    let metadata = facts.layer_metadata;
-    if !src_gate_permits(metrics, source_gate, metadata) {
+    let packet_rid = facts.rid;
+    if !src_gate_permits(metrics, source_gate, packet_rid) {
         return;
     }
     if let Some(relay_targets) = relay_targets {
-        populate_relay_forwards(state, relay_targets, pkt_idx, src_media, metadata, forwards);
+        populate_relay_forwards(
+            state,
+            relay_targets,
+            pkt_idx,
+            src_media,
+            packet_rid,
+            forwards,
+        );
     }
     if let Some(route_entry) = route_entry {
-        populate_local_forwards(route_entry, pkt_idx, src_media, metadata, forwards);
+        populate_local_forwards(route_entry, pkt_idx, src_media, packet_rid, forwards);
     }
 }
 
@@ -133,10 +141,10 @@ fn reserve_forward_capacity(
 fn src_gate_permits(
     metrics: &impl RtcRouteControlMetrics,
     src_gate: Option<PacketLayerGate>,
-    metadata: PacketLayerMetadata,
+    packet_rid: Option<Rid>,
 ) -> bool {
     if let Some(src_gate) = src_gate
-        && !src_gate.permits(metadata)
+        && !src_gate.permits(packet_rid)
     {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
         return false;
@@ -156,11 +164,11 @@ fn populate_relay_forwards(
     relay_targets: &[ActiveRelayTarget],
     pkt_idx: usize,
     src_media: TransportMediaId,
-    metadata: PacketLayerMetadata,
+    packet_rid: Option<Rid>,
     forwards: &mut Vec<PacketForward>,
 ) {
     for relay_target in relay_targets {
-        if !relay_target_gate_permits(state, src_media, relay_target.target_id, metadata) {
+        if !relay_target_gate_permits(state, src_media, relay_target.target_id, packet_rid) {
             continue;
         }
         forwards.push(PacketForward::from_relay_target(
@@ -186,7 +194,7 @@ fn populate_local_forwards(
     route_entry: &MediaRouteEntry,
     pkt_idx: usize,
     src_media: TransportMediaId,
-    metadata: PacketLayerMetadata,
+    packet_rid: Option<Rid>,
     forwards: &mut Vec<PacketForward>,
 ) {
     if !route_entry.source_active {
@@ -198,7 +206,7 @@ fn populate_local_forwards(
     }
     if route_entry.active_destination_count == route_entry.destinations.len() {
         for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
-            if dst.packet_gate.permits(metadata) {
+            if dst.packet_gate.permits(packet_rid) {
                 forwards.push(PacketForward::from_local_route_destination(
                     pkt_idx, src_media, dst_idx,
                 ));
@@ -207,7 +215,7 @@ fn populate_local_forwards(
         return;
     }
     for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
-        if dst.active && dst.packet_gate.permits(metadata) {
+        if dst.active && dst.packet_gate.permits(packet_rid) {
             forwards.push(PacketForward::from_local_route_destination(
                 pkt_idx, src_media, dst_idx,
             ));
@@ -224,12 +232,12 @@ fn relay_target_gate_permits(
     state: &PacketLoopState,
     src_media: TransportMediaId,
     target_id: RelayTargetId,
-    metadata: PacketLayerMetadata,
+    packet_rid: Option<Rid>,
 ) -> bool {
     state
         .routes
         .relay_packet_gate(src_media, target_id)
-        .is_none_or(|packet_gate| packet_gate.permits(metadata))
+        .is_none_or(|packet_gate| packet_gate.permits(packet_rid))
 }
 
 /// Reports whether route planning has any destination work after origin sinks.

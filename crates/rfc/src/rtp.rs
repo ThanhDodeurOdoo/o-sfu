@@ -1491,9 +1491,10 @@ pub mod header_extension {
 
 /// Video Frame Marking RTP header-extension payload values.
 ///
-/// Frame marking is carried as the value of one negotiated RTP header
-/// extension. Packet gates use it as packet-local metadata for temporal-layer
-/// selection. The first octet is enough for the current route-control decision.
+/// Frame marking is carried as one negotiated RTP header extension
+///
+/// These helpers retain temporal-layer fields for future negotiated SVC
+/// selection while current packet gates match simulcast RIDs
 ///
 /// ```text
 /// Short form, non-scalable stream

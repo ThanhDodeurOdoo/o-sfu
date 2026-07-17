@@ -7,14 +7,14 @@
 //!
 //! ```
 //! use o_sfu_telemetry::{
-//!     metrics::RuntimeMetrics,
+//!     metrics::{HttpRoute, RuntimeMetrics},
 //!     prometheus::render_prometheus,
 //! };
 //!
 //! let metrics = RuntimeMetrics::default();
-//! metrics.record_http_noop_request();
-//!
+//! let request = metrics.track_http_request(HttpRoute::Noop);
 //! let body = render_prometheus(&metrics);
+//! drop(request);
 //! assert!(body.contains("osfu_http_noop_requests_total"));
 //! ```
 //!
@@ -35,8 +35,6 @@ pub use config::{
     DEFAULT_TELEMETRY_SERVICE_NAME, TelemetryConfig, TelemetryLogFormat, TelemetryResource,
     TraceExportConfig,
 };
-#[cfg(feature = "macros")]
-pub use o_sfu_telemetry_macros::{measure_duration, measure_http_request};
 pub use setup::{
     TelemetryHandle, activated_span, http_request_span, init_tracing, ws_handshake_span,
     ws_upgrade_span,

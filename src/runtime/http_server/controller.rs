@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::Result;
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, MatchedPath, Path, Request, State},
     http::{StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
@@ -71,8 +71,16 @@ pub(crate) async fn serve_http_on(
 
 /// builds the Axum router for the HTTP control plane and WebSocket listener
 pub(crate) fn app(state: RuntimeState) -> Router {
+    let metrics = Arc::clone(&state.metrics);
     Router::new()
         .route(route::WEBSOCKET, get(websocket_server::upgrade))
+        .merge(http_router(metrics))
+        .merge(diagnostics_router(state.clone()))
+        .with_state(state)
+}
+
+fn http_router(runtime_metrics: Arc<RuntimeMetrics>) -> Router<RuntimeState> {
+    Router::new()
         .route(route::v1::NOOP, get(noop))
         .route(route::v1::STATS, get(stats))
         .route(route::v1::CHANNEL, get(room))
@@ -81,8 +89,28 @@ pub(crate) fn app(state: RuntimeState) -> Router {
             post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
         )
         .route(route::METRICS, get(metrics))
-        .merge(diagnostics_router(state.clone()))
-        .with_state(state)
+        .route_layer(middleware::from_fn_with_state(
+            runtime_metrics,
+            track_http_request,
+        ))
+}
+
+async fn track_http_request(
+    State(metrics): State<Arc<RuntimeMetrics>>,
+    path: MatchedPath,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    let route = match path.as_str() {
+        route::v1::NOOP => HttpRoute::Noop,
+        route::v1::STATS => HttpRoute::Stats,
+        route::v1::CHANNEL => HttpRoute::Room,
+        route::v1::DISCONNECT => HttpRoute::Disconnect,
+        route::METRICS => HttpRoute::Metrics,
+        _ => return next.run(request).await,
+    };
+    let _guard = metrics.track_http_request(route);
+    next.run(request).await
 }
 
 /// diagnostics route group protected by [`DiagnosticsAccess`]
@@ -100,23 +128,13 @@ fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
 }
 
 /// liveness endpoint for a cheap control-plane round trip
-#[o_sfu_telemetry::measure_http_request(
-    metrics = "metrics",
-    request = "record_http_noop_request",
-    route = "HttpRoute::Noop"
-)]
-async fn noop(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoResponse {
+async fn noop() -> impl IntoResponse {
     async { axum::Json(NoopResponse::ok()) }
         .instrument(telemetry::http_request_span("noop"))
         .await
 }
 
 /// compatibility room-stat endpoint consumed by Odoo's SFU control plane
-#[o_sfu_telemetry::measure_http_request(
-    metrics = "services.metrics",
-    request = "record_http_stats_request",
-    route = "HttpRoute::Stats"
-)]
 async fn stats(State(services): State<RoomServices>) -> impl IntoResponse {
     async {
         axum::Json(
@@ -134,11 +152,6 @@ async fn stats(State(services): State<RoomServices>) -> impl IntoResponse {
 }
 
 /// prometheus scrape endpoint for process, HTTP and media-transport metrics
-#[o_sfu_telemetry::measure_http_request(
-    metrics = "metrics",
-    request = "record_http_metrics_request",
-    route = "HttpRoute::Metrics"
-)]
 async fn metrics(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoResponse {
     async {
         (
@@ -153,11 +166,6 @@ async fn metrics(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoRespons
 /// room creation endpoint used by Odoo to bind a channel key to an SFU room
 ///
 /// `VerifiedRoomRequest` owns JWT verification and request-origin projection
-#[o_sfu_telemetry::measure_http_request(
-    metrics = "services.metrics",
-    request = "record_http_room_request",
-    route = "HttpRoute::Room"
-)]
 async fn room(State(services): State<RoomServices>, request: VerifiedRoomRequest) -> Response {
     async {
         let room = services
@@ -186,11 +194,6 @@ async fn room(State(services): State<RoomServices>, request: VerifiedRoomRequest
 /// bulk-disconnect endpoint used by Odoo to remove users from active rooms
 ///
 /// `VerifiedDisconnectClaims` owns JWT verification and request-body decoding
-#[o_sfu_telemetry::measure_http_request(
-    metrics = "services.metrics",
-    request = "record_http_disconnect_request",
-    route = "HttpRoute::Disconnect"
-)]
 async fn disconnect(
     State(services): State<RoomServices>,
     VerifiedDisconnectClaims(claims): VerifiedDisconnectClaims,

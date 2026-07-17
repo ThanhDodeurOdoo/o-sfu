@@ -1,7 +1,7 @@
 //! packet-facing layer gates for routed rtp
 //!
 //! this module defines the small gate language used after the packet loop has
-//! extracted route-control metadata from an rtp packet
+//! resolved the route-control RID from an rtp packet
 //! it does not parse codecs, choose room policy or schedule keyframes
 //! it only answers whether the current packet layer can pass a gate
 //!
@@ -20,8 +20,7 @@ use str0m::media::Rid;
 
 /// packet-layer predicate installed on a source, relay target or destination
 ///
-/// gates are transport-native predicates over metadata that has already been
-/// extracted from the packet header
+/// gates are transport-native predicates over the resolved packet RID
 /// they do not carry room policy meaning
 /// by the time a gate reaches this file, "selected thumbnail quality" or
 /// "active speaker audio policy" has already been projected into layer facts
@@ -33,142 +32,33 @@ pub enum PacketLayerGate {
     /// drop every packet layer for this route
     Block,
     /// allow only packets whose resolved rid matches the selected rid
-    ///
-    /// temporal metadata is ignored here because simulcast-only selection can
-    /// be expressed by rid alone
     Rid(Rid),
-    /// allow packets that fit the selected rid and temporal operating point
-    ///
-    /// packets without temporal-layer metadata do not pass this gate because the
-    /// max temporal layer cannot be enforced safely
-    OperatingPoint(PacketOperatingPointGate),
-}
-
-/// selected temporal operating point for a layered video source
-///
-/// a missing rid means the gate applies to any rid as long as the packet exposes
-/// temporal-layer metadata that can be compared with `max_temporal_layer_id`
-/// this lets route control express sources that have temporal layering without
-/// simulcast rid separation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PacketOperatingPointGate {
-    /// optional rid restriction for the selected operating point
-    rid: Option<Rid>,
-    /// highest temporal layer id that may pass through the gate
-    max_temporal_layer_id: u8,
-}
-
-impl PacketOperatingPointGate {
-    /// creates an operating-point gate from already-projected transport facts
-    ///
-    /// callers are expected to validate that the temporal layer exists on the
-    /// advertised source before this value reaches rtc route control
-    pub const fn new(rid: Option<Rid>, max_temporal_layer_id: u8) -> Self {
-        Self {
-            rid,
-            max_temporal_layer_id,
-        }
-    }
-
-    /// returns the selected rid restriction when this operating point is rid-bound
-    #[inline]
-    pub const fn rid(self) -> Option<Rid> {
-        self.rid
-    }
-
-    /// returns the inclusive temporal-layer ceiling for this operating point
-    pub const fn max_temporal_layer_id(self) -> u8 {
-        self.max_temporal_layer_id
-    }
-
-    /// returns this operating point constrained to a concrete rid
-    ///
-    /// intersection uses this when a rid-only gate narrows an operating point
-    /// that was previously valid for any rid
-    const fn with_rid(self, rid: Rid) -> Self {
-        Self {
-            rid: Some(rid),
-            max_temporal_layer_id: self.max_temporal_layer_id,
-        }
-    }
-
-    /// checks whether packet metadata is inside this operating point
-    ///
-    /// temporal-layer metadata is required because forwarding a packet with an
-    /// unknown temporal layer would weaken the selected operating point
-    fn permits(self, metadata: PacketLayerMetadata) -> bool {
-        if let Some(selected_rid) = self.rid
-            && metadata.rid() != Some(selected_rid)
-        {
-            return false;
-        }
-        metadata
-            .temporal_layer_id()
-            .is_some_and(|layer_id| layer_id <= self.max_temporal_layer_id)
-    }
 }
 
 impl PacketLayerGate {
     /// returns the concrete RID selected by this gate when one exists
     ///
-    /// open routes, blocked routes and RID-less operating points do not name a
-    /// simulcast layer and therefore return `None`
+    /// open and blocked routes do not name a simulcast layer
     /// feedback routing uses this to map destination policy back to the
     /// producer layer that can satisfy a keyframe request
     #[inline]
     pub const fn selected_rid(&self) -> Option<Rid> {
         match *self {
             Self::Rid(rid) => Some(rid),
-            Self::OperatingPoint(operating_point) => operating_point.rid(),
             Self::Open | Self::Block => None,
         }
     }
 
-    /// checks whether packet metadata passes this gate without allocating
+    /// checks whether the packet RID passes this gate without allocating
     ///
     /// the packet loop calls this on the forwarding hot path
-    /// it must remain a pure metadata predicate with no source-state mutation
-    pub fn permits(&self, metadata: PacketLayerMetadata) -> bool {
+    /// it must remain a pure RID predicate with no source-state mutation
+    pub fn permits(&self, packet_rid: Option<Rid>) -> bool {
         match self {
             Self::Open => true,
             Self::Block => false,
-            Self::Rid(selected_rid) => metadata.rid() == Some(*selected_rid),
-            Self::OperatingPoint(operating_point) => operating_point.permits(metadata),
+            Self::Rid(selected_rid) => packet_rid == Some(*selected_rid),
         }
-    }
-}
-
-/// route-control metadata extracted from one packet before gate evaluation
-///
-/// the rid may come from an rtp header extension, a cached source-rid mapping or
-/// relay metadata
-/// temporal-layer metadata comes from frame-marking state when the packet
-/// carries it
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PacketLayerMetadata {
-    /// resolved rid for this packet when one is known
-    rid: Option<Rid>,
-    /// temporal layer id carried by frame-marking metadata when present
-    temporal_layer_id: Option<u8>,
-}
-
-impl PacketLayerMetadata {
-    /// creates metadata for one packet after route-control extraction
-    pub const fn new(rid: Option<Rid>, temporal_layer_id: Option<u8>) -> Self {
-        Self {
-            rid,
-            temporal_layer_id,
-        }
-    }
-
-    /// returns the resolved rid that gate evaluation can compare
-    pub const fn rid(self) -> Option<Rid> {
-        self.rid
-    }
-
-    /// returns the packet temporal layer id when the packet exposes one
-    const fn temporal_layer_id(self) -> Option<u8> {
-        self.temporal_layer_id
     }
 }
 
@@ -221,21 +111,6 @@ pub fn intersect_packet_gates(
                 Some(PacketLayerGate::Block)
             }
         }
-        (
-            Some(PacketLayerGate::Rid(rid)),
-            Some(PacketLayerGate::OperatingPoint(operating_point)),
-        )
-        | (
-            Some(PacketLayerGate::OperatingPoint(operating_point)),
-            Some(PacketLayerGate::Rid(rid)),
-        ) => Some(intersect_operating_point_with_rid(operating_point, rid)),
-        (
-            Some(PacketLayerGate::OperatingPoint(first_operating_point)),
-            Some(PacketLayerGate::OperatingPoint(second_operating_point)),
-        ) => Some(intersect_operating_points(
-            first_operating_point,
-            second_operating_point,
-        )),
     }
 }
 
@@ -256,79 +131,7 @@ fn union_packet_gates(first: PacketLayerGate, second: PacketLayerGate) -> Packet
                 PacketLayerGate::Open
             }
         }
-        (PacketLayerGate::Rid(rid), PacketLayerGate::OperatingPoint(operating_point))
-        | (PacketLayerGate::OperatingPoint(operating_point), PacketLayerGate::Rid(rid)) => {
-            if operating_point.rid() == Some(rid) {
-                PacketLayerGate::Rid(rid)
-            } else {
-                PacketLayerGate::Open
-            }
-        }
-        (
-            PacketLayerGate::OperatingPoint(first_operating_point),
-            PacketLayerGate::OperatingPoint(second_operating_point),
-        ) => union_operating_points(first_operating_point, second_operating_point),
     }
-}
-
-/// unions two operating points that refer to the same rid scope
-///
-/// a shared rid scope can be widened by keeping the larger temporal ceiling
-/// different rid scopes cannot be represented as one operating point, so the
-/// caller must open the source gate
-fn union_operating_points(
-    first: PacketOperatingPointGate,
-    second: PacketOperatingPointGate,
-) -> PacketLayerGate {
-    if first.rid() != second.rid() {
-        return PacketLayerGate::Open;
-    }
-    PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-        first.rid(),
-        first
-            .max_temporal_layer_id()
-            .max(second.max_temporal_layer_id()),
-    ))
-}
-
-/// narrows an operating point with a rid-only gate
-///
-/// when the operating point had no rid, the rid gate supplies that missing
-/// scope
-/// when both sides name different rids, the intersection is empty and blocks
-fn intersect_operating_point_with_rid(
-    operating_point: PacketOperatingPointGate,
-    rid: Rid,
-) -> PacketLayerGate {
-    match operating_point.rid() {
-        Some(point_rid) if point_rid == rid => PacketLayerGate::OperatingPoint(operating_point),
-        Some(_) => PacketLayerGate::Block,
-        None => PacketLayerGate::OperatingPoint(operating_point.with_rid(rid)),
-    }
-}
-
-/// intersects two operating points into their shared rid and temporal scope
-///
-/// matching or missing rid scopes are compatible
-/// incompatible concrete rids make the intersection empty
-/// compatible scopes keep the smaller temporal ceiling because both gates must
-/// permit the packet
-fn intersect_operating_points(
-    first: PacketOperatingPointGate,
-    second: PacketOperatingPointGate,
-) -> PacketLayerGate {
-    let rid = match (first.rid(), second.rid()) {
-        (Some(first_rid), Some(second_rid)) if first_rid == second_rid => Some(first_rid),
-        (Some(_), Some(_)) => return PacketLayerGate::Block,
-        (Some(rid), None) | (None, Some(rid)) => Some(rid),
-        (None, None) => None,
-    };
-    PacketLayerGate::OperatingPoint(PacketOperatingPointGate::new(
-        rid,
-        first
-            .max_temporal_layer_id()
-            .min(second.max_temporal_layer_id()),
-    ))
 }
 
 #[cfg(test)]

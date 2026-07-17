@@ -91,65 +91,8 @@ pub struct RoomEffects {
     source_policy: SourcePolicyTurn,
 }
 
-pub(in crate::engine::room) enum RoomCommit {
-    Join(JoinCommit),
-    ConnectionClose(ConnectionCloseCommit),
-    Disconnect(DisconnectCommit),
-    UserInfo(PresenceCommit),
-    Publish(PublishCommit),
-    PublicationActivity(ProducerActivityCommit),
-    Unpublish(UnpublishCommit),
-    ReceiverIntent(ReceiverRouteCommit),
-    ConsumerReadiness(ReceiverRouteCommit),
-}
-
 impl RoomEffects {
-    pub(in crate::engine::room) fn from_commit(room: &Room, commit: RoomCommit) -> Self {
-        match commit {
-            RoomCommit::Join(commit) => Self::from_join(room, commit),
-            RoomCommit::ConnectionClose(commit) => Self::from_connection_close(room, commit),
-            RoomCommit::Disconnect(commit) => Self::from_disconnect(room, commit),
-            RoomCommit::UserInfo(commit) => {
-                let mut batch = Self::default();
-                batch.push_presence(Some(commit));
-                batch
-            }
-            RoomCommit::Publish(commit) => Self::from_publish(room, commit),
-            RoomCommit::PublicationActivity(commit) => {
-                Self::from_publication_activity(room, commit)
-            }
-            RoomCommit::Unpublish(commit) => {
-                let mut batch = Self::default();
-                batch
-                    .observability
-                    .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
-                batch.transport.extend(commit.transport_plan);
-                batch.output.push_source_snapshots(commit.source_snapshots);
-                batch.push_presence(commit.presence);
-                batch.source_policy.route_graph_changed();
-                batch
-            }
-            RoomCommit::ReceiverIntent(commit) => {
-                let changed = commit.work.route_graph_changed();
-                let mut batch =
-                    Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Subscribe);
-                if changed {
-                    batch.source_policy.route_graph_changed();
-                } else {
-                    batch.source_policy.receiver_intent_changed();
-                }
-                batch
-            }
-            RoomCommit::ConsumerReadiness(commit) => {
-                let mut batch =
-                    Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Readiness);
-                batch.source_policy.route_graph_changed();
-                batch
-            }
-        }
-    }
-
-    fn from_join(room: &Room, commit: JoinCommit) -> Self {
+    pub(in crate::engine::room) fn from_join(room: &Room, commit: JoinCommit) -> Self {
         let JoinCommit {
             counts,
             effects,
@@ -173,7 +116,10 @@ impl RoomEffects {
         batch
     }
 
-    fn from_connection_close(room: &Room, commit: ConnectionCloseCommit) -> Self {
+    pub(in crate::engine::room) fn from_connection_close(
+        room: &Room,
+        commit: ConnectionCloseCommit,
+    ) -> Self {
         let mut batch = Self::default();
         match commit {
             ConnectionCloseCommit::Current {
@@ -213,7 +159,7 @@ impl RoomEffects {
         batch
     }
 
-    fn from_disconnect(room: &Room, commit: DisconnectCommit) -> Self {
+    pub(in crate::engine::room) fn from_disconnect(room: &Room, commit: DisconnectCommit) -> Self {
         let mut batch = Self::default();
         batch.observability.push_gauge(commit.counts);
         batch.transport.extend(commit.transport_plan);
@@ -235,7 +181,13 @@ impl RoomEffects {
         batch
     }
 
-    fn from_publish(room: &Room, commit: PublishCommit) -> Self {
+    pub(in crate::engine::room) fn from_presence(commit: PresenceCommit) -> Self {
+        let mut batch = Self::default();
+        batch.push_presence(Some(commit));
+        batch
+    }
+
+    pub(in crate::engine::room) fn from_publish(room: &Room, commit: PublishCommit) -> Self {
         let context = RoomDiagnosticsContext::new(&commit.user, commit.connection, commit.worker);
         let diagnostics = context
             .event_data(room, telemetry_event::PUBLISH_COMMITTED)
@@ -261,7 +213,10 @@ impl RoomEffects {
         batch
     }
 
-    fn from_publication_activity(room: &Room, commit: ProducerActivityCommit) -> Self {
+    pub(in crate::engine::room) fn from_publication_activity(
+        room: &Room,
+        commit: ProducerActivityCommit,
+    ) -> Self {
         let ProducerActivityCommit {
             source,
             stream_id,
@@ -284,6 +239,41 @@ impl RoomEffects {
         batch.output.push_source_snapshots(source_snapshots);
         batch.push_presence(presence);
         batch.source_policy.fanout_pressure_changed();
+        batch
+    }
+
+    pub(in crate::engine::room) fn from_unpublish(commit: UnpublishCommit) -> Self {
+        let mut batch = Self::default();
+        batch
+            .observability
+            .push_gauge(RoomGaugeDelta::media(commit.before, commit.after));
+        batch.transport.extend(commit.transport_plan);
+        batch.output.push_source_snapshots(commit.source_snapshots);
+        batch.push_presence(commit.presence);
+        batch.source_policy.route_graph_changed();
+        batch
+    }
+
+    pub(in crate::engine::room) fn from_receiver_intent(
+        room: &Room,
+        commit: ReceiverRouteCommit,
+    ) -> Self {
+        let changed = commit.work.route_graph_changed();
+        let mut batch = Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Subscribe);
+        if changed {
+            batch.source_policy.route_graph_changed();
+        } else {
+            batch.source_policy.receiver_intent_changed();
+        }
+        batch
+    }
+
+    pub(in crate::engine::room) fn from_consumer_readiness(
+        room: &Room,
+        commit: ReceiverRouteCommit,
+    ) -> Self {
+        let mut batch = Self::from_receiver_route(room, commit, ConsumerSetupOrigin::Readiness);
+        batch.source_policy.route_graph_changed();
         batch
     }
 

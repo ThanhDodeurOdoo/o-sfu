@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::common::{
     download_main_stat, route_state_color, route_state_label, stream_id_color, stream_id_label,
-    transport_health_label, user_id_to_string,
+    transport_health_label,
 };
 use crate::diagnostics::types::{
     DiagnosticsIncomingBitrate, DiagnosticsRoomDetail, DiagnosticsRouteState, DiagnosticsSource,
@@ -76,7 +76,7 @@ fn add_bitrate_arcs(node: &mut Value, bitrate: &DiagnosticsIncomingBitrate) {
 }
 
 fn session_node(room_uuid: &str, user: &DiagnosticsUserView) -> Value {
-    let session_id = user_id_to_string(&user.user_id);
+    let session_id = user.user_id.path_segment();
     let health = transport_health_label(user.transport.health.as_ref());
     let bitrate = &user.transport.quality_summary.current_incoming_bitrate;
     let mut node = json!({
@@ -100,7 +100,7 @@ fn push_session_entries(
 ) {
     let room_uuid = detail.summary.uuid.as_str();
     for user in &detail.users {
-        let session_id = user_id_to_string(&user.user_id);
+        let session_id = user.user_id.path_segment();
         let health = transport_health_label(user.transport.health.as_ref());
         let edge_color = match health {
             "connected" => "green",
@@ -175,7 +175,7 @@ fn push_source_entries(
             "subtitle": format!("{} {}", active_str, media_kind_str),
             "mainStat": format!("{} bps", source.current_incoming_bitrate_bps),
             "secondaryStat": format!("{} encodings / {} downloads", source.encodings.len(), downloads),
-            "detail__owner_session_id": user_id_to_string(&source.owner_user_id),
+            "detail__owner_session_id": source.owner_user_id.path_segment(),
             "detail__stream_id": stream_id,
             "detail__media_kind": media_kind_str,
             "detail__transport_media_id": source.transport_media_id,
@@ -196,7 +196,7 @@ fn push_source_entries(
 
         edges.push(json!({
             "id": format!("publish:{}:{}", room_uuid, source.source_id),
-            "source": format!("session:{}:{}", room_uuid, user_id_to_string(&source.owner_user_id)),
+            "source": format!("session:{}:{}", room_uuid, source.owner_user_id.path_segment()),
             "target": format!("source:{}:{}", room_uuid, source.source_id),
             "mainStat": format!("{} upload", stream_id),
             "secondaryStat": format!("{} bps", source.current_incoming_bitrate_bps),
@@ -215,7 +215,7 @@ fn download_edge(
     user: &DiagnosticsUserView,
     sub: &DiagnosticsSubscription,
 ) -> Value {
-    let session_id = user_id_to_string(&user.user_id);
+    let session_id = user.user_id.path_segment();
     let mut edge = json!({
         "id": format!("download:{}:{}:{}", room_uuid, sub.source_id, session_id),
         "source": format!("source:{}:{}", room_uuid, sub.source_id),
@@ -224,7 +224,7 @@ fn download_edge(
         "secondaryStat": route_state_label(&sub.state),
         "color": route_state_color(&sub.state),
         "detail__source_id": sub.source_id,
-        "detail__producer_session_id": user_id_to_string(&sub.producer_user_id),
+        "detail__producer_session_id": sub.producer_user_id.path_segment(),
         "detail__stream_id": &sub.stream_id,
         "detail__selector": format!("{:?}", sub.selection.selector),
         "detail__selection_reason": format!("{:?}", sub.selection.selection_reason),

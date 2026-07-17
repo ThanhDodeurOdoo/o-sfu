@@ -39,10 +39,7 @@ pub type BundleSessionInfoSnapshotById = BTreeMap<String, UserInfo>;
 
 #[must_use]
 pub fn bundle_session_info_key(user_id: &UserId) -> String {
-    match user_id {
-        UserId::Integer(value) => value.to_string(),
-        UserId::String(value) => value.clone(),
-    }
+    user_id.path_segment().into_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

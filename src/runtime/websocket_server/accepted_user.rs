@@ -123,6 +123,7 @@ impl AcceptedUser {
     }
 
     async fn start(&mut self, state: &WebSocketServices, writer: &mut WsWriter) -> Option<()> {
+        let _guard = state.metrics.track_ws_user_initialization();
         let span = telemetry::activated_span(info_span!(
             "user.initialize",
             room_id = %self.user.room_id(),
@@ -133,9 +134,9 @@ impl AcceptedUser {
         self.start_inner(state, writer).instrument(span).await
     }
 
-    #[o_sfu_telemetry::measure_duration(
-        metrics = "state.metrics",
-        record = "record_ws_user_initialize_duration"
+    #[allow(
+        clippy::cognitive_complexity,
+        reason = "startup failure branches must close the admitted user before returning"
     )]
     async fn start_inner(
         &mut self,

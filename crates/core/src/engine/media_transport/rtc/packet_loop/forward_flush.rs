@@ -80,7 +80,7 @@ pub(super) fn record_incoming_stats(
             if facts.decoder_refresh {
                 let cleared = state
                     .routes
-                    .observe_decoder_refresh(transport_media_id, facts.layer_metadata.rid());
+                    .observe_decoder_refresh(transport_media_id, facts.rid);
                 for _ in 0..cleared {
                     metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
                 }
@@ -91,7 +91,7 @@ pub(super) fn record_incoming_stats(
                     .dirty_source_policy_channel_ids
                     .push(facts.room_instance_id);
             }
-            let packet_rid = facts.layer_metadata.rid();
+            let packet_rid = facts.rid;
             if packet_rid.is_some() || facts.decoder_refresh {
                 state.routes.observe_producer_packet(
                     transport_media_id,

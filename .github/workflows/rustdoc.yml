@@ -51,7 +51,6 @@ jobs:
           -p o-sfu-rfc
           -p o-sfu-router
           -p o-sfu-telemetry
-          -p o-sfu-telemetry-macros
 
       - name: Prepare rustdoc site
         run: |

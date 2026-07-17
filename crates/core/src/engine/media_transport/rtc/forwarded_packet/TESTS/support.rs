@@ -128,27 +128,6 @@ pub fn sample_forwarded_packet_with_rid_and_audio_activity(
     )
 }
 
-#[cfg(test)]
-#[must_use]
-pub fn sample_forwarded_packet_with_frame_mark(
-    src_key: TransportSessionKey,
-    mid: &str,
-    rid: Option<&str>,
-    frame_mark: u32,
-    payload: &[u8],
-) -> ForwardedPacket {
-    sample_forwarded_packet_with_extensions(
-        src_key,
-        mid,
-        rid,
-        ExtensionValues {
-            frame_mark: Some(frame_mark),
-            ..ExtensionValues::default()
-        },
-        payload,
-    )
-}
-
 fn sample_forwarded_packet_with_extensions(
     src_key: TransportSessionKey,
     mid: &str,

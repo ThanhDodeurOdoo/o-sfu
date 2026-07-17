@@ -19,6 +19,8 @@
 //! runtime callers should normalize compatibility input at ingress before
 //! storing it in room state, diagnostics indexes or subscription maps
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -63,6 +65,16 @@ impl From<String> for UserId {
 }
 
 impl UserId {
+    /// return the path representation used by diagnostics and bundle keys
+    /// string ids retain their raw representation
+    #[must_use]
+    pub fn path_segment(&self) -> Cow<'_, str> {
+        match self {
+            Self::Integer(value) => Cow::Owned(value.to_string()),
+            Self::String(value) => Cow::Borrowed(value),
+        }
+    }
+
     /// return the runtime key form for this user id
     ///
     /// numeric strings are parsed into [`Self::Integer`] so all room state,

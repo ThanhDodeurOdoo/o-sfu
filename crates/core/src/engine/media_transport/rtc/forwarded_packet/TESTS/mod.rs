@@ -17,9 +17,8 @@ use crate::{
         media_transport::rtc::{
             bootstrap::ensure_session_rtc_state,
             forwarded_packet::test_support::{
-                sample_forwarded_packet, sample_forwarded_packet_with_frame_mark,
-                sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
-                sample_local_forwarded_packet,
+                sample_forwarded_packet, sample_forwarded_packet_with_rid,
+                sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
             },
             media_registry::RegisteredMediaHandle,
             test_support::test_transport_session_key,
@@ -255,18 +254,6 @@ fn forwarded_packet_relay_clone_preserves_source_facts() {
 }
 
 #[test]
-fn forwarded_packet_exposes_recording_payload_and_received_at() {
-    let session_key = test_transport_session_key(42, 0, 10, UserId::Integer(8));
-    let state = PacketLoopState::default();
-    let packet = sample_forwarded_packet(session_key.clone(), "aud-up", b"payload");
-
-    assert_eq!(packet.src_key(&state), Some(&session_key));
-    assert_eq!(packet.payload(), b"payload");
-    assert_eq!(packet.payload_len(), 7);
-    assert!(packet.received_at() <= Instant::now());
-}
-
-#[test]
 fn forwarded_packet_relay_clone_keeps_payload_and_explicit_source_media_id() {
     let session_key = test_transport_session_key(43, 0, 11, UserId::Integer(9));
     let state = PacketLoopState::default();
@@ -282,27 +269,6 @@ fn forwarded_packet_relay_clone_keeps_payload_and_explicit_source_media_id() {
     assert_eq!(
         relay_packet.resolve_src_media(&PacketLoopState::default()),
         Some(TransportMediaId::new(18))
-    );
-}
-
-#[test]
-fn forwarded_packet_projects_rid_and_frame_marking_for_route_control() {
-    let session_key = test_transport_session_key(46, 0, 14, UserId::Integer(12));
-    let frame_mark = u32::from(frame_marking::TEMPORAL_LAYER_ID_MAX) << 24;
-    let mut packet = sample_forwarded_packet_with_frame_mark(
-        session_key,
-        "cam-up",
-        Some("hi"),
-        frame_mark,
-        b"payload",
-    );
-
-    assert_eq!(
-        packet.resolve_route_control_layer_metadata(&PacketLoopState::default()),
-        PacketLayerMetadata::new(
-            Some(Rid::from("hi")),
-            Some(frame_marking::TEMPORAL_LAYER_ID_MAX)
-        )
     );
 }
 
@@ -336,10 +302,7 @@ fn forwarded_packet_facts_expose_vp8_payload_identity() {
     };
 
     assert_eq!(facts.src_media, transport_media_id);
-    assert_eq!(
-        facts.layer_metadata,
-        PacketLayerMetadata::new(Some(Rid::from("hi")), None)
-    );
+    assert_eq!(facts.rid, Some(Rid::from("hi")));
     assert_eq!(vp8_payload.identity.picture_id, Some(2));
     assert_eq!(vp8_payload.identity.tl0_pic_idx, Some(9));
     assert_eq!(packet.local_vp8_payload(), Some(vp8_payload));
@@ -380,10 +343,7 @@ fn forwarded_packet_recovers_rid_from_ssrc_binding_when_extension_is_absent() {
         return;
     };
 
-    assert_eq!(
-        facts.layer_metadata,
-        PacketLayerMetadata::new(Some(Rid::from("hi")), None)
-    );
+    assert_eq!(facts.rid, Some(Rid::from("hi")));
     assert_eq!(
         facts.vp8_payload.map(|payload| payload.identity),
         Some(Vp8PayloadIdentity {

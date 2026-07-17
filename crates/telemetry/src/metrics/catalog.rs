@@ -6,7 +6,10 @@
 //! and prevents HTTP, websocket, transport, and media code from inventing
 //! adoc counters, gauges, etc...
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use o_sfu_model::WebSocketCloseCode;
 
@@ -84,7 +87,36 @@ pub struct RuntimeMetrics {
     pub(super) budget_solver_outcomes: CounterFamily<BudgetSolverOutcome>,
 }
 
+struct MetricGuard<'a, F>
+where
+    F: Fn(&RuntimeMetrics, Duration),
+{
+    metrics: &'a RuntimeMetrics,
+    started_at: Instant,
+    finish: F,
+}
+
+impl<F> Drop for MetricGuard<'_, F>
+where
+    F: Fn(&RuntimeMetrics, Duration),
+{
+    fn drop(&mut self) {
+        (self.finish)(self.metrics, self.started_at.elapsed());
+    }
+}
+
 impl RuntimeMetrics {
+    /// counts one HTTP request then records duration and releases inflight state on drop
+    #[must_use = "keep the guard until the HTTP request finishes"]
+    pub fn track_http_request(&self, route: HttpRoute) -> impl Drop + '_ {
+        self.http_requests.increment(route);
+        self.http_inflight_requests.add(route, 1);
+        self.track(move |metrics, duration| {
+            metrics.http_inflight_requests.add(route, -1);
+            metrics.http_request_duration.observe(route, duration);
+        })
+    }
+
     pub fn record_http_noop_request(&self) {
         self.http_requests.increment(HttpRoute::Noop);
     }
@@ -250,6 +282,24 @@ impl RuntimeMetrics {
         self.ws_outbound_queue_overflows.increment();
     }
 
+    /// records handshake duration when the guard is dropped
+    #[must_use = "keep the guard until the WebSocket handshake finishes"]
+    pub fn track_ws_handshake(&self) -> impl Drop + '_ {
+        self.track(|metrics, duration| metrics.ws_handshake_duration.observe(duration))
+    }
+
+    /// records authentication duration when the guard is dropped
+    #[must_use = "keep the guard until WebSocket authentication finishes"]
+    pub fn track_ws_authentication(&self) -> impl Drop + '_ {
+        self.track(|metrics, duration| metrics.ws_auth_duration.observe(duration))
+    }
+
+    /// records user initialization duration when the guard is dropped
+    #[must_use = "keep the guard until WebSocket user initialization finishes"]
+    pub fn track_ws_user_initialization(&self) -> impl Drop + '_ {
+        self.track(|metrics, duration| metrics.ws_user_initialize_duration.observe(duration))
+    }
+
     pub fn record_ws_handshake_duration(&self, duration: Duration) {
         self.ws_handshake_duration.observe(duration);
     }
@@ -260,6 +310,14 @@ impl RuntimeMetrics {
 
     pub fn record_ws_user_initialize_duration(&self, duration: Duration) {
         self.ws_user_initialize_duration.observe(duration);
+    }
+
+    fn track<'a>(&'a self, finish: impl Fn(&Self, Duration) + 'a) -> impl Drop + 'a {
+        MetricGuard {
+            metrics: self,
+            started_at: Instant::now(),
+            finish,
+        }
     }
 
     pub fn add_active_rooms(&self, delta: i64) {

@@ -27,7 +27,6 @@ allow-dependencies-licenses:
   - pkg:cargo/o-sfu-rfc
   - pkg:cargo/o-sfu-router
   - pkg:cargo/o-sfu-telemetry
-  - pkg:cargo/o-sfu-telemetry-macros
   - pkg:cargo/o-sfu-tests
   - pkg:cargo/tikv-jemalloc-sys
   - pkg:cargo/tikv-jemallocator

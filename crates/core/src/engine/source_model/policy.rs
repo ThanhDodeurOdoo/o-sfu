@@ -295,7 +295,7 @@ pub enum PolicyPauseReason {
     HiddenTile,
     /// the receiver layout puts this source outside the visible tile set
     OverflowTile,
-    /// no negotiated encoding or operating point can be forwarded usefully
+    /// no negotiated encoding can be forwarded usefully
     MissingUsableLayer,
     /// the active-audio-speaker cap withheld this route
     AudioSpeakerLimit,

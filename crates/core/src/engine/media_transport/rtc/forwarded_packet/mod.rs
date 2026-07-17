@@ -12,12 +12,12 @@
 //! facts are valid for the current packet-loop turn only because they are
 //! computed against `PacketLoopState`
 //! they let incoming stats, fanout planning and local VP8 rewriting reuse the
-//! same source media id, layer metadata and codec facts without repeating header
+//! same source media id, RID and codec facts without repeating header
 //! or payload parsing
 
 use std::{mem::take, sync::Arc, time::Instant};
 
-use o_sfu_rfc::rtp::{frame_marking, h264, vp8};
+use o_sfu_rfc::rtp::{h264, vp8};
 use str0m::{
     media::{ExtensionValues, Mid, Rid},
     rtp::{RtpHeader, RtpPacket, Ssrc, Vp8Descriptor, Vp8Patch, Vp8PatchError},
@@ -25,8 +25,7 @@ use str0m::{
 
 use super::{
     local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
-    route_control::PacketLayerMetadata, slots::SessionHandle, source_route::PacketCodec,
-    state::PacketLoopState,
+    slots::SessionHandle, source_route::PacketCodec, state::PacketLoopState,
 };
 use crate::engine::{
     RoomInstanceId,
@@ -58,7 +57,7 @@ pub struct ForwardedPacket {
     /// resolved RID recovered from the packet header or from the worker SSRC binding
     ///
     /// relay clones carry this value so a target worker can apply the same
-    /// route-control layer metadata without owning the source worker registry
+    /// route-control RID without owning the source worker registry
     resolved_source_rid: Option<Rid>,
     /// turn-local source observations shared by stats, route planning and egress
     facts: Option<PacketFacts>,
@@ -131,8 +130,8 @@ pub(super) struct ForwardedRelayRtpData {
 pub(super) struct PacketFacts {
     /// source producer selected by MID, SSRC or relay metadata
     pub(super) src_media: TransportMediaId,
-    /// route-control layer key derived from RID and frame marking metadata
-    pub(super) layer_metadata: PacketLayerMetadata,
+    /// resolved RID used by packet-layer gates
+    pub(super) rid: Option<Rid>,
     /// payload length observed before local egress can move the payload
     pub(super) payload_len: usize,
     /// room that owns source-policy wakeups for this packet
@@ -223,17 +222,6 @@ impl ForwardedPacket {
         self.payload.as_ref()
     }
 
-    #[cfg(test)]
-    pub(super) fn resolve_route_control_layer_metadata(
-        &mut self,
-        state: &PacketLoopState,
-    ) -> PacketLayerMetadata {
-        if let Some(facts) = self.facts {
-            return facts.layer_metadata;
-        }
-        self.compute_route_control_layer_metadata(state)
-    }
-
     /// resolves and caches all source observations needed by this packet turn
     ///
     /// `None` means the packet cannot currently be attached to a source
@@ -250,7 +238,7 @@ impl ForwardedPacket {
             return Some(facts);
         }
         let src_media = self.resolve_src_media(state)?;
-        let layer_metadata = self.compute_route_control_layer_metadata(state);
+        let rid = self.compute_route_control_rid(state);
         let packet_codec = state
             .routes
             .packet_codec(src_media, self.rtp_header().payload_type);
@@ -258,7 +246,7 @@ impl ForwardedPacket {
         let extensions = self.route_control_extension_values();
         let facts = PacketFacts {
             src_media,
-            layer_metadata,
+            rid,
             payload_len: self.payload_len(),
             room_instance_id: self.src_key(state)?.room_instance_id(),
             voice_activity: extensions.voice_activity,
@@ -279,18 +267,14 @@ impl ForwardedPacket {
         self.facts.and_then(|facts| facts.vp8_payload)
     }
 
-    fn compute_route_control_layer_metadata(
-        &mut self,
-        state: &PacketLoopState,
-    ) -> PacketLayerMetadata {
+    fn compute_route_control_rid(&mut self, state: &PacketLoopState) -> Option<Rid> {
         let extensions = self.route_control_extension_values();
         let extension_rid = extensions.rid.or(extensions.rid_repair);
-        let temporal_layer_id = extensions.frame_mark.map(frame_mark_temporal_layer_id);
         let rid = extension_rid
             .or(self.resolved_source_rid)
             .or_else(|| self.route_control_rid_from_ssrc(state));
         self.resolved_source_rid = rid;
-        PacketLayerMetadata::new(rid, temporal_layer_id)
+        rid
     }
 
     pub(super) fn route_control_ssrc(&self) -> Ssrc {
@@ -464,11 +448,6 @@ impl PacketVp8Payload {
         }
         patch.build()
     }
-}
-
-fn frame_mark_temporal_layer_id(frame_mark: u32) -> u8 {
-    let [first_octet, ..] = frame_mark.to_be_bytes();
-    frame_marking::temporal_layer_id(first_octet)
 }
 
 #[cfg(test)]
