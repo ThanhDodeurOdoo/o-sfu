@@ -1,15 +1,19 @@
 use super::{packet_fingerprint, packet_fingerprint_scalar};
 
+// Covers every 16-byte alignment offset with the suffix ending at the slice bundary.
 #[test]
 fn packet_fingerprint_matches_scalar_reference() {
     for len in [0_usize, 1, 7, 8, 15, 16, 17, 64, 256, 1200] {
         for seed in 0_usize..8 {
-            let packet = deterministic_packet(len, seed);
+            for offset in 0_usize..16 {
+                let storage = deterministic_packet(len + offset, seed);
+                let (_, packet) = storage.split_at(offset);
 
-            assert_eq!(
-                packet_fingerprint(packet.as_slice()),
-                packet_fingerprint_scalar(packet.as_slice())
-            );
+                assert_eq!(
+                    packet_fingerprint(packet),
+                    packet_fingerprint_scalar(packet)
+                );
+            }
         }
     }
 }

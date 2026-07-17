@@ -18,7 +18,17 @@ concurrency:
 
 jobs:
   miri_host:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    strategy:
+      matrix:
+        include:
+          - name: miri_host
+            runner: ubuntu-latest
+            host_suite: true
+          - name: miri_aarch64
+            runner: ubuntu-24.04-arm
+            host_suite: false
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
     steps:
@@ -39,12 +49,16 @@ jobs:
         # Swatinem/rust-cache v2
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          shared-key: nightly-miri
+          shared-key: nightly-miri-${{ matrix.name }}
 
       - name: Bootstrap Miri
         run: cargo +nightly-2026-04-01 miri setup
 
+      - name: Run SIMD fingerprint UB test
+        run: cargo +nightly-2026-04-01 miri test --locked -p o-sfu-core --lib packet_fingerprint_matches_scalar_reference
+
       - name: Run host-target UB-oriented tests
+        if: matrix.host_suite
         run: |
           MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_auth_codec
           cargo +nightly-2026-04-01 miri test -p o-sfu-tests --test miri_protocol_core
