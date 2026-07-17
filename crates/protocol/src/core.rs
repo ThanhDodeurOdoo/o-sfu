@@ -41,14 +41,7 @@ pub use command_batch::CommandBatch;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
-    use super::ProtocolCore;
     pub use super::command_batch::test_support::command_batch;
-    use crate::signaling::TrackBinding;
-
-    #[must_use]
-    pub fn track_binding<'a>(core: &'a ProtocolCore, mid: &str) -> Option<&'a TrackBinding> {
-        core.track_bindings.get(mid)
-    }
 }
 use outbound_batch::{FlushMode, OutboundBatcher};
 use request_tracker::RequestTracker;
@@ -498,16 +491,6 @@ impl ProtocolCore {
         command_batch(commands)
     }
 
-    /// commits the authenticated server snapshot and replays room-level intent
-    ///
-    /// the welcome payload is the point where feature flags and recording state
-    /// become authoritative again after a reconnect. only after that snapshot is
-    /// accepted do we replay remembered downloads and user info. publish intent
-    /// waits for transport readiness because it consumes browser upload slots
-    pub fn on_welcome(&mut self, payload: WelcomePayload) -> CommandBatch {
-        command_batch(self.accept_welcome(payload))
-    }
-
     fn accept_welcome(&mut self, payload: WelcomePayload) -> Commands {
         if !matches!(
             self.phase.connection_state(),
@@ -545,7 +528,12 @@ impl ProtocolCore {
         if !self.phase.can_enter_connected() {
             return CommandBatch::default();
         }
-        let mut commands = connection_lifecycle::on_transport_ready(self);
+        self.phase
+            .apply_lifecycle_state(BundleConnectionState::Connected);
+        let mut commands = vec![Command::EmitStateChange {
+            state: self.state(),
+            cause: None,
+        }];
         commands.extend(self.replay_publication_state());
         command_batch(commands)
     }

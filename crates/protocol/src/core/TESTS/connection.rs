@@ -67,7 +67,7 @@ fn protocol_core_welcome_transitions_to_authenticated_and_emits_peer_snapshot() 
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
 
-    let commands = core.on_welcome(sample_welcome_payload());
+    let commands = core.accept_welcome(sample_welcome_payload());
 
     assert_eq!(core.state(), ConnectionState::Authenticated);
     assert!(core.features().video_recording);
@@ -98,7 +98,7 @@ fn protocol_core_welcome_transitions_to_authenticated_and_emits_peer_snapshot() 
 fn protocol_core_transport_ready_transitions_to_connected() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
 
     let commands = core.on_transport_ready();
 
@@ -116,7 +116,7 @@ fn protocol_core_transport_ready_transitions_to_connected() {
 fn protocol_core_rejects_illegal_authenticated_transition() {
     let mut core = ProtocolCore::new();
 
-    let commands = core.on_welcome(sample_welcome_payload());
+    let commands = core.accept_welcome(sample_welcome_payload());
 
     assert!(commands.is_empty());
     assert_eq!(core.state(), ConnectionState::Disconnected);

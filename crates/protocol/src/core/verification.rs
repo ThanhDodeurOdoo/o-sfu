@@ -75,7 +75,7 @@ impl VerificationConnectionLifecycle {
     }
 
     pub fn on_transport_ready(&mut self) -> VerificationLifecycleEffects {
-        project_effects(connection_lifecycle::on_transport_ready(&mut self.core))
+        project_effects(self.core.on_transport_ready().into_vec())
     }
 
     pub fn on_welcome(&mut self) -> VerificationLifecycleEffects {

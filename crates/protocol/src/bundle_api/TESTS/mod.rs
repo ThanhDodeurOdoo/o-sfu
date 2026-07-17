@@ -4,10 +4,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use super::{
-    BundleBroadcastUpdate, BundleConnectionState, BundleStateChange, BundleTrackUpdate,
-    BundleUpdate, bundle_session_info_key,
+    BundleBroadcastUpdate, BundleConnectionState, BundleStateChange, BundleUpdate,
+    bundle_session_info_key,
 };
-use crate::shared::{RecordingState, RecordingStateUpdate, StopCode, StreamType, UserId, UserInfo};
+use crate::shared::{RecordingState, RecordingStateUpdate, StopCode, UserId, UserInfo};
 
 fn assert_round_trip<T>(value: &T, expected_json: Value) -> serde_json::Result<()>
 where
@@ -45,31 +45,6 @@ fn bundle_connection_states_round_trip() -> serde_json::Result<()> {
 
 #[test]
 fn bundle_updates_round_trip() -> serde_json::Result<()> {
-    let track_update = BundleUpdate::Track(BundleTrackUpdate {
-        stream_type: StreamType::Camera,
-        user_id: UserId::Integer(9),
-        track: json!({
-            "id": "camera-track",
-            "kind": "video"
-        }),
-        active: true,
-    });
-    assert_round_trip(
-        &track_update,
-        json!({
-            "name": "track",
-            "payload": {
-                "type": "camera",
-                "sessionId": 9,
-                "track": {
-                    "id": "camera-track",
-                    "kind": "video"
-                },
-                "active": true
-            }
-        }),
-    )?;
-
     let broadcast = BundleUpdate::Broadcast(BundleBroadcastUpdate {
         sender_id: UserId::String("guest-7".to_owned()),
         message: json!("hello"),

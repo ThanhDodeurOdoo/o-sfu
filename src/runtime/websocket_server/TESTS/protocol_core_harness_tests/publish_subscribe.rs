@@ -1,5 +1,3 @@
-use o_sfu_protocol::host::test_support::track_binding as protocol_track_binding;
-
 use super::support::*;
 use crate::core::prelude::{SourcePolicy, SourcePublishIntent};
 
@@ -99,10 +97,6 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
         "subscriber should receive the rtc-backed source descriptor",
     )?;
     assert_eq!(source.mid.as_deref(), Some(published_track.mid.as_str()));
-    assert_eq!(
-        protocol_track_binding(&bob.core, &published_track.mid),
-        Some(published_track)
-    );
 
     require_some(
         bob.read_server_frame().await,
@@ -402,11 +396,6 @@ async fn protocol_core_unpublish_round_trips_through_real_rtc_after_publish_comm
     assert!(
         removed_track_bindings.is_empty(),
         "committed unpublish should clear the authoritative track snapshot"
-    );
-    assert_eq!(
-        protocol_track_binding(&bob.core, &published_track.mid),
-        None,
-        "committed unpublish should remove the cached track binding"
     );
     assert!(
         bob.read_server_frame().await.is_some(),

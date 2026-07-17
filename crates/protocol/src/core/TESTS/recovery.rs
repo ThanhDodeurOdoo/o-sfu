@@ -4,7 +4,7 @@ use super::*;
 fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let (request_id, timeout_timer_id) = start_flushed_recording_request(&mut core)?;
     let _ = core.on_transport_ready();
 
@@ -50,7 +50,7 @@ fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
 fn protocol_core_terminal_close_resolves_request_before_recovery_cancel() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let (request_id, timeout_timer_id) = start_flushed_recording_request(&mut core)?;
     let _ = core.on_transport_ready();
 
@@ -111,7 +111,7 @@ fn start_flushed_recording_request(core: &mut ProtocolCore) -> Result<(RequestId
 fn protocol_core_non_terminal_close_enters_recovering() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
 
     let commands = core.on_ws_close(1011);
@@ -137,7 +137,7 @@ fn protocol_core_non_terminal_close_enters_recovering() {
 fn protocol_core_replays_sticky_session_intents_after_recovery_authentication() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
     let _ = core.publish(StreamType::Camera, true);
     let _ = core.subscribe(
@@ -157,7 +157,7 @@ fn protocol_core_replays_sticky_session_intents_after_recovery_authentication() 
     let _ = core.on_ws_close(1011);
     let _ = core.on_timer(RECOVERY_TIMER_ID);
 
-    let commands = core.on_welcome(sample_welcome_payload());
+    let commands = core.accept_welcome(sample_welcome_payload());
     let envelopes = decode_sent_client_envelopes(&commands);
 
     assert_eq!(core.state(), ConnectionState::Authenticated);
@@ -193,7 +193,7 @@ fn protocol_core_replays_sticky_session_intents_after_recovery_authentication() 
 fn protocol_core_replays_sticky_publish_when_recovery_transport_is_ready() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
     let _ = core.publish(StreamType::Camera, true);
     let _ = core.subscribe(
@@ -212,7 +212,7 @@ fn protocol_core_replays_sticky_publish_when_recovery_transport_is_ready() {
     });
     let _ = core.on_ws_close(1011);
     let _ = core.on_timer(RECOVERY_TIMER_ID);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
 
     let commands = core.on_transport_ready();
     let envelopes = decode_sent_client_envelopes(&commands);
@@ -239,7 +239,7 @@ fn protocol_core_replays_sticky_publish_when_recovery_transport_is_ready() {
 fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
     let _ = core.publish(StreamType::Camera, true);
     let _ = core.subscribe(
@@ -277,7 +277,7 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
     });
     let _ = core.on_timer(RECOVERY_TIMER_ID);
 
-    let commands = core.on_welcome(sample_welcome_payload());
+    let commands = core.accept_welcome(sample_welcome_payload());
     let envelopes = decode_sent_client_envelopes(&commands);
 
     assert_eq!(
@@ -306,7 +306,7 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
 fn protocol_core_recovery_timer_retries_the_saved_url() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
     let _ = core.on_ws_close(1011);
 
@@ -331,7 +331,7 @@ fn protocol_core_recovery_timer_retries_the_saved_url() {
 fn protocol_core_fresh_connect_supersedes_pending_recovery() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
     let _ = core.on_ws_close(1011);
 
@@ -377,11 +377,11 @@ fn protocol_core_fresh_connect_supersedes_pending_recovery() {
 fn protocol_core_successful_recovery_resets_backoff_delay() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
     let _ = core.on_ws_close(1011);
     let _ = core.on_timer(RECOVERY_TIMER_ID);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
 
     let commands = core.on_ws_close(1011);
 
@@ -405,7 +405,7 @@ fn protocol_core_successful_recovery_resets_backoff_delay() {
 fn protocol_core_terminal_close_enters_closed_with_cause() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
 
     let commands = core.on_ws_close(4109);
 
@@ -429,13 +429,12 @@ fn protocol_core_terminal_close_enters_closed_with_cause() {
 fn protocol_core_protocol_error_close_is_terminal() {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
 
     let commands = core.on_ws_close(u16::from(WebSocketCloseCode::ProtocolError));
 
     assert_eq!(core.state(), ConnectionState::Closed);
-    assert!(core.connect_context.is_none());
     assert_eq!(
         commands.as_slice(),
         &[

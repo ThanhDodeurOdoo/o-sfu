@@ -520,15 +520,8 @@ sfu.addEventListener("log", ({ detail }) => {
 
 ## Public Properties
 
-```ts
-interface SfuClientSurface extends EventTarget {
-    readonly state: ConnectionState;
-    readonly errors: Error[];
-    readonly availableFeatures: AvailableFeatures;
-    readonly recordingState: RecordingState;
-    readonly sourceDescriptors: readonly SourceDescriptor[];
-}
-```
+`SfuClient` exposes `state`, `errors`, `availableFeatures`, `recordingState` and
+`sourceDescriptors` as public properties.
 
 `availableFeatures` has this shape:
 

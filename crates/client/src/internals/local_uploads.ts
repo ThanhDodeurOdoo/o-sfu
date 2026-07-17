@@ -118,12 +118,9 @@ export class LocalUploads {
     }
 
     async attachPendingTracks(
-        peerConnection: ClientPeerConnection | null,
+        peerConnection: ClientPeerConnection,
         uploadSlots: UploadSlot[]
     ): Promise<void> {
-        if (!peerConnection) {
-            return;
-        }
         const pendingStreamTypes = STREAM_TYPES.filter(
             (streamType) =>
                 this.hasPendingPublication(streamType) && this._attachableTypes.has(streamType)

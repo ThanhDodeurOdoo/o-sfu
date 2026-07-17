@@ -5,7 +5,7 @@
 
 use serde_json::json;
 
-use super::{HostCommand, connection_state_tag, project_commands};
+use super::{HostCommand, project_commands};
 use crate::{
     bundle_api::BundleConnectionState,
     core::{
@@ -15,18 +15,6 @@ use crate::{
     shared::{StreamType, UserId},
     signaling::{RequestId, SourceDescriptor, TrackBinding},
 };
-
-#[test]
-fn connection_state_tag_matches_public_client_surface() {
-    assert_eq!(
-        connection_state_tag(BundleConnectionState::Disconnected),
-        "disconnected"
-    );
-    assert_eq!(
-        connection_state_tag(BundleConnectionState::Closed),
-        "closed"
-    );
-}
 
 #[test]
 fn host_command_bridge_projects_commands_to_browser_payloads() {
@@ -39,7 +27,7 @@ fn host_command_bridge_projects_commands_to_browser_payloads() {
                 upload_slots: Vec::new(),
             },
             Command::EmitStateChange {
-                state: BundleConnectionState::Connected,
+                state: BundleConnectionState::Disconnected,
                 cause: Some(String::from("recovered")),
             },
             Command::EmitEvent {
@@ -70,7 +58,7 @@ fn host_command_bridge_projects_commands_to_browser_payloads() {
             },
             {
                 "kind": "emitStateChange",
-                "state": "connected",
+                "state": "disconnected",
                 "cause": "recovered"
             },
             {

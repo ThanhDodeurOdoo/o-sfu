@@ -190,29 +190,3 @@ export interface StateChangeDetail {
     state: ConnectionState;
     cause?: string;
 }
-
-export interface SfuClientSurface extends EventTarget {
-    readonly state: ConnectionState;
-    readonly errors: Error[];
-    readonly availableFeatures: AvailableFeatures;
-    readonly recordingState: RecordingState;
-    readonly sourceDescriptors: readonly SourceDescriptor[];
-
-    connect(url: string, jwt: string, options?: ConnectOptions): void;
-    disconnect(): void;
-    publish(type: StreamType, track: MediaStreamTrack | null | undefined): void;
-    subscribe(sessionId: SessionId, states: DownloadStates): void;
-    /**
-     * @deprecated Odoo compatibility alias. Use `publish()` for new code.
-     */
-    updateUpload(type: StreamType, track: MediaStreamTrack | null | undefined): void;
-    /**
-     * @deprecated Odoo compatibility alias. Use `subscribe()` for new code.
-     */
-    updateDownload(sessionId: SessionId, states: DownloadStates): void;
-    updateInfo(info: SessionInfo, options?: UpdateInfoOptions): void;
-    getStats(): Promise<SfuStats>;
-    broadcast(message: unknown): void;
-    startRecording(options?: RecordingOptions): Promise<boolean>;
-    stopRecording(): Promise<boolean>;
-}

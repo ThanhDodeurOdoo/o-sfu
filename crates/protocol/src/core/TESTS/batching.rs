@@ -4,7 +4,7 @@ use super::*;
 fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
 
     let first_commands = core.update_info(UserInfo {
         is_talking: Some(true),
@@ -50,7 +50,7 @@ fn protocol_core_batches_outbound_control_plane_messages_until_flush_timer() -> 
 fn protocol_core_publish_and_unpublish_flush_only_websocket_envelopes() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
-    let _ = core.on_welcome(sample_welcome_payload());
+    let _ = core.accept_welcome(sample_welcome_payload());
     let _ = core.on_transport_ready();
 
     let publish_timer_id =
