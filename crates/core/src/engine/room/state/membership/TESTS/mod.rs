@@ -19,7 +19,7 @@ use crate::{
     RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
-        media_transport::{TransportMediaId, TransportSourceKey, TransportTeardown},
+        media_transport::{TransportConsumerRoute, TransportMediaId, TransportTeardown},
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
@@ -104,7 +104,7 @@ fn commit_test_publication(
 
 #[derive(Debug)]
 struct RelayedSource {
-    source: TransportSourceKey,
+    route: TransportConsumerRoute,
     target_media_worker_id: MediaWorkerId,
 }
 
@@ -130,7 +130,6 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
             )
             .is_some()
     );
-    let publisher_session = state.transport_user_key(&publisher, publisher_connection);
     let source_media = TransportMediaId::new(11);
     let consumer_media = TransportMediaId::new(21);
     commit_test_publication(
@@ -151,12 +150,11 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
     let setup = setup.declared(consumer_media, None);
     let (_, _, setup_outcome) =
         state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
-    assert!(matches!(
-        setup_outcome,
-        ConsumerSetupOutcome::Committed { .. }
-    ));
+    let ConsumerSetupOutcome::Committed { route, .. } = setup_outcome else {
+        panic!("relay consumer setup should commit");
+    };
     RelayedSource {
-        source: TransportSourceKey::new(publisher_session, source_media),
+        route,
         target_media_worker_id: target_worker,
     }
 }
@@ -170,7 +168,7 @@ fn source_relay_teardown_count(teardown: &[TransportTeardown], relay: &RelayedSo
                 TransportTeardown::ReleaseRelayRoute {
                     source,
                     target_media_worker_id,
-                } if source == &relay.source
+                } if source == relay.route.source()
                     && *target_media_worker_id == relay.target_media_worker_id
             )
         })
@@ -329,7 +327,7 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
 
     let outcome = state
         .apply_join(
-            relay.source.session_key().user_id(),
+            relay.route.source_session_key().user_id(),
             UserPermissions::default(),
             test_sender(),
         )
@@ -343,14 +341,24 @@ fn replacement_join_releases_relay_with_displaced_source_session() {
             operation,
             TransportTeardown::CloseSession {
                 session_key,
-            } if session_key == relay.source.session_key()
+            } if session_key == relay.route.source_session_key()
         )
     }));
     assert!(!teardown.iter().any(|operation| {
         matches!(
             operation,
             TransportTeardown::RemoveMedia { session_key, .. }
-                if session_key == relay.source.session_key()
+                if session_key == relay.route.source_session_key()
+        )
+    }));
+    assert!(teardown.iter().any(|operation| {
+        matches!(
+            operation,
+            TransportTeardown::RemoveMedia {
+                session_key,
+                transport_media_id,
+            } if session_key == relay.route.consumer_session_key()
+                && *transport_media_id == relay.route.consumer_transport_media_id()
         )
     }));
 }
@@ -362,8 +370,8 @@ fn leave_releases_relay_before_forgetting_source_session() {
 
     let outcome = state
         .close_connection(
-            relay.source.session_key().user_id(),
-            relay.source.session_key().connection_id(),
+            relay.route.source_session_key().user_id(),
+            relay.route.source_session_key().connection_id(),
         )
         .expect("publisher leave should succeed");
     let ConnectionCloseCommit::Current { transport_plan, .. } = outcome else {
@@ -380,7 +388,8 @@ fn disconnect_releases_relay_before_forgetting_source_session() {
     let mut state = test_state();
     let relay = install_relayed_source(&mut state);
 
-    let outcome = state.apply_disconnect_users(from_ref(relay.source.session_key().user_id()));
+    let outcome =
+        state.apply_disconnect_users(from_ref(relay.route.source_session_key().user_id()));
     let (relays, teardown) = outcome.transport_plan.relays_and_teardown();
 
     assert!(relays.is_empty());

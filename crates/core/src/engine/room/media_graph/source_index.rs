@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{PublishedSource, SourceKey, TransportMediaRemoval, remove_from_index_set};
+use super::{PublishedSource, SourceKey, remove_from_index_set};
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::ConnectionId;
 use crate::engine::{
@@ -136,23 +136,5 @@ impl PublishedSources {
         self.id_by_transport
             .remove(&source.transport.transport_media_id());
         Some(source)
-    }
-
-    pub(super) fn transport_removals_for_users(
-        &self,
-        users: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        users
-            .iter()
-            .flat_map(|user| self.ids_for_owner(user))
-            .filter_map(|id| self.source(id))
-            .map(|source| {
-                TransportMediaRemoval::new(
-                    source.transport.session_key().user_id().clone(),
-                    source.transport.session_key().connection_id(),
-                    source.transport.transport_media_id(),
-                )
-            })
-            .collect()
     }
 }

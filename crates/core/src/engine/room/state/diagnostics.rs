@@ -215,28 +215,26 @@ impl RoomState {
     ) -> Vec<DiagnosticsSubscription> {
         let mut subscriptions = self
             .topology
-            .live_consumer_routes()
+            .committed_consumer_routes_for_user(user_id)
             .filter_map(|route| {
-                if route.consumer_user_id != *user_id
-                    || route.state.consumer_connection_id != connection_id
-                {
+                if route.route.consumer_session_key().connection_id() != connection_id {
                     return None;
                 }
                 let source = &route.source.descriptor;
-                let route_selection = route.selection_or_open(self.desired_source_active(
-                    user_id,
-                    source.owner().user_id(),
-                    source.stream_id(),
-                ));
+                let route_selection = route.selection;
                 let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
                 Some(DiagnosticsSubscription {
-                    consumer_transport_media_id: Some(route.state.consumer_media.as_u64()),
+                    consumer_transport_media_id: Some(
+                        route.route.consumer_transport_media_id().as_u64(),
+                    ),
                     layout_priority: layout_intent.map(|intent| intent.priority().into()),
                     layout_role: layout_intent.map(|intent| intent.role().into()),
                     producer_user_id: source.owner().user_id().clone(),
                     selection: selection(source, route_selection),
                     source_id: source.source_id().as_u64(),
-                    source_transport_media_id: Some(route.state.source_media.as_u64()),
+                    source_transport_media_id: Some(
+                        route.route.source_transport_media_id().as_u64(),
+                    ),
                     state: if route.source.active && route_selection.delivery_active() {
                         DiagnosticsRouteState::Active
                     } else {
@@ -251,9 +249,7 @@ impl RoomState {
             |route| {
                 let publication = route.source;
                 let source = &publication.descriptor;
-                let route_selection = route
-                    .selection
-                    .unwrap_or_else(|| ConsumerSourceSelection::open(true));
+                let route_selection = route.selection;
                 let layout_intent = self.diagnostics_video_layout_intent(user_id, source);
                 DiagnosticsSubscription {
                     consumer_transport_media_id: None,

@@ -1,4 +1,4 @@
-use super::super::media_graph::ConsumerRouteTransportRef;
+use super::super::media_graph::SubscriptionKey;
 use crate::engine::{
     ConnectionId, UserId,
     media_transport::{
@@ -61,8 +61,9 @@ impl BudgetSolverOutcomes {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::engine::room) struct ConsumerPacketSelectionUpdate {
-    pub(super) transport_ref: ConsumerRouteTransportRef,
+    pub(super) key: SubscriptionKey,
     pub(super) source_id: PublishedSourceId,
+    pub(in crate::engine::room) route: TransportConsumerRoute,
     pub(super) selector: SourceSelector,
     pub(super) policy_pause_reason: Option<PolicyPauseReason>,
     pub(super) budget: ReceiverVideoBudgetDiagnostics,
@@ -76,14 +77,16 @@ pub(in crate::engine::room) struct ConsumerPacketSelectionUpdate {
 
 impl ConsumerPacketSelectionUpdate {
     pub(in crate::engine::room) fn route_activity(
-        transport_ref: ConsumerRouteTransportRef,
+        key: SubscriptionKey,
         source_id: PublishedSourceId,
+        route: TransportConsumerRoute,
         current_selection: ConsumerSourceSelection,
         policy_pause_reason: Option<PolicyPauseReason>,
     ) -> Option<Self> {
         (policy_pause_reason != current_selection.policy_pause_reason()).then(|| Self {
-            transport_ref,
+            key,
             source_id,
+            route,
             selector: current_selection.selector(),
             policy_pause_reason,
             budget: current_selection.budget(),
@@ -100,11 +103,9 @@ impl ConsumerPacketSelectionUpdate {
         self.packet_gate.is_some() || self.route_activity_changed || self.request_keyframe
     }
 
-    pub(in crate::engine::room) fn route_control(
-        &self,
-        route: TransportConsumerRoute,
-    ) -> ConsumerRouteControl {
-        let mut control = ConsumerRouteControl::new(route).request_keyframe(self.request_keyframe);
+    pub(in crate::engine::room) fn route_control(&self) -> ConsumerRouteControl {
+        let mut control =
+            ConsumerRouteControl::new(self.route.clone()).request_keyframe(self.request_keyframe);
         if self.route_activity_changed {
             control = control.activity(ConsumerActivity::from_active(self.route_active()));
         }

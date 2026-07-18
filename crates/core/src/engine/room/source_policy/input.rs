@@ -12,8 +12,7 @@ use crate::{
             ActiveSpeakerSource, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
             TransportMediaId,
         },
-        room::{media_graph::ConsumerRouteTransportRef, state::RoomState},
-        source_model::{ConsumerSourceSelection, PublishedSourceDescriptor},
+        room::{media_graph::ConsumerRouteView, state::RoomState},
     },
 };
 
@@ -21,7 +20,7 @@ const ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT: usize = 5;
 
 #[derive(Debug)]
 pub(super) struct SourcePolicySnapshot<'a> {
-    pub(super) routes: Vec<SourcePolicyRoute<'a>>,
+    pub(super) routes: Vec<ConsumerRouteView<'a>>,
     pub(super) receiver_bwe_targets: BTreeMap<UserId, ReceiverBweTargetUpdate>,
     pub(super) receiver_bandwidth_by_connection: BTreeMap<ConnectionId, Bitrate>,
     pub(super) active_speaker_media_ids: BTreeSet<TransportMediaId>,
@@ -31,13 +30,6 @@ pub(super) struct SourcePolicySnapshot<'a> {
     pub(super) featured_user_updates: Vec<FeaturedUserUpdate>,
     pub(super) user_count: usize,
     pub(super) media_limits: RoomMediaLimits,
-}
-
-#[derive(Debug)]
-pub(super) struct SourcePolicyRoute<'a> {
-    pub(super) source: &'a PublishedSourceDescriptor,
-    pub(super) transport_ref: ConsumerRouteTransportRef,
-    pub(super) current_selection: ConsumerSourceSelection,
 }
 
 impl<'a> SourcePolicySnapshot<'a> {
@@ -57,7 +49,10 @@ impl<'a> SourcePolicySnapshot<'a> {
             featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
         });
         let featured_user_updates = featured_user_updates(state, desired_featured_user_id.as_ref());
-        let routes = source_policy_routes(state);
+        let routes = state
+            .committed_consumer_routes()
+            .filter(|route| route.source.active && route.selection.active())
+            .collect();
         Self {
             routes,
             receiver_bwe_targets: receiver_bwe_targets(state),
@@ -73,32 +68,6 @@ impl<'a> SourcePolicySnapshot<'a> {
             media_limits,
         }
     }
-}
-
-fn source_policy_routes(state: &RoomState) -> Vec<SourcePolicyRoute<'_>> {
-    let live_routes = state.live_consumer_routes();
-    let mut routes = Vec::with_capacity(live_routes.size_hint().1.unwrap_or_default());
-    for route in live_routes {
-        if !route.source.active {
-            continue;
-        }
-        let source = &route.source.descriptor;
-        let desired_active = state.desired_source_active(
-            &route.consumer_user_id,
-            source.owner().user_id(),
-            source.stream_id(),
-        );
-        let current_selection = route.selection_or_open(desired_active);
-        if !current_selection.active() {
-            continue;
-        }
-        routes.push(SourcePolicyRoute {
-            source,
-            transport_ref: route.transport_ref(),
-            current_selection,
-        });
-    }
-    routes
 }
 
 fn receiver_bwe_targets(state: &RoomState) -> BTreeMap<UserId, ReceiverBweTargetUpdate> {

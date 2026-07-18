@@ -6,27 +6,43 @@
 use o_sfu_router::{MediaKind, ProducerId, RouterId, topology::RoutedProducerId};
 
 use super::{
-    ConsumerKey, ConsumerSourceSelection, ConsumerState,
+    ConsumerSourceSelection, SubscriptionKey,
     consumer_setup::ConsumerSetupTarget,
     route_graph::{ConsumerRouteReservation, RelayRouteEffect, RouteGraph},
 };
-use crate::engine::{
-    ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
-    media_transport::{
-        RelayRouteActivity, TransportMediaId, TransportRelayRouteAction, TransportSessionKey,
-        TransportSourceKey,
+use crate::{
+    Bitrate,
+    engine::{
+        ConnectionId, MediaWorkerId, RoomInstanceId, UserId, VideoLayoutIntent,
+        media_transport::{
+            RelayRouteActivity, TransportConsumerRoute, TransportMediaId,
+            TransportRelayRouteAction, TransportSessionKey, TransportSourceKey,
+        },
+        source_model::{
+            PolicyPauseReason, PublishedSourceId, ReceiverVideoBudgetDiagnostics, SourceEncodingId,
+            SourceSelector, SourceSubscriptionIntent, UserStreamId,
+        },
     },
-    source_model::{PublishedSourceId, UserStreamId},
 };
 
-fn target(
-    consumer: UserId,
-    connection: ConnectionId,
-    source_id: PublishedSourceId,
-) -> ConsumerSetupTarget {
+const SOURCE_ONE: PublishedSourceId = PublishedSourceId::from_raw(1);
+const SOURCE_TWO: PublishedSourceId = PublishedSourceId::from_raw(2);
+
+fn key(receiver: i64) -> SubscriptionKey {
+    SubscriptionKey::new(
+        &UserId::Integer(receiver),
+        &UserId::Integer(1),
+        &UserStreamId::from("camera"),
+    )
+}
+
+fn target(receiver: i64, connection: u64, source_id: PublishedSourceId) -> ConsumerSetupTarget {
     let source_connection = ConnectionId::from_raw(10);
     ConsumerSetupTarget {
-        session: session_key(consumer, connection),
+        session: session_key(
+            UserId::Integer(receiver),
+            ConnectionId::from_raw(connection),
+        ),
         source: TransportSourceKey::new(
             session_key(UserId::Integer(1), source_connection),
             TransportMediaId::new(50),
@@ -47,243 +63,342 @@ fn session_key(user: UserId, connection: ConnectionId) -> TransportSessionKey {
     )
 }
 
-fn consumer_state(id: u64) -> ConsumerState {
-    ConsumerState {
-        consumer_connection_id: ConnectionId::from_raw(20 + id),
-        source_connection_id: ConnectionId::from_raw(10),
-        source_media: TransportMediaId::new(50),
-        consumer_media: TransportMediaId::new(100 + id),
-        consumer_mid: format!("mid-{id}"),
-    }
+fn route(target: &ConsumerSetupTarget, media: u64) -> TransportConsumerRoute {
+    target.transport_consumer_route(TransportMediaId::new(media))
+}
+
+fn reserve(
+    graph: &mut RouteGraph,
+    key: &SubscriptionKey,
+    source_id: PublishedSourceId,
+    selection: ConsumerSourceSelection,
+) -> ConsumerRouteReservation {
+    assert!(graph.attach_for_setup(key.clone(), source_id));
+    graph
+        .reserve_consumer_setup(key.clone(), source_id, selection)
+        .expect("attached subscription should reserve an absent realization")
+}
+
+fn commit_route(
+    graph: &mut RouteGraph,
+    reservation: ConsumerRouteReservation,
+    target: &ConsumerSetupTarget,
+    media: u64,
+    selection: ConsumerSourceSelection,
+) -> TransportConsumerRoute {
+    let route = route(target, media);
+    graph
+        .commit(
+            reservation,
+            route.clone(),
+            String::from("mid"),
+            selection,
+            || true,
+        )
+        .expect("current reservation should commit");
+    route
 }
 
 fn actions(effects: Vec<RelayRouteEffect>) -> Vec<TransportRelayRouteAction> {
     effects.into_iter().map(|effect| effect.action).collect()
 }
 
-fn replacement_routes(
-    graph: &mut RouteGraph,
-    key: &ConsumerKey,
-) -> (ConsumerRouteReservation, ConsumerRouteReservation) {
-    let stale = graph
-        .reserve_consumer_setup(key.clone(), ConsumerSourceSelection::open(false))
-        .expect("first pending route should be reserved");
-    assert!(graph.remove_key_state(key).is_empty());
-    let fresh = graph
-        .reserve_consumer_setup(key.clone(), ConsumerSourceSelection::open(true))
-        .expect("replacement pending route should be reserved");
-    (stale, fresh)
+#[test]
+fn intent_survives_detach_and_resets_source_selection() {
+    let mut graph = RouteGraph::default();
+    let key = key(2);
+    let target = target(2, 20, SOURCE_ONE);
+    graph.merge_intent(
+        key.clone(),
+        SourceSubscriptionIntent::new(Some(false), Some(VideoLayoutIntent::Pinned)),
+    );
+    graph.merge_intent(key.clone(), SourceSubscriptionIntent::default());
+    let reservation = reserve(
+        &mut graph,
+        &key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(false),
+    );
+    let route = commit_route(
+        &mut graph,
+        reservation,
+        &target,
+        100,
+        ConsumerSourceSelection::open(false),
+    );
+    assert!(
+        graph.update_selection(&key, SOURCE_ONE, &route, |selection| {
+            selection.set_selector(SourceSelector::Encoding(SourceEncodingId::from_raw(7)));
+            selection.set_policy_pause_reason(Some(PolicyPauseReason::HiddenTile));
+            selection.set_budget(ReceiverVideoBudgetDiagnostics::new(
+                Some(Bitrate::from_kbps(800)),
+                Some(Bitrate::from_kbps(600)),
+                2,
+                Bitrate::from_kbps(500),
+                None,
+            ));
+            selection.set_adaptation_observations(3, 4);
+        })
+    );
+    graph.detach_source(SOURCE_ONE);
+    assert_eq!(graph.intent(&key).layout(), Some(VideoLayoutIntent::Pinned));
+    assert!(graph.attach_for_setup(key.clone(), SOURCE_TWO));
+    assert_eq!(
+        graph.selection(&key, SOURCE_TWO),
+        Some(ConsumerSourceSelection::open(false))
+    );
 }
 
 #[test]
-fn subscription_count_tracks_route_state_transitions() {
+fn receiver_reset_rejects_stale_reservation_for_same_publication() {
     let mut graph = RouteGraph::default();
-    let source_id = PublishedSourceId::from_raw(1);
-    let stored = ConsumerKey::new(&UserId::Integer(1), source_id);
-    let pending = ConsumerKey::new(&UserId::Integer(2), source_id);
-    let committed = ConsumerKey::new(&UserId::Integer(3), source_id);
-    let released = ConsumerKey::new(&UserId::Integer(4), source_id);
-
-    graph.set_selection(&stored, false);
-    assert_eq!(graph.subscription_count(), 0);
-
-    let pending_route = graph
-        .reserve_consumer_setup(pending.clone(), ConsumerSourceSelection::open(true))
-        .expect("pending route should be reserved");
-    assert_eq!(graph.subscription_count(), 1);
-
-    let committed_route = graph
-        .reserve_consumer_setup(committed.clone(), ConsumerSourceSelection::open(true))
-        .expect("committed route should start as pending");
-    graph
-        .commit(
-            committed_route,
-            consumer_state(1),
-            ConsumerSourceSelection::open(true),
-            || true,
-        )
-        .expect("pending route should commit");
-    assert_eq!(graph.subscription_count(), 2);
-    assert_eq!(
+    let key = key(2);
+    let target = target(2, 20, SOURCE_ONE);
+    let stale = reserve(
+        &mut graph,
+        &key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(true),
+    );
+    graph.reset_receiver_for_replacement(&UserId::Integer(2));
+    let fresh = reserve(
+        &mut graph,
+        &key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(false),
+    );
+    let mut accepted = false;
+    assert!(
         graph
-            .committed_entries_for_user(&UserId::Integer(3))
-            .map(|(key, state)| (key, state.consumer_mid.as_str()))
-            .collect::<Vec<_>>(),
-        vec![(&committed, "mid-1")]
+            .commit(
+                stale,
+                route(&target, 100),
+                String::from("stale"),
+                ConsumerSourceSelection::open(true),
+                || {
+                    accepted = true;
+                    true
+                },
+            )
+            .is_err()
     );
+    assert!(!accepted);
+    commit_route(
+        &mut graph,
+        fresh,
+        &target,
+        101,
+        ConsumerSourceSelection::open(false),
+    );
+}
+
+#[test]
+fn detach_prunes_default_record_and_full_leave_deletes_intent() {
+    let mut graph = RouteGraph::default();
+    let default_key = key(2);
+    assert!(graph.attach_for_setup(default_key, SOURCE_ONE));
+    graph.detach_source(SOURCE_ONE);
+    assert_eq!(graph.record_count(), 0);
+
+    let explicit_key = key(3);
+    graph.merge_intent(
+        explicit_key.clone(),
+        SourceSubscriptionIntent::new(Some(false), None),
+    );
+    assert!(graph.attach_for_setup(explicit_key, SOURCE_TWO));
+    graph.remove_receiver(&UserId::Integer(3));
+    assert_eq!(graph.record_count(), 0);
+}
+
+#[test]
+fn pending_and_committed_counts_follow_realization_state() {
+    let mut graph = RouteGraph::default();
+    let pending_key = key(2);
+    let committed_key = key(3);
+    let pending = reserve(
+        &mut graph,
+        &pending_key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(true),
+    );
+    let committed_target = target(3, 30, SOURCE_ONE);
+    let committed = reserve(
+        &mut graph,
+        &committed_key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(true),
+    );
+    assert_eq!(graph.subscription_count(), 2);
+    commit_route(
+        &mut graph,
+        committed,
+        &committed_target,
+        101,
+        ConsumerSourceSelection::open(true),
+    );
+    assert_eq!(graph.count(), 1);
+    let committed = graph
+        .current(&committed_key)
+        .and_then(|(_, current)| current.committed())
+        .expect("committed realization should be projected");
+    assert_eq!(committed.1, "mid");
+
+    assert!(graph.release_consumer_setup(pending).is_empty());
+    assert_eq!(graph.subscription_count(), 1);
+    graph.detach_source(SOURCE_ONE);
+    assert_eq!(graph.subscription_count(), 0);
+}
+
+#[test]
+fn receiver_reset_clears_realization_and_preserves_intent() {
+    let mut graph = RouteGraph::default();
+    let key = key(2);
+    let target = target(2, 20, SOURCE_ONE);
+    graph.merge_intent(
+        key.clone(),
+        SourceSubscriptionIntent::new(Some(false), None),
+    );
+    let reservation = reserve(
+        &mut graph,
+        &key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(false),
+    );
+    commit_route(
+        &mut graph,
+        reservation,
+        &target,
+        100,
+        ConsumerSourceSelection::open(false),
+    );
+
+    graph.reset_receiver_for_replacement(&UserId::Integer(2));
     assert_eq!(
+        graph.selection(&key, SOURCE_ONE),
+        Some(ConsumerSourceSelection::open(false))
+    );
+    assert!(
         graph
-            .committed_entries_for_user(&UserId::Integer(2))
-            .count(),
-        0
-    );
-
-    let released_route = graph
-        .reserve_consumer_setup(released, ConsumerSourceSelection::open(true))
-        .expect("released route should be reserved");
-    assert_eq!(graph.subscription_count(), 3);
-    assert!(graph.release_consumer_setup(released_route).is_empty());
-    assert_eq!(graph.subscription_count(), 2);
-
-    graph
-        .commit(
-            pending_route,
-            consumer_state(2),
-            ConsumerSourceSelection::open(true),
-            || true,
-        )
-        .expect("pending route should commit");
-    assert_eq!(graph.subscription_count(), 2);
-
-    graph.remove_key_state(&pending);
-    assert_eq!(graph.subscription_count(), 1);
-    graph.remove_key_state(&committed);
-    assert_eq!(graph.subscription_count(), 0);
-    graph.remove_key_state(&stored);
-    assert_eq!(graph.subscription_count(), 0);
-}
-
-#[test]
-fn remove_key_state_releases_relay_owner() {
-    let mut graph = RouteGraph::default();
-    let source_id = PublishedSourceId::from_raw(1);
-    let owner = target(UserId::Integer(2), ConnectionId::from_raw(20), source_id);
-    let key = owner.consumer_key();
-    let route = graph
-        .reserve_consumer_setup(key.clone(), ConsumerSourceSelection::open(false))
-        .expect("relay owner should have a pending route");
-
-    assert_eq!(
-        actions(graph.reserve_relay(&route, &owner, MediaWorkerId::from_raw(1), false,)),
-        vec![TransportRelayRouteAction::Install]
-    );
-    assert_eq!(
-        actions(graph.remove_key_state(&key)),
-        vec![TransportRelayRouteAction::Release]
+            .reserve_consumer_setup(key, SOURCE_ONE, ConsumerSourceSelection::open(false))
+            .is_some()
     );
 }
 
 #[test]
-fn stale_reservation_cannot_mutate_new_pending_route() {
-    let source_id = PublishedSourceId::from_raw(1);
-    let key = ConsumerKey::new(&UserId::Integer(2), source_id);
-
+fn stale_source_or_route_cannot_commit_after_reattach() {
     let mut graph = RouteGraph::default();
-    let (stale, fresh) = replacement_routes(&mut graph, &key);
-    assert!(graph.release_consumer_setup(stale).is_empty());
-    assert_eq!(graph.subscription_count(), 1);
-    assert!(graph.release_consumer_setup(fresh).is_empty());
-    assert_eq!(graph.subscription_count(), 0);
+    let key = key(2);
+    let old_target = target(2, 20, SOURCE_ONE);
+    let stale = reserve(
+        &mut graph,
+        &key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(true),
+    );
+    graph.detach_source(SOURCE_ONE);
 
-    let mut graph = RouteGraph::default();
-    let (stale, fresh) = replacement_routes(&mut graph, &key);
+    let fresh_target = target(2, 21, SOURCE_TWO);
+    let fresh = reserve(
+        &mut graph,
+        &key,
+        SOURCE_TWO,
+        ConsumerSourceSelection::open(true),
+    );
     let mut router_called = false;
     assert!(
         graph
             .commit(
                 stale,
-                consumer_state(1),
+                route(&old_target, 100),
+                String::from("old"),
                 ConsumerSourceSelection::open(true),
                 || {
                     router_called = true;
                     true
                 },
             )
-            .expect_err("stale reservation should be rejected")
-            .is_empty()
+            .is_err()
     );
     assert!(!router_called);
-    assert_eq!(graph.subscription_count(), 1);
-    graph
-        .commit(
-            fresh,
-            consumer_state(2),
-            ConsumerSourceSelection::open(true),
-            || true,
-        )
-        .expect("fresh reservation should commit");
-    assert_eq!(graph.count(), 1);
 
-    let mut graph = RouteGraph::default();
-    let owner = target(UserId::Integer(2), ConnectionId::from_raw(20), source_id);
-    let (stale, fresh) = replacement_routes(&mut graph, &key);
+    let current_route = commit_route(
+        &mut graph,
+        fresh,
+        &fresh_target,
+        101,
+        ConsumerSourceSelection::open(true),
+    );
     assert!(
         graph
-            .reserve_relay(&stale, &owner, MediaWorkerId::from_raw(1), false,)
-            .is_empty()
+            .set_activity(&key, SOURCE_TWO, ConnectionId::from_raw(20), false,)
+            .is_none()
     );
-    assert!(graph.release_consumer_setup(fresh).is_empty());
+    assert_eq!(
+        graph.selection(&key, SOURCE_TWO),
+        Some(ConsumerSourceSelection::open(true))
+    );
+    assert!(!graph.update_selection(&key, SOURCE_ONE, &current_route, |_| {}));
+    assert!(!graph.update_selection(&key, SOURCE_TWO, &route(&fresh_target, 102), |_| {}));
+    assert!(
+        graph.update_selection(&key, SOURCE_TWO, &current_route, |selection| {
+            selection.set_active(false);
+        })
+    );
 }
 
 #[test]
-fn router_rejection_preserves_selection_and_shared_relay() {
+fn rejected_route_preserves_selection_and_shared_relay() {
     let mut graph = RouteGraph::default();
-    let source_id = PublishedSourceId::from_raw(1);
-    let active_owner = target(UserId::Integer(2), ConnectionId::from_raw(20), source_id);
-    let inactive_owner = target(UserId::Integer(3), ConnectionId::from_raw(30), source_id);
-    let target_worker = MediaWorkerId::from_raw(1);
-    let active_key = active_owner.consumer_key();
-    let inactive_key = inactive_owner.consumer_key();
-    let active_selection = ConsumerSourceSelection::open(true);
-    let active_route = graph
-        .reserve_consumer_setup(active_key.clone(), active_selection)
-        .expect("active owner should have a pending route");
-    let inactive_route = graph
-        .reserve_consumer_setup(inactive_key, ConsumerSourceSelection::open(false))
-        .expect("inactive owner should have a pending route");
-
-    assert_eq!(
-        actions(graph.reserve_relay(&inactive_route, &inactive_owner, target_worker, false,)),
-        vec![TransportRelayRouteAction::Install]
+    let inactive_target = target(2, 20, SOURCE_ONE);
+    let active_target = target(3, 30, SOURCE_ONE);
+    let inactive_key = key(2);
+    let active_key = key(3);
+    let inactive = reserve(
+        &mut graph,
+        &inactive_key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(false),
     );
-    assert!(
-        graph
-            .reserve_relay(&inactive_route, &inactive_owner, target_worker, false,)
-            .is_empty()
+    let active = reserve(
+        &mut graph,
+        &active_key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(true),
+    );
+    let worker = MediaWorkerId::from_raw(1);
+    assert_eq!(
+        actions(graph.reserve_relay(&inactive, &inactive_target, worker, false)),
+        [TransportRelayRouteAction::Install]
     );
     assert_eq!(
-        actions(graph.reserve_relay(&active_route, &active_owner, target_worker, true,)),
-        vec![TransportRelayRouteAction::SetActivity(
+        actions(graph.reserve_relay(&active, &active_target, worker, true)),
+        [TransportRelayRouteAction::SetActivity(
             RelayRouteActivity::Active
         )]
     );
-    assert!(
-        graph
-            .set_relay_active(
-                &UserId::Integer(3),
-                ConnectionId::from_raw(30),
-                source_id,
-                RelayRouteActivity::Active,
-            )
-            .is_empty()
-    );
-    assert!(
-        graph
-            .set_relay_active(
-                &UserId::Integer(3),
-                ConnectionId::from_raw(30),
-                source_id,
-                RelayRouteActivity::Inactive,
-            )
-            .is_empty()
-    );
 
-    graph.set_selection(&active_key, false);
-    let relay_effects = graph
-        .commit(active_route, consumer_state(1), active_selection, || false)
-        .expect_err("rejected route should release its relay owner");
     assert_eq!(
-        actions(relay_effects),
-        vec![TransportRelayRouteAction::SetActivity(
+        actions(
+            graph
+                .commit(
+                    active,
+                    route(&active_target, 101),
+                    String::from("active"),
+                    ConsumerSourceSelection::open(true),
+                    || false,
+                )
+                .expect_err("router rejection should release the active relay owner")
+        ),
+        [TransportRelayRouteAction::SetActivity(
             RelayRouteActivity::Inactive
         )]
     );
     assert_eq!(
-        graph.selection(&active_key),
-        Some(ConsumerSourceSelection::open(false))
+        graph.selection(&active_key, SOURCE_ONE),
+        Some(ConsumerSourceSelection::open(true))
     );
     assert_eq!(
-        actions(graph.release_consumer_setup(inactive_route)),
-        vec![TransportRelayRouteAction::Release]
+        actions(graph.release_consumer_setup(inactive)),
+        [TransportRelayRouteAction::Release]
     );
 }

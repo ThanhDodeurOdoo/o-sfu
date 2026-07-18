@@ -2,11 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{MediaKind as RouterMediaKind, negotiation::negotiate_consumer_rtp_parameters};
 
-#[cfg(any(test, feature = "testing-transport"))]
-use super::ConsumerKey;
 use super::{
     super::{effects::RoomGaugeDelta, state::RoomState},
-    ConsumerId, ConsumerRouteTarget,
+    ConsumerId, ConsumerRouteTarget, SubscriptionKey,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
 };
 use crate::engine::{
@@ -123,7 +121,12 @@ impl RoomState {
         target_user_id: &UserId,
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> ReceiverRouteWork {
-        self.persist_intents(user_id, target_user_id, intents);
+        for (stream_id, intent) in intents {
+            self.topology.merge_subscription_intent(
+                SubscriptionKey::new(user_id, target_user_id, stream_id),
+                *intent,
+            );
+        }
         let (updates, relays) =
             self.apply_route_updates(user_id, connection_id, target_user_id, intents);
         let ReceiverRouteWork { setups, .. } = self.plan_missing_receiver_routes(
@@ -133,31 +136,6 @@ impl RoomState {
             activities: updates,
             setups,
             relays,
-        }
-    }
-
-    fn persist_intents(
-        &mut self,
-        user_id: &UserId,
-        target_user_id: &UserId,
-        intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
-    ) {
-        let Some(user) = self.users.get_mut(user_id) else {
-            return;
-        };
-        let existing_states = user
-            .desired_source_subscriptions
-            .entry(target_user_id.clone())
-            .or_default();
-        for (stream_id, update) in intents {
-            existing_states
-                .entry(stream_id.clone())
-                .and_modify(|intent| intent.merge(*update))
-                .or_insert(*update);
-        }
-        existing_states.retain(|_, intent| !intent.is_empty());
-        if existing_states.is_empty() {
-            user.desired_source_subscriptions.remove(target_user_id);
         }
     }
 
@@ -202,8 +180,9 @@ impl RoomState {
         &mut self,
         scope: ReceiverRouteScope<'_>,
     ) -> ReceiverRouteWork {
+        let targets = self.missing_receiver_route_targets(scope);
         ReceiverRouteWork {
-            setups: self.plan_consumers(self.missing_receiver_route_targets(scope)),
+            setups: self.plan_consumers(targets),
             ..Default::default()
         }
     }
@@ -278,19 +257,18 @@ impl RoomState {
     }
 
     fn missing_receiver_route_targets(
-        &self,
+        &mut self,
         scope: ReceiverRouteScope<'_>,
     ) -> Vec<ConsumerSetupTarget> {
         match scope {
             ReceiverRouteScope::Source(source_id) => {
-                let receivers = self.users.iter().filter_map(|(user, state)| {
-                    state
-                        .parsed_client_rtp_capabilities
-                        .is_some()
-                        .then_some((user, state.connection_id))
-                });
-                self.topology
-                    .missing_consumer_targets_for_source(source_id, receivers)
+                let users = &self.users;
+                self.topology.missing_consumer_targets_for_source(
+                    source_id,
+                    users
+                        .iter()
+                        .map(|(user, state)| (user, state.connection_id)),
+                )
             }
             ReceiverRouteScope::Receiver(user, connection) => self
                 .topology
@@ -330,16 +308,17 @@ impl RoomState {
         target: &ConsumerSetupTarget,
         source_active: bool,
     ) -> ConsumerSourceSelection {
-        let key = target.consumer_key();
+        let key = target.subscription_key();
         let selection = self
             .topology
-            .consumer_source_selection(&key)
+            .consumer_source_selection(&key, target.source_id)
             .unwrap_or_else(|| {
-                ConsumerSourceSelection::open(self.desired_source_active(
-                    target.session.user_id(),
-                    target.source.session_key().user_id(),
-                    &target.stream,
-                ))
+                ConsumerSourceSelection::open(
+                    self.topology
+                        .subscription_intent(&key)
+                        .active()
+                        .unwrap_or(true),
+                )
             });
         self.apply_initial_video_download_cap(target, source_active, selection)
     }
@@ -364,51 +343,20 @@ impl RoomState {
 
     fn active_video_count(&self, consumer_user_id: &UserId) -> usize {
         let committed = self
-            .live_consumer_routes()
-            .filter(|route| route.consumer_user_id == *consumer_user_id)
+            .topology
+            .committed_consumer_routes_for_user(consumer_user_id)
             .filter(|route| route.source.descriptor.media_kind() == RouterMediaKind::Video)
             .filter(|route| route.source.active)
-            .filter(|route| {
-                let desired_active = self.desired_source_active(
-                    &route.consumer_user_id,
-                    route.source.descriptor.owner().user_id(),
-                    route.source.descriptor.stream_id(),
-                );
-                route.selection_or_open(desired_active).delivery_active()
-            })
+            .filter(|route| route.selection.delivery_active())
             .count();
         let pending = self
             .topology
             .pending_consumer_routes_for_user(consumer_user_id)
             .filter(|route| route.source.descriptor.media_kind() == RouterMediaKind::Video)
             .filter(|route| route.source.active)
-            .filter(|route| {
-                let desired_active = self.desired_source_active(
-                    consumer_user_id,
-                    route.source.descriptor.owner().user_id(),
-                    route.source.descriptor.stream_id(),
-                );
-                route
-                    .selection
-                    .unwrap_or_else(|| ConsumerSourceSelection::open(desired_active))
-                    .delivery_active()
-            })
+            .filter(|route| route.selection.delivery_active())
             .count();
         committed + pending
-    }
-
-    pub fn desired_source_active(
-        &self,
-        user_id: &UserId,
-        target_user_id: &UserId,
-        stream_id: &UserStreamId,
-    ) -> bool {
-        self.users
-            .get(user_id)
-            .and_then(|user| user.desired_source_subscriptions.get(target_user_id))
-            .and_then(|states| states.get(stream_id))
-            .and_then(|intent| intent.active())
-            .unwrap_or(true)
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -419,20 +367,11 @@ impl RoomState {
         stream_id: &UserStreamId,
     ) -> Option<ConsumerRouteState> {
         self.users.get(consumer_user_id)?;
-        let Some(source) = self
-            .topology
-            .source_id_for_owner_stream(producer_user_id, stream_id)
-        else {
-            return Some(ConsumerRouteState::Absent);
-        };
-        let key = ConsumerKey::new(consumer_user_id, source);
+        let key = SubscriptionKey::new(consumer_user_id, producer_user_id, stream_id);
         let Some(route) = self.topology.committed_consumer_route_for_key(&key) else {
             return Some(ConsumerRouteState::Absent);
         };
-        let desired_active =
-            self.desired_source_active(consumer_user_id, producer_user_id, stream_id);
-        let route_active =
-            route.source.active && route.selection_or_open(desired_active).delivery_active();
+        let route_active = route.source.active && route.selection.delivery_active();
         Some(if route_active {
             ConsumerRouteState::Active
         } else {

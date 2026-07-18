@@ -14,8 +14,8 @@ use crate::engine::{
     },
     metrics::{self, BudgetSolverOutcome},
     room::{
-        Room, RoomEventMessage, effects::transport::RoomRouteEffects,
-        media_graph::ConsumerRouteTarget, outbound::MessageFanout, state::RoomState,
+        Room, RoomEventMessage, effects::transport::RoomRouteEffects, outbound::MessageFanout,
+        state::RoomState,
     },
 };
 
@@ -146,7 +146,7 @@ impl SourcePolicyTransaction {
     ) -> Option<Self> {
         let mut input = SourcePolicySnapshot::from_state(state, active_speakers, bandwidth);
         let mut tx = Self::default();
-        audio::append_audio_route_activity(&mut tx, state, &input);
+        audio::append_audio_route_activity(&mut tx, &input);
         let receiver_bwe_targets = mem::take(&mut input.receiver_bwe_targets);
         video::append_receiver_video_policy(&mut tx, state, &input, receiver_bwe_targets);
         tx.featured_users = input.featured_user_updates;
@@ -157,12 +157,8 @@ impl SourcePolicyTransaction {
         self.state_updates.push(update);
     }
 
-    pub(super) fn push_route_update(
-        &mut self,
-        update: ConsumerPacketSelectionUpdate,
-        target: &ConsumerRouteTarget,
-    ) {
-        self.route_effects.source_policy_update(update, target);
+    pub(super) fn push_route_update(&mut self, update: ConsumerPacketSelectionUpdate) {
+        self.route_effects.source_policy_update(update);
     }
 
     pub(super) fn set_receiver_bwe_targets(&mut self, targets: Vec<ReceiverBweTargetUpdate>) {
@@ -246,8 +242,9 @@ fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelecti
 fn commit_packet_updates(state: &mut RoomState, updates: &[ConsumerPacketSelectionUpdate]) {
     for update in updates {
         state.topology.update_consumer_source_selection(
-            &update.transport_ref,
+            &update.key,
             update.source_id,
+            &update.route,
             |selection| {
                 selection.set_selector(update.selector);
                 selection.set_policy_pause_reason(update.policy_pause_reason);

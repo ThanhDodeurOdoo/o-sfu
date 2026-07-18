@@ -3,11 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::{ConsumerId, MediaKind, rtp, topology::RoutedProducerId};
 
 use crate::engine::{
-    ConnectionId, UserId,
+    UserId,
     media_transport::{TransportConsumerRoute, TransportMediaId, TransportSourceKey},
-    source_model::{
-        ConsumerSourceSelection, PublishedSourceDescriptor, PublishedSourceId, UserStreamId,
-    },
+    source_model::{ConsumerSourceSelection, PublishedSourceDescriptor, UserStreamId},
 };
 
 mod consumer_setup;
@@ -41,16 +39,18 @@ pub(super) use self::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct ConsumerKey {
-    pub consumer_user_id: UserId,
-    pub source_id: PublishedSourceId,
+pub(super) struct SubscriptionKey {
+    pub receiver: UserId,
+    pub publisher: UserId,
+    pub stream: UserStreamId,
 }
 
-impl ConsumerKey {
-    pub fn new(consumer_user_id: &UserId, source_id: PublishedSourceId) -> Self {
+impl SubscriptionKey {
+    pub fn new(receiver: &UserId, publisher: &UserId, stream: &UserStreamId) -> Self {
         Self {
-            consumer_user_id: consumer_user_id.clone(),
-            source_id,
+            receiver: receiver.clone(),
+            publisher: publisher.clone(),
+            stream: stream.clone(),
         }
     }
 }
@@ -70,71 +70,29 @@ pub(super) struct PublishedSource {
     pub active: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TransportMediaRemoval {
-    pub user: UserId,
-    pub connection: ConnectionId,
-    pub transport_media: TransportMediaId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ConsumerState {
-    pub consumer_connection_id: ConnectionId,
-    pub source_connection_id: ConnectionId,
-    pub source_media: TransportMediaId,
-    pub consumer_media: TransportMediaId,
-    pub consumer_mid: String,
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct ConsumerRouteView<'a> {
-    pub consumer_user_id: UserId,
-    pub state: &'a ConsumerState,
+    pub key: &'a SubscriptionKey,
+    pub route: &'a TransportConsumerRoute,
+    pub mid: &'a str,
     pub source: &'a PublishedSource,
-    pub selection: Option<ConsumerSourceSelection>,
+    pub selection: ConsumerSourceSelection,
 }
 
 impl ConsumerRouteView<'_> {
-    pub fn selection_or_open(&self, active: bool) -> ConsumerSourceSelection {
-        self.selection
-            .unwrap_or_else(|| ConsumerSourceSelection::open(active))
-    }
-
-    pub fn transport_ref(&self) -> ConsumerRouteTransportRef {
-        ConsumerRouteTransportRef {
-            consumer_user_id: self.consumer_user_id.clone(),
-            consumer_connection_id: self.state.consumer_connection_id,
-            consumer_media: self.state.consumer_media,
-            source_user_id: self.source.descriptor.owner().user_id().clone(),
-            source_connection_id: self.state.source_connection_id,
-            source_media: self.state.source_media,
-        }
-    }
-
-    pub fn matches_transport_ref(&self, route: &ConsumerRouteTransportRef) -> bool {
-        self.consumer_user_id == route.consumer_user_id
-            && self.state.consumer_connection_id == route.consumer_connection_id
-            && self.state.consumer_media == route.consumer_media
-            && self.source.descriptor.owner().user_id() == &route.source_user_id
-            && self.state.source_connection_id == route.source_connection_id
-            && self.state.source_media == route.source_media
+    pub fn target(&self) -> ConsumerRouteTarget {
+        ConsumerRouteTarget::new(
+            self.route.clone(),
+            self.key.stream.clone(),
+            self.source.descriptor.media_kind(),
+        )
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PendingConsumerRouteView<'a> {
     pub source: &'a PublishedSource,
-    pub selection: Option<ConsumerSourceSelection>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ConsumerRouteTransportRef {
-    pub consumer_user_id: UserId,
-    pub consumer_connection_id: ConnectionId,
-    pub consumer_media: TransportMediaId,
-    pub source_user_id: UserId,
-    pub source_connection_id: ConnectionId,
-    pub source_media: TransportMediaId,
+    pub selection: ConsumerSourceSelection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,16 +145,6 @@ impl SourceKey {
         Self {
             owner_user_id: owner_user_id.clone(),
             stream_id: stream_id.clone(),
-        }
-    }
-}
-
-impl TransportMediaRemoval {
-    pub fn new(user: UserId, connection: ConnectionId, transport_media: TransportMediaId) -> Self {
-        Self {
-            user,
-            connection,
-            transport_media,
         }
     }
 }

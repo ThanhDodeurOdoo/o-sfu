@@ -12,7 +12,7 @@ use super::{
         outbound::{OutboundSender, RemoteSourceSnapshot},
         state::RoomState,
     },
-    ConsumerId, ConsumerKey, ConsumerRouteTarget, ConsumerState, PublishedSource,
+    ConsumerId, ConsumerRouteTarget, PublishedSource, SubscriptionKey,
     route_graph::{ConsumerRouteReservation, RelayRouteKey},
 };
 use crate::engine::{
@@ -226,22 +226,12 @@ impl ConsumerSetupTarget {
         }
     }
 
-    pub(super) fn consumer_key(&self) -> ConsumerKey {
-        ConsumerKey::new(self.session.user_id(), self.source_id)
-    }
-
-    pub(super) fn consumer_state(
-        &self,
-        consumer_media: TransportMediaId,
-        consumer_mid: String,
-    ) -> ConsumerState {
-        ConsumerState {
-            consumer_connection_id: self.session.connection_id(),
-            source_connection_id: self.source.session_key().connection_id(),
-            source_media: self.source.transport_media_id(),
-            consumer_media,
-            consumer_mid,
-        }
+    pub(super) fn subscription_key(&self) -> SubscriptionKey {
+        SubscriptionKey::new(
+            self.session.user_id(),
+            self.source.session_key().user_id(),
+            &self.stream,
+        )
     }
 
     pub(super) fn transport_consumer_route(

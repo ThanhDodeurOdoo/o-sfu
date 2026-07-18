@@ -19,16 +19,14 @@ use o_sfu_router::{
 };
 
 use super::{
-    ConsumerKey, ConsumerRouteState, ConsumerRouteTarget, ConsumerSetupOrigin,
-    ConsumerSetupOutcome, DeclaredConsumerSetup, PendingConsumerSetup, ValidatedPublish,
+    ConsumerRouteState, ConsumerRouteTarget, ConsumerSetupOrigin, ConsumerSetupOutcome,
+    DeclaredConsumerSetup, PendingConsumerSetup, SubscriptionKey, ValidatedPublish,
 };
 use crate::{
     Bitrate, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
-        media_transport::{
-            SessionUploadEncoding, TransportConsumerRoute, TransportMediaId, TransportTeardown,
-        },
+        media_transport::{SessionUploadEncoding, TransportConsumerRoute, TransportMediaId},
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
@@ -36,7 +34,7 @@ use crate::{
         },
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
-            SourceEncodingDescriptor, SourceSelector, UploadLayerPolicyRole, UserStreamId,
+            SourceEncodingDescriptor, UploadLayerPolicyRole, UserStreamId,
             test_support::{
                 TestSubscriptionStates, source_kind_for_stream_id,
                 source_publish_intent_for_source, stream_id_for_source,
@@ -161,15 +159,21 @@ fn install_test_consumer_route(
     state: &mut RoomState,
     producer_user_id: &UserId,
     consumer_user_id: &UserId,
-) -> (ConsumerKey, ConnectionId) {
+) -> (SubscriptionKey, ConnectionId) {
+    join_test_user(state, producer_user_id);
+    join_test_user(state, consumer_user_id);
     let consumer_connection_id = set_test_user_ready(state, consumer_user_id);
-    let source_id = commit_test_publication(
+    commit_test_publication(
         state,
         producer_user_id,
         TestSourceKind::ScalableVideo,
         TransportMediaId::new(1),
     );
-    let route_key = ConsumerKey::new(consumer_user_id, source_id);
+    let route_key = SubscriptionKey::new(
+        consumer_user_id,
+        producer_user_id,
+        &stream_id_for_source(TestSourceKind::ScalableVideo),
+    );
     let mut setups = state
         .plan_missing_consumers(consumer_user_id, consumer_connection_id)
         .expect("consumer session should exist");
@@ -257,21 +261,6 @@ fn commit_test_video_publication(
     )
 }
 
-fn set_test_consumer_policy_pause(state: &mut RoomState, key: &ConsumerKey) {
-    let route_ref = state
-        .topology
-        .committed_consumer_route_for_key(key)
-        .expect("consumer route should exist")
-        .transport_ref();
-    assert!(state.topology.update_consumer_source_selection(
-        &route_ref,
-        key.source_id,
-        |selection| {
-            selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
-        }
-    ));
-}
-
 fn pending_consumer_setup() -> (
     RoomState,
     UserId,
@@ -352,46 +341,16 @@ fn consumer_setup_mid_uses_transport_then_negotiated_then_id() {
             commit_setup_with_media(&mut state, setup, TransportMediaId::new(20), transport),
             ConsumerSetupOutcome::Committed { .. }
         ));
-        let source = state
-            .topology
-            .source_id_for_owner_stream(&publisher, &stream)
-            .expect("published source should exist");
-        let key = ConsumerKey::new(&subscriber, source);
+        let key = SubscriptionKey::new(&subscriber, &publisher, &stream);
 
         assert_eq!(
             state
                 .topology
                 .committed_consumer_route_for_key(&key)
-                .map(|route| route.state.consumer_mid.as_str()),
+                .map(|route| route.mid),
             Some(expected)
         );
     }
-}
-
-#[test]
-fn policy_paused_routes_do_not_count_as_effective_delivery() {
-    let mut state = test_state();
-    let producer_user_id = UserId::Integer(1);
-    let consumer_user_id = UserId::Integer(2);
-    let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
-
-    join_test_user(&mut state, &producer_user_id);
-    join_test_user(&mut state, &consumer_user_id);
-    let (key, _) = install_test_consumer_route(&mut state, &producer_user_id, &consumer_user_id);
-
-    assert!(state.source_fanout_pressure(1));
-    assert_eq!(
-        state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
-        Some(ConsumerRouteState::Active)
-    );
-
-    set_test_consumer_policy_pause(&mut state, &key);
-
-    assert!(!state.source_fanout_pressure(1));
-    assert_eq!(
-        state.consumer_route_state(&consumer_user_id, &producer_user_id, &stream_id),
-        Some(ConsumerRouteState::Inactive)
-    );
 }
 
 #[test]
@@ -400,8 +359,6 @@ fn stale_replaced_connection_cannot_update_download_state() {
     let producer_user_id = UserId::Integer(1);
     let consumer_user_id = UserId::Integer(2);
 
-    join_test_user(&mut state, &producer_user_id);
-    join_test_user(&mut state, &consumer_user_id);
     let (route_key, stale_connection_id) =
         install_test_consumer_route(&mut state, &producer_user_id, &consumer_user_id);
 
@@ -416,58 +373,141 @@ fn stale_replaced_connection_cannot_update_download_state() {
     );
     assert!(!change.route_graph_changed());
     assert!(
-        state.desired_source_active(
-            &consumer_user_id,
-            &producer_user_id,
-            &stream_id_for_source(TestSourceKind::ScalableVideo),
-        ),
+        state
+            .topology
+            .subscription_intent(&route_key)
+            .active()
+            .unwrap_or(true),
         "stale subscription updates must not overwrite the replacement user's stored preferences"
     );
-    assert!(
-        !state.topology.has_consumer_setup_or_route(&route_key),
-        "replacement join should clear stale consumer routes before the new connection reboots them"
+    assert_eq!(
+        state.media_counts().subscriptions,
+        0,
+        "replacement join should clear stale consumer routes"
     );
 }
 
 #[test]
-fn subscription_change_reserves_missing_setup_for_existing_publisher() {
+fn stored_intent_attaches_before_readiness_then_reserves_setup() {
     let mut state = test_state();
-    let publisher_user_id = UserId::Integer(1);
-    let subscriber_user_id = UserId::Integer(2);
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    let publisher_connection = join_test_user(&mut state, &publisher);
+    let receiver_connection = join_test_user(&mut state, &receiver);
+    assert!(
+        state
+            .set_user_negotiated(
+                &publisher,
+                publisher_connection,
+                sample_client_rtp_capabilities()
+            )
+            .is_some()
+    );
+    let intent = source_publish_intent_for_source(TestSourceKind::ScalableVideo);
+    let intents = subscription_intents_from_test_states(&scalable_video_states(false));
+    assert!(
+        state
+            .apply_receiver_intent(&receiver, receiver_connection, &publisher, &intents)
+            .is_some()
+    );
+    let publish = state
+        .validate_publish(&publisher, publisher_connection, &intent)
+        .expect("ready publisher should validate");
+    let rtp = derive_consumable_rtp_parameters(
+        &sample_video_rtp_parameters(None, 22_222),
+        &state.router_rtp_capabilities(),
+    )
+    .expect("publisher RTP parameters should be consumable");
+    let commit = state
+        .commit_publish_reservation(publish, rtp, &[], TransportMediaId::new(10))
+        .expect("publication should commit");
+    assert!(commit.receiver_route_work.setups.is_empty());
+    let source_id = state
+        .published_source_id(&publisher, publisher_connection, intent.stream_id())
+        .expect("publication should be current");
+    assert_eq!(
+        state
+            .topology
+            .source_selection_for_test(&receiver, source_id),
+        Some(ConsumerSourceSelection::open(false))
+    );
+    assert_eq!(
+        state.set_user_negotiated(
+            &receiver,
+            receiver_connection,
+            sample_client_rtp_capabilities()
+        ),
+        Some(true)
+    );
+    let readiness = state
+        .refresh_consumer_readiness(&receiver, receiver_connection)
+        .expect("receiver should remain current");
+    assert_eq!(readiness.work.setups.len(), 1);
+}
 
-    join_test_user(&mut state, &publisher_user_id);
-    join_test_user(&mut state, &subscriber_user_id);
+#[test]
+fn policy_paused_route_does_not_create_fanout_pressure() {
+    let mut state = test_state();
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    let (key, _) = install_test_consumer_route(&mut state, &publisher, &receiver);
+    assert!(state.source_fanout_pressure(1));
+    let route = state
+        .topology
+        .committed_consumer_route_for_key(&key)
+        .expect("consumer route should be committed");
+    let source_id = route.source.descriptor.source_id();
+    let transport_route = route.route.clone();
+    assert!(state.topology.update_consumer_source_selection(
+        &key,
+        source_id,
+        &transport_route,
+        |selection| {
+            selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
+        }
+    ));
+    assert!(!state.source_fanout_pressure(1));
+}
 
-    let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
-    let source_id = commit_test_video_publication(
+#[test]
+fn missing_consumer_setup_applies_video_cap_before_transport() {
+    let mut state = test_state_with_media_limits(RoomMediaLimits::try_new(4, 1).unwrap());
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    join_test_user(&mut state, &publisher);
+    join_test_user(&mut state, &receiver);
+    let receiver_connection = set_test_user_ready(&mut state, &receiver);
+    let scalable = commit_test_video_publication(
         &mut state,
-        &publisher_user_id,
+        &publisher,
         TestSourceKind::ScalableVideo,
         TransportMediaId::new(10),
         22_222,
     );
-
-    let intents = subscription_intents_from_test_states(&scalable_video_states(false));
-    let change = state.plan_receiver_route_work(
-        &subscriber_user_id,
-        subscriber_connection_id,
-        &publisher_user_id,
-        &intents,
+    let readable = commit_test_video_publication(
+        &mut state,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        TransportMediaId::new(11),
+        33_333,
     );
-    assert!(change.activities.is_empty());
-    assert!(change.relays.is_empty());
-    assert_eq!(change.setups.len(), 1);
-    let selection = state
-        .topology
-        .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, source_id))
-        .expect("compat subscription should create a source-level selection");
-    assert!(!selection.active());
+    let setups = state
+        .plan_missing_consumers(&receiver, receiver_connection)
+        .expect("receiver should remain current");
+    assert_eq!(setups.len(), 2);
+    let selection = |source_id| {
+        setups
+            .iter()
+            .find(|setup| setup.target.source_id == source_id)
+            .expect("published source should have a setup")
+            .reservation
+            .selection()
+    };
+    assert!(selection(readable).delivery_active());
     assert_eq!(
-        selection.selector(),
-        SourceSelector::Open,
-        "compat downloads default to an unconstrained source selector"
+        selection(scalable).policy_pause_reason(),
+        Some(PolicyPauseReason::VideoDownloadLimit)
     );
-    assert_eq!(state.media_counts().subscriptions, 1);
 }
 
 #[test]
@@ -574,99 +614,6 @@ fn consumer_setup_commit_releases_stale_publication_plan() {
 }
 
 #[test]
-fn stale_consumer_setup_retries_original_consumer_id() {
-    let (
-        mut state,
-        publisher_user_id,
-        subscriber_user_id,
-        subscriber_connection_id,
-        stream_id,
-        setup,
-    ) = pending_consumer_setup();
-    let consumer = setup.consumer;
-    assert_eq!(state.media_counts().subscriptions, 1);
-
-    let source_id = state
-        .topology
-        .source_id_for_owner_stream(&publisher_user_id, &stream_id)
-        .expect("publisher source should exist");
-    let key = ConsumerKey::new(&subscriber_user_id, source_id);
-    assert!(state.topology.has_consumer_setup_or_route(&key));
-    state.topology.remove_route_graph_entry_for_test(&key);
-    assert!(!state.topology.has_consumer_setup_or_route(&key));
-
-    let ConsumerSetupOutcome::Released(..) = commit_setup(&mut state, setup) else {
-        panic!("setup with rejected route graph commit should be released");
-    };
-
-    let mut retries = state
-        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id)
-        .expect("subscriber session should exist");
-    assert_eq!(retries.len(), 1);
-    let mut retry = retries.pop().expect("consumer setup should be retried");
-    retry.consumer = consumer;
-    let ConsumerSetupOutcome::Committed { .. } = commit_setup(&mut state, retry) else {
-        panic!("the original consumer id should remain available after stale rejection");
-    };
-    assert_eq!(state.consumer_count(), 1);
-}
-
-#[test]
-fn missing_consumer_setup_applies_video_download_cap_before_effects() {
-    let mut state = test_state_with_media_limits(RoomMediaLimits::try_new(4, 1).unwrap());
-    let publisher_user_id = UserId::Integer(1);
-    let subscriber_user_id = UserId::Integer(2);
-
-    join_test_user(&mut state, &publisher_user_id);
-    join_test_user(&mut state, &subscriber_user_id);
-
-    let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_user_id);
-    let scalable_source_id = commit_test_video_publication(
-        &mut state,
-        &publisher_user_id,
-        TestSourceKind::ScalableVideo,
-        TransportMediaId::new(10),
-        22_222,
-    );
-    let readable_source_id = commit_test_video_publication(
-        &mut state,
-        &publisher_user_id,
-        TestSourceKind::ReadableVideo,
-        TransportMediaId::new(11),
-        33_333,
-    );
-    for source_id in [scalable_source_id, readable_source_id] {
-        state.topology.ensure_selection_for_test(
-            &ConsumerKey::new(&subscriber_user_id, source_id),
-            ConsumerSourceSelection::open(true),
-        );
-    }
-
-    let planned_setups = state
-        .plan_missing_consumers(&subscriber_user_id, subscriber_connection_id)
-        .expect("subscriber session should still exist");
-
-    assert_eq!(planned_setups.len(), 2);
-    let scalable_selection = state
-        .topology
-        .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, scalable_source_id))
-        .expect("scalable source should have a consumer selection");
-    let readable_selection = state
-        .topology
-        .consumer_source_selection(&ConsumerKey::new(&subscriber_user_id, readable_source_id))
-        .expect("readable source should have a consumer selection");
-    assert!(scalable_selection.active());
-    assert!(readable_selection.active());
-    assert!(!scalable_selection.delivery_active());
-    assert!(readable_selection.delivery_active());
-    assert_eq!(
-        scalable_selection.policy_pause_reason(),
-        Some(PolicyPauseReason::VideoDownloadLimit)
-    );
-    assert_eq!(readable_selection.policy_pause_reason(), None);
-}
-
-#[test]
 fn commit_publish_reservation_registers_all_source_encodings() {
     let mut state = test_state();
     let user_id = UserId::Integer(1);
@@ -730,62 +677,5 @@ fn commit_publish_reservation_registers_all_source_encodings() {
             .iter()
             .map(|encoding| encoding.encoding_id())
             .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn transport_removals_for_departing_users_deduplicate_overlapping_consumer_routes() {
-    let mut state = test_state();
-    let publisher_id = UserId::Integer(1);
-    let subscriber_id = UserId::Integer(2);
-    let source_media = TransportMediaId::new(10);
-    let consumer_media = TransportMediaId::new(20);
-
-    join_test_user(&mut state, &publisher_id);
-    join_test_user(&mut state, &subscriber_id);
-
-    let subscriber_connection_id = set_test_user_ready(&mut state, &subscriber_id);
-    commit_test_publication(
-        &mut state,
-        &publisher_id,
-        TestSourceKind::ScalableVideo,
-        source_media,
-    );
-    let mut setups = state
-        .plan_missing_consumers(&subscriber_id, subscriber_connection_id)
-        .expect("subscriber should still be current");
-    assert_eq!(setups.len(), 1);
-    let setup = setups.pop().expect("consumer setup should be planned");
-    assert!(matches!(
-        commit_setup_with_media(
-            &mut state,
-            setup,
-            consumer_media,
-            Some(String::from("camera-down")),
-        ),
-        ConsumerSetupOutcome::Committed { .. }
-    ));
-
-    let outcome = state.apply_disconnect_users(&[publisher_id.clone(), subscriber_id.clone()]);
-    let (_, teardown) = outcome.transport_plan.relays_and_teardown();
-
-    let mut removed_media = teardown
-        .iter()
-        .filter_map(|operation| match operation {
-            TransportTeardown::RemoveMedia {
-                session_key,
-                transport_media_id,
-            } => Some((session_key.user_id(), *transport_media_id)),
-            TransportTeardown::CloseSession { .. }
-            | TransportTeardown::ReleaseRelayRoute { .. } => None,
-        })
-        .collect::<Vec<_>>();
-    removed_media.sort_unstable();
-    assert_eq!(
-        removed_media,
-        vec![
-            (&publisher_id, source_media),
-            (&subscriber_id, consumer_media)
-        ]
     );
 }

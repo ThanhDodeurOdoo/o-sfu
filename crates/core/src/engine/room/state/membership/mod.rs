@@ -212,7 +212,6 @@ impl RoomState {
                 permissions,
                 info: UserInfo::default(),
                 server_featured: None,
-                desired_source_subscriptions: BTreeMap::new(),
                 parsed_client_rtp_capabilities: None,
                 connection_id,
                 sender,

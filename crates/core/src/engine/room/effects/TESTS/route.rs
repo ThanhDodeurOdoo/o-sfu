@@ -19,7 +19,7 @@ use crate::{
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
-        room::media_graph::ConsumerRouteTransportRef,
+        room::media_graph::SubscriptionKey,
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId, UserStreamId,
         },
@@ -76,21 +76,19 @@ fn keyframe_failure_keeps_source_policy_update() -> Result<(), io::Error> {
         TransportSourceKey::new(source.clone(), TransportMediaId::new(2)),
     );
     let update = ConsumerPacketSelectionUpdate::route_activity(
-        ConsumerRouteTransportRef {
-            consumer_user_id: consumer.user_id().clone(),
-            consumer_connection_id: consumer.connection_id(),
-            consumer_media: route.consumer_transport_media_id(),
-            source_user_id: source.user_id().clone(),
-            source_connection_id: source.connection_id(),
-            source_media: route.source_transport_media_id(),
-        },
+        SubscriptionKey::new(
+            consumer.user_id(),
+            source.user_id(),
+            &UserStreamId::from("camera"),
+        ),
         PublishedSourceId::from_raw(1),
+        route,
         ConsumerSourceSelection::open(true),
         Some(PolicyPauseReason::HiddenTile),
     )
     .ok_or_else(|| io::Error::other("policy pause change should create a route update"))?;
     let mut outcome = RoomRouteOutcome::default();
-    ConsumerRouteFinish::SourcePolicy(update.clone(), route).finish(
+    ConsumerRouteFinish::SourcePolicy(update.clone()).finish(
         ConsumerRouteControlOutcome::keyframe_error(TransportAdapterError::TransportUnavailable),
         &mut outcome,
     );
