@@ -187,12 +187,10 @@ impl RoomRouteEffects {
     pub(in crate::engine::room) fn source_policy_update(
         &mut self,
         update: ConsumerPacketSelectionUpdate,
-        target: &ConsumerRouteTarget,
     ) {
-        let route = target.transport_route().clone();
         self.0.push_consumer(
-            update.route_control(route.clone()),
-            ConsumerRouteFinish::SourcePolicy(update, route),
+            update.route_control(),
+            ConsumerRouteFinish::SourcePolicy(update),
         );
     }
 
@@ -248,7 +246,7 @@ enum ConsumerRouteFinish {
     Activity(ReceiverRouteActivity, DiagnosticsEventData),
     Keyframe(ConsumerRouteTarget),
     SetupActivity(TransportConsumerRoute, bool),
-    SourcePolicy(ConsumerPacketSelectionUpdate, TransportConsumerRoute),
+    SourcePolicy(ConsumerPacketSelectionUpdate),
 }
 
 impl ConsumerRouteFinish {
@@ -303,10 +301,10 @@ impl ConsumerRouteFinish {
                     );
                 }
             }
-            Self::SourcePolicy(update, route) => {
+            Self::SourcePolicy(update) => {
                 if result.packet_gate_failed() || result.activity_failed() {
                     warn!(
-                        ?route,
+                        route = ?update.route,
                         error = ?result.error(),
                         route_active = update.route_active(),
                         "media transport rejected the receiver-driven packet selection update"
@@ -316,7 +314,7 @@ impl ConsumerRouteFinish {
                 if result.keyframe_failed() {
                     warn!(
                         error = ?result.error(),
-                        ?route,
+                        route = ?update.route,
                         "media transport failed to request an adaptation keyframe refresh"
                     );
                 }

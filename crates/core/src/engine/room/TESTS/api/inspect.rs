@@ -100,19 +100,6 @@ impl RoomTestInspect<'_> {
             .source_id_for_owner_stream(owner_user_id, stream_type)
     }
 
-    #[cfg(test)]
-    pub async fn contains_consumer_source_selection(
-        self,
-        consumer_user_id: &UserId,
-        source_id: PublishedSourceId,
-    ) -> bool {
-        self.room
-            .state
-            .read()
-            .await
-            .contains_consumer_source_selection(consumer_user_id, source_id)
-    }
-
     pub async fn user_info_snapshot(self, user_id: &UserId) -> Option<(UserId, UserInfo)> {
         self.room.state.read().await.user_info_snapshot(user_id)
     }

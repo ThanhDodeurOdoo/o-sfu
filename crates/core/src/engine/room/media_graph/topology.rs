@@ -10,19 +10,18 @@ use o_sfu_router::{
 use tracing::{error, warn};
 
 use super::{
-    CommittedConsumerSetup, ConsumerId, ConsumerKey, ConsumerRouteTarget,
-    ConsumerRouteTransportRef, ConsumerRouteView, ConsumerSetupTarget, DeclaredConsumerSetup,
-    PendingConsumerRouteView, PendingConsumerSetup, PublishedSource, ReceiverRouteActivity,
-    TransportMediaRemoval, ValidatedPublish,
+    CommittedConsumerSetup, ConsumerId, ConsumerRouteView, ConsumerSetupTarget,
+    DeclaredConsumerSetup, PendingConsumerRouteView, PendingConsumerSetup, PublishedSource,
+    ReceiverRouteActivity, SubscriptionKey, ValidatedPublish,
     producer::{PublicationCommitError, allocate_source_descriptor},
-    route_graph::{RelayRouteEffect, RouteGraph},
+    route_graph::{CurrentPublication, RelayRouteEffect, RemovedRoutes, RouteGraph},
     source_index::PublishedSources,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
     media_transport::{
-        RelayRouteActivity, SessionUploadEncoding, TransportConsumerRoute, TransportMediaId,
-        TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey, TransportTeardown,
+        SessionUploadEncoding, TransportConsumerRoute, TransportMediaId, TransportRelayRouteEffect,
+        TransportSessionKey, TransportSourceKey, TransportTeardown,
     },
     room::{
         RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
@@ -31,7 +30,7 @@ use crate::engine::{
     },
     source_model::{
         ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
-        PublishedSourceId, UserStreamId,
+        PublishedSourceId, SourceSubscriptionIntent, UserStreamId,
     },
 };
 
@@ -261,12 +260,12 @@ impl RoomTopology {
             .then(|| owner.clone())
     }
 
-    pub(in crate::engine::room) fn live_consumer_routes(
+    pub(in crate::engine::room) fn committed_consumer_routes(
         &self,
     ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
         self.route_graph
-            .committed_entries()
-            .filter_map(|(key, state)| self.consumer_route_for_key(key, state))
+            .attached()
+            .filter_map(|(key, current)| self.consumer_route(key, current))
     }
 
     pub(in crate::engine::room) fn committed_consumer_routes_for_user(
@@ -274,8 +273,8 @@ impl RoomTopology {
         user_id: &UserId,
     ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
         self.route_graph
-            .committed_entries_for_user(user_id)
-            .filter_map(|(key, state)| self.consumer_route_for_key(key, state))
+            .attached_for_receiver(user_id)
+            .filter_map(|(key, current)| self.consumer_route(key, current))
     }
 
     pub(in crate::engine::room) fn pending_consumer_routes_for_user(
@@ -283,12 +282,13 @@ impl RoomTopology {
         user_id: &UserId,
     ) -> impl Iterator<Item = PendingConsumerRouteView<'_>> {
         self.route_graph
-            .pending_keys_for_user(user_id)
-            .filter_map(|key| {
-                let source = self.sources.source(key.source_id)?;
+            .attached_for_receiver(user_id)
+            .filter(|(_, current)| current.is_pending())
+            .filter_map(|(_, current)| {
+                let source = self.sources.source(current.source_id)?;
                 Some(PendingConsumerRouteView {
                     source,
-                    selection: self.route_graph.selection(key),
+                    selection: current.selection,
                 })
             })
     }
@@ -296,9 +296,26 @@ impl RoomTopology {
     #[must_use]
     pub(in crate::engine::room) fn consumer_source_selection(
         &self,
-        key: &ConsumerKey,
+        key: &SubscriptionKey,
+        source_id: PublishedSourceId,
     ) -> Option<ConsumerSourceSelection> {
-        self.route_graph.selection(key)
+        self.route_graph.selection(key, source_id)
+    }
+
+    pub(in crate::engine::room) fn merge_subscription_intent(
+        &mut self,
+        key: SubscriptionKey,
+        intent: SourceSubscriptionIntent,
+    ) {
+        self.route_graph.merge_intent(key, intent);
+    }
+
+    #[must_use]
+    pub(in crate::engine::room) fn subscription_intent(
+        &self,
+        key: &SubscriptionKey,
+    ) -> SourceSubscriptionIntent {
+        self.route_graph.intent(key)
     }
 
     pub(in crate::engine::room) fn committed_consumer_user_ids_for_source(
@@ -306,9 +323,9 @@ impl RoomTopology {
         source_id: PublishedSourceId,
     ) -> BTreeSet<UserId> {
         self.route_graph
-            .keys_for_source(source_id)
-            .filter(|key| self.route_graph.consumer_state(key).is_some())
-            .map(|key| key.consumer_user_id.clone())
+            .attached_for_source(source_id)
+            .filter(|(_, current)| current.committed().is_some())
+            .map(|(key, _)| key.receiver.clone())
             .collect()
     }
 
@@ -316,26 +333,22 @@ impl RoomTopology {
         &self,
         user_id: &UserId,
     ) -> BTreeSet<UserId> {
+        let route_graph = &self.route_graph;
         self.sources
             .ids_for_owner(user_id)
-            .flat_map(|source_id| self.route_graph.keys_for_source(source_id))
-            .filter(|key| self.route_graph.consumer_state(key).is_some())
-            .map(|key| key.consumer_user_id.clone())
+            .flat_map(|source_id| route_graph.attached_for_source(source_id))
+            .filter(|(_, current)| current.committed().is_some())
+            .map(|(key, _)| key.receiver.clone())
             .collect()
     }
 
     #[must_use]
     pub(in crate::engine::room) fn committed_consumer_route_for_key(
         &self,
-        key: &ConsumerKey,
+        key: &SubscriptionKey,
     ) -> Option<ConsumerRouteView<'_>> {
-        let state = self.route_graph.consumer_state(key)?;
-        self.consumer_route_for_key(key, state)
-    }
-
-    #[must_use]
-    pub(in crate::engine::room) fn has_consumer_setup_or_route(&self, key: &ConsumerKey) -> bool {
-        self.route_graph.has_consumer_setup_or_route(key)
+        let (key, current) = self.route_graph.current(key)?;
+        self.consumer_route(key, current)
     }
 
     #[must_use]
@@ -347,49 +360,58 @@ impl RoomTopology {
     }
 
     pub(super) fn missing_consumer_targets_for_source<'a>(
-        &self,
+        &mut self,
         source_id: PublishedSourceId,
         receivers: impl IntoIterator<Item = (&'a UserId, ConnectionId)>,
     ) -> Vec<ConsumerSetupTarget> {
-        let Some(source) = self.published_source(source_id) else {
-            return Vec::new();
-        };
         receivers
             .into_iter()
-            .filter_map(|(user, connection)| self.consumer_target(user, connection, source))
+            .filter_map(|(user, connection)| self.consumer_target(user, connection, source_id))
             .collect()
     }
 
     fn consumer_target(
-        &self,
+        &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
+        source_id: PublishedSourceId,
+    ) -> Option<ConsumerSetupTarget> {
+        let consumer_session = self.committed_transport_user_key(user_id.clone(), connection_id)?;
+        let (sources, route_graph) = (&self.sources, &mut self.route_graph);
+        Self::attach_consumer_target(route_graph, &consumer_session, sources.source(source_id)?)
+    }
+
+    fn attach_consumer_target(
+        route_graph: &mut RouteGraph,
+        consumer_session: &TransportSessionKey,
         source: &PublishedSource,
     ) -> Option<ConsumerSetupTarget> {
-        if source.descriptor.owner().user_id() == user_id {
+        if source.descriptor.owner().user_id() == consumer_session.user_id() {
             return None;
         }
-        let key = ConsumerKey::new(user_id, source.descriptor.source_id());
-        if self.has_consumer_setup_or_route(&key) {
-            return None;
-        }
-        let consumer_session = self.committed_transport_user_key(user_id.clone(), connection_id)?;
-        Some(ConsumerSetupTarget::new(consumer_session, source))
+        let target = ConsumerSetupTarget::new(consumer_session.clone(), source);
+        route_graph
+            .attach_for_setup(target.subscription_key(), target.source_id)
+            .then_some(target)
     }
 
     pub(super) fn missing_consumer_targets(
-        &self,
+        &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
         include_source: impl Fn(&PublishedSource) -> bool,
     ) -> Vec<ConsumerSetupTarget> {
-        self.sources
+        let Some(consumer_session) =
+            self.committed_transport_user_key(user_id.clone(), connection_id)
+        else {
+            return Vec::new();
+        };
+        let (sources, route_graph) = (&self.sources, &mut self.route_graph);
+        sources
             .iter()
+            .filter(|source| include_source(source))
             .filter_map(|source| {
-                if !include_source(source) {
-                    return None;
-                }
-                self.consumer_target(user_id, connection_id, source)
+                Self::attach_consumer_target(route_graph, &consumer_session, source)
             })
             .collect()
     }
@@ -399,11 +421,15 @@ impl RoomTopology {
         loads: &mut WorkerLoadIndex,
         current_connection_id: impl Fn(&UserId) -> Option<ConnectionId>,
     ) {
-        for connection_id in self.route_graph.committed_consumer_connection_ids() {
-            loads.record_consumer(self.router.media_worker_id_for_connection(connection_id));
-        }
-        for user_id in self.route_graph.pending_consumer_user_ids() {
-            let Some(connection_id) = current_connection_id(user_id) else {
+        for (key, current) in self.route_graph.attached() {
+            let connection_id = if let Some((route, _)) = current.committed() {
+                route.consumer_session_key().connection_id()
+            } else if current.is_pending() {
+                let Some(connection_id) = current_connection_id(&key.receiver) else {
+                    continue;
+                };
+                connection_id
+            } else {
                 continue;
             };
             loads.record_consumer(self.router.media_worker_id_for_connection(connection_id));
@@ -424,26 +450,22 @@ impl RoomTopology {
                 return false;
             }
             let mut deliveries_by_worker = BTreeMap::new();
-            for key in self
+            for (key, current) in self
                 .route_graph
-                .keys_for_source(source.descriptor.source_id())
+                .attached_for_source(source.descriptor.source_id())
             {
-                if !self.route_graph.has_consumer_setup_or_route(key) {
+                if current.committed().is_none() && !current.is_pending() {
                     continue;
                 }
-                if self
-                    .route_graph
-                    .selection(key)
-                    .is_some_and(|selection| !selection.delivery_active())
-                {
+                if !current.selection.delivery_active() {
                     continue;
                 }
-                let Some(connection_id) = current_connection_id(&key.consumer_user_id) else {
+                let Some(connection_id) = current_connection_id(&key.receiver) else {
                     continue;
                 };
                 let Some(media_worker) = self
                     .router
-                    .committed_media_worker_id(&key.consumer_user_id, connection_id)
+                    .committed_media_worker_id(&key.receiver, connection_id)
                 else {
                     continue;
                 };
@@ -461,92 +483,53 @@ impl RoomTopology {
 
     pub fn update_consumer_source_selection(
         &mut self,
-        route: &ConsumerRouteTransportRef,
+        key: &SubscriptionKey,
         source_id: PublishedSourceId,
+        route: &TransportConsumerRoute,
         update: impl FnOnce(&mut ConsumerSourceSelection),
     ) -> bool {
-        let key = ConsumerKey::new(&route.consumer_user_id, source_id);
-        let Some(current_route) = self.committed_consumer_route_for_key(&key) else {
-            return false;
-        };
-        if !current_route.matches_transport_ref(route) {
-            return false;
-        }
-        update(self.route_graph.selection_mut_or_open(key));
-        true
+        self.route_graph
+            .update_selection(key, source_id, route, update)
     }
 
-    fn remove_user_media(&mut self, user_id: &UserId) -> Vec<RelayRouteEffect> {
-        let mut relay_effects = Vec::new();
+    fn detach_user_sources(
+        &mut self,
+        user_id: &UserId,
+    ) -> (Vec<TransportSourceKey>, RemovedRoutes) {
+        let mut sources = Vec::new();
+        let mut removed = RemovedRoutes::default();
         let source_ids = self.sources.ids_for_owner(user_id).collect::<Vec<_>>();
         for source_id in source_ids {
-            if let Some(effects) = self.remove_source(source_id) {
-                relay_effects.extend(effects);
+            if let Some((source, routes)) = self.remove_source(source_id) {
+                sources.push(source.transport);
+                removed.extend(routes);
             }
         }
-        for key in self.route_graph.keys_for_user(user_id) {
-            relay_effects.extend(self.route_graph.remove_key_state(&key));
-        }
-        relay_effects
+        (sources, removed)
     }
 
-    fn remove_source(&mut self, source_id: PublishedSourceId) -> Option<Vec<RelayRouteEffect>> {
-        self.sources.source(source_id)?;
-        let consumer_keys = self
-            .route_graph
-            .keys_for_source(source_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut relay_effects = Vec::new();
-        for key in consumer_keys {
-            relay_effects.extend(self.route_graph.remove_key_state(&key));
-        }
-        self.sources.remove(source_id)?;
-        Some(relay_effects)
+    fn remove_source(
+        &mut self,
+        source_id: PublishedSourceId,
+    ) -> Option<(PublishedSource, RemovedRoutes)> {
+        let source = self.sources.remove(source_id)?;
+        let routes = self.route_graph.detach_source(source_id);
+        Some((source, routes))
     }
 
-    fn transport_removals_for_users(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        let mut removals = self
-            .sources
-            .transport_removals_for_users(departing_user_ids);
-        removals.extend(self.consumer_transport_removals_for_users(departing_user_ids));
-        removals
-    }
-
-    fn transport_removals_for_user(&self, user_id: &UserId) -> Vec<TransportMediaRemoval> {
-        self.transport_removals_for_users(&BTreeSet::from([user_id.clone()]))
-    }
-
-    fn consumer_transport_removals_for_users(
-        &self,
-        departing_user_ids: &BTreeSet<UserId>,
-    ) -> Vec<TransportMediaRemoval> {
-        let affected_consumer_keys = departing_user_ids
-            .iter()
-            .flat_map(|user_id| {
-                self.route_graph
-                    .affected_keys_for_user(user_id, self.sources.ids_for_owner(user_id))
-            })
-            .collect::<BTreeSet<_>>();
-
-        self.route_graph
-            .transport_removals_for_keys(affected_consumer_keys)
-    }
-
-    fn consumer_route_for_key<'a>(
+    fn consumer_route<'a>(
         &'a self,
-        key: &ConsumerKey,
-        state: &'a super::ConsumerState,
+        key: &'a SubscriptionKey,
+        current: &'a CurrentPublication,
     ) -> Option<ConsumerRouteView<'a>> {
-        let source = self.sources.source(key.source_id)?;
+        let (route, mid) = current.committed()?;
+        let source = self.sources.source(current.source_id)?;
         Some(ConsumerRouteView {
-            consumer_user_id: key.consumer_user_id.clone(),
-            state,
+            key,
+            route,
+            mid,
             source,
-            selection: self.route_graph.selection(key),
+            selection: current.selection,
         })
     }
 
@@ -573,37 +556,24 @@ impl RoomTopology {
         Ok(source_id)
     }
 
-    pub(in crate::engine::room) fn consumer_route_target_for_source(
-        &self,
-        route: &ConsumerRouteTransportRef,
-        source: &PublishedSourceDescriptor,
-    ) -> ConsumerRouteTarget {
-        let transport_route = TransportConsumerRoute::new(
-            self.transport_user_key(route.consumer_user_id.clone(), route.consumer_connection_id),
-            route.consumer_media,
-            TransportSourceKey::new(
-                self.transport_user_key(route.source_user_id.clone(), route.source_connection_id),
-                route.source_media,
-            ),
-        );
-        ConsumerRouteTarget::new(
-            transport_route,
-            source.stream_id().clone(),
-            source.media_kind(),
-        )
-    }
-
-    fn resolve_media_teardowns(
-        &self,
-        removals: impl IntoIterator<Item = TransportMediaRemoval>,
-    ) -> Vec<TransportTeardown> {
-        removals
+    fn media_teardowns(
+        sources: impl IntoIterator<Item = TransportSourceKey>,
+        routes: impl IntoIterator<Item = TransportConsumerRoute>,
+    ) -> impl Iterator<Item = TransportTeardown> {
+        sources
             .into_iter()
-            .map(|removal| TransportTeardown::RemoveMedia {
-                session_key: self.transport_user_key(removal.user, removal.connection),
-                transport_media_id: removal.transport_media,
+            .map(|source| TransportTeardown::RemoveMedia {
+                session_key: source.session_key().clone(),
+                transport_media_id: source.transport_media_id(),
             })
-            .collect()
+            .chain(
+                routes
+                    .into_iter()
+                    .map(|route| TransportTeardown::RemoveMedia {
+                        session_key: route.consumer_session_key().clone(),
+                        transport_media_id: route.consumer_transport_media_id(),
+                    }),
+            )
     }
 
     fn resolve_relay_effects(
@@ -665,13 +635,6 @@ impl RoomTopology {
             return None;
         }
         let routed = source.routed;
-        let mut transport_removals = vec![TransportMediaRemoval::new(
-            user_id.clone(),
-            connection_id,
-            source.transport.transport_media_id(),
-        )];
-        transport_removals.extend(self.route_graph.transport_removals_for_source(source_id));
-        let teardown = self.resolve_media_teardowns(transport_removals);
         if let Some(error) = self.router.remove_producer(routed).err() {
             error!(
                 ?user_id,
@@ -680,8 +643,9 @@ impl RoomTopology {
                 "repaired published track room state after router producer teardown failed"
             );
         }
-        let relay_effects = self.remove_source(source_id)?;
-        let relay_effects = self.resolve_relay_effects(relay_effects);
+        let (source, removed) = self.remove_source(source_id)?;
+        let teardown = Self::media_teardowns([source.transport], removed.routes);
+        let relay_effects = self.resolve_relay_effects(removed.relays);
         Some(RoomTransportPlan::from_relays_and_teardown(
             relay_effects,
             teardown,
@@ -740,15 +704,19 @@ impl RoomTopology {
         let replacement_transport_plan = previous_session_key.as_ref().map_or_else(
             RoomTransportPlan::default,
             |replaced_session_key| {
-                let teardown = [TransportTeardown::CloseSession {
+                let close_session = TransportTeardown::CloseSession {
                     session_key: replaced_session_key.clone(),
-                }];
-                let relay_effects = self.remove_user_media(user_id);
+                };
+                let (_, removed_sources) = self.detach_user_sources(user_id);
+                let receiver_relays = self.route_graph.reset_receiver_for_replacement(user_id);
+                let RemovedRoutes { routes, mut relays } = removed_sources;
+                relays.extend(receiver_relays);
                 let relay_effects = self.resolve_relay_effects_with_displaced(
-                    relay_effects,
+                    relays,
                     user_id,
                     replaced_session_key,
                 );
+                let teardown = Self::media_teardowns([], routes).chain([close_session]);
                 RoomTransportPlan::from_relays_and_teardown(relay_effects, teardown)
             },
         );
@@ -759,10 +727,10 @@ impl RoomTopology {
     }
 
     pub fn remove_session(&mut self, user_id: &UserId) -> RoomTransportPlan {
-        let transport_removals = self.transport_removals_for_user(user_id);
-        let teardown = self.resolve_media_teardowns(transport_removals);
-        let relay_effects = self.remove_user_media(user_id);
-        let relay_effects = self.resolve_relay_effects(relay_effects);
+        let (sources, mut removed) = self.detach_user_sources(user_id);
+        removed.extend(self.route_graph.remove_receiver(user_id));
+        let teardown = Self::media_teardowns(sources, removed.routes);
+        let relay_effects = self.resolve_relay_effects(removed.relays);
         if let Some(error) = self.router.remove_session(user_id).err() {
             error!(?user_id, ?error, "failed to remove user from room router");
         }
@@ -794,10 +762,13 @@ impl RoomTopology {
             rtp.mid()
                 .map_or_else(|| consumer.to_string(), ToOwned::to_owned)
         });
-        let state = target.consumer_state(route.consumer_transport_media_id(), committed_mid);
         let (route_graph, router) = (&mut self.route_graph, &mut self.router);
-        let result = route_graph.commit(reservation, state, selection, || {
-            match router.add_consumer(target.session.user_id(), consumer, target.routed) {
+        let result = route_graph.commit(
+            reservation,
+            route.clone(),
+            committed_mid,
+            selection,
+            || match router.add_consumer(target.session.user_id(), consumer, target.routed) {
                 Ok(_) => true,
                 Err(error) => {
                     warn!(
@@ -808,8 +779,8 @@ impl RoomTopology {
                     );
                     false
                 }
-            }
-        });
+            },
+        );
         if let Err(relays) = result {
             return Err((route, self.resolve_relay_effects(relays)));
         }
@@ -829,9 +800,11 @@ impl RoomTopology {
         sender: OutboundSender,
         rtp: RouterRtpParameters,
     ) -> Option<PendingConsumerSetup> {
-        let key = target.consumer_key();
+        let key = target.subscription_key();
         let active = selection.delivery_active();
-        let reservation = self.route_graph.reserve_consumer_setup(key, selection)?;
+        let reservation =
+            self.route_graph
+                .reserve_consumer_setup(key, target.source_id, selection)?;
         let source_worker = target.source.session_key().media_worker_id();
         let target_worker = target.session.media_worker_id();
         let relays = if source_worker == target_worker {
@@ -868,32 +841,18 @@ impl RoomTopology {
         stream_id: &UserStreamId,
         active: bool,
     ) -> Option<ConsumerActivityCommit> {
+        let key = SubscriptionKey::new(user_id, target_user_id, stream_id);
         let source_id = self.source_id_for_owner_stream(target_user_id, stream_id)?;
-        let key = ConsumerKey::new(user_id, source_id);
-        self.route_graph.set_selection(&key, active);
-        let relay_effects = self.route_graph.set_relay_active(
-            user_id,
-            connection_id,
-            source_id,
-            RelayRouteActivity::from_active(active),
-        );
+        let relay_effects =
+            self.route_graph
+                .set_activity(&key, source_id, connection_id, active)?;
         let relay_effects = self.resolve_relay_effects(relay_effects);
-        let Some(route) = self.committed_consumer_route_for_key(&key) else {
-            return Some(ConsumerActivityCommit {
-                update: None,
-                relay_effects,
-            });
-        };
-        if route.state.consumer_connection_id != connection_id {
-            return Some(ConsumerActivityCommit {
-                update: None,
-                relay_effects,
-            });
-        }
-        let target =
-            self.consumer_route_target_for_source(&route.transport_ref(), &route.source.descriptor);
+        let update = self
+            .committed_consumer_route_for_key(&key)
+            .filter(|route| route.route.consumer_session_key().connection_id() == connection_id)
+            .map(|route| ReceiverRouteActivity::new(route.target(), active));
         Some(ConsumerActivityCommit {
-            update: Some(ReceiverRouteActivity::new(target, active)),
+            update,
             relay_effects,
         })
     }

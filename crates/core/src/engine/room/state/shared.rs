@@ -15,9 +15,8 @@ use crate::{
     RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
-        media_transport::TransportSessionKey,
-        room::placement::PlacementSnapshot,
-        source_model::{SourceSubscriptionIntent, UserStreamId},
+        media_transport::TransportSessionKey, room::placement::PlacementSnapshot,
+        source_model::UserStreamId,
     },
 };
 
@@ -40,8 +39,6 @@ pub struct ActiveUser {
     pub(super) permissions: RoomUserPermissions,
     pub(super) info: UserInfo,
     pub(super) server_featured: Option<bool>,
-    pub desired_source_subscriptions:
-        BTreeMap<UserId, BTreeMap<UserStreamId, SourceSubscriptionIntent>>,
     pub parsed_client_rtp_capabilities: Option<RouterRtpCapabilities>,
     pub connection_id: ConnectionId,
     pub sender: OutboundSender,
@@ -173,12 +170,12 @@ impl RoomState {
         self.topology.router().primary_worker()
     }
 
-    pub(in crate::engine::room) fn live_consumer_routes(
+    pub(in crate::engine::room) fn committed_consumer_routes(
         &self,
     ) -> impl Iterator<Item = ConsumerRouteView<'_>> {
-        self.topology.live_consumer_routes().filter(|route| {
-            self.user_connection_id(&route.consumer_user_id)
-                == Some(route.state.consumer_connection_id)
+        self.topology.committed_consumer_routes().filter(|route| {
+            self.user_connection_id(&route.key.receiver)
+                == Some(route.route.consumer_session_key().connection_id())
         })
     }
 
@@ -223,12 +220,14 @@ impl RoomState {
             sources: self
                 .topology
                 .committed_consumer_routes_for_user(user_id)
-                .filter(|route| connection_id == Some(route.state.consumer_connection_id))
+                .filter(|route| {
+                    connection_id == Some(route.route.consumer_session_key().connection_id())
+                })
                 .filter_map(|route| {
                     let source = &route.source.descriptor;
                     let owner = self.users.get(source.owner().user_id())?;
                     Some(RemoteSourceProjection {
-                        consumer_mid: route.state.consumer_mid.clone(),
+                        consumer_mid: route.mid.to_owned(),
                         source: source.clone(),
                         owner_info: owner.info.clone().with_featured(owner.server_featured),
                         producer_active: route.source.active,

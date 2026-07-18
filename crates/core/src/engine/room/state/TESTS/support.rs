@@ -1,9 +1,6 @@
-#[cfg(test)]
-use {super::super::media_graph::ConsumerKey, crate::engine::source_model::PublishedSourceId};
-
 use super::shared::RoomState;
 #[cfg(test)]
-use crate::engine::source_model::{SourceEncodingDescriptor, SourceEncodingId};
+use crate::engine::source_model::{PublishedSourceId, SourceEncodingDescriptor, SourceEncodingId};
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId, media_transport::TransportMediaId,
     source_model::test_support::stream_id_for_source,
@@ -83,17 +80,6 @@ impl RoomState {
     ) -> Option<PublishedSourceId> {
         self.topology
             .source_id_for_owner_stream(owner_user_id, &stream_id_for_source(stream_type))
-    }
-
-    #[cfg(test)]
-    pub fn contains_consumer_source_selection(
-        &self,
-        consumer_user_id: &UserId,
-        source_id: PublishedSourceId,
-    ) -> bool {
-        self.topology
-            .consumer_source_selection(&ConsumerKey::new(consumer_user_id, source_id))
-            .is_some()
     }
 
     #[cfg(test)]

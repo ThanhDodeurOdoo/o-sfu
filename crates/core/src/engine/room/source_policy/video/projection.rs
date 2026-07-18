@@ -54,8 +54,9 @@ pub(super) fn consumer_packet_selection_update(
         outcomes = outcomes.with_protected_over_budget();
     }
     Some(ConsumerPacketSelectionUpdate {
-        transport_ref: input.transport_ref.clone(),
+        key: input.key.clone(),
         source_id: input.source.source_id(),
+        route: input.route.clone(),
         selector: selection.selector,
         policy_pause_reason: selection.policy_pause_reason,
         budget,

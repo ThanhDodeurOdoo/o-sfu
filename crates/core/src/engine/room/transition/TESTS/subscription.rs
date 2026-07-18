@@ -327,15 +327,20 @@ async fn destination_active(
 }
 
 #[tokio::test]
-async fn stored_receiver_intent_applies_to_future_consumer_setup() {
-    let (
-        room,
-        media_transport,
-        publisher_id,
-        publisher_connection_id,
-        subscriber_id,
-        subscriber_connection_id,
-    ) = setup_subscription_room(true).await;
+async fn stored_receiver_intent_applies_before_publish_and_after_republish() {
+    let room = RoomManager::for_test()
+        .serve_room(
+            "issuer-transition-subscription-intent",
+            "room",
+            &RoomConfig::default(),
+            None,
+        )
+        .await;
+    let media_transport = media_transport();
+    let publisher_id = UserId::Integer(1);
+    let subscriber_id = UserId::Integer(2);
+    let subscriber_connection_id =
+        join_negotiated_user(&room, &media_transport, &subscriber_id, true).await;
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
 
     assert_eq!(
@@ -344,6 +349,8 @@ async fn stored_receiver_intent_applies_to_future_consumer_setup() {
             .await,
         Some(())
     );
+    let publisher_connection_id =
+        join_negotiated_user(&room, &media_transport, &publisher_id, true).await;
     publish_scalable_video(
         &room,
         &media_transport,
@@ -352,7 +359,34 @@ async fn stored_receiver_intent_applies_to_future_consumer_setup() {
     )
     .await;
 
-    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id)
+            .await,
+        Some(ConsumerRouteState::Inactive)
+    );
+
+    assert!(
+        room.test_api()
+            .media()
+            .unpublish_track(&publisher_id, &stream_id, &media_transport)
+            .await
+    );
+    assert_eq!(
+        room.test_api()
+            .inspect()
+            .consumer_route_state(&subscriber_id, &publisher_id, &stream_id)
+            .await,
+        Some(ConsumerRouteState::Absent)
+    );
+    publish_scalable_video(
+        &room,
+        &media_transport,
+        &publisher_id,
+        publisher_connection_id,
+    )
+    .await;
     assert_eq!(
         room.test_api()
             .inspect()

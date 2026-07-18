@@ -240,19 +240,13 @@ pub(in crate::engine::room::source_policy) fn append_receiver_video_policy(
 ) {
     let routes = receiver_video_routes(state, input);
     let max_video_downloads_per_receiver = input.media_limits.max_video_downloads_per_receiver();
-    for receiver_routes in routes.chunk_by(|left, right| {
-        left.transport_ref.consumer_user_id == right.transport_ref.consumer_user_id
-    }) {
+    for receiver_routes in routes.chunk_by(|left, right| left.key.receiver == right.key.receiver) {
         let Some(first_route) = receiver_routes.first() else {
             continue;
         };
-        let consumer_user_id = &first_route.transport_ref.consumer_user_id;
-        let receiver_bwe_target = append_receiver_policy_updates(
-            tx,
-            state,
-            receiver_routes,
-            max_video_downloads_per_receiver,
-        );
+        let consumer_user_id = &first_route.key.receiver;
+        let receiver_bwe_target =
+            append_receiver_policy_updates(tx, receiver_routes, max_video_downloads_per_receiver);
         if let Some(update) = receiver_bwe_targets.get_mut(consumer_user_id) {
             update.set_target(receiver_bwe_target);
         }
@@ -262,7 +256,6 @@ pub(in crate::engine::room::source_policy) fn append_receiver_video_policy(
 
 fn append_receiver_policy_updates<'a>(
     tx: &mut SourcePolicyTransaction,
-    state: &RoomState,
     receiver_routes: &'a [ReceiverVideoRouteInput<'a>],
     max_video_downloads_per_receiver: usize,
 ) -> Bitrate {
@@ -290,11 +283,7 @@ fn append_receiver_policy_updates<'a>(
             continue;
         };
         if update.requires_media_transport_effect() {
-            let target = state.topology.consumer_route_target_for_source(
-                &update.transport_ref,
-                planned_route.input.source,
-            );
-            tx.push_route_update(update, &target);
+            tx.push_route_update(update);
         } else {
             tx.push_state_update(update);
         }

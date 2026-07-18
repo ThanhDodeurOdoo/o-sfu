@@ -561,7 +561,7 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
 }
 
 #[tokio::test]
-async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
+async fn source_policy_replaced_route_does_not_commit_stale_selector_update() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],
         RoomMediaLimits::try_new(4, 1).unwrap(),
@@ -569,29 +569,31 @@ async fn source_policy_removed_route_does_not_commit_stale_selector_update() {
     .await;
     scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
     let (tx, third_camera_source_id) = third_camera_policy_transaction(&scenario).await;
-
-    assert!(
-        scenario
-            .room
-            .test_api()
-            .media()
-            .unpublish_track(
-                &UserId::Integer(3),
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                &scenario.adapter,
-            )
-            .await
-    );
+    let receiver = UserId::Integer(2);
+    let (replacement_tx, _replacement_rx) = test_sender();
+    join_user_without_transport_teardown(
+        &scenario.room,
+        &scenario.adapter,
+        receiver.clone(),
+        replacement_tx,
+    )
+    .await;
+    make_session_ready_with_transport(&scenario.room, &receiver, &scenario.adapter).await;
+    let replacement_selection = {
+        let state = scenario.room.state.read().await;
+        state
+            .topology
+            .source_selection_for_test(&receiver, third_camera_source_id)
+            .expect("replacement route should select the current publication")
+    };
     tx.execute(&scenario.room, &scenario.adapter).await;
-
-    assert!(
-        !scenario
-            .room
-            .test_api()
-            .inspect()
-            .contains_consumer_source_selection(&UserId::Integer(2), third_camera_source_id)
-            .await
-    );
+    let current_selection = {
+        let state = scenario.room.state.read().await;
+        state
+            .topology
+            .source_selection_for_test(&receiver, third_camera_source_id)
+    };
+    assert_eq!(current_selection, Some(replacement_selection));
 }
 
 #[tokio::test]
@@ -685,24 +687,27 @@ async fn reset_subscription_selection_to_open(
     let state = room.state.read().await;
     let route = state
         .topology
-        .live_consumer_routes()
+        .committed_consumer_routes()
         .find(|route| {
-            route.consumer_user_id == *consumer_user_id
+            route.key.receiver == *consumer_user_id
                 && route.source.descriptor.owner().user_id() == producer_user_id
                 && route.source.descriptor.stream_id() == &stream_id
         })
         .expect("test should have a live subscription route");
-    let transport_ref = route.transport_ref();
+    let key = route.key.clone();
+    let transport_route = route.route.clone();
     let source_id = route.source.descriptor.source_id();
     drop(state);
 
     let mut state = room.state.write().await;
-    let updated =
-        state
-            .topology
-            .update_consumer_source_selection(&transport_ref, source_id, |selection| {
-                *selection = ConsumerSourceSelection::open(true);
-            });
+    let updated = state.topology.update_consumer_source_selection(
+        &key,
+        source_id,
+        &transport_route,
+        |selection| {
+            *selection = ConsumerSourceSelection::open(true);
+        },
+    );
     drop(state);
     assert!(updated);
 }
