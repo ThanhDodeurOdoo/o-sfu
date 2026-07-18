@@ -187,6 +187,24 @@ test("socket recovery resolves a registered recording request", { timeout: 2_000
     assert.equal(client.state, "recovering");
 });
 
+test("disconnect preserves active control cleanup", { timeout: 2_000 }, async () => {
+    const harness = createRecoveryHarness();
+    const { client, sockets, timers } = harness;
+
+    await connectRealWithWelcome(harness);
+    const recording = client.startRecording({ audio: true });
+    await tick();
+
+    assert.equal(timers.hasDelay(5000), true);
+    client.addEventListener("log", () => queueMicrotask(() => client.disconnect()), { once: true });
+    sockets[0].emitClose(1011);
+
+    assert.equal(await recording, false);
+    await tick();
+    assert.equal(timers.hasDelay(5000), false);
+    assert.equal(client.state, "disconnected");
+});
+
 test("duplicate recording request id is handled as a runtime error", async () => {
     const core = new FakeProtocolCore();
     core.startRecording = () => [

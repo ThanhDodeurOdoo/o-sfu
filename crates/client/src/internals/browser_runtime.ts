@@ -126,6 +126,12 @@ export class BrowserRuntime {
     }
 
     disconnect(): void {
+        // Let the active cleanup finish before disconnecting.
+        if (this._turnQueue.hasControlTurn) {
+            this._turnQueue.cancelPending();
+            this.enqueueProtocolCommands(() => this._core.disconnect());
+            return;
+        }
         const commands = this.tryControlTransition(() => this._core.disconnect());
         if (!commands) {
             return;
