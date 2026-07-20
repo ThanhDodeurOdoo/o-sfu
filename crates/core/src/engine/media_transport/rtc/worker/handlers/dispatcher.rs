@@ -28,7 +28,7 @@ use super::{
 };
 use crate::engine::{
     media_transport::{TransportMediaId, TransportResult, TransportSourceActivitySnapshot},
-    metrics::RuntimeMetrics,
+    metrics::{RtcMetricsRecorder, RuntimeMetrics},
 };
 
 pub struct WorkerCommandContext<'a> {
@@ -37,7 +37,8 @@ pub struct WorkerCommandContext<'a> {
     pub candidate_addr: SocketAddr,
     pub now: Instant,
     pub config: &'a RtcWorkerConfig,
-    pub metrics: &'a RuntimeMetrics,
+    pub runtime_metrics: &'a RuntimeMetrics,
+    pub rtc_metrics: &'a RtcMetricsRecorder,
 }
 
 impl WorkerCommandContext<'_> {
@@ -48,7 +49,7 @@ impl WorkerCommandContext<'_> {
             video_bitrate_limits: self.config.video_bitrate_limits,
             profile: self.config.profile.as_ref(),
             media_quality_interval: self.config.media_quality_interval,
-            metrics: self.metrics,
+            metrics: self.runtime_metrics,
         }
     }
 
@@ -151,7 +152,7 @@ pub fn handle_worker_command(
                 context.bitrate_registry,
                 context.snapshot_state,
                 &session_key,
-                context.metrics,
+                context.runtime_metrics,
             );
             respond(response, Ok(()));
         }
@@ -211,14 +212,14 @@ pub fn handle_worker_command(
             response,
             Ok(media::apply_media_control_batch(
                 state,
-                context.metrics,
+                context.rtc_metrics,
                 context.config.bitrate_limits.max_bitrate_out(),
                 context.now,
                 batch,
             )),
         ),
         RtcWorkerCommand::RouteControl { request, response } => {
-            media::apply_route_control_request(state, context.metrics, request, response);
+            media::apply_route_control_request(state, context.rtc_metrics, request, response);
         }
     }
 }

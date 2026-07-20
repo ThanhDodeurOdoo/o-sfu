@@ -1,4 +1,4 @@
-use std::{mem::take, sync::OnceLock, time::Instant};
+use std::{mem::take, sync::Arc, time::Instant};
 
 use str0m::media::Mid;
 
@@ -16,11 +16,9 @@ use crate::{
             TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
             rtc::state::PacketLoopState,
         },
-        metrics::RuntimeMetrics,
+        metrics::{RtcMetricsRecorder, RuntimeMetrics},
     },
 };
-
-static BENCH_METRICS: OnceLock<RuntimeMetrics> = OnceLock::new();
 
 /// fixed consumer packet-gate batch fixture for route-control benchmarks
 ///
@@ -29,7 +27,7 @@ static BENCH_METRICS: OnceLock<RuntimeMetrics> = OnceLock::new();
 /// batch through the production worker route-control helper
 pub struct ConsumerGateBatchBenchFixture {
     state: PacketLoopState,
-    metrics: &'static RuntimeMetrics,
+    metrics: Arc<RtcMetricsRecorder>,
     source: Option<TransportSourceKey>,
     updates: Vec<(usize, TransportConsumerRoute, PacketLayerGate)>,
     src_media: TransportMediaId,
@@ -64,7 +62,7 @@ impl ConsumerGateBatchBenchFixture {
 
         Self {
             state,
-            metrics: BENCH_METRICS.get_or_init(RuntimeMetrics::default),
+            metrics: RuntimeMetrics::default().register_rtc_worker(),
             source: Some(source),
             updates,
             src_media,
@@ -78,7 +76,7 @@ impl ConsumerGateBatchBenchFixture {
             let updates = take(&mut self.updates);
             let _ = apply_media_control_batch(
                 &mut self.state,
-                self.metrics,
+                &self.metrics,
                 Bitrate::from_mbps(10),
                 self.now,
                 WorkerMediaControlBatch::ConsumerGates { source, updates },

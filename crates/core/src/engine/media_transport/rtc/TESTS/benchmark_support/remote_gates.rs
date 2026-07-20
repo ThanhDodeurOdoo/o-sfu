@@ -131,7 +131,7 @@ fn register_saturated_remote_source(
     ));
     let _ = state.routes.register_remote_source(
         source,
-        RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics),
+        RemoteSourceControl::new(control_tx, target_id, rtc_metrics),
     );
     control_rx
 }

@@ -130,7 +130,7 @@ impl PacketSinkFanoutBenchFixture {
             plan_forwards(
                 &self.state,
                 &self.packet_sinks,
-                &*self.route_metrics,
+                &self.route_metrics,
                 pkt_idx,
                 packet,
                 &mut self.buffers.forwards,

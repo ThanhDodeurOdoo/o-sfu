@@ -163,41 +163,26 @@ fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
     }
 }
 
-fn assert_control_plane_latency_metrics(snapshot: &RuntimeMetricsSnapshot) {
+fn assert_control_plane_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.http_inflight().noop, 1);
     assert_eq!(snapshot.http_inflight().metrics, 0);
-    assert_eq!(snapshot.http_request_duration().noop.le_50_millis, 1);
-    assert_eq!(snapshot.http_request_duration().noop.le_10_millis, 0);
-    assert_eq!(snapshot.http_request_duration().noop.count, 1);
-    assert_eq!(snapshot.http_request_duration().noop.sum_micros, 25_000);
-    assert_eq!(snapshot.http_request_duration().metrics.le_50_millis, 1);
+    assert_eq!(snapshot.http_request_duration().noop.count, 0);
     assert_eq!(snapshot.http_request_duration().metrics.count, 1);
-    assert_eq!(snapshot.http_request_duration().metrics.sum_micros, 12_000);
-    assert_eq!(snapshot.ws_handshake_duration().le_100_millis, 1);
     assert_eq!(snapshot.ws_handshake_duration().count, 1);
-    assert_eq!(snapshot.ws_handshake_duration().sum_micros, 80_000);
-    assert_eq!(snapshot.ws_auth_duration().le_10_millis, 1);
     assert_eq!(snapshot.ws_auth_duration().count, 1);
-    assert_eq!(snapshot.ws_auth_duration().sum_micros, 8_000);
-    assert_eq!(snapshot.ws_user_initialize_duration().le_250_millis, 1);
-    assert_eq!(snapshot.ws_user_initialize_duration().le_100_millis, 0);
     assert_eq!(snapshot.ws_user_initialize_duration().count, 1);
-    assert_eq!(snapshot.ws_user_initialize_duration().sum_micros, 120_000);
 }
 
-fn record_http_metrics(metrics: &RuntimeMetrics) {
-    metrics.add_http_inflight_requests(HttpRoute::Noop, 1);
-    metrics.record_http_noop_request();
-    metrics.record_http_room_request();
+fn record_http_metrics(metrics: &RuntimeMetrics) -> impl Drop + '_ {
+    drop(metrics.track_http_request(HttpRoute::Room));
     metrics.record_http_room_success();
     metrics.record_http_room_unauthorized();
-    metrics.record_http_disconnect_request();
+    drop(metrics.track_http_request(HttpRoute::Disconnect));
     metrics.record_http_disconnect_success();
     metrics.record_http_disconnect_bad_request();
     metrics.record_http_disconnect_unprocessable_entity();
-    metrics.record_http_metrics_request();
-    metrics.record_http_request_duration(HttpRoute::Noop, Duration::from_millis(25));
-    metrics.record_http_request_duration(HttpRoute::Metrics, Duration::from_millis(12));
+    drop(metrics.track_http_request(HttpRoute::Metrics));
+    metrics.track_http_request(HttpRoute::Noop)
 }
 
 fn record_websocket_metrics(metrics: &RuntimeMetrics) {
@@ -215,9 +200,9 @@ fn record_websocket_metrics(metrics: &RuntimeMetrics) {
     metrics.record_ws_bus_batch_sent(2);
     metrics.record_ws_bus_batches_sent(2, 65);
     metrics.record_ws_bus_send_failure();
-    metrics.record_ws_handshake_duration(Duration::from_millis(80));
-    metrics.record_ws_auth_duration(Duration::from_millis(8));
-    metrics.record_ws_user_initialize_duration(Duration::from_millis(120));
+    drop(metrics.track_ws_handshake());
+    drop(metrics.track_ws_authentication());
+    drop(metrics.track_ws_user_initialization());
 }
 
 fn assert_http_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -257,14 +242,14 @@ fn assert_websocket_metrics(snapshot: &RuntimeMetricsSnapshot) {
 #[test]
 fn metrics_snapshot_tracks_http_and_websocket_counters() {
     let metrics = RuntimeMetrics::default();
-    record_http_metrics(&metrics);
+    let _request = record_http_metrics(&metrics);
     record_websocket_metrics(&metrics);
 
     let snapshot = metrics.snapshot();
 
     assert_http_metrics(&snapshot);
     assert_websocket_metrics(&snapshot);
-    assert_control_plane_latency_metrics(&snapshot);
+    assert_control_plane_metrics(&snapshot);
 }
 
 #[test]
@@ -332,44 +317,48 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_recording_start_accepted();
     metrics.record_recording_captured_packet();
     metrics.record_recording_captured_stream();
-    metrics.record_rtp_ingress(1200);
-    metrics.record_rtp_egress(900);
-    metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Rid);
-    metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Source);
-    metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
-    metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
-    metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
+    let packet_recorder = metrics.register_rtp_worker();
+    packet_recorder.record_ingress(1200);
+    packet_recorder.record_egress(900);
+    packet_recorder.record_decoder_refresh(RtpDecoderRefreshScope::Rid);
+    packet_recorder.record_decoder_refresh(RtpDecoderRefreshScope::Source);
+    packet_recorder.record_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
+    packet_recorder.record_forwarded(RtpForwardDestinationKind::Recording, 700);
+    packet_recorder.record_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
     metrics.record_rtp_relay_overload_drop(RtpRelayDropKind::IntraNodeRelay);
     metrics.record_transport_ice_state_change(TransportIceState::Checking);
     metrics.record_transport_ice_state_change(TransportIceState::Connected);
     metrics.record_transport_dtls_connected();
     metrics.record_transport_user_lifetime(Duration::from_millis(1500));
     metrics.record_transport_cleanup_failure();
-    metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
-    metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
-    metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
-    metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
-    metrics.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
-    metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
-    metrics.record_rtc_datagram_fallback_scan(3);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Forwarded);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Absorbed);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Retry);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
-    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
-    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
-    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
-    metrics.record_rtc_relay_mailbox_depth(7);
-    metrics.record_rtc_relay_drain_batch(4, true);
-    metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
-    metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
-    metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
-    metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
+    let control_recorder = metrics.register_rtc_worker();
+    control_recorder.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
+    control_recorder.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+    control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
+    control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
+    control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
+    control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+    control_recorder.record_rtc_datagram_fallback_scan(3);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Forwarded);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Absorbed);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Retry);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
+    control_recorder.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
+    control_recorder.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
+    control_recorder.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
+    control_recorder.record_rtc_relay_mailbox_depth(7);
+    control_recorder.record_rtc_relay_drain_batch(4, true);
+    control_recorder.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
+    control_recorder.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
+    control_recorder
+        .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
+    control_recorder
+        .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
     metrics.record_source_selection_update(SourceSelectionKind::Encoding);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
@@ -385,31 +374,6 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     assert_forwarding_volume_metrics(&snapshot);
     assert_rtc_datagram_and_route_control_metrics(&snapshot);
     assert_source_selection_metrics(&snapshot);
-}
-
-#[test]
-fn metrics_snapshot_aggregates_worker_local_rtp_recorders() {
-    let metrics = RuntimeMetrics::default();
-    let first_worker = metrics.register_rtp_worker();
-    let second_worker = metrics.register_rtp_worker();
-
-    metrics.record_rtp_ingress(10);
-    first_worker.record_ingress(1200);
-    first_worker.record_egress(900);
-    first_worker.record_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
-    second_worker.record_ingress(300);
-    second_worker.record_forwarded(RtpForwardDestinationKind::Recording, 300);
-
-    let snapshot = metrics.snapshot();
-
-    assert_eq!(snapshot.rtp_packets_ingress(), 3);
-    assert_eq!(snapshot.rtp_packets_egress(), 1);
-    assert_eq!(snapshot.rtp_payload_bytes_ingress(), 1510);
-    assert_eq!(snapshot.rtp_payload_bytes_egress(), 900);
-    assert_eq!(snapshot.rtp_forwarded_packets_local_rtc(), 1);
-    assert_eq!(snapshot.rtp_forwarded_packets_recording(), 1);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_local_rtc(), 900);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording(), 300);
 }
 
 #[test]
@@ -434,8 +398,7 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     let first_worker = metrics.register_rtc_worker();
     let second_worker = metrics.register_rtc_worker();
 
-    metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
-    first_worker.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+    first_worker.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
     first_worker.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
     first_worker.record_rtc_datagram_fallback_scan(3);
     first_worker.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
@@ -446,6 +409,7 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     first_worker.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
     first_worker.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
     second_worker.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+    second_worker.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
     second_worker.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
     second_worker.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
     second_worker.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);

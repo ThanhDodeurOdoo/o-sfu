@@ -75,8 +75,8 @@ use crate::{
             },
         },
         metrics::{
-            RtcMetricsRecorder, RtcRouteControlMetrics, RtpForwardDestinationKind,
-            RtpMetricsRecorder, RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
+            RtcMetricsRecorder, RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics,
+            test_support::RuntimeMetricsSnapshotTestExt,
         },
         packet_sink_registry::{
             PacketSink as MediaPacketSink, PacketSinkRouteCache, RegisteredPacketSink,
@@ -388,26 +388,6 @@ fn push_keyframe_request_with_rid(
     ));
 }
 
-#[allow(
-    clippy::expect_used,
-    reason = "test setup helpers should fail loudly when a required remote keyframe fixture cannot be built"
-)]
-fn remote_keyframe_source(
-    state: &mut PacketLoopState,
-    src_media: TransportMediaId,
-    source_session: &TransportSessionKey,
-    target_id: RelayTargetId,
-    capacity: usize,
-) -> mpsc::Receiver<RtcWorkerCommand> {
-    let (control_tx, control_rx) = mpsc::channel(capacity);
-    let source = TransportSourceKey::new(source_session.clone(), src_media);
-    state
-        .routes
-        .register_remote_source(&source, RemoteSourceControl::new(control_tx, target_id))
-        .expect("remote source should register");
-    control_rx
-}
-
 fn set_source_route_active(
     state: &mut PacketLoopState,
     src_media: TransportMediaId,
@@ -615,7 +595,7 @@ fn route_feedback_cases() -> [RouteFeedbackCase; 6] {
 fn populate_forward_routes(
     state: &PacketLoopState,
     packet_sinks: &RoomPacketSinkRegistry,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     pending_packets: &mut [super::super::forwarded_packet::ForwardedPacket],
     forwards: &mut Vec<super::super::forwarding_destination::PacketForward>,
 ) {
@@ -644,25 +624,36 @@ struct PacketLoopHarness {
 impl PacketLoopHarness {
     fn new() -> Self {
         let metrics = RuntimeMetrics::default();
-        let rtp_metrics = metrics.register_rtp_worker();
-        let datagram_metrics = metrics.register_rtc_worker();
         Self {
             state: PacketLoopState::default(),
             buffers: PacketLoopBuffers::new(),
+            rtp_metrics: metrics.register_rtp_worker(),
+            rtc_metrics: metrics.register_rtc_worker(),
             metrics,
-            rtp_metrics,
-            rtc_metrics: datagram_metrics,
         }
     }
 
-    fn without_registered_worker_recorders() -> Self {
-        Self {
-            state: PacketLoopState::default(),
-            buffers: PacketLoopBuffers::new(),
-            metrics: RuntimeMetrics::default(),
-            rtp_metrics: Arc::new(RtpMetricsRecorder::default()),
-            rtc_metrics: Arc::new(RtcMetricsRecorder::default()),
-        }
+    #[allow(
+        clippy::expect_used,
+        reason = "test setup helpers should fail loudly when a required remote keyframe fixture cannot be built"
+    )]
+    fn remote_keyframe_source(
+        &mut self,
+        src_media: TransportMediaId,
+        source_session: &TransportSessionKey,
+        target_id: RelayTargetId,
+        capacity: usize,
+    ) -> mpsc::Receiver<RtcWorkerCommand> {
+        let (control_tx, control_rx) = mpsc::channel(capacity);
+        let source = TransportSourceKey::new(source_session.clone(), src_media);
+        self.state
+            .routes
+            .register_remote_source(
+                &source,
+                RemoteSourceControl::new(control_tx, target_id, Arc::clone(&self.rtc_metrics)),
+            )
+            .expect("remote source should register");
+        control_rx
     }
 
     fn only_packet_index(&self) -> usize {
@@ -1036,44 +1027,13 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
 }
 
 #[test]
-fn flush_forward_routes_writes_hot_rtp_metrics_only_to_the_worker_recorder() {
-    let source_session = test_transport_session_key(128, 0, 129, UserId::Integer(130));
-    let src_media = TransportMediaId::new(131);
-    let mut harness = PacketLoopHarness::without_registered_worker_recorders();
-    let sink = Arc::new(CountingSink::new());
-
-    harness
-        .buffers
-        .pending_packets
-        .push(sample_forwarded_packet(
-            source_session,
-            "aud-up",
-            b"payload",
-        ));
-    harness.add_recording_sink(src_media, &sink);
-
-    flush_forward_routes(
-        &mut harness.state,
-        &harness.metrics,
-        &harness.rtp_metrics,
-        &harness.rtc_metrics,
-        &harness.buffers,
-    );
-
-    assert_eq!(sink.packets.load(Ordering::Relaxed), 1);
-    let snapshot = harness.metrics.snapshot();
-    assert_eq!(snapshot.rtp_forwarded_packets_recording(), 0);
-    assert_eq!(snapshot.rtp_forwarded_payload_bytes_recording(), 0);
-    assert_eq!(snapshot.rtp_payload_bytes_egress(), 0);
-}
-
-#[test]
 fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() {
     let producer_session = test_transport_session_key(88, 0, 89, UserId::Integer(90));
     let mut state = PacketLoopState::default();
     let src_media = register_producer_media(&mut state, &producer_session, "cam-up");
     let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
+    let packet_recorder = metrics.register_rtp_worker();
+    let control_recorder = metrics.register_rtc_worker();
     let mut buffers = PacketLoopBuffers::new();
 
     buffers
@@ -1087,8 +1047,8 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
     record_incoming_stats(
         &mut state,
         &SourcePolicySignal::default(),
-        &metrics,
-        &rtp_metrics,
+        &control_recorder,
+        &packet_recorder,
         &mut buffers,
     );
 
@@ -1377,7 +1337,11 @@ fn due_relay_observation_expires_in_same_pump() -> Result<(), &'static str> {
             .routes
             .register_remote_source(
                 &TransportSourceKey::new(session.clone(), source_id),
-                RemoteSourceControl::new(control_tx, RelayTargetId::new(1)),
+                RemoteSourceControl::new(
+                    control_tx,
+                    RelayTargetId::new(1),
+                    Arc::clone(&config.rtc_metrics),
+                ),
             )
             .map_err(|_error| "remote source should register")?;
 
@@ -1651,7 +1615,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
     record_incoming_stats(
         &mut harness.state,
         &SourcePolicySignal::default(),
-        &harness.metrics,
+        &harness.rtc_metrics,
         &harness.rtp_metrics,
         &mut harness.buffers,
     );
@@ -1676,7 +1640,8 @@ fn repeated_active_audio_packets_do_not_republish_source_policy_dirty_room() {
     let mut state = PacketLoopState::default();
     register_producer_media(&mut state, &producer_session, "aud-up");
     let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
+    let packet_recorder = metrics.register_rtp_worker();
+    let control_recorder = metrics.register_rtc_worker();
     let source_policy_signal = SourcePolicySignal::default();
     let subscription = source_policy_signal.subscribe();
     let mut buffers = PacketLoopBuffers::new();
@@ -1693,8 +1658,8 @@ fn repeated_active_audio_packets_do_not_republish_source_policy_dirty_room() {
     record_incoming_stats(
         &mut state,
         &source_policy_signal,
-        &metrics,
-        &rtp_metrics,
+        &control_recorder,
+        &packet_recorder,
         &mut buffers,
     );
     assert_eq!(
@@ -1715,8 +1680,8 @@ fn repeated_active_audio_packets_do_not_republish_source_policy_dirty_room() {
     record_incoming_stats(
         &mut state,
         &source_policy_signal,
-        &metrics,
-        &rtp_metrics,
+        &control_recorder,
+        &packet_recorder,
         &mut buffers,
     );
     assert!(subscription.take_pending_updates().is_empty());
@@ -1746,7 +1711,8 @@ fn active_audio_rank_change_publishes_source_policy_dirty_room() {
         shared_observed_at,
     ));
     let metrics = RuntimeMetrics::default();
-    let rtp_metrics = metrics.register_rtp_worker();
+    let packet_recorder = metrics.register_rtp_worker();
+    let control_recorder = metrics.register_rtc_worker();
     let source_policy_signal = SourcePolicySignal::default();
     let subscription = source_policy_signal.subscribe();
     let mut buffers = PacketLoopBuffers::new();
@@ -1763,8 +1729,8 @@ fn active_audio_rank_change_publishes_source_policy_dirty_room() {
     record_incoming_stats(
         &mut state,
         &source_policy_signal,
-        &metrics,
-        &rtp_metrics,
+        &control_recorder,
+        &packet_recorder,
         &mut buffers,
     );
 
@@ -1913,7 +1879,7 @@ fn flush_pending_kf_reqs_follow_route_scoped_feedback() {
         let target_id = RelayTargetId::new(case.id);
         let mut harness = PacketLoopHarness::new();
         let mut control_rx =
-            remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 1);
+            harness.remote_keyframe_source(src_media, &source_session, target_id, 1);
         let (packet_gate, pending_gate) = case.gate.gates();
         register_consumer_route_fixture(
             &mut harness.state,
@@ -1980,8 +1946,7 @@ fn flush_pending_kf_reqs_coalesces_duplicate_remote_requests() {
     let src_media = TransportMediaId::new(101);
     let target_id = RelayTargetId::new(4);
     let mut harness = PacketLoopHarness::new();
-    let mut control_rx =
-        remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 2);
+    let mut control_rx = harness.remote_keyframe_source(src_media, &source_session, target_id, 2);
 
     register_open_consumer_route_fixture(
         &mut harness.state,
@@ -2039,8 +2004,7 @@ fn flush_pending_kf_reqs_keeps_distinct_rids_separate() {
     let second_rid = Rid::from("hi");
     let target_id = RelayTargetId::new(6);
     let mut harness = PacketLoopHarness::new();
-    let mut control_rx =
-        remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 4);
+    let mut control_rx = harness.remote_keyframe_source(src_media, &source_session, target_id, 4);
     register_consumer_route_fixture(
         &mut harness.state,
         &first_consumer_session,
@@ -2101,8 +2065,7 @@ fn keyframe_tracker_cancels_due_retry_when_route_goes_inactive() {
     let target_id = RelayTargetId::new(187);
     let now = Instant::now();
     let mut harness = PacketLoopHarness::new();
-    let mut control_rx =
-        remote_keyframe_source(&mut harness.state, src_media, &source_session, target_id, 2);
+    let mut control_rx = harness.remote_keyframe_source(src_media, &source_session, target_id, 2);
     register_open_consumer_route_fixture(
         &mut harness.state,
         &consumer_session,

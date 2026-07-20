@@ -20,7 +20,7 @@ use super::{
 };
 use crate::engine::{
     media_transport::{TransportMediaId, TransportSessionKey, TransportSourceKey},
-    metrics::RtcRouteControlMetrics,
+    metrics::RtcMetricsRecorder,
 };
 
 /// keyframe feedback emitted by one consumer session before producer lookup
@@ -72,7 +72,7 @@ impl ResolvedKeyframeRoute {
 /// resolve and flush every keyframe request staged during the current turn
 pub(super) fn flush_pending_kf_reqs(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
     flush_pending_kf_reqs_at(state, metrics, buffers, Instant::now());
@@ -84,7 +84,7 @@ pub(super) fn flush_pending_kf_reqs(
 /// distinct rids stay separate so simulcast feedback is not widened
 pub fn flush_pending_kf_reqs_at(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
     now: Instant,
 ) {
@@ -176,7 +176,7 @@ pub fn flush_pending_kf_reqs_at(
 /// drain retry deadlines after new feedback has had a chance to arm them
 pub fn drain_due_kf_retries(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
     now: Instant,
 ) {
@@ -194,7 +194,7 @@ fn compare_kf_rids(left: Option<Rid>, right: Option<Rid>) -> Ordering {
 
 fn flush_coalesced_kf_req(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     coalesced_request: SourceKeyframeRequest,
     now: Instant,
 ) {
@@ -213,7 +213,7 @@ fn flush_coalesced_kf_req(
 
 fn flush_kf_retry(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     retry: SourceKeyframeRequest,
 ) {
     let src_media = retry.src_media;

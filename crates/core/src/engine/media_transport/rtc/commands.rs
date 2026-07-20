@@ -41,25 +41,20 @@ use crate::engine::{
 pub struct RemoteSourceControl {
     tx: mpsc::Sender<RtcWorkerCommand>,
     target_id: RelayTargetId,
-    metrics: Arc<RtcMetricsRecorder>,
+    rtc_metrics: Arc<RtcMetricsRecorder>,
 }
 
 impl RemoteSourceControl {
     /// creates a source-control handle for one relay target on a worker mailbox
-    #[cfg(test)]
-    pub(super) fn new(tx: mpsc::Sender<RtcWorkerCommand>, target_id: RelayTargetId) -> Self {
-        Self::with_metrics(tx, target_id, Arc::new(RtcMetricsRecorder::default()))
-    }
-
-    pub(super) fn with_metrics(
+    pub(super) fn new(
         tx: mpsc::Sender<RtcWorkerCommand>,
         target_id: RelayTargetId,
-        metrics: Arc<RtcMetricsRecorder>,
+        rtc_metrics: Arc<RtcMetricsRecorder>,
     ) -> Self {
         Self {
             tx,
             target_id,
-            metrics,
+            rtc_metrics,
         }
     }
 
@@ -102,12 +97,12 @@ impl RemoteSourceControl {
     }
 
     pub(super) fn record_pkt_gate_retry(&self) {
-        self.metrics
+        self.rtc_metrics
             .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
     }
 
     pub(super) fn record_pkt_gate_flushed(&self) {
-        self.metrics
+        self.rtc_metrics
             .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
     }
 
@@ -122,7 +117,7 @@ impl RemoteSourceControl {
         }) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_) | mpsc::error::TrySendError::Closed(_)) => {
-                self.metrics.record_rtc_remote_control_drop(drop_kind);
+                self.rtc_metrics.record_rtc_remote_control_drop(drop_kind);
                 false
             }
         }

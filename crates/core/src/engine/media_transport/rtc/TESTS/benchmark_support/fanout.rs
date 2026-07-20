@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use str0m::media::Mid;
 
 use super::super::{
@@ -7,7 +9,11 @@ use super::super::{
     state::PacketLoopState,
     test_support::{MediaWorkerScenario, sample_forwarded_packet, test_transport_session_key},
 };
-use crate::engine::{UserId, metrics::RuntimeMetrics, packet_sink_registry::PacketSinkRouteCache};
+use crate::engine::{
+    UserId,
+    metrics::{RtcMetricsRecorder, RuntimeMetrics},
+    packet_sink_registry::PacketSinkRouteCache,
+};
 
 pub const ROUTE_PLANNING_TURNS: usize = 1024;
 
@@ -21,7 +27,7 @@ pub const ROUTE_PLANNING_TURNS: usize = 1024;
 pub struct FanoutBenchTopology {
     state: PacketLoopState,
     packet_sinks: PacketSinkRouteCache,
-    metrics: RuntimeMetrics,
+    metrics: Arc<RtcMetricsRecorder>,
     pending_packets: Vec<ForwardedPacket>,
     forwards: Vec<PacketForward>,
 }
@@ -46,7 +52,7 @@ impl FanoutBenchTopology {
         let mut topology = Self {
             state,
             packet_sinks: PacketSinkRouteCache::default(),
-            metrics: RuntimeMetrics::default(),
+            metrics: RuntimeMetrics::default().register_rtc_worker(),
             pending_packets,
             forwards: Vec::with_capacity(destination_count),
         };

@@ -39,8 +39,8 @@ use super::{
 use crate::engine::{
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
     metrics::{
-        RtcKeyframeRequestOutcome, RtcMetricsRecorder, RtcRouteControlMetrics,
-        RtpDecoderRefreshScope, RtpMetricsRecorder, RuntimeMetrics,
+        RtcKeyframeRequestOutcome, RtcMetricsRecorder, RtpDecoderRefreshScope, RtpMetricsRecorder,
+        RuntimeMetrics,
     },
 };
 
@@ -53,8 +53,8 @@ use crate::engine::{
 pub(super) fn record_incoming_stats(
     state: &mut PacketLoopState,
     source_policy_signal: &SourcePolicySignal,
-    metrics: &impl RtcRouteControlMetrics,
-    rtp_metrics: &RtpMetricsRecorder,
+    control: &RtcMetricsRecorder,
+    rtp: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
     let mut pending_packets = take(&mut buffers.pending_packets);
@@ -82,7 +82,7 @@ pub(super) fn record_incoming_stats(
                     .routes
                     .observe_decoder_refresh(transport_media_id, facts.rid);
                 for _ in 0..cleared {
-                    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
+                    control.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
                 }
             }
             if audio_policy_changed {
@@ -106,7 +106,7 @@ pub(super) fn record_incoming_stats(
                 } else {
                     RtpDecoderRefreshScope::Source
                 };
-                rtp_metrics.record_decoder_refresh(scope);
+                rtp.record_decoder_refresh(scope);
             }
             if let Some(rid) = packet_rid {
                 buffers.push_rid_readiness(
@@ -142,12 +142,12 @@ pub(super) fn record_incoming_stats(
                     packet.received_at(),
                 );
             }
-            rtp_metrics.record_ingress(facts.payload_len);
+            rtp.record_ingress(facts.payload_len);
         }
     }
     buffers.pending_packets = pending_packets;
-    flush_pending_rid_readiness(state, metrics, buffers);
-    flush_first_video_kfs(state, metrics, buffers);
+    flush_pending_rid_readiness(state, control, buffers);
+    flush_first_video_kfs(state, control, buffers);
     buffers.flush_source_policy_dirty(source_policy_signal);
 }
 
@@ -155,16 +155,16 @@ pub(super) fn record_incoming_stats(
 pub fn record_incoming_stats_for_benchmark(
     state: &mut PacketLoopState,
     source_policy_signal: &SourcePolicySignal,
-    metrics: &impl RtcRouteControlMetrics,
-    rtp_metrics: &RtpMetricsRecorder,
+    control: &RtcMetricsRecorder,
+    rtp: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
-    record_incoming_stats(state, source_policy_signal, metrics, rtp_metrics, buffers);
+    record_incoming_stats(state, source_policy_signal, control, rtp, buffers);
 }
 
 fn flush_pending_rid_readiness(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
     for pending in buffers.pending_rid_readiness.drain(..) {
@@ -203,7 +203,7 @@ fn flush_pending_rid_readiness(
 
 fn flush_first_video_kfs(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
     for pending in buffers.pending_first_video_keyframes.drain(..) {
@@ -232,7 +232,7 @@ fn flush_first_video_kfs(
 /// inspect packet payloads.
 fn request_first_video_kf(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     source: &ForwardedPacketSource,
     transport_media_id: TransportMediaId,
     now: Instant,
@@ -252,7 +252,7 @@ fn request_first_video_kf(
 
 fn request_first_video_kf_for_session(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_key: &TransportSessionKey,
     transport_media_id: TransportMediaId,
     now: Instant,

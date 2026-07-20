@@ -16,7 +16,7 @@ const RTP_DECODER_REFRESH_SCOPE_COUNT: usize = <RtpDecoderRefreshScope as Metric
 ///
 /// Packet loops keep one recorder for their full worker lifetime. Updates touch
 /// only this worker's padded atomics while `RuntimeMetrics` aggregates all
-/// registered recorders during snapshot export.
+/// registered recorders during scrape capture.
 #[derive(Debug, Default)]
 pub struct RtpMetricsRecorder {
     packets: PaddedCounterFamily<RtpFlowDirection>,
@@ -51,7 +51,6 @@ impl RtpMetricsRecorder {
 
 #[derive(Debug, Default)]
 pub(super) struct RtpMetrics {
-    process_recorder: RtpMetricsRecorder,
     worker_recorders: Mutex<Vec<RtpWorkerMetricsRecorder>>,
 }
 
@@ -74,30 +73,8 @@ impl RtpMetrics {
         recorder
     }
 
-    pub(super) fn record_ingress(&self, payload_bytes: usize) {
-        self.process_recorder.record_ingress(payload_bytes);
-    }
-
-    pub(super) fn record_egress(&self, payload_bytes: usize) {
-        self.process_recorder.record_egress(payload_bytes);
-    }
-
-    pub(super) fn record_forwarded(
-        &self,
-        destination: RtpForwardDestinationKind,
-        payload_bytes: usize,
-    ) {
-        self.process_recorder
-            .record_forwarded(destination, payload_bytes);
-    }
-
-    pub(super) fn record_decoder_refresh(&self, scope: RtpDecoderRefreshScope) {
-        self.process_recorder.record_decoder_refresh(scope);
-    }
-
     pub(super) fn snapshot(&self) -> RtpMetricsSnapshot {
         let mut snapshot = RtpMetricsSnapshot::default();
-        snapshot.add_recorder(&self.process_recorder);
         {
             let workers = match self.worker_recorders.lock() {
                 Ok(workers) => workers,

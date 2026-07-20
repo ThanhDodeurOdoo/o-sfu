@@ -3,7 +3,7 @@
     reason = "media worker fixtures use panic only for mandatory setup failures"
 )]
 
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use str0m::media::{Mid, Rid};
 use tokio::sync::mpsc;
@@ -29,37 +29,12 @@ use crate::{
                 },
             },
         },
-        metrics::RuntimeMetrics,
+        metrics::{RtcMetricsRecorder, RuntimeMetrics},
     },
 };
 
 const SOURCE_MID: &str = "cam-up";
 const CONSUMER_MID: &str = "cam-down";
-
-pub(super) fn request_consumer_keyframe(
-    state: &mut PacketLoopState,
-    metrics: &RuntimeMetrics,
-    consumer_session: &TransportSessionKey,
-    consumer_media: TransportMediaId,
-    source_session: &TransportSessionKey,
-    src_media: TransportMediaId,
-) {
-    let route = TransportConsumerRoute::new(
-        consumer_session.clone(),
-        consumer_media,
-        TransportSourceKey::new(source_session.clone(), src_media),
-    );
-    let _ = apply_media_control_batch(
-        state,
-        metrics,
-        Bitrate::from_mbps(10),
-        Instant::now(),
-        WorkerMediaControlBatch::ConsumerFollowUp(vec![(
-            0,
-            ConsumerRouteControl::new(route).request_keyframe(true),
-        )]),
-    );
-}
 
 pub(super) fn set_consumer_packet_gate_at(
     state: &mut PacketLoopState,
@@ -67,9 +42,10 @@ pub(super) fn set_consumer_packet_gate_at(
     packet_gate: PacketLayerGate,
     now: Instant,
 ) {
+    let rtc_metrics = RuntimeMetrics::default().register_rtc_worker();
     let _ = apply_media_control_batch(
         state,
-        &RuntimeMetrics::default(),
+        &rtc_metrics,
         Bitrate::from_mbps(10),
         now,
         WorkerMediaControlBatch::ConsumerGates {
@@ -82,6 +58,7 @@ pub(super) fn set_consumer_packet_gate_at(
 pub(super) struct LocalVideoRoute {
     pub state: PacketLoopState,
     pub metrics: RuntimeMetrics,
+    pub rtc_metrics: Arc<RtcMetricsRecorder>,
     pub source_session: TransportSessionKey,
     pub consumer_session: TransportSessionKey,
     pub src_media: TransportMediaId,
@@ -116,6 +93,7 @@ impl LocalVideoRoute {
         let consumer_session = test_consumer_session_key(seed);
         let mut state = PacketLoopState::default();
         let metrics = RuntimeMetrics::default();
+        let rtc_metrics = metrics.register_rtc_worker();
         let src_media = match rid {
             Some(rid) => prepare_source_session_with_rid(
                 &mut state,
@@ -148,6 +126,7 @@ impl LocalVideoRoute {
         Self {
             state,
             metrics,
+            rtc_metrics,
             source_session,
             consumer_session,
             src_media,
@@ -156,13 +135,16 @@ impl LocalVideoRoute {
     }
 
     pub fn request_kf(&mut self) {
-        request_consumer_keyframe(
+        let route = self.consumer_route();
+        let _ = apply_media_control_batch(
             &mut self.state,
-            &self.metrics,
-            &self.consumer_session,
-            self.consumer_media,
-            &self.source_session,
-            self.src_media,
+            &self.rtc_metrics,
+            Bitrate::from_mbps(10),
+            Instant::now(),
+            WorkerMediaControlBatch::ConsumerFollowUp(vec![(
+                0,
+                ConsumerRouteControl::new(route).request_keyframe(true),
+            )]),
         );
     }
 
@@ -184,7 +166,7 @@ impl LocalVideoRoute {
     pub fn observe_rid_ready(&mut self, rid: Rid, keyframe: bool, now: Instant) -> bool {
         observe_src_rid_ready(
             &mut self.state,
-            &self.metrics,
+            &self.rtc_metrics,
             &self.source_session,
             self.src_media,
             rid,
@@ -211,6 +193,7 @@ impl LocalVideoRoute {
 pub(super) struct RemoteVideoRoute {
     pub state: PacketLoopState,
     pub metrics: RuntimeMetrics,
+    pub rtc_metrics: Arc<RtcMetricsRecorder>,
     pub source_session: TransportSessionKey,
     pub consumer_session: TransportSessionKey,
     pub src_media: TransportMediaId,
@@ -236,6 +219,7 @@ impl RemoteVideoRoute {
         let target_id = RelayTargetId::new(target_id);
         let mut state = PacketLoopState::default();
         let metrics = RuntimeMetrics::default();
+        let rtc_metrics = metrics.register_rtc_worker();
         let (control_tx, control_rx) = mpsc::channel(1);
         let source = TransportSourceKey::new(source_session.clone(), src_media);
         assert!(
@@ -243,11 +227,7 @@ impl RemoteVideoRoute {
                 .routes
                 .register_remote_source(
                     &source,
-                    RemoteSourceControl::with_metrics(
-                        control_tx,
-                        target_id,
-                        metrics.register_rtc_worker(),
-                    ),
+                    RemoteSourceControl::new(control_tx, target_id, Arc::clone(&rtc_metrics)),
                 )
                 .is_ok()
         );
@@ -261,6 +241,7 @@ impl RemoteVideoRoute {
         Self {
             state,
             metrics,
+            rtc_metrics,
             source_session,
             consumer_session,
             src_media,
@@ -271,13 +252,20 @@ impl RemoteVideoRoute {
     }
 
     pub fn request_kf(&mut self) {
-        request_consumer_keyframe(
-            &mut self.state,
-            &self.metrics,
-            &self.consumer_session,
+        let route = TransportConsumerRoute::new(
+            self.consumer_session.clone(),
             self.consumer_media,
-            &self.source_session,
-            self.src_media,
+            TransportSourceKey::new(self.source_session.clone(), self.src_media),
+        );
+        let _ = apply_media_control_batch(
+            &mut self.state,
+            &self.rtc_metrics,
+            Bitrate::from_mbps(10),
+            Instant::now(),
+            WorkerMediaControlBatch::ConsumerFollowUp(vec![(
+                0,
+                ConsumerRouteControl::new(route).request_keyframe(true),
+            )]),
         );
     }
 }
@@ -285,6 +273,7 @@ impl RemoteVideoRoute {
 pub(super) struct PendingSelectedRidRoute {
     pub state: PacketLoopState,
     pub metrics: RuntimeMetrics,
+    pub rtc_metrics: Arc<RtcMetricsRecorder>,
     pub source_session: TransportSessionKey,
     pub consumer_session: TransportSessionKey,
     pub src_media: TransportMediaId,
@@ -296,7 +285,7 @@ impl PendingSelectedRidRoute {
     pub fn observe_rid_ready(&mut self, rid: Rid, keyframe: bool, now: Instant) -> bool {
         observe_src_rid_ready(
             &mut self.state,
-            &self.metrics,
+            &self.rtc_metrics,
             &self.source_session,
             self.src_media,
             rid,
@@ -329,6 +318,7 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
     let fallback_rid = Rid::from("lo");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let src_media = prepare_source_session_with_rid(
         &mut state,
         &source_session,
@@ -364,6 +354,7 @@ pub(super) fn prepare_pending_selected_rid_route() -> PendingSelectedRidRoute {
     PendingSelectedRidRoute {
         state,
         metrics,
+        rtc_metrics,
         source_session,
         consumer_session,
         src_media,

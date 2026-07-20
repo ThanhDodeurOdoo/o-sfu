@@ -17,7 +17,7 @@ pub mod diagnostics {
 ///
 /// runtime edges record through this facade instead of assembling metric names
 /// or label sets manually
-/// the Prometheus renderer consumes snapshots produced by these types
+/// the Prometheus renderer reads the catalog declared by these types
 pub mod metrics {
     pub use crate::engine::metrics::*;
 }
