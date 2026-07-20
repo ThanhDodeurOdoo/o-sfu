@@ -36,7 +36,7 @@ use super::{
 };
 use crate::engine::{
     media_transport::TransportMediaId,
-    metrics::{RtcRouteControlMetrics, RtcRouteControlOutcome},
+    metrics::{RtcMetricsRecorder, RtcRouteControlOutcome},
     packet_sink_registry::{PacketSinkRouteCache, RegisteredPacketSink},
 };
 
@@ -52,7 +52,7 @@ use crate::engine::{
 pub(super) fn plan_forwards(
     state: &PacketLoopState,
     packet_sinks: &PacketSinkRouteCache,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     pkt_idx: usize,
     pkt: &mut ForwardedPacket,
     forwards: &mut Vec<PacketForward>,
@@ -139,7 +139,7 @@ fn reserve_forward_capacity(
 /// selected-layer and source-wide policy gates authoritative for every
 /// downstream destination.
 fn src_gate_permits(
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_gate: Option<PacketLayerGate>,
     packet_rid: Option<Rid>,
 ) -> bool {

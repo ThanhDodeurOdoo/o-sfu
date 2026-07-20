@@ -251,11 +251,11 @@ impl RtcWorker {
     ///
     /// the returned handle lets the consumer worker send best-effort keyframe
     /// and packet-gate updates back to the worker that owns the producer
-    pub fn remote_source_control(&self, target: &Self) -> RemoteSourceControl {
-        RemoteSourceControl::with_metrics(
+    pub fn remote_source_control(&self, consumer: &Self) -> RemoteSourceControl {
+        RemoteSourceControl::new(
             self.handle.command_tx.clone(),
-            target.relay_target_id,
-            Arc::clone(&target.rtc_metrics),
+            consumer.relay_target_id,
+            Arc::clone(&consumer.rtc_metrics),
         )
     }
 

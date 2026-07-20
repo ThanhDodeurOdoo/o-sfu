@@ -13,6 +13,7 @@ use crate::engine::{
             test_support::test_transport_session_key,
         },
     },
+    metrics::RuntimeMetrics,
 };
 
 fn rtp_parameters_with_ssrc(mid: Mid, ssrc: u32) -> RouterRtpParameters {
@@ -354,6 +355,7 @@ fn rejected_negotiated_ssrc_binding_does_not_clear_existing_owner() {
 #[test]
 fn expired_local_and_relay_speakers_resolve_the_same_room_once() {
     let mut state = PacketLoopState::default();
+    let rtc_metrics = RuntimeMetrics::default().register_rtc_worker();
     let session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
     let local_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session.clone(),
@@ -366,7 +368,7 @@ fn expired_local_and_relay_speakers_resolve_the_same_room_once() {
             .routes
             .register_remote_source(
                 &TransportSourceKey::new(session.clone(), relay_id),
-                RemoteSourceControl::new(control_tx, RelayTargetId::new(1)),
+                RemoteSourceControl::new(control_tx, RelayTargetId::new(1), rtc_metrics),
             )
             .is_ok()
     );

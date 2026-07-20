@@ -41,7 +41,7 @@ use crate::engine::{
             state::{PacketLoopState, RidReadinessScratch},
         },
     },
-    metrics::RtcRouteControlMetrics,
+    metrics::RtcMetricsRecorder,
 };
 
 /// maximum age for treating a producer rid as live enough for strict gating
@@ -74,7 +74,7 @@ const SELECTED_RID_KEYFRAME_RETRY_DELAYS: [Duration; 5] = [
 #[cfg(test)]
 pub fn observe_src_rid_ready(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_key: &TransportSessionKey,
     src_media: TransportMediaId,
     rid: Rid,
@@ -112,7 +112,7 @@ pub fn observe_src_rid_ready(
 /// treat the source as route-control dirty
 pub fn apply_src_rid_ready(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_key: &TransportSessionKey,
     src_media: TransportMediaId,
     rid: Rid,
@@ -180,7 +180,7 @@ pub fn apply_src_rid_ready(
 /// dropped best-effort refresh
 pub fn drain_due_rid_kf_refreshes(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     now: Instant,
 ) {
     for (src_media, rid) in state.routes.drain_all_due_rid_refreshes(now) {
@@ -283,7 +283,7 @@ fn update_rid_readiness_routes(
 /// observed ownership is checked against the current registration
 fn request_live_rid_kf(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_key: &TransportSessionKey,
     src_media: TransportMediaId,
     rid: Rid,
@@ -372,7 +372,7 @@ fn schedule_live_rid_kf_retries(
 /// the packet-loop timer path as a fallback for quiet rids
 fn drain_live_rid_kf_retries(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_key: &TransportSessionKey,
     src_media: TransportMediaId,
     rid: Rid,

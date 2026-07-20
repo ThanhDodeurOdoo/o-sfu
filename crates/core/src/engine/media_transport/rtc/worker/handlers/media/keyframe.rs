@@ -25,14 +25,12 @@ use crate::engine::{
         TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
         TransportSourceKey, rtc::relay_registry::RelayTargetId,
     },
-    metrics::{
-        RtcKeyframeRequestOutcome, RtcRouteControlMetrics, RtcRouteControlOutcome, RuntimeMetrics,
-    },
+    metrics::{RtcKeyframeRequestOutcome, RtcMetricsRecorder, RtcRouteControlOutcome},
 };
 
 pub fn worker_request_remote_kf(
     state: &mut PacketLoopState,
-    metrics: &RuntimeMetrics,
+    metrics: &RtcMetricsRecorder,
     src: &TransportSourceKey,
     target_id: RelayTargetId,
     rid: Option<Rid>,
@@ -85,7 +83,7 @@ impl KeyframeRequestMode {
 
 pub fn request_kf_for_target(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     target: KeyframeRequestTarget<'_>,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
@@ -103,7 +101,7 @@ pub fn request_kf_for_target(
 
 fn request_local_kf(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_key: &TransportSessionKey,
     src_media: TransportMediaId,
     rid: Option<Rid>,
@@ -129,7 +127,7 @@ fn request_local_kf(
 
 fn request_remote_kf(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src: &TransportSourceKey,
     src_control: &RemoteSourceControl,
     rid: Option<Rid>,
@@ -149,7 +147,7 @@ fn request_remote_kf(
 
 fn track_kf_req(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_media: TransportMediaId,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
@@ -171,7 +169,7 @@ fn track_kf_req(
 /// request a refresh frame for an already-declared consumer route
 pub fn worker_request_consumer_kf(
     state: &mut PacketLoopState,
-    metrics: &RuntimeMetrics,
+    metrics: &RtcMetricsRecorder,
     route: &TransportConsumerRoute,
 ) -> Result<(), TransportAdapterError> {
     let consumer_key = route.consumer_session_key();
@@ -349,7 +347,7 @@ fn push_unique_rid(rids: &mut Vec<Rid>, rid: Rid) {
 
 fn request_kf_from_producer(
     state: &mut PacketLoopState,
-    metrics: &impl RtcRouteControlMetrics,
+    metrics: &RtcMetricsRecorder,
     src_key: &TransportSessionKey,
     src_media: TransportMediaId,
     mid: Mid,

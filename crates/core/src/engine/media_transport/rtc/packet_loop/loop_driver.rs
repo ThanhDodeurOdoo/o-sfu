@@ -169,21 +169,21 @@ impl PacketLoopTurn {
             &config.rtc_metrics,
         );
         state.routes.flush_remote_pkt_gates();
-        drain_due_rid_kf_refreshes(state, &*config.rtc_metrics, now);
-        flush_pending_kf_reqs(state, &*config.rtc_metrics, &mut self.buffers);
+        drain_due_rid_kf_refreshes(state, &config.rtc_metrics, now);
+        flush_pending_kf_reqs(state, &config.rtc_metrics, &mut self.buffers);
         // packet observations must run before fanout planning because layer gates
         // and first-ingress keyframes depend on facts learned from this batch
         record_incoming_stats(
             state,
             &config.source_policy_signal,
-            &*config.rtc_metrics,
+            &config.rtc_metrics,
             &config.rtp_metrics,
             &mut self.buffers,
         );
         config
             .source_policy_signal
             .mark_dirty_rooms(state.take_expired_speaker_rooms(now));
-        drain_due_kf_retries(state, &*config.rtc_metrics, &mut self.buffers, now);
+        drain_due_kf_retries(state, &config.rtc_metrics, &mut self.buffers, now);
         // sink routes are refreshed once per turn so recording lookups do not take
         // the shared registry lock per packet
         self.packet_sink_cache
@@ -194,7 +194,7 @@ impl PacketLoopTurn {
             plan_forwards(
                 state,
                 &self.packet_sink_cache,
-                &*config.rtc_metrics,
+                &config.rtc_metrics,
                 pkt_idx,
                 pkt,
                 &mut self.buffers.forwards,
@@ -541,7 +541,8 @@ fn handle_control_input(
             candidate_addr,
             now: Instant::now(),
             config: &config.worker,
-            metrics: &config.metrics,
+            runtime_metrics: &config.metrics,
+            rtc_metrics: &config.rtc_metrics,
         },
     );
     demux.clear_on_topology_change();

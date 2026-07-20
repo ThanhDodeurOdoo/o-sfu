@@ -30,7 +30,7 @@ use crate::{
                 test_media_transport_config, test_media_transport_deps, test_rtc_port_range,
             },
         },
-        metrics::MetricName,
+        metrics::{MetricName, test_support::RuntimeMetricsSnapshotLookup},
         sync::lock_unpoisoned,
     },
 };
@@ -183,8 +183,8 @@ async fn assert_relay_target_counts(
     );
 }
 
-fn transport_cleanup_failures(adapter: &MediaTransport) -> Option<u64> {
-    adapter.metrics.snapshot().counter(
+fn transport_cleanup_failures(adapter: &MediaTransport) -> u64 {
+    adapter.metrics.snapshot().counter_value(
         MetricName::TransportCleanupFailuresTotal,
         &[("kind", "terminal")],
     )
@@ -804,14 +804,14 @@ async fn media_transport_terminal_teardown_falls_back_and_continues_batch() {
             .await
             .is_ok()
     );
-    assert_eq!(transport_cleanup_failures(&adapter), Some(1));
+    assert_eq!(transport_cleanup_failures(&adapter), 1);
     worker.stop_for_test().await;
     adapter
         .teardown([TransportTeardown::CloseSession {
             session_key: source_session,
         }])
         .await;
-    assert_eq!(transport_cleanup_failures(&adapter), Some(2));
+    assert_eq!(transport_cleanup_failures(&adapter), 2);
 }
 
 #[tokio::test]
@@ -921,6 +921,6 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() -> Tra
         .await?;
     adapter.teardown([release(source_session)]).await;
     assert_relay_target_counts(source_worker, source_media_id, 0, 0).await;
-    assert_eq!(transport_cleanup_failures(&adapter), Some(1));
+    assert_eq!(transport_cleanup_failures(&adapter), 1);
     Ok(())
 }

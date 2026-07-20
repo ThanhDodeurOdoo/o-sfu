@@ -91,7 +91,7 @@ impl IncomingObservationBenchFixture {
             record_incoming_stats_for_benchmark(
                 &mut self.state,
                 &self.source_policy_signal,
-                &*self.route_metrics,
+                &self.route_metrics,
                 &self.rtp_metrics,
                 &mut self.buffers,
             );

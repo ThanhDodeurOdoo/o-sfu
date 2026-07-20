@@ -65,11 +65,12 @@ fn populate_forward_routes(
 ) {
     let mut packet_sink_cache = PacketSinkRouteCache::default();
     packet_sink_cache.refresh_from(packet_sinks);
+    let rtc_metrics = metrics.register_rtc_worker();
     for (pkt_idx, packet) in pending_packets.iter_mut().enumerate() {
         plan_pkt_forwards(
             state,
             &packet_sink_cache,
-            metrics,
+            &rtc_metrics,
             pkt_idx,
             packet,
             forwards,

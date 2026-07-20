@@ -22,7 +22,7 @@ use crate::{
                 state::PacketLoopState,
             },
         },
-        metrics::RuntimeMetrics,
+        metrics::RtcMetricsRecorder,
     },
 };
 
@@ -32,7 +32,7 @@ fn map_updates<T, R>(updates: Vec<(usize, T)>, mut apply: impl FnMut(T) -> R) ->
 
 pub fn apply_route_control_request(
     state: &mut PacketLoopState,
-    metrics: &RuntimeMetrics,
+    metrics: &RtcMetricsRecorder,
     request: RouteControlRequest,
     response: Option<RtcWorkerResponse<()>>,
 ) {
@@ -75,7 +75,7 @@ pub fn apply_route_control_request(
 
 pub fn apply_media_control_batch(
     state: &mut PacketLoopState,
-    metrics: &RuntimeMetrics,
+    metrics: &RtcMetricsRecorder,
     max_bitrate_out: Bitrate,
     now: Instant,
     batch: WorkerMediaControlBatch,

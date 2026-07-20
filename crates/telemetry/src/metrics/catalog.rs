@@ -1,10 +1,4 @@
-//! Defines the process-local metric catalog for runtime observability
-//!
-//! This module is the single place where `o-sfu` declares the metric families
-//! it exports and the typed recording helpers that runtime edges are allowed to
-//! call. having catalog centralized makes the `/metrics` schema explicit
-//! and prevents HTTP, websocket, transport, and media code from inventing
-//! adoc counters, gauges, etc...
+//! Defines process-local metric storage and recording APIs.
 
 use std::{
     sync::Arc,
@@ -20,15 +14,12 @@ use super::{
     labels::{
         BudgetSolverOutcome, ControlPlaneDurationBucket, HttpDisconnectResponseStatus,
         HttpRoomResponseStatus, HttpRoute, MediaQualityLossDirection, MediaQualityRttBucket,
-        MediaQualitySample, RecordingActionOutcome, RtcDatagramDropReason, RtcDatagramRoutePath,
-        RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
-        RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
-        RtpForwardDestinationKind, RtpRelayDropKind, SourceSelectionKind, TransportHealthState,
-        TransportHealthTransition, TransportIceState, TransportUserLifetimeBucket,
-        WsBusClientFrameKind, WsBusDirection, WsBusFailureKind, WsConnectionStage,
-        WsSessionLoopExitReason, WsStartupFailureKind,
+        MediaQualitySample, RecordingActionOutcome, RtpRelayDropKind, SourceSelectionKind,
+        TransportHealthState, TransportHealthTransition, TransportIceState,
+        TransportUserLifetimeBucket, WsBusClientFrameKind, WsBusDirection, WsBusFailureKind,
+        WsConnectionStage, WsSessionLoopExitReason, WsStartupFailureKind,
     },
-    rtc::{RtcMetrics, RtcMetricsRecorder, RtcRouteControlMetrics},
+    rtc::{RtcMetrics, RtcMetricsRecorder},
     rtp::{RtpMetrics, RtpMetricsRecorder},
 };
 
@@ -117,22 +108,6 @@ impl RuntimeMetrics {
         })
     }
 
-    pub fn record_http_noop_request(&self) {
-        self.http_requests.increment(HttpRoute::Noop);
-    }
-
-    pub fn record_http_stats_request(&self) {
-        self.http_requests.increment(HttpRoute::Stats);
-    }
-
-    pub fn record_http_metrics_request(&self) {
-        self.http_requests.increment(HttpRoute::Metrics);
-    }
-
-    pub fn record_http_room_request(&self) {
-        self.http_requests.increment(HttpRoute::Room);
-    }
-
     pub fn record_http_room_success(&self) {
         self.http_room_responses
             .increment(HttpRoomResponseStatus::Success);
@@ -153,10 +128,6 @@ impl RuntimeMetrics {
             .increment(HttpRoomResponseStatus::BadRequest);
     }
 
-    pub fn record_http_disconnect_request(&self) {
-        self.http_requests.increment(HttpRoute::Disconnect);
-    }
-
     pub fn record_http_disconnect_success(&self) {
         self.http_disconnect_responses
             .increment(HttpDisconnectResponseStatus::Success);
@@ -170,14 +141,6 @@ impl RuntimeMetrics {
     pub fn record_http_disconnect_unprocessable_entity(&self) {
         self.http_disconnect_responses
             .increment(HttpDisconnectResponseStatus::UnprocessableEntity);
-    }
-
-    pub fn add_http_inflight_requests(&self, route: HttpRoute, delta: i64) {
-        self.http_inflight_requests.add(route, delta);
-    }
-
-    pub fn record_http_request_duration(&self, route: HttpRoute, duration: Duration) {
-        self.http_request_duration.observe(route, duration);
     }
 
     pub fn record_ws_connection_accepted(&self) {
@@ -298,18 +261,6 @@ impl RuntimeMetrics {
     #[must_use = "keep the guard until WebSocket user initialization finishes"]
     pub fn track_ws_user_initialization(&self) -> impl Drop + '_ {
         self.track(|metrics, duration| metrics.ws_user_initialize_duration.observe(duration))
-    }
-
-    pub fn record_ws_handshake_duration(&self, duration: Duration) {
-        self.ws_handshake_duration.observe(duration);
-    }
-
-    pub fn record_ws_auth_duration(&self, duration: Duration) {
-        self.ws_auth_duration.observe(duration);
-    }
-
-    pub fn record_ws_user_initialize_duration(&self, duration: Duration) {
-        self.ws_user_initialize_duration.observe(duration);
     }
 
     fn track<'a>(&'a self, finish: impl Fn(&Self, Duration) + 'a) -> impl Drop + 'a {
@@ -449,27 +400,6 @@ impl RuntimeMetrics {
         self.rtc_metrics.register_worker()
     }
 
-    pub fn record_rtp_ingress(&self, payload_bytes: usize) {
-        self.rtp_metrics.record_ingress(payload_bytes);
-    }
-
-    pub fn record_rtp_egress(&self, payload_bytes: usize) {
-        self.rtp_metrics.record_egress(payload_bytes);
-    }
-
-    pub fn record_rtp_forwarded(
-        &self,
-        destination: RtpForwardDestinationKind,
-        payload_bytes: usize,
-    ) {
-        self.rtp_metrics
-            .record_forwarded(destination, payload_bytes);
-    }
-
-    pub fn record_rtp_decoder_refresh(&self, scope: RtpDecoderRefreshScope) {
-        self.rtp_metrics.record_decoder_refresh(scope);
-    }
-
     pub fn record_rtp_relay_overload_drop(&self, destination: RtpRelayDropKind) {
         self.rtp_relay_overload_drops.increment(destination);
     }
@@ -537,67 +467,11 @@ impl RuntimeMetrics {
         self.transport_cleanup_failures.increment();
     }
 
-    pub fn record_rtc_datagram_route(&self, path: RtcDatagramRoutePath) {
-        self.rtc_metrics.record_datagram_route(path);
-    }
-
-    pub fn record_rtc_datagram_drop(&self, reason: RtcDatagramDropReason) {
-        self.rtc_metrics.record_datagram_drop(reason);
-    }
-
-    pub fn record_rtc_datagram_fallback_scan(&self, examined_sessions: usize) {
-        self.rtc_metrics
-            .record_datagram_fallback_scan(examined_sessions);
-    }
-
-    pub fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
-        self.rtc_metrics.record_route_control(outcome);
-    }
-
-    pub fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
-        self.rtc_metrics.record_keyframe_request(outcome);
-    }
-
-    pub fn record_rtc_relay_enqueue(&self, result: RtcRelayEnqueueResult) {
-        self.rtc_metrics.record_relay_enqueue(result);
-    }
-
-    pub fn record_rtc_relay_mailbox_depth(&self, depth: usize) {
-        self.rtc_metrics.record_relay_mailbox_depth(depth);
-    }
-
-    pub fn record_rtc_relay_drain_batch(&self, drained_packets: usize, cap_hit: bool) {
-        self.rtc_metrics
-            .record_relay_drain_batch(drained_packets, cap_hit);
-    }
-
-    pub fn record_rtc_remote_control_drop(&self, kind: RtcRemoteControlDropKind) {
-        self.rtc_metrics.record_remote_control_drop(kind);
-    }
-
-    pub fn record_rtc_remote_packet_gate_convergence(
-        &self,
-        outcome: RtcRemotePacketGateConvergence,
-    ) {
-        self.rtc_metrics
-            .record_remote_packet_gate_convergence(outcome);
-    }
-
     pub fn record_source_selection_update(&self, selector: SourceSelectionKind) {
         self.source_selection_updates.increment(selector);
     }
 
     pub fn record_budget_solver_outcome(&self, outcome: BudgetSolverOutcome) {
         self.budget_solver_outcomes.increment(outcome);
-    }
-}
-
-impl RtcRouteControlMetrics for RuntimeMetrics {
-    fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
-        self.rtc_metrics.record_route_control(outcome);
-    }
-
-    fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
-        self.rtc_metrics.record_keyframe_request(outcome);
     }
 }

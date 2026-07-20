@@ -4,11 +4,11 @@ use o_sfu_model::WebSocketCloseCode;
 
 use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
 use crate::metrics::{
-    BudgetSolverOutcome, HttpRoute, RtcDatagramDropReason, RtcDatagramRoutePath,
-    RtcKeyframeRequestOutcome, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
-    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
-    RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind, TransportHealthState,
-    TransportIceState, WsSessionLoopExitReason,
+    BudgetSolverOutcome, HttpRoute, METRIC_FAMILY_COUNT, RtcDatagramDropReason,
+    RtcDatagramRoutePath, RtcKeyframeRequestOutcome, RtcRelayEnqueueResult,
+    RtcRemoteControlDropKind, RtcRemotePacketGateConvergence, RtcRouteControlOutcome,
+    RtpDecoderRefreshScope, RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind,
+    TransportHealthState, TransportIceState, WsSessionLoopExitReason,
 };
 
 fn assert_http_and_websocket_metrics(rendered: &str) {
@@ -16,20 +16,16 @@ fn assert_http_and_websocket_metrics(rendered: &str) {
     assert!(rendered.contains("osfu_http_noop_requests_total 1"));
     assert!(rendered.contains("osfu_http_metrics_requests_total 1"));
     assert!(rendered.contains("# TYPE osfu_http_inflight_requests gauge"));
-    assert!(rendered.contains("osfu_http_inflight_requests{route=\"noop\"} 1"));
+    assert!(rendered.contains("osfu_http_inflight_requests{route=\"noop\"} 0"));
     assert!(rendered.contains("# TYPE osfu_http_request_duration_seconds histogram"));
-    assert!(
-        rendered
-            .contains("osfu_http_request_duration_seconds_bucket{route=\"noop\",le=\"0.05\"} 1")
-    );
     assert!(rendered.contains("osfu_http_request_duration_seconds_count{route=\"noop\"} 1"));
     assert!(
         rendered.contains("osfu_ws_handshake_rejections_total{close_code=\"protocol_error\"} 1")
     );
     assert!(rendered.contains("# TYPE osfu_ws_handshake_duration_seconds histogram"));
-    assert!(rendered.contains("osfu_ws_handshake_duration_seconds_bucket{le=\"0.1\"} 1"));
+    assert!(rendered.contains("osfu_ws_handshake_duration_seconds_count 1"));
     assert!(rendered.contains("osfu_ws_auth_duration_seconds_count 1"));
-    assert!(rendered.contains("osfu_ws_user_initialize_duration_seconds_bucket{le=\"0.25\"} 1"));
+    assert!(rendered.contains("osfu_ws_user_initialize_duration_seconds_count 1"));
     assert!(
         rendered.contains("osfu_ws_user_loop_exits_total{reason=\"transport_disconnected\"} 1")
     );
@@ -97,18 +93,16 @@ fn assert_rtc_keyframe_request_metrics(rendered: &str) {
 
 fn sample_metrics() -> RuntimeMetrics {
     let metrics = RuntimeMetrics::default();
-    metrics.record_http_noop_request();
-    metrics.record_http_metrics_request();
-    metrics.add_http_inflight_requests(HttpRoute::Noop, 1);
-    metrics.record_http_request_duration(HttpRoute::Noop, Duration::from_millis(25));
+    drop(metrics.track_http_request(HttpRoute::Noop));
+    drop(metrics.track_http_request(HttpRoute::Metrics));
     metrics.record_ws_connection_accepted();
     metrics.record_ws_handshake_rejection(Some(WebSocketCloseCode::ProtocolError));
     metrics.record_ws_user_loop_exit(WsSessionLoopExitReason::TransportDisconnected);
     metrics.record_ws_bus_batch_received(2);
     metrics.record_ws_bus_send_failure();
-    metrics.record_ws_handshake_duration(Duration::from_millis(80));
-    metrics.record_ws_auth_duration(Duration::from_millis(8));
-    metrics.record_ws_user_initialize_duration(Duration::from_millis(120));
+    drop(metrics.track_ws_handshake());
+    drop(metrics.track_ws_authentication());
+    drop(metrics.track_ws_user_initialization());
     metrics.add_active_rooms(1);
     metrics.add_active_users(2);
     metrics.add_active_publications(3);
@@ -120,40 +114,44 @@ fn sample_metrics() -> RuntimeMetrics {
     metrics.record_recording_stop_rejected();
     metrics.record_recording_captured_packet();
     metrics.record_recording_captured_stream();
-    metrics.record_rtp_ingress(1200);
-    metrics.record_rtp_egress(900);
-    metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Rid);
-    metrics.record_rtp_decoder_refresh(RtpDecoderRefreshScope::Source);
-    metrics.record_rtp_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
-    metrics.record_rtp_forwarded(RtpForwardDestinationKind::Recording, 700);
-    metrics.record_rtp_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
+    let packet_recorder = metrics.register_rtp_worker();
+    packet_recorder.record_ingress(1200);
+    packet_recorder.record_egress(900);
+    packet_recorder.record_decoder_refresh(RtpDecoderRefreshScope::Rid);
+    packet_recorder.record_decoder_refresh(RtpDecoderRefreshScope::Source);
+    packet_recorder.record_forwarded(RtpForwardDestinationKind::LocalRtc, 900);
+    packet_recorder.record_forwarded(RtpForwardDestinationKind::Recording, 700);
+    packet_recorder.record_forwarded(RtpForwardDestinationKind::IntraNodeRelay, 500);
     metrics.record_transport_ice_state_change(TransportIceState::Checking);
     metrics.record_transport_ice_state_change(TransportIceState::Connected);
     metrics.record_transport_dtls_connected();
     metrics.record_transport_user_lifetime(Duration::from_millis(1500));
     metrics.record_transport_cleanup_failure();
-    metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
-    metrics.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
-    metrics.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
-    metrics.record_rtc_datagram_fallback_scan(4);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
-    metrics.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Forwarded);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Absorbed);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Retry);
-    metrics.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
-    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
-    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
-    metrics.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
-    metrics.record_rtc_relay_mailbox_depth(7);
-    metrics.record_rtc_relay_drain_batch(4, true);
-    metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
-    metrics.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
-    metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
-    metrics.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
+    let control_recorder = metrics.register_rtc_worker();
+    control_recorder.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
+    control_recorder.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+    control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
+    control_recorder.record_rtc_datagram_fallback_scan(4);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::LayerAllowed);
+    control_recorder.record_rtc_route_control(RtcRouteControlOutcome::LayerDropped);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Forwarded);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Absorbed);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Retry);
+    control_recorder.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
+    control_recorder.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
+    control_recorder.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeOverloaded);
+    control_recorder.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
+    control_recorder.record_rtc_relay_mailbox_depth(7);
+    control_recorder.record_rtc_relay_drain_batch(4, true);
+    control_recorder.record_rtc_remote_control_drop(RtcRemoteControlDropKind::Keyframe);
+    control_recorder.record_rtc_remote_control_drop(RtcRemoteControlDropKind::PacketGate);
+    control_recorder
+        .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
+    control_recorder
+        .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
     metrics.record_source_selection_update(SourceSelectionKind::Encoding);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
@@ -166,6 +164,16 @@ fn sample_metrics() -> RuntimeMetrics {
 fn prometheus_export_renders_existing_metric_families() {
     let rendered = render_prometheus(&sample_metrics());
 
+    assert_eq!(METRIC_FAMILY_COUNT, 73);
+    for prefix in ["# HELP ", "# TYPE "] {
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with(prefix))
+                .count(),
+            METRIC_FAMILY_COUNT
+        );
+    }
     assert_eq!(
         PROMETHEUS_CONTENT_TYPE,
         "text/plain; version=0.0.4; charset=utf-8"

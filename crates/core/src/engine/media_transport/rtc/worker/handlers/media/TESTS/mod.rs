@@ -85,12 +85,13 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let (_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let src_media = prepare_source_session(&mut state, &source_session, source_mid, 66_666);
 
     apply_route_control_request(
         &mut state,
-        &metrics,
+        &rtc_metrics,
         RouteControlRequest::RequestRemoteKeyframe {
             source: TransportSourceKey::new(source_session.clone(), src_media),
             target_id: RelayTargetId::new(7),
@@ -113,6 +114,7 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let (mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let src_media = prepare_source_session(&mut state, &source_session, source_mid, 77_777);
     let relay_target_id = RelayTargetId::new(8);
@@ -126,7 +128,7 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
 
     apply_route_control_request(
         &mut state,
-        &metrics,
+        &rtc_metrics,
         RouteControlRequest::RequestRemoteKeyframe {
             source: TransportSourceKey::new(source_session.clone(), src_media),
             target_id: relay_target_id,
@@ -137,7 +139,7 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     );
     apply_route_control_request(
         &mut state,
-        &metrics,
+        &rtc_metrics,
         RouteControlRequest::RequestRemoteKeyframe {
             source: TransportSourceKey::new(source_session.clone(), src_media),
             target_id: relay_target_id,
@@ -197,7 +199,7 @@ fn consumer_follow_up_failures_are_isolated_and_classified() {
     .collect();
     let WorkerMediaControlBatchOutcome::Consumers(results) = apply_media_control_batch(
         &mut route.state,
-        &route.metrics,
+        &route.rtc_metrics,
         Bitrate::from_mbps(10),
         Instant::now(),
         WorkerMediaControlBatch::ConsumerFollowUp(controls),
@@ -551,7 +553,7 @@ fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
 
     drain_due_rid_kf_refreshes(
         &mut route.state,
-        &route.metrics,
+        &route.rtc_metrics,
         now + Duration::from_millis(1_200),
     );
 
@@ -623,6 +625,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
     let first_consumer_mid = Mid::from("cam-down-a");
     let second_consumer_mid = Mid::from("cam-down-b");
     let mut state = PacketLoopState::default();
+    let rtc_metrics = RuntimeMetrics::default().register_rtc_worker();
     let src_media = TransportMediaId::new(41);
     let (command_tx, mut command_rx) = mpsc::channel(4);
     let source = TransportSourceKey::new(source_session.clone(), src_media);
@@ -631,7 +634,11 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
             .routes
             .register_remote_source(
                 &source,
-                RemoteSourceControl::new(command_tx, RelayTargetId::new(16)),
+                RemoteSourceControl::new(
+                    command_tx,
+                    RelayTargetId::new(16),
+                    Arc::clone(&rtc_metrics),
+                ),
             )
             .is_ok()
     );
@@ -656,7 +663,7 @@ fn batched_consumer_packet_gates_keep_remote_relay_open_during_rid_bootstrap() {
 
     let outcome = apply_media_control_batch(
         &mut state,
-        &RuntimeMetrics::default(),
+        &rtc_metrics,
         Bitrate::from_mbps(10),
         Instant::now(),
         WorkerMediaControlBatch::ConsumerGates {
@@ -918,9 +925,11 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
     let source_session = test_source_session_key(151);
     let consumer_session = test_consumer_session_key_on_worker(151, 1);
     let mut state = PacketLoopState::default();
+    let rtc_metrics = RuntimeMetrics::default().register_rtc_worker();
     let src_media = TransportMediaId::new(33);
     let (command_tx, _command_rx) = mpsc::channel(1);
-    let remote_source_control = RemoteSourceControl::new(command_tx, RelayTargetId::new(10));
+    let remote_source_control =
+        RemoteSourceControl::new(command_tx, RelayTargetId::new(10), rtc_metrics);
     let consumer_rtp_parameters = RouterRtpParameters::new(vec![], vec![], vec![]);
     let source = TransportSourceKey::new(source_session, src_media);
 
@@ -1099,11 +1108,12 @@ fn request_keyframe_ignores_wrong_source_owner() {
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
     let src_media = prepare_source_session(&mut state, &source_session, source_mid, 99_999);
 
     request_kf_for_target(
         &mut state,
-        &metrics,
+        &rtc_metrics,
         KeyframeRequestTarget::Local(&wrong_session, src_media),
         None,
         KeyframeRequestKind::Pli,
@@ -1122,11 +1132,12 @@ fn remote_source_packet_gate_ignores_wrong_source_owner() {
     let wrong_session = test_consumer_session_key(141);
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
+    let rtc_metrics = RuntimeMetrics::default().register_rtc_worker();
     let src_media = prepare_source_session(&mut state, &source_session, source_mid, 101_010);
 
     apply_route_control_request(
         &mut state,
-        &RuntimeMetrics::default(),
+        &rtc_metrics,
         RouteControlRequest::SetRemoteSourcePacketGate {
             source: TransportSourceKey::new(wrong_session, src_media),
             target_id: RelayTargetId::new(9),

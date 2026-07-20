@@ -18,16 +18,11 @@ const RTC_REMOTE_CONTROL_DROP_KIND_COUNT: usize = <RtcRemoteControlDropKind as M
 const RTC_REMOTE_PACKET_GATE_CONVERGENCE_COUNT: usize =
     <RtcRemotePacketGateConvergence as MetricLabel>::COUNT;
 
-pub trait RtcRouteControlMetrics {
-    fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome);
-    fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome);
-}
-
 /// Worker-local RTC packet-loop metric recorder.
 ///
 /// Packet loops keep one recorder for their full worker lifetime. Datagram and
 /// route-control updates touch only this worker's padded atomics while
-/// `RuntimeMetrics` aggregates all registered recorders during snapshot export.
+/// `RuntimeMetrics` aggregates all registered recorders during scrape capture.
 #[derive(Debug, Default)]
 pub struct RtcMetricsRecorder {
     datagram_routes: PaddedCounterFamily<RtcDatagramRoutePath>,
@@ -100,19 +95,8 @@ impl RtcMetricsRecorder {
     }
 }
 
-impl RtcRouteControlMetrics for RtcMetricsRecorder {
-    fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
-        self.record_rtc_route_control(outcome);
-    }
-
-    fn record_rtc_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
-        self.record_rtc_keyframe_request(outcome);
-    }
-}
-
 #[derive(Debug, Default)]
 pub(super) struct RtcMetrics {
-    process_recorder: RtcMetricsRecorder,
     worker_recorders: Mutex<Vec<Arc<RtcMetricsRecorder>>>,
 }
 
@@ -129,55 +113,8 @@ impl RtcMetrics {
         recorder
     }
 
-    pub(super) fn record_datagram_route(&self, path: RtcDatagramRoutePath) {
-        self.process_recorder.record_rtc_datagram_route(path);
-    }
-
-    pub(super) fn record_datagram_drop(&self, reason: RtcDatagramDropReason) {
-        self.process_recorder.record_rtc_datagram_drop(reason);
-    }
-
-    pub(super) fn record_datagram_fallback_scan(&self, examined_sessions: usize) {
-        self.process_recorder
-            .record_rtc_datagram_fallback_scan(examined_sessions);
-    }
-
-    pub(super) fn record_route_control(&self, outcome: RtcRouteControlOutcome) {
-        self.process_recorder.record_rtc_route_control(outcome);
-    }
-
-    pub(super) fn record_keyframe_request(&self, outcome: RtcKeyframeRequestOutcome) {
-        self.process_recorder.record_rtc_keyframe_request(outcome);
-    }
-
-    pub(super) fn record_relay_enqueue(&self, result: RtcRelayEnqueueResult) {
-        self.process_recorder.record_rtc_relay_enqueue(result);
-    }
-
-    pub(super) fn record_relay_mailbox_depth(&self, depth: usize) {
-        self.process_recorder.record_rtc_relay_mailbox_depth(depth);
-    }
-
-    pub(super) fn record_relay_drain_batch(&self, drained_packets: usize, cap_hit: bool) {
-        self.process_recorder
-            .record_rtc_relay_drain_batch(drained_packets, cap_hit);
-    }
-
-    pub(super) fn record_remote_control_drop(&self, kind: RtcRemoteControlDropKind) {
-        self.process_recorder.record_rtc_remote_control_drop(kind);
-    }
-
-    pub(super) fn record_remote_packet_gate_convergence(
-        &self,
-        outcome: RtcRemotePacketGateConvergence,
-    ) {
-        self.process_recorder
-            .record_rtc_remote_packet_gate_convergence(outcome);
-    }
-
     pub(super) fn snapshot(&self) -> RtcMetricsSnapshot {
         let mut snapshot = RtcMetricsSnapshot::default();
-        snapshot.add_recorder(&self.process_recorder);
         {
             let workers = match self.worker_recorders.lock() {
                 Ok(workers) => workers,

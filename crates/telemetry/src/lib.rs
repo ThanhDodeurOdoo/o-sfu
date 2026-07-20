@@ -1,9 +1,9 @@
 //! telemetry setup, metric catalog and diagnostics schema
 //!
-//! `o-sfu-telemetry` keep runtime observability contracts in one crate
-//! the server initializes tracing from `TelemetryConfig`, reocrds process-local
+//! `o-sfu-telemetry` keeps runtime observability contracts in one crate
+//! the server initializes tracing from `TelemetryConfig`, records process-local
 //! metrics through typed helpers and renders diagnostics or Prometheus output
-//! from snapshot types
+//! from the metric catalog
 //!
 //! ```
 //! use o_sfu_telemetry::{

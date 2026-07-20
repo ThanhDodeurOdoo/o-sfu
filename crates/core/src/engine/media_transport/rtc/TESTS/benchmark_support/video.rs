@@ -38,7 +38,6 @@ pub struct RidReadinessBenchFixture {
     src_media: TransportMediaId,
     rid: Rid,
     now: Instant,
-    _metrics: RuntimeMetrics,
     rtc_metrics: Arc<RtcMetricsRecorder>,
     _control_rx: mpsc::Receiver<RtcWorkerCommand>,
 }
@@ -52,17 +51,12 @@ impl RidReadinessBenchFixture {
         let rid = Rid::from("hi");
         let now = fixed_now();
         let mut state = PacketLoopState::default();
-        let metrics = RuntimeMetrics::default();
-        let rtc_metrics = metrics.register_rtc_worker();
+        let rtc_metrics = RuntimeMetrics::default().register_rtc_worker();
         let (control_tx, control_rx) = mpsc::channel(8);
         let source = TransportSourceKey::new(source_session.clone(), src_media);
         let _ = state.routes.register_remote_source(
             &source,
-            RemoteSourceControl::with_metrics(
-                control_tx,
-                RelayTargetId::new(1),
-                Arc::clone(&rtc_metrics),
-            ),
+            RemoteSourceControl::new(control_tx, RelayTargetId::new(1), Arc::clone(&rtc_metrics)),
         );
 
         let mut scenario = MediaWorkerScenario::new(&mut state);
@@ -82,7 +76,6 @@ impl RidReadinessBenchFixture {
             src_media,
             rid,
             now,
-            _metrics: metrics,
             rtc_metrics,
             _control_rx: control_rx,
         }
@@ -98,7 +91,7 @@ impl RidReadinessBenchFixture {
         );
         let changed = apply_src_rid_ready(
             &mut self.state,
-            &*self.rtc_metrics,
+            &self.rtc_metrics,
             &self.source_session,
             self.src_media,
             self.rid,
@@ -117,7 +110,6 @@ impl RidReadinessBenchFixture {
 pub struct KeyframeCoalescingBenchFixture {
     state: PacketLoopState,
     buffers: PacketLoopBuffers,
-    _metrics: RuntimeMetrics,
     rtc_metrics: Arc<RtcMetricsRecorder>,
     _control_rx: mpsc::Receiver<RtcWorkerCommand>,
 }
@@ -129,17 +121,12 @@ impl KeyframeCoalescingBenchFixture {
         let src_media = TransportMediaId::new(9_100);
         let mut state = PacketLoopState::default();
         let mut buffers = PacketLoopBuffers::new();
-        let metrics = RuntimeMetrics::default();
-        let rtc_metrics = metrics.register_rtc_worker();
+        let rtc_metrics = RuntimeMetrics::default().register_rtc_worker();
         let (control_tx, control_rx) = mpsc::channel(1);
         let source = TransportSourceKey::new(source_session, src_media);
         let _ = state.routes.register_remote_source(
             &source,
-            RemoteSourceControl::with_metrics(
-                control_tx,
-                RelayTargetId::new(2),
-                Arc::clone(&rtc_metrics),
-            ),
+            RemoteSourceControl::new(control_tx, RelayTargetId::new(2), Arc::clone(&rtc_metrics)),
         );
 
         let mut scenario = MediaWorkerScenario::new(&mut state);
@@ -167,7 +154,6 @@ impl KeyframeCoalescingBenchFixture {
         Self {
             state,
             buffers,
-            _metrics: metrics,
             rtc_metrics,
             _control_rx: control_rx,
         }
@@ -177,7 +163,7 @@ impl KeyframeCoalescingBenchFixture {
     pub fn flush_requests(&mut self) -> usize {
         flush_pending_kf_reqs_at(
             &mut self.state,
-            &*self.rtc_metrics,
+            &self.rtc_metrics,
             &mut self.buffers,
             fixed_now(),
         );

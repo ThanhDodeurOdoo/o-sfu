@@ -116,7 +116,7 @@ pub fn register_remote_source_control(
     target_id: RelayTargetId,
     rtc_metrics: Arc<RtcMetricsRecorder>,
 ) {
-    let control = RemoteSourceControl::with_metrics(control_tx, target_id, rtc_metrics);
+    let control = RemoteSourceControl::new(control_tx, target_id, rtc_metrics);
     assert!(state.routes.register_remote_source(source, control).is_ok());
 }
 
