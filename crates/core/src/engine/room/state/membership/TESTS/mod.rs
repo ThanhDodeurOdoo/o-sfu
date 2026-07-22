@@ -16,7 +16,7 @@ use o_sfu_router::{
 
 use super::*;
 use crate::{
-    RoomMediaLimits,
+    RoomMediaLimits, VideoAdaptationTuning,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserPermissions,
         media_transport::{TransportConsumerRoute, TransportMediaId, TransportTeardown},
@@ -42,6 +42,7 @@ fn test_state() -> RoomState {
         &runtime_context,
         RoomAdmissionPolicy::new(4),
         RoomMediaLimits::default(),
+        VideoAdaptationTuning::default(),
         sample_client_rtp_capabilities(),
     )
 }

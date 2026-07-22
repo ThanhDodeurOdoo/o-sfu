@@ -23,7 +23,7 @@ use super::{
     DeclaredConsumerSetup, PendingConsumerSetup, SubscriptionKey, ValidatedPublish,
 };
 use crate::{
-    Bitrate, RoomMediaLimits,
+    Bitrate, RoomMediaLimits, VideoAdaptationTuning,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
         media_transport::{
@@ -89,6 +89,7 @@ fn test_state_with_media_limits(media_limits: RoomMediaLimits) -> RoomState {
         &runtime_context,
         RoomAdmissionPolicy::new(4),
         media_limits,
+        VideoAdaptationTuning::default(),
         sample_client_rtp_capabilities(),
     )
 }

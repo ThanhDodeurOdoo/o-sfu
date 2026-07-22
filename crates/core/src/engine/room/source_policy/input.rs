@@ -5,7 +5,7 @@ use std::{
 
 use super::action::FeaturedUserUpdate;
 use crate::{
-    Bitrate, RoomMediaLimits,
+    Bitrate, RoomMediaLimits, VideoAdaptationTuning,
     engine::{
         ConnectionId, UserId,
         media_transport::{
@@ -30,6 +30,7 @@ pub(super) struct SourcePolicySnapshot<'a> {
     pub(super) featured_user_updates: Vec<FeaturedUserUpdate>,
     pub(super) user_count: usize,
     pub(super) media_limits: RoomMediaLimits,
+    pub(super) video_adaptation_tuning: VideoAdaptationTuning,
 }
 
 impl<'a> SourcePolicySnapshot<'a> {
@@ -66,6 +67,7 @@ impl<'a> SourcePolicySnapshot<'a> {
             featured_user_updates,
             user_count: state.user_count(),
             media_limits,
+            video_adaptation_tuning: state.video_adaptation_tuning,
         }
     }
 }

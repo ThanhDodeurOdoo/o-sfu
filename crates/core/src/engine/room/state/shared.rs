@@ -12,7 +12,7 @@ use super::super::{
     transition::StagedPublishes,
 };
 use crate::{
-    RoomMediaLimits,
+    RoomMediaLimits, VideoAdaptationTuning,
     engine::{
         ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState, UserId, UserInfo,
         media_transport::TransportSessionKey, room::placement::PlacementSnapshot,
@@ -24,6 +24,7 @@ use crate::{
 pub struct RoomState {
     pub(super) admission_policy: RoomAdmissionPolicy,
     pub media_limits: RoomMediaLimits,
+    pub video_adaptation_tuning: VideoAdaptationTuning,
     pub users: BTreeMap<UserId, ActiveUser>,
     /// rejects stale async callbacks from previous connections
     pub(super) next_connection_id: u64,
@@ -75,11 +76,13 @@ impl RoomState {
         runtime_context: &super::super::RoomRuntimeContext,
         admission_policy: RoomAdmissionPolicy,
         media_limits: RoomMediaLimits,
+        video_adaptation_tuning: VideoAdaptationTuning,
         router_rtp_capabilities: MediaCapabilities,
     ) -> Self {
         Self {
             admission_policy,
             media_limits,
+            video_adaptation_tuning,
             users: BTreeMap::new(),
             next_connection_id: 0,
             next_consumer_id: 1,

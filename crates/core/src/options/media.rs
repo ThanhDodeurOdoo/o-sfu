@@ -150,6 +150,101 @@ impl Default for RoomMediaLimits {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoAdaptationTuning {
+    multiparty_scalable_video_threshold: usize,
+    thumbnail_budget_divisor: u64,
+    downswitch_pressure_observations: u8,
+    upswitch_stable_observations: u8,
+}
+
+/// Invalid video adaptation tuning input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum VideoAdaptationTuningError {
+    #[error("multiparty scalable video threshold must be greater than zero")]
+    MultipartyScalableVideoThresholdZero,
+    #[error("thumbnail budget divisor must be greater than zero")]
+    ThumbnailBudgetDivisorZero,
+    #[error("downswitch pressure observations must be greater than zero")]
+    DownswitchPressureObservationsZero,
+    #[error("upswitch stable observations must be greater than zero")]
+    UpswitchStableObservationsZero,
+}
+
+impl VideoAdaptationTuning {
+    pub const DEFAULT_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD: usize = 3;
+    pub const DEFAULT_THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
+    pub const DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
+    pub const DEFAULT_UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
+
+    /// Build video adaptation tuning after validating its invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VideoAdaptationTuningError`] when a knob is zero.
+    pub const fn try_new(
+        multiparty_scalable_video_threshold: usize,
+        thumbnail_budget_divisor: u64,
+        downswitch_pressure_observations: u8,
+        upswitch_stable_observations: u8,
+    ) -> Result<Self, VideoAdaptationTuningError> {
+        if multiparty_scalable_video_threshold == 0 {
+            return Err(VideoAdaptationTuningError::MultipartyScalableVideoThresholdZero);
+        }
+        if thumbnail_budget_divisor == 0 {
+            return Err(VideoAdaptationTuningError::ThumbnailBudgetDivisorZero);
+        }
+        if downswitch_pressure_observations == 0 {
+            return Err(VideoAdaptationTuningError::DownswitchPressureObservationsZero);
+        }
+        if upswitch_stable_observations == 0 {
+            return Err(VideoAdaptationTuningError::UpswitchStableObservationsZero);
+        }
+        Ok(Self {
+            multiparty_scalable_video_threshold,
+            thumbnail_budget_divisor,
+            downswitch_pressure_observations,
+            upswitch_stable_observations,
+        })
+    }
+
+    #[must_use]
+    pub const fn conservative() -> Self {
+        Self {
+            multiparty_scalable_video_threshold: Self::DEFAULT_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD,
+            thumbnail_budget_divisor: Self::DEFAULT_THUMBNAIL_BUDGET_DIVISOR,
+            downswitch_pressure_observations: Self::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS,
+            upswitch_stable_observations: Self::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
+        }
+    }
+
+    #[must_use]
+    pub const fn multiparty_scalable_video_threshold(self) -> usize {
+        self.multiparty_scalable_video_threshold
+    }
+
+    #[must_use]
+    pub const fn thumbnail_budget_divisor(self) -> u64 {
+        self.thumbnail_budget_divisor
+    }
+
+    #[must_use]
+    pub const fn downswitch_pressure_observations(self) -> u8 {
+        self.downswitch_pressure_observations
+    }
+
+    #[must_use]
+    pub const fn upswitch_stable_observations(self) -> u8 {
+        self.upswitch_stable_observations
+    }
+}
+
+impl Default for VideoAdaptationTuning {
+    fn default() -> Self {
+        Self::conservative()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionBitrateLimits {
     max_bitrate_in: Bitrate,
     max_bitrate_out: Bitrate,
