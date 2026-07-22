@@ -8,8 +8,7 @@ use {
             RtpProfile,
             state::PacketLoopState,
             test_support::{
-                RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
-                SessionStreamTxSsrcProbe,
+                RememberRemoteAddrProbe, SessionStreamRxSsrcProbe, SessionStreamTxSsrcProbe,
             },
         },
         WorkerCommandContext,
@@ -18,7 +17,6 @@ use {
         CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
         SessionBitrateLimits,
         engine::{
-            diagnostics::DiagnosticsStore,
             media_transport::{
                 MediaTransportConfig, MediaTransportDeps, SourcePolicySignal,
                 test_support::test_rtc_port_range,
@@ -38,7 +36,8 @@ use super::{
         state::TransportSessionHealth,
         test_support::{
             DebugProbe, DebugRouteEntry, ObserveAudioActivityProbe, ReceiverBweTargetProbe,
-            RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe, RouteEntryProbe,
+            RecordIncomingMediaProbe, RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe,
+            RouteEntryProbe,
         },
     },
     RtcWorker,
@@ -54,7 +53,7 @@ fn default_test_rtc_port_range() -> RtcPortRange {
     test_rtc_port_range(1).unwrap_or_else(|| panic!("test RTC port range should be available"))
 }
 #[cfg(any(test, feature = "testing-transport"))]
-use crate::engine::media_transport::TransportMediaId;
+use crate::engine::media_transport::{TransportMediaId, TransportQualitySample};
 use crate::engine::{media_transport::TransportSessionKey, metrics};
 
 impl RtcWorker {
@@ -88,6 +87,17 @@ impl RtcWorker {
             previous.map(metrics::transport_health_state),
             Some(metrics::transport_health_state(health)),
         );
+    }
+
+    pub fn debug_set_session_transport_quality(
+        &self,
+        session_key: &TransportSessionKey,
+        quality: TransportQualitySample,
+    ) {
+        let Ok(mut snapshot_state) = self.handle.snapshot_state.lock() else {
+            return;
+        };
+        snapshot_state.update_transport_quality(session_key, |sample| *sample = quality);
     }
 
     async fn probe_debug_worker<P>(&self, probe: P) -> Option<P::Output>
@@ -282,7 +292,7 @@ impl RtcWorker {
             .flatten()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub async fn debug_record_incoming_media(
         &self,
         session_key: &TransportSessionKey,
@@ -400,7 +410,6 @@ impl RtcWorkerTestBuilder {
             Arc::new(profile),
             self.rtc_port_range,
             &MediaTransportDeps {
-                diagnostics: Arc::new(DiagnosticsStore::default()),
                 packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
                 metrics: Arc::new(RuntimeMetrics::default()),
             },

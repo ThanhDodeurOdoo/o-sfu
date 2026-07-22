@@ -259,10 +259,7 @@ pub struct ReceiverBandwidthSnapshot {
 /// These values come from str0m stats events and are intended for diagnostics.
 /// Prometheus receives only aggregate counters and histograms so user identity
 /// never becomes a metrics label.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TransportQualitySnapshot {
-    pub per_session: Vec<(TransportSessionKey, TransportQualitySample)>,
-}
+pub type TransportQualitySnapshot = BTreeMap<TransportSessionKey, TransportQualitySample>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TransportQualitySample {
@@ -274,10 +271,14 @@ pub struct TransportQualitySample {
     pub sample_count: u64,
 }
 
-/// Latest packet-path activity for producer media.
+/// Latest transport health keyed by the requested sessions.
+pub type TransportHealthSnapshot = BTreeMap<TransportSessionKey, TransportSessionHealth>;
+
+/// Packet activity and active-speaker observations for requested sources.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TransportSourceActivitySnapshot {
-    pub per_media: Vec<TransportSourceActivity>,
+pub struct TransportSourceDiagnosticsSnapshot {
+    pub activity: Vec<TransportSourceActivity>,
+    pub active_speaker_diagnostics: Vec<ActiveSpeakerSourceDiagnostic>,
 }
 
 /// Recent packet and decoder-refresh age for one producer media id.

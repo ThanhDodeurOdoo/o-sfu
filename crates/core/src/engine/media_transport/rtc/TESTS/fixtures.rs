@@ -116,7 +116,7 @@ pub(super) async fn expect_initial_offer(
     session_key: &TransportSessionKey,
 ) -> SessionOffer {
     adapter
-        .create_initial_session_offer(session_key)
+        .create_initial_session_offer("test-room", session_key)
         .await
         .expect("initial offer should succeed")
 }

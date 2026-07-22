@@ -18,7 +18,6 @@ use crate::{
     application::stream_catalog::counter_for_stream_type,
     runtime::{
         RuntimeState, diagnostics,
-        diagnostics::DiagnosticsUserLookup,
         http_server::{
             contract::{
                 IncomingBitRateStatsResponse, NoopResponse, RoomResponse, RoomStatsResponse,
@@ -121,9 +120,9 @@ fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
         .route(route::diagnostics::WORKERS, get(diagnostics_workers))
         .route(route::diagnostics::ROOM, get(diagnostics_room_detail))
         .route(route::diagnostics::ROOM_USERS, get(diagnostics_room_users))
+        .route(route::diagnostics::ROOM_USER, get(diagnostics_user_detail))
         .route(route::diagnostics::ROOM_GRAPH, get(diagnostics_room_graph))
         .route(route::diagnostics::USER_GRAPH, get(diagnostics_user_graph))
-        .route(route::diagnostics::USER, get(diagnostics_user_detail))
         .route_layer(middleware::from_extractor_with_state::<DiagnosticsAccess, _>(state))
 }
 
@@ -215,27 +214,15 @@ async fn disconnect(
 /// diagnostics overview for room, user and publication totals
 async fn diagnostics_summary(State(services): State<DiagnosticsServices>) -> Response {
     axum::Json(
-        diagnostics::summary_response(
-            &services.room_manager,
-            &services.media_transport,
-            &services.diagnostics,
-        )
-        .await,
+        diagnostics::summary_response(&services.room_manager, &services.media_transport).await,
     )
     .into_response()
 }
 
 /// diagnostics inventory for active rooms
 async fn diagnostics_rooms(State(services): State<DiagnosticsServices>) -> Response {
-    axum::Json(
-        diagnostics::rooms_response(
-            &services.room_manager,
-            &services.media_transport,
-            &services.diagnostics,
-        )
-        .await,
-    )
-    .into_response()
+    axum::Json(diagnostics::rooms_response(&services.room_manager, &services.media_transport).await)
+        .into_response()
 }
 
 /// diagnostics inventory for media workers and load pressure
@@ -246,7 +233,7 @@ async fn diagnostics_workers(State(services): State<DiagnosticsServices>) -> Res
     .into_response()
 }
 
-/// live room diagnostics with users, sources and recent events
+/// live room diagnostics with users and sources
 async fn diagnostics_room_detail(
     State(services): State<DiagnosticsServices>,
     Path(room_id): Path<String>,
@@ -254,7 +241,6 @@ async fn diagnostics_room_detail(
     let payload = diagnostics::room_detail_response(
         &services.room_manager,
         &services.media_transport,
-        &services.diagnostics,
         &room_id,
     )
     .await;
@@ -269,7 +255,6 @@ async fn diagnostics_room_users(
     let payload = diagnostics::room_users_response(
         &services.room_manager,
         &services.media_transport,
-        &services.diagnostics,
         &room_id,
     )
     .await;
@@ -284,7 +269,6 @@ async fn diagnostics_room_graph(
     let payload = diagnostics::room_detail_response(
         &services.room_manager,
         &services.media_transport,
-        &services.diagnostics,
         &room_id,
     )
     .await
@@ -295,16 +279,15 @@ async fn diagnostics_room_graph(
 /// node-graph projection rooted at one user in one room
 async fn diagnostics_user_graph(
     State(services): State<DiagnosticsServices>,
-    Path((room_id, user_id)): Path<(String, String)>,
+    Path((room_id, user_key)): Path<(String, String)>,
 ) -> Response {
     let payload = diagnostics::room_detail_response(
         &services.room_manager,
         &services.media_transport,
-        &services.diagnostics,
         &room_id,
     )
     .await
-    .and_then(|payload| diagnostics::build_user_graph(&payload, &user_id));
+    .and_then(|payload| diagnostics::build_user_graph(&payload, &user_key));
     diagnostics_optional_response(payload)
 }
 
@@ -318,25 +301,20 @@ where
     )
 }
 
-/// global diagnostics lookup for a user id across rooms
+/// diagnostics for one user in one room
 async fn diagnostics_user_detail(
     State(services): State<DiagnosticsServices>,
-    Path(user_id): Path<String>,
+    Path((room_id, user_key)): Path<(String, String)>,
 ) -> Response {
-    match diagnostics::user_detail_response(
-        &services.room_manager,
-        &services.media_transport,
-        &services.diagnostics,
-        &user_id,
+    diagnostics_optional_response(
+        diagnostics::user_detail_response(
+            &services.room_manager,
+            &services.media_transport,
+            &room_id,
+            &user_key,
+        )
+        .await,
     )
-    .await
-    {
-        DiagnosticsUserLookup::Missing => StatusCode::NOT_FOUND.into_response(),
-        DiagnosticsUserLookup::Found(payload) => axum::Json(payload).into_response(),
-        DiagnosticsUserLookup::Conflict(payload) => {
-            (StatusCode::CONFLICT, axum::Json(payload)).into_response()
-        }
-    }
 }
 
 fn http_room_stats(snapshot: RuntimeRoomStatsSnapshot) -> RoomStatsResponse {

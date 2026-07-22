@@ -19,10 +19,10 @@ use super::{
 };
 use crate::engine::{
     media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, AppliedSessionAnswer,
-        ConsumerRouteControl, ConsumerRouteControlOutcome, ProducerRouteControl,
-        ReceiverBweTargetUpdate, SessionOffer, TransportConsumerRoute, TransportMediaId,
-        TransportResult, TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
+        ActiveSpeakerSource, AppliedSessionAnswer, ConsumerRouteControl,
+        ConsumerRouteControlOutcome, ProducerRouteControl, ReceiverBweTargetUpdate, SessionOffer,
+        TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
+        TransportSourceDiagnosticsSnapshot, TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -190,6 +190,7 @@ pub enum RtcWorkerCommand {
     /// it fails if an offer is already pending or the session already moved
     /// past bootstrap
     CreateInitialSessionOffer {
+        room_id: Arc<str>,
         session_key: TransportSessionKey,
         response: RtcWorkerResponse<SessionOffer>,
     },
@@ -210,21 +211,10 @@ pub enum RtcWorkerCommand {
     ActiveSpeakerSourceSnapshot {
         response: RtcWorkerResponse<Vec<ActiveSpeakerSource>>,
     },
-    /// read detailed active-speaker diagnostics for operators and tests
-    ///
-    /// diagnostics expose the worker's route-control view rather than room
-    /// policy state, so callers can inspect what the packet loop will actually
-    /// use for source activity decisions
-    ActiveSpeakerDiagnosticSnapshot {
-        response: RtcWorkerResponse<Vec<ActiveSpeakerSourceDiagnostic>>,
-    },
-    /// read source packet activity from worker-local packet-loop state
-    ///
-    /// this is a cold-path diagnostics view. querying through the worker
-    /// mailbox avoids mirroring every packet into a shared snapshot table.
-    SourceActivitySnapshot {
+    /// Read packet activity and active-speaker facts for selected sources.
+    SourceDiagnosticsSnapshot {
         transport_media_ids: Vec<TransportMediaId>,
-        response: RtcWorkerResponse<TransportSourceActivitySnapshot>,
+        response: RtcWorkerResponse<TransportSourceDiagnosticsSnapshot>,
     },
     /// accept the answer for the current pending local offer
     ///

@@ -4,6 +4,8 @@ use o_sfu_router::{
     MediaKind,
     rtp::{MediaStream, StreamBinding},
 };
+use o_sfu_telemetry::schema::event as telemetry_event;
+use serde_json::Value;
 
 use super::*;
 use crate::{
@@ -19,7 +21,10 @@ use crate::{
             },
         },
         metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
-        room::media_graph::SubscriptionKey,
+        room::{
+            TESTS::tracing::{assert_user_exact, capture},
+            media_graph::SubscriptionKey,
+        },
         source_model::{
             ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId, UserStreamId,
         },
@@ -87,12 +92,13 @@ fn keyframe_failure_keeps_source_policy_update() -> Result<(), io::Error> {
         Some(PolicyPauseReason::HiddenTile),
     )
     .ok_or_else(|| io::Error::other("policy pause change should create a route update"))?;
-    let mut outcome = RoomRouteOutcome::default();
+    let mut accepted_policy_updates = Vec::new();
     ConsumerRouteFinish::SourcePolicy(update.clone()).finish(
+        "room-route-effects",
         ConsumerRouteControlOutcome::keyframe_error(TransportAdapterError::TransportUnavailable),
-        &mut outcome,
+        &mut accepted_policy_updates,
     );
-    assert_eq!(outcome.accepted_policy_updates, [update]);
+    assert_eq!(accepted_policy_updates, [update]);
     Ok(())
 }
 
@@ -103,6 +109,63 @@ async fn room_route_effects_execute_finish_work() -> Result<(), Box<dyn Error>> 
     fixture.pause_route_activity().await?;
     fixture.apply_setup_activity_correction(false).await?;
     fixture.apply_setup_activity_correction(true).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn route_activity_events_survive_transport_failure() -> Result<(), Box<dyn Error>> {
+    let _guard = capture().await;
+    let fixture = RouteFixture::new().await?;
+    let producer = TransportSessionKey::new(
+        RoomInstanceId::from_raw(70),
+        MediaWorkerId::from_raw(99),
+        ConnectionId::from_raw(41),
+        UserId::Integer(7),
+    );
+    let consumer = TransportSessionKey::new(
+        RoomInstanceId::from_raw(70),
+        MediaWorkerId::from_raw(99),
+        ConnectionId::from_raw(42),
+        UserId::Integer(8),
+    );
+    let source = TransportSourceKey::new(producer, TransportMediaId::new(71));
+    let route = TransportConsumerRoute::new(consumer, TransportMediaId::new(81), source.clone());
+    let target =
+        ConsumerRouteTarget::for_test(route, UserStreamId::from("camera"), MediaKind::Video);
+    let mut routes = RoomRouteEffects::default();
+    routes.producer_activity(source, UserStreamId::from("camera"), false);
+    routes.receiver_activity(ReceiverRouteActivity::new(target, false));
+
+    routes
+        .execute("room-route-failure", &fixture.media_transport)
+        .await;
+
+    assert_user_exact(
+        telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
+        "room-route-failure",
+        "7",
+        41,
+        99,
+        &[
+            ("transport_media_id", Value::from(71)),
+            ("active", Value::from(false)),
+            ("stream_id", Value::from("camera")),
+        ],
+    );
+    assert_user_exact(
+        telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
+        "room-route-failure",
+        "8",
+        42,
+        99,
+        &[
+            ("transport_media_id", Value::from(81)),
+            ("active", Value::from(false)),
+            ("producer_user_id", Value::from("7")),
+            ("source_transport_media_id", Value::from(71)),
+            ("stream_id", Value::from("camera")),
+        ],
+    );
     Ok(())
 }
 
@@ -125,10 +188,10 @@ impl RouteFixture {
         let source_session = session_key(1, UserId::Integer(1));
         let consumer_session = session_key(2, UserId::Integer(2));
         media_transport
-            .create_initial_session_offer(&source_session)
+            .create_initial_session_offer("test-room", &source_session)
             .await?;
         media_transport
-            .create_initial_session_offer(&consumer_session)
+            .create_initial_session_offer("test-room", &consumer_session)
             .await?;
 
         let source_media = media_transport
@@ -166,7 +229,9 @@ impl RouteFixture {
     async fn request_standalone_keyframe(&self) {
         let mut routes = RoomRouteEffects::default();
         routes.keyframe(self.target.clone());
-        routes.execute(&self.media_transport).await;
+        routes
+            .execute("room-route-effects", &self.media_transport)
+            .await;
         assert_eq!(self.metrics.snapshot().rtc_keyframe_requests_forwarded(), 1);
     }
 
@@ -174,20 +239,14 @@ impl RouteFixture {
         let mut routes = RoomRouteEffects::default();
         routes.producer_activity(
             self.route.source().clone(),
+            UserStreamId::from("camera"),
             false,
-            diagnostics(self.route.source_session_key(), "producer.activity"),
         );
-        routes.receiver_activity(
-            ReceiverRouteActivity::new(self.target.clone(), false),
-            diagnostics(self.route.consumer_session_key(), "consumer.activity"),
-        );
+        routes.receiver_activity(ReceiverRouteActivity::new(self.target.clone(), false));
 
-        let outcome = routes.execute(&self.media_transport).await;
-
-        assert_eq!(outcome.diagnostics.len(), 2);
-        let has_event = |name| outcome.diagnostics.iter().any(|event| event.event == name);
-        assert!(has_event("producer.activity"));
-        assert!(has_event("consumer.activity"));
+        routes
+            .execute("room-route-effects", &self.media_transport)
+            .await;
         self.assert_route_state(0, false).await?;
         Ok(())
     }
@@ -196,7 +255,9 @@ impl RouteFixture {
         let keyframes = self.keyframe_request_count();
         let mut routes = RoomRouteEffects::default();
         routes.setup_activity(self.route.clone(), MediaKind::Video, active);
-        routes.execute(&self.media_transport).await;
+        routes
+            .execute("room-route-effects", &self.media_transport)
+            .await;
 
         let expected_keyframes = if active { keyframes + 1 } else { keyframes };
         assert_eq!(self.keyframe_request_count(), expected_keyframes);
@@ -244,8 +305,4 @@ fn session_key(connection_id: u64, user_id: UserId) -> TransportSessionKey {
 fn sample_rtp_parameters(mid: &str, ssrc: u32) -> MediaStream {
     MediaStream::new(vec![], vec![], vec![StreamBinding::new().with_ssrc(ssrc)])
         .with_mid(String::from(mid))
-}
-
-fn diagnostics(session: &TransportSessionKey, event: &'static str) -> DiagnosticsEventData {
-    DiagnosticsEventData::for_user("room-route-effects", session.user_id(), event)
 }

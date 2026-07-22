@@ -133,12 +133,17 @@ impl RtcWorker {
     #[cfg(any(test, feature = "internal-benchmarks"))]
     pub async fn create_initial_session_offer(
         &self,
+        room_id: &str,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
-        self.request_worker(|response| RtcWorkerCommand::CreateInitialSessionOffer {
-            session_key: session_key.clone(),
-            response,
-        })
+        let room_id: Arc<str> = Arc::from(room_id);
+        self.request_worker(
+            move |response| RtcWorkerCommand::CreateInitialSessionOffer {
+                room_id,
+                session_key: session_key.clone(),
+                response,
+            },
+        )
         .await
     }
 

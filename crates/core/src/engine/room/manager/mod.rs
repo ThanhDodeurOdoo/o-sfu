@@ -18,6 +18,7 @@ use std::{collections::BTreeSet, future::Future, sync::Arc};
 
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
+use tracing::info;
 
 #[cfg(test)]
 pub use super::placement::JoinPlacementTestGate;
@@ -33,7 +34,6 @@ use super::{
 };
 use crate::engine::{
     ConnectionId, RoomInstanceId, UserId,
-    diagnostics::{self, DiagnosticsEventData, DiagnosticsStore},
     media_transport::{MediaTransport, TransportSessionKey},
     metrics::RuntimeMetrics,
 };
@@ -62,15 +62,6 @@ impl RoomManagerConfig {
             runtime_policy,
         }
     }
-}
-
-/// process services shared by room manager and room instances
-#[derive(Debug, Clone)]
-pub struct RoomManagerDeps {
-    /// event store used by room creation and removal diagnostics
-    pub diagnostics: Arc<DiagnosticsStore>,
-    /// metric catalog updated by room publication and teardown
-    pub metrics: Arc<RuntimeMetrics>,
 }
 
 /// operator-facing room stats assembled from directory and transport snapshots
@@ -119,7 +110,6 @@ pub struct RuntimeRoomDirectorySnapshot {
 #[derive(Debug)]
 pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
-    diagnostics: Arc<DiagnosticsStore>,
     factory: RoomFactory,
     #[cfg(test)]
     join_placement_gate: Mutex<Option<Arc<JoinPlacementTestGate>>>,
@@ -133,20 +123,15 @@ impl RoomManager {
     /// `media_worker_count` is normalized to at least one so diagnostics and
     /// placement snapshots always have a worker range to inspect
     #[must_use]
-    pub fn new(config: RoomManagerConfig, deps: RoomManagerDeps) -> Self {
-        let factory = RoomFactory::new(
-            config.runtime_policy,
-            Arc::clone(&deps.diagnostics),
-            Arc::clone(&deps.metrics),
-        );
+    pub fn new(config: RoomManagerConfig, metrics: Arc<RuntimeMetrics>) -> Self {
+        let factory = RoomFactory::new(config.runtime_policy, Arc::clone(&metrics));
         Self {
             directory: RwLock::new(RoomDirectory::default()),
-            diagnostics: deps.diagnostics,
             factory,
             #[cfg(test)]
             join_placement_gate: Mutex::new(None),
             media_worker_count: config.media_worker_count.max(1),
-            metrics: deps.metrics,
+            metrics,
         }
     }
 
@@ -176,14 +161,12 @@ impl RoomManager {
         directory.insert(Arc::clone(&room), remote_address);
         drop(directory);
         self.metrics.add_active_rooms(1);
-        self.diagnostics.register_room_instance(
-            diagnostics::diagnostics_room_instance_id(room.instance_id()),
-            room.uuid(),
-        );
-        self.diagnostics.record(
-            DiagnosticsEventData::for_room(room.uuid(), telemetry_event::ROOM_CREATED)
-                .insert_field("remote_address", remote_address.unwrap_or("unknown"))
-                .insert_field("web_rtc_enabled", config.web_rtc_enabled),
+        info!(
+            event = telemetry_event::ROOM_CREATED,
+            room_id = room.uuid(),
+            remote_address = remote_address.unwrap_or("unknown"),
+            web_rtc_enabled = config.web_rtc_enabled,
+            "room created"
         );
         room
     }
@@ -232,29 +215,6 @@ impl RoomManager {
             create_date: entry.create_date,
             remote_address: entry.remote_address,
         })
-    }
-
-    /// returns the normalized worker count used by diagnostics worker views
-    #[must_use]
-    pub const fn media_worker_count(&self) -> usize {
-        self.media_worker_count
-    }
-
-    /// returns current directory rows for requested room ids in request order
-    pub async fn directory_snapshots_for_room_ids(
-        &self,
-        room_ids: &[String],
-    ) -> Vec<RuntimeRoomDirectorySnapshot> {
-        let directory = self.directory.read().await;
-        room_ids
-            .iter()
-            .filter_map(|room_id| directory.entry(room_id))
-            .map(|entry| RuntimeRoomDirectorySnapshot {
-                room: entry.room,
-                create_date: entry.create_date,
-                remote_address: entry.remote_address,
-            })
-            .collect()
     }
 
     /// recalculates packet-selection policy for rooms dirtied by media activity
@@ -505,7 +465,6 @@ impl RoomManager {
         drop(directory);
         if removed {
             self.metrics.add_active_rooms(-1);
-            self.diagnostics.forget_room(room_id);
         }
     }
 }

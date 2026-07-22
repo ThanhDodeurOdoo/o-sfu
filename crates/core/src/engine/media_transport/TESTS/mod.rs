@@ -3,7 +3,10 @@
     reason = "media transport tests fail loudly when fixed test setup is invalid"
 )]
 
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::{
+    net::{Ipv4Addr, SocketAddrV4, UdpSocket},
+    time::Instant,
+};
 
 use o_sfu_router::{
     MediaKind,
@@ -23,7 +26,7 @@ use crate::{
             ReceiverBweTargetUpdate, RelayRouteActivity, SessionOffer, SourcePacketGate,
             TransportAdapterError, TransportConsumerRoute, TransportMediaId,
             TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult,
-            TransportSessionKey, TransportSourceKey,
+            TransportSessionHealth, TransportSessionKey, TransportSourceKey,
             rtc::{RtcWorker, WorkerMediaControlBatchOutcome},
             test_support::{
                 DebugPacketGate, test_media_transport as build_test_media_transport,
@@ -265,7 +268,7 @@ async fn expect_initial_offer(
     session_key: &TransportSessionKey,
 ) -> SessionOffer {
     adapter
-        .create_initial_session_offer(session_key)
+        .create_initial_session_offer("test-room", session_key)
         .await
         .unwrap_or_else(|error| panic!("test session should create an RTC offer: {error:?}"))
 }
@@ -684,7 +687,9 @@ async fn rtc_rejects_noncanonical_media_worker_id() {
     let adapter = test_media_transport(2, test_rtc_range(2));
     let session = test_session_key(13, 2, 1, UserId::Integer(4));
 
-    let offer = adapter.create_initial_session_offer(&session).await;
+    let offer = adapter
+        .create_initial_session_offer("test-room", &session)
+        .await;
 
     assert_eq!(
         offer.err(),
@@ -693,21 +698,80 @@ async fn rtc_rejects_noncanonical_media_worker_id() {
 }
 
 #[tokio::test]
-async fn rtc_allocates_disjoint_media_ids_across_workers() {
+async fn rtc_diagnostics_group_workers_and_preserve_media_ids() {
     let adapter = test_media_transport(2, test_rtc_range(2));
-    let first_source = test_session_key(50, 0, 1, UserId::Integer(1));
-    let second_source = test_session_key(50, 1, 2, UserId::Integer(2));
-    let first_rtp_parameters = sample_rtp_parameters("first-aud-up", 71_000);
-    let second_rtp_parameters = sample_rtp_parameters("second-aud-up", 72_000);
+    let first_session = test_session_key(50, 0, 1, UserId::Integer(1));
+    let second_session = test_session_key(50, 1, 2, UserId::Integer(2));
+    let first_rtp = sample_rtp_parameters("first", 71_000);
+    let sibling_rtp = sample_rtp_parameters("sibling", 71_001);
+    let unrelated_rtp = sample_rtp_parameters("unrelated", 71_002);
+    let second_rtp = sample_rtp_parameters("second", 72_000);
 
-    prepare_rtc_sessions(&adapter, &[&first_source, &second_source]).await;
+    prepare_rtc_sessions(&adapter, &[&first_session, &second_session]).await;
+    let test_api = adapter.test_api();
+    test_api.set_session_transport_health(&first_session, TransportSessionHealth::Connected);
+    test_api.set_session_transport_health(&second_session, TransportSessionHealth::Disconnected);
+    let health =
+        adapter.transport_health_snapshot(&[first_session.clone(), second_session.clone()]);
+    assert_eq!(health.len(), 2);
+    assert_eq!(
+        health.get(&first_session),
+        Some(&TransportSessionHealth::Connected)
+    );
+    assert_eq!(
+        health.get(&second_session),
+        Some(&TransportSessionHealth::Disconnected)
+    );
 
-    let first_media_id = publish_audio(&adapter, &first_source, &first_rtp_parameters).await;
-    let second_media_id = publish_audio(&adapter, &second_source, &second_rtp_parameters).await;
+    let first_media_id = publish_audio(&adapter, &first_session, &first_rtp).await;
+    let sibling_media_id = publish_audio(&adapter, &first_session, &sibling_rtp).await;
+    let unrelated_media_id = publish_audio(&adapter, &first_session, &unrelated_rtp).await;
+    let second_media_id = publish_audio(&adapter, &second_session, &second_rtp).await;
 
-    assert_ne!(first_media_id, second_media_id);
+    assert_ne!(first_media_id, sibling_media_id);
     assert!(first_media_id.as_u64() < 1_000_000_000);
     assert!(second_media_id.as_u64() >= 1_000_000_000);
+    let first_worker = expect_worker_for_user(&adapter, &first_session);
+    let second_worker = expect_worker_for_user(&adapter, &second_session);
+    let now = Instant::now();
+    for (worker, session, media_id) in [
+        (first_worker, &first_session, first_media_id),
+        (first_worker, &first_session, sibling_media_id),
+        (second_worker, &second_session, second_media_id),
+    ] {
+        worker
+            .debug_record_incoming_media(session, media_id, 64, now)
+            .await;
+    }
+    first_worker
+        .debug_observe_audio_activity(first_media_id, Some(true), None, now)
+        .await;
+    second_worker
+        .debug_observe_audio_activity(second_media_id, Some(true), None, now)
+        .await;
+    first_worker
+        .debug_observe_audio_activity(unrelated_media_id, Some(true), None, now)
+        .await;
+    let snapshot = adapter
+        .source_diagnostics_snapshot(&[
+            TransportSourceKey::new(first_session.clone(), first_media_id),
+            TransportSourceKey::new(first_session, sibling_media_id),
+            TransportSourceKey::new(second_session, second_media_id),
+        ])
+        .await;
+
+    assert_eq!(test_api.source_diagnostics_request_count(), 2);
+    let [first_activity, sibling_activity, second_activity] = snapshot.activity.as_slice() else {
+        panic!("expected diagnostics for all requested sources");
+    };
+    assert_eq!(first_activity.transport_media_id(), first_media_id);
+    assert_eq!(sibling_activity.transport_media_id(), sibling_media_id);
+    assert_eq!(second_activity.transport_media_id(), second_media_id);
+    let [first_speaker, second_speaker] = snapshot.active_speaker_diagnostics.as_slice() else {
+        panic!("expected only requested active speakers");
+    };
+    assert_eq!(first_speaker.transport_media_id(), first_media_id);
+    assert_eq!(second_speaker.transport_media_id(), second_media_id);
 }
 
 #[tokio::test]
@@ -800,7 +864,7 @@ async fn media_transport_terminal_teardown_falls_back_and_continues_batch() {
     assert!(worker.debug_resolve_mid(later_media_id).await.is_none());
     assert!(
         adapter
-            .create_initial_session_offer(&wrong_owner)
+            .create_initial_session_offer("test-room", &wrong_owner)
             .await
             .is_ok()
     );
@@ -912,7 +976,7 @@ async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() -> Tra
         .await;
     assert_relay_target_counts(source_worker, source_media_id, 1, 1).await;
     let _offer = adapter
-        .create_initial_session_offer(&local_consumer_session)
+        .create_initial_session_offer("test-room", &local_consumer_session)
         .await?;
     adapter.teardown([release(source_session.clone())]).await;
     assert_relay_target_counts(source_worker, source_media_id, 0, 0).await;

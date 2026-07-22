@@ -38,7 +38,7 @@ use super::{
 };
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError, TransportMediaId,
-    TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
+    TransportSessionKey, TransportSourceActivity, TransportSourceKey,
 };
 
 #[derive(Debug, Default)]
@@ -428,19 +428,17 @@ impl RouteTable {
         source_ids: &[TransportMediaId],
         now: Instant,
         incoming_bitrate_counters: &BTreeMap<TransportMediaId, Arc<MediaBitrateCounter>>,
-    ) -> TransportSourceActivitySnapshot {
-        TransportSourceActivitySnapshot {
-            per_media: source_ids
-                .iter()
-                .filter_map(|source_id| {
-                    let source = self.sources.get(source_id)?;
-                    let source_last_packet_age = incoming_bitrate_counters
-                        .get(source_id)
-                        .and_then(|counter| counter.last_observed_age(now));
-                    source.diagnostic(*source_id, source_last_packet_age, now)
-                })
-                .collect(),
-        }
+    ) -> Vec<TransportSourceActivity> {
+        source_ids
+            .iter()
+            .filter_map(|source_id| {
+                let source = self.sources.get(source_id)?;
+                let source_last_packet_age = incoming_bitrate_counters
+                    .get(source_id)
+                    .and_then(|counter| counter.last_observed_age(now));
+                source.diagnostic(*source_id, source_last_packet_age, now)
+            })
+            .collect()
     }
 
     pub(super) fn producer_rid_is_ready(
@@ -645,11 +643,16 @@ impl RouteTable {
 
     pub(super) fn active_speaker_diagnostics(
         &self,
+        source_ids: &[TransportMediaId],
         now: Instant,
     ) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        self.sources
+        source_ids
             .iter()
-            .filter_map(|(source_id, source)| source.active_speaker_diagnostic(*source_id, now))
+            .filter_map(|source_id| {
+                self.sources
+                    .get(source_id)?
+                    .active_speaker_diagnostic(*source_id, now)
+            })
             .collect()
     }
 

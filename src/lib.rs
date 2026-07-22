@@ -12,8 +12,7 @@
 //! - room admission through [`core::prelude::SfuCore`] and user-session
 //!   orchestration through [`core::prelude::MediaSession`]
 //! - process lifecycle through [`run`], [`Runtime::serve_listener`],
-//!   [`core::server::metrics::RuntimeMetrics`] and
-//!   [`core::server::diagnostics::DiagnosticsStore`]
+//!   [`core::server::metrics::RuntimeMetrics`] and structured tracing
 //!
 //!
 //! # architecture
@@ -61,7 +60,7 @@
 //! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] facade for room placement and routed media lifetimes |
 //! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, resolved teardown effects and [`core::server::transport::MediaTransport`] projection |
 //! | [`o_sfu_protocol`] | sans-I/O [`o_sfu_protocol::host::ProtocolCore`] and typed [`o_sfu_protocol::host::Command`] values |
-//! | [`o_sfu_telemetry`] | tracing setup, [`o_sfu_telemetry::metrics::RuntimeMetrics`], [`o_sfu_telemetry::diagnostics::DiagnosticsStore`], [`o_sfu_telemetry::prometheus::render_prometheus`] and graph payloads |
+//! | [`o_sfu_telemetry`] | tracing setup, [`o_sfu_telemetry::metrics::RuntimeMetrics`], diagnostics response types, [`o_sfu_telemetry::prometheus::render_prometheus`] and graph payloads |
 //!
 //! ## client bundle
 //!
@@ -244,9 +243,8 @@
 //! - low-cardinality [`o_sfu_telemetry::metrics::RuntimeMetrics`] and
 //!   [`o_sfu_telemetry::prometheus::render_prometheus`]
 //! - structured event names in [`o_sfu_telemetry::schema`] used by tracing
-//! - [`o_sfu_telemetry::diagnostics::DiagnosticsStore`] snapshots for rooms,
-//!   users, workers and media paths
-//! - recent-event storage for operator investigation
+//! - current room, user, worker and media diagnostics response types
+//! - structured lifecycle events retained by the configured log sink
 //! - [`o_sfu_telemetry::graph`] payloads used by the diagnostics UI and
 //!   Grafana-style views
 //!
@@ -401,9 +399,9 @@ pub mod http {
         /// | `GET /internal/diagnostics/workers` | array of [`diagnostics::DiagnosticsWorkerSummary`] | none |
         /// | `GET /internal/diagnostics/rooms/{uuid}` | one [`diagnostics::DiagnosticsRoomDetail`] | `uuid` from the rooms response |
         /// | `GET /internal/diagnostics/rooms/{uuid}/users` | array of [`diagnostics::DiagnosticsUserSummary`] | `uuid` from the rooms response |
+        /// | `GET /internal/diagnostics/rooms/{uuid}/users/{id}` | one [`diagnostics::DiagnosticsUserDetail`] | `uuid` from rooms and `userKey` from room users |
         /// | `GET /internal/diagnostics/node-graph/rooms/{uuid}` | `{ "nodes": [], "edges": [] }` | `uuid` from the rooms response |
         /// | `GET /internal/diagnostics/node-graph/rooms/{uuid}/users/{id}` | `{ "nodes": [], "edges": [] }` | `uuid` from rooms and `userKey` from room users |
-        /// | `GET /internal/diagnostics/users/{id}` | one [`diagnostics::DiagnosticsUserDetail`] | `userKey` from room users |
         ///
         /// `userId` may be a JSON number or string.
         /// `userKey` is always the string to put into `{id}`.
@@ -423,7 +421,6 @@ pub mod http {
         /// {
         ///   "roomsActive": 1,
         ///   "publicationsActive": 1,
-        ///   "recentEvents": [],
         ///   "recordingRoomsActive": 0,
         ///   "usersActive": 2,
         ///   "subscriptionsActive": 1,
@@ -462,7 +459,7 @@ pub mod http {
         ///     `/internal/diagnostics/node-graph/rooms/${roomUuid}/users/${userKey}`,
         ///   );
         ///
-        ///   console.log(room.summary, room.recentEvents, room.users, room.sources);
+        ///   console.log(room.summary, room.users, room.sources);
         ///   console.log(graph.nodes, graph.edges);
         /// }
         ///
@@ -568,20 +565,12 @@ pub mod http {
         /// populate `room_uuid` from the rooms response `uuid` field.
         /// populate `user_key` from the room users response `userKey` field.
         ///
-        /// `GET /internal/diagnostics/users/{id}` returns `409 Conflict` when
-        /// the same user key is active in several rooms.
-        ///
-        /// ```json
-        /// {
-        ///   "matchingRoomIds": ["room-a", "room-b"],
-        ///   "requestedUserId": "42"
-        /// }
-        /// ```
+        /// User detail is room-scoped because the same user key can be active
+        /// in several rooms.
         pub mod diagnostics {
             pub use o_sfu_telemetry::diagnostics::{
                 DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSummaryResponse,
-                DiagnosticsUserDetail, DiagnosticsUserLookupConflict, DiagnosticsUserSummary,
-                DiagnosticsWorkerSummary,
+                DiagnosticsUserDetail, DiagnosticsUserSummary, DiagnosticsWorkerSummary,
             };
 
             pub use crate::http::route::diagnostics as route;

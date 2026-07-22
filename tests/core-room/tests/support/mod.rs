@@ -19,7 +19,6 @@ use o_sfu_core::{
         SessionBitrateLimits, SfuCore, UserStreamId, VideoBitrateLimits,
     },
     server::{
-        diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         packet_sinks::RoomPacketSinkRegistry,
         room::{
@@ -68,7 +67,6 @@ pub fn media_transport() -> Result<MediaTransport> {
             media_quality_interval: None,
         },
         MediaTransportDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
             packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
         },

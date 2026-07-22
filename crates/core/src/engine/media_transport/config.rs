@@ -5,17 +5,14 @@
 //! consulted by packet-loop code after startup. The split keeps startup policy
 //! separate from long-lived service handles:
 //! transport config describes operator policy, while transport deps describe
-//! process services shared with diagnostics, metrics and recording.
+//! process services shared with metrics and recording.
 
 use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use crate::{
     CodecPreferences, MediaCodecFlags, RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits,
     VideoBitrateLimits,
-    engine::{
-        diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        packet_sink_registry::RoomPacketSinkRegistry,
-    },
+    engine::{metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry},
 };
 
 /// operator-facing RTC transport policy used to build each RTC worker
@@ -59,9 +56,6 @@ pub struct MediaTransportConfig {
 /// executing media work.
 #[derive(Debug, Clone)]
 pub struct MediaTransportDeps {
-    /// Operator diagnostics store used for session and transport lifecycle
-    /// events.
-    pub diagnostics: Arc<DiagnosticsStore>,
     /// Room packet-sink registry used by the packet path to fan out recording
     /// and non-local destinations.
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,

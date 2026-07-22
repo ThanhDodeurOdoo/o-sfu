@@ -1,17 +1,15 @@
 use o_sfu_telemetry::schema::event as telemetry_event;
+use tracing::info;
 
 use super::{
     RoomGaugeDelta,
     transport::{RoomRouteEffects, RoomTransportOutcome, execute_relays_and_teardown},
 };
 use crate::engine::{
-    diagnostics::DiagnosticsEventData,
-    media_transport::{MediaTransport, TransportConsumerRoute, TransportTeardown},
+    media_transport::{MediaTransport, TransportTeardown},
     room::{
         Room, UserOutbound,
-        media_graph::{
-            ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget, PendingConsumerSetup,
-        },
+        media_graph::{ConsumerSetupOrigin, ConsumerSetupOutcome, PendingConsumerSetup},
     },
 };
 
@@ -61,9 +59,21 @@ impl ReceiverSetupTurn {
                 transport_activity_update,
                 readiness_keyframe,
             } => {
-                outcome
-                    .diagnostics
-                    .push(setup_diagnostics(room.uuid(), &target, origin, &route));
+                let consumer = route.consumer_session_key();
+                let source = route.source();
+                info!(
+                    event = telemetry_event::SUBSCRIBE_SUCCEEDED,
+                    room_id = room.uuid(),
+                    user_id = %consumer.user_id().path_segment(),
+                    connection_id = consumer.connection_id().as_u64(),
+                    media_worker_id = consumer.media_worker_id().as_usize(),
+                    transport_media_id = route.consumer_transport_media_id().as_u64(),
+                    producer_user_id = %source.session_key().user_id().path_segment(),
+                    source_transport_media_id = source.transport_media_id().as_u64(),
+                    stream_id = %target.stream,
+                    origin = origin.as_diagnostic_str(),
+                    "subscription committed"
+                );
                 let mut route_effects = RoomRouteEffects::default();
                 if let Some(active) = transport_activity_update {
                     route_effects.setup_activity(route, target.kind, active);
@@ -72,7 +82,7 @@ impl ReceiverSetupTurn {
                     route_effects.keyframe(kf_target);
                 }
                 if !route_effects.is_empty() {
-                    route_effects.execute(media_transport).await;
+                    route_effects.execute(room.uuid(), media_transport).await;
                 }
                 let _ = sender.send(UserOutbound::RemoteSources(snapshot));
             }
@@ -101,32 +111,4 @@ impl ReceiverSetupTurn {
         outcome.gauges.push(RoomGaugeDelta::media(before, after));
         outcome.source_policy.fanout_pressure_changed();
     }
-}
-
-fn setup_diagnostics(
-    room_id: &str,
-    target: &ConsumerSetupTarget,
-    origin: ConsumerSetupOrigin,
-    route: &TransportConsumerRoute,
-) -> DiagnosticsEventData {
-    let consumer = route.consumer_session_key();
-    let source = route.source();
-    DiagnosticsEventData::for_user(
-        room_id,
-        consumer.user_id(),
-        telemetry_event::SUBSCRIBE_SUCCEEDED,
-    )
-    .with_connection_id(consumer.connection_id().as_u64())
-    .with_media_worker_id(consumer.media_worker_id().as_usize())
-    .with_transport_media_id(route.consumer_transport_media_id().as_u64())
-    .insert_field(
-        "producer_user_id",
-        serde_json::to_value(source.session_key().user_id()).unwrap_or(serde_json::Value::Null),
-    )
-    .insert_field(
-        "source_transport_media_id",
-        source.transport_media_id().as_u64(),
-    )
-    .insert_field("stream_id", target.stream.to_string())
-    .insert_field("origin", origin.as_diagnostic_str())
 }

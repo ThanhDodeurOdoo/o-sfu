@@ -27,7 +27,7 @@ async fn rtc_initial_session_offer_contains_real_ice_and_dtls_parameters() {
     let session_key = transport_key(1, 13, UserId::Integer(13));
 
     let offer_sdp = adapter
-        .create_initial_session_offer(&session_key)
+        .create_initial_session_offer("test-room", &session_key)
         .await
         .expect("initial offer should succeed")
         .into_parts()
@@ -99,14 +99,14 @@ async fn rtc_transport_close_session_allows_recreating_the_initial_offer() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
     assert!(adapter.close_session(&session_key).await.is_ok());
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -118,7 +118,7 @@ async fn rtc_transport_close_session_cleans_transport_health_snapshot() {
     let session_key = transport_key(1, 143, UserId::Integer(143));
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -145,7 +145,7 @@ async fn rtc_transport_close_session_cleans_remote_addr_demux_state() {
     let session_key = transport_key(1, 140, UserId::Integer(140));
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -171,7 +171,7 @@ async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
     let first_session_key = transport_key(1, 141, UserId::Integer(141));
     assert!(
         adapter
-            .create_initial_session_offer(&first_session_key)
+            .create_initial_session_offer("test-room", &first_session_key)
             .await
             .is_ok()
     );
@@ -180,7 +180,7 @@ async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
     let second_session_key = transport_key(1, 142, UserId::Integer(142));
     assert!(
         adapter
-            .create_initial_session_offer(&second_session_key)
+            .create_initial_session_offer("test-room", &second_session_key)
             .await
             .is_ok()
     );
@@ -261,13 +261,13 @@ async fn rtc_transport_distinguishes_same_session_id_across_channels() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&first_session_key)
+            .create_initial_session_offer("test-room", &first_session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .create_initial_session_offer(&second_session_key)
+            .create_initial_session_offer("test-room", &second_session_key)
             .await
             .is_ok()
     );
@@ -295,7 +295,11 @@ async fn rtc_transport_concurrent_initial_offers_deliver_all_worker_responses() 
                 UserId::Integer(200_i64 + i64::from(offset)),
             );
             let adapter = Arc::clone(&adapter);
-            async move { adapter.create_initial_session_offer(&session_key).await }
+            async move {
+                adapter
+                    .create_initial_session_offer("test-room", &session_key)
+                    .await
+            }
         })),
     )
     .await;
@@ -317,13 +321,13 @@ async fn rtc_transport_concurrent_last_session_close_keeps_worker_reusable() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&first_session_key)
+            .create_initial_session_offer("test-room", &first_session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .create_initial_session_offer(&second_session_key)
+            .create_initial_session_offer("test-room", &second_session_key)
             .await
             .is_ok()
     );
@@ -345,7 +349,7 @@ async fn rtc_transport_concurrent_last_session_close_keeps_worker_reusable() {
     let next_session_key = transport_key(4, 303, UserId::Integer(303));
     assert!(
         adapter
-            .create_initial_session_offer(&next_session_key)
+            .create_initial_session_offer("test-room", &next_session_key)
             .await
             .is_ok()
     );

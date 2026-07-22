@@ -73,11 +73,10 @@ impl<'a> SourcePolicySnapshot<'a> {
 fn receiver_bwe_targets(state: &RoomState) -> BTreeMap<UserId, ReceiverBweTargetUpdate> {
     state
         .transport_user_entries()
-        .into_iter()
         .map(|(user_id, connection_id)| {
-            let session = state.transport_user_key(&user_id, connection_id);
+            let session = state.transport_user_key(user_id, connection_id);
             (
-                user_id,
+                user_id.clone(),
                 ReceiverBweTargetUpdate::new(session, Bitrate::zero()),
             )
         })

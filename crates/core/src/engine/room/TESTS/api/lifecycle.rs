@@ -82,7 +82,7 @@ impl RoomTestLifecycle<'_> {
         let connection_id = self.connection_id(user_id).await?;
         let session_key = self.room.transport_user_key(user_id, connection_id).await;
         media_transport
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await?;
         if self
             .mark_session_ready(user_id, sample_client_rtp_capabilities(), media_transport)

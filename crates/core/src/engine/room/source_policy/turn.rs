@@ -122,8 +122,7 @@ async fn run_packet_selection(
         let state = room.state.read().await;
         state
             .transport_user_entries()
-            .into_iter()
-            .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
+            .map(|(user_id, connection_id)| state.transport_user_key(user_id, connection_id))
             .collect::<Vec<_>>()
     };
     let bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
@@ -170,9 +169,8 @@ impl SourcePolicyTransaction {
         if !self.route_effects.is_empty() {
             state_updates.extend(
                 self.route_effects
-                    .execute(media_transport)
-                    .await
-                    .accepted_policy_updates,
+                    .execute(room.uuid(), media_transport)
+                    .await,
             );
         }
         commit_accepted_updates(room, &state_updates, &self.featured_users).await;

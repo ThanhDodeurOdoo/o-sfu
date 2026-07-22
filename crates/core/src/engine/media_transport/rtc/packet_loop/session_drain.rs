@@ -29,14 +29,12 @@ use super::{
     keyframe_requests::PendingKeyframeRequest,
 };
 use crate::engine::{
-    diagnostics::DiagnosticsStore,
     media_transport::{SourcePolicySignal, TransportSessionKey},
     metrics::RuntimeMetrics,
 };
 
 pub struct SessionDrainContext<'a> {
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
-    pub diagnostics: &'a Arc<DiagnosticsStore>,
     pub metrics: &'a RuntimeMetrics,
     pub source_policy_signal: &'a SourcePolicySignal,
 }
@@ -118,9 +116,9 @@ fn drain_single_session(
             Ok(Output::Event(event)) => {
                 observe_rtc_event(
                     context.snapshot_state,
-                    context.diagnostics,
                     context.metrics,
                     context.source_policy_signal,
+                    session_state.room_id.as_ref(),
                     session_key,
                     &event,
                 );

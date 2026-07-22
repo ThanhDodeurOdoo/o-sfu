@@ -9,10 +9,13 @@ use o_sfu_router::test_support::rtp_samples::{
     sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
 };
 use o_sfu_telemetry::schema::event as telemetry_event;
+use serde_json::Value;
 
 use super::super::super::{
     Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
-    UserOutbound, UserOutboundReceiver, UserOutboundSender, media_graph::ConsumerRouteState,
+    TESTS::tracing::{assert_user_exact, capture},
+    UserOutbound, UserOutboundReceiver, UserOutboundSender,
+    media_graph::ConsumerRouteState,
     transition::PublishStageOutcome,
 };
 use crate::{
@@ -91,7 +94,7 @@ async fn join_negotiated_user_with_sender(
     if create_transport_session {
         let session_key = room.transport_user_key(user_id, connection_id).await;
         media_transport
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .expect("test session should create an initial offer");
     }
@@ -396,7 +399,7 @@ async fn stored_receiver_intent_applies_before_publish_and_after_republish() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn receiver_intent_updates_transport_route_activity() {
     let (
         room,
@@ -407,6 +410,7 @@ async fn receiver_intent_updates_transport_route_activity() {
         subscriber_connection_id,
     ) = setup_spillover_subscription_room().await;
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
+    let _guard = capture().await;
     let source_media_id = publish_scalable_video(
         &room,
         &media_transport,
@@ -415,9 +419,40 @@ async fn receiver_intent_updates_transport_route_activity() {
     )
     .await;
 
-    assert_eq!(
-        destination_active(&media_transport, source_media_id, &subscriber_id).await,
-        Some(true)
+    let (consumer_media_id, active) =
+        destination_state(&media_transport, source_media_id, &subscriber_id)
+            .await
+            .expect("subscriber route should exist");
+    assert!(active);
+    let subscriber_worker = room
+        .transport_user_key(&subscriber_id, subscriber_connection_id)
+        .await
+        .media_worker_id()
+        .as_usize();
+    let route_fields = [
+        (
+            "transport_media_id",
+            Value::from(consumer_media_id.as_u64()),
+        ),
+        (
+            "producer_user_id",
+            Value::from(publisher_id.path_segment().as_ref()),
+        ),
+        (
+            "source_transport_media_id",
+            Value::from(source_media_id.as_u64()),
+        ),
+        ("stream_id", Value::from(stream_id.to_string())),
+    ];
+    let mut subscribe_fields = route_fields.to_vec();
+    subscribe_fields.push(("origin", Value::from("publish")));
+    assert_user_exact(
+        telemetry_event::SUBSCRIBE_SUCCEEDED,
+        room.uuid(),
+        subscriber_id.path_segment().as_ref(),
+        subscriber_connection_id.as_u64(),
+        subscriber_worker,
+        &subscribe_fields,
     );
     assert_eq!(
         room.user_operation(&subscriber_id, subscriber_connection_id, &media_transport)
@@ -432,31 +467,21 @@ async fn receiver_intent_updates_transport_route_activity() {
             .await,
         Some(ConsumerRouteState::Inactive)
     );
-    let (consumer_media_id, active) =
+    let (paused_consumer_media_id, active) =
         destination_state(&media_transport, source_media_id, &subscriber_id)
             .await
             .expect("subscriber route should still exist");
     assert!(!active);
-    let subscriber_worker = room
-        .transport_user_key(&subscriber_id, subscriber_connection_id)
-        .await
-        .media_worker_id()
-        .as_usize();
-    let events = room
-        .diagnostics
-        .user_recent_events(room.uuid(), &subscriber_id);
-    let event = events
-        .iter()
-        .find(|event| {
-            event.event == telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED
-                && event.connection_id == Some(subscriber_connection_id.as_u64())
-                && event.transport_media_id == Some(consumer_media_id.as_u64())
-        })
-        .expect("expected subscription activity diagnostics event");
-    assert_eq!(event.media_worker_id, Some(subscriber_worker));
-    assert_eq!(
-        event.fields.get("active"),
-        Some(&serde_json::Value::Bool(false))
+    assert_eq!(paused_consumer_media_id, consumer_media_id);
+    let mut activity_fields = route_fields.to_vec();
+    activity_fields.push(("active", Value::from(false)));
+    assert_user_exact(
+        telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
+        room.uuid(),
+        subscriber_id.path_segment().as_ref(),
+        subscriber_connection_id.as_u64(),
+        subscriber_worker,
+        &activity_fields,
     );
 
     assert_eq!(
@@ -520,7 +545,7 @@ async fn transport_consume_failure_releases_pending_setup_for_retry() {
         .transport_user_key(&subscriber_id, subscriber_connection_id)
         .await;
     media_transport
-        .create_initial_session_offer(&subscriber_session_key)
+        .create_initial_session_offer("test-room", &subscriber_session_key)
         .await
         .expect("retry session should create an initial offer");
 

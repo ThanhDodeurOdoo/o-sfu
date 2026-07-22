@@ -363,7 +363,7 @@ impl DebugProbe for ReceiverBweTargetProbe {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 pub struct RecordIncomingMediaProbe {
     pub session_key: TransportSessionKey,
     pub transport_media_id: TransportMediaId,
@@ -371,7 +371,7 @@ pub struct RecordIncomingMediaProbe {
     pub now: Instant,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 impl DebugProbe for RecordIncomingMediaProbe {
     type Output = ();
 

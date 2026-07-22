@@ -10,6 +10,7 @@
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -117,6 +118,7 @@ pub(super) fn ensure_session_rtc_state(
     let profile = RtpProfile::compile(MediaCodecFlags::default(), CodecPreferences::default())?;
     ensure_session_rtc_state_with_stats_interval(
         users,
+        Arc::from("test-room"),
         session_key,
         candidate_addr,
         max_bitrate_out,
@@ -127,6 +129,7 @@ pub(super) fn ensure_session_rtc_state(
 
 pub(super) fn ensure_session_rtc_state_with_stats_interval(
     users: &mut SessionStore,
+    room_id: Arc<str>,
     session_key: &TransportSessionKey,
     candidate_addr: SocketAddr,
     max_bitrate_out: Bitrate,
@@ -154,6 +157,7 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
     users.insert(
         session_key.clone(),
         RtcSessionState {
+            room_id,
             rtc,
             started_at,
             local_ice_ufrag,

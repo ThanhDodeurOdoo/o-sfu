@@ -1,6 +1,9 @@
 #[cfg(any(test, feature = "testing-transport"))]
 use {
-    super::{MediaTransport, TransportMediaId, TransportSessionHealth, TransportSessionKey},
+    super::{
+        MediaTransport, TransportMediaId, TransportQualitySample, TransportSessionHealth,
+        TransportSessionKey, TransportSourceKey,
+    },
     crate::engine::sync::lock_unpoisoned,
     std::{
         collections::BTreeSet,
@@ -8,7 +11,7 @@ use {
         io::ErrorKind,
         net::{SocketAddrV4, UdpSocket},
         path::{Path, PathBuf},
-        sync::{Mutex, OnceLock},
+        sync::{Mutex, OnceLock, atomic::Ordering},
         time::{Duration, Instant, SystemTime},
     },
     str0m::media::Mid,
@@ -24,10 +27,7 @@ use {
     crate::{
         Bitrate, CodecPreferences, MediaCodecFlags, RtcUdpIoBackend, SessionBitrateLimits,
         VideoBitrateLimits,
-        engine::{
-            diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-            packet_sink_registry::RoomPacketSinkRegistry,
-        },
+        engine::{metrics::RuntimeMetrics, packet_sink_registry::RoomPacketSinkRegistry},
     },
     std::{net::IpAddr, sync::Arc},
 };
@@ -82,6 +82,14 @@ impl MediaTransport {
 
 #[cfg(any(test, feature = "testing-transport"))]
 impl MediaTransportTestApi<'_> {
+    /// Returns the number of worker source-diagnostics commands issued.
+    #[must_use]
+    pub fn source_diagnostics_request_count(self) -> usize {
+        self.transport
+            .source_diagnostics_requests
+            .load(Ordering::Relaxed)
+    }
+
     #[cfg(test)]
     pub(crate) async fn negotiated_producer_parameters(
         self,
@@ -106,6 +114,34 @@ impl MediaTransportTestApi<'_> {
     ) {
         if let Some(worker) = self.transport.worker_for_user(session_key) {
             worker.debug_set_session_transport_health(session_key, health);
+        }
+    }
+
+    pub fn set_session_transport_quality(
+        self,
+        session_key: &TransportSessionKey,
+        quality: TransportQualitySample,
+    ) {
+        if let Some(worker) = self.transport.worker_for_user(session_key) {
+            worker.debug_set_session_transport_quality(session_key, quality);
+        }
+    }
+
+    pub async fn record_incoming_media(
+        self,
+        source: &TransportSourceKey,
+        payload_bytes: usize,
+        now: Instant,
+    ) {
+        if let Some(worker) = self.transport.worker_for_user(source.session_key()) {
+            worker
+                .debug_record_incoming_media(
+                    source.session_key(),
+                    source.transport_media_id(),
+                    payload_bytes,
+                    now,
+                )
+                .await;
         }
     }
 
@@ -330,7 +366,6 @@ pub(crate) fn test_media_transport_config(
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub(crate) fn test_media_transport_deps() -> MediaTransportDeps {
     MediaTransportDeps {
-        diagnostics: Arc::new(DiagnosticsStore::default()),
         packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
         metrics: Arc::new(RuntimeMetrics::default()),
     }

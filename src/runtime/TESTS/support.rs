@@ -138,7 +138,6 @@ impl RuntimeTestBuilder {
         let state = RuntimeState::from_parts(
             &runtime_config,
             Arc::clone(&room_manager),
-            Arc::clone(&services.diagnostics),
             Arc::clone(&services.metrics),
             media_transport.clone(),
         );

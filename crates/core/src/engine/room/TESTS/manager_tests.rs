@@ -1,12 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::{slice, sync::Arc, time::Duration};
 
 use o_sfu_telemetry::schema::event as telemetry_event;
+use serde_json::Value;
 use tokio::{sync::Notify, task::yield_now, time::timeout};
 
-use super::{super::manager::JoinPlacementTestGate, api::NegotiatedPublish, fixtures::*};
+use super::{
+    super::manager::JoinPlacementTestGate,
+    api::NegotiatedPublish,
+    fixtures::*,
+    tracing::{assert_exact, assert_user_exact, capture},
+};
 use crate::{
-    LocalSpilloverPolicy, RoomWorkerPolicy, RuntimeFeatureFlags,
-    engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
+    LocalSpilloverPolicy, RoomWorkerPolicy, RuntimeFeatureFlags, engine::metrics::RuntimeMetrics,
     prelude::LocalSpilloverPolicyParts,
 };
 
@@ -92,24 +97,81 @@ async fn assert_router_count(room: &Arc<TestRoom>, expected: usize) {
     assert_eq!(room.test_api().inspect().router_count().await, expected);
 }
 
-fn assert_event_worker(
-    room: &TestRoom,
-    user_id: &UserId,
-    connection_id: ConnectionId,
-    event_name: &str,
-    transport_media_id: TransportMediaId,
-    media_worker_id: usize,
-) {
-    let events = room.diagnostics.user_recent_events(room.uuid(), user_id);
-    let event = events
-        .iter()
-        .find(|event| {
-            event.event == event_name
-                && event.connection_id == Some(connection_id.as_u64())
-                && event.transport_media_id == Some(transport_media_id.as_u64())
-        })
-        .unwrap_or_else(|| panic!("expected recent diagnostics event {event_name}"));
-    assert_eq!(event.media_worker_id, Some(media_worker_id));
+#[tokio::test(flavor = "current_thread")]
+async fn room_and_user_lifecycle_events_preserve_contract_fields() {
+    let _guard = capture().await;
+    let manager = RoomManager::for_test();
+    let media_transport = real_adapter();
+    let room = manager
+        .serve_room(
+            "issuer-lifecycle-events",
+            TEST_ROOM_KEY,
+            &RoomConfig::default(),
+            Some("203.0.113.1"),
+        )
+        .await;
+    let closed_user = UserId::Integer(1);
+    let disconnected_user = UserId::Integer(2);
+    let closed_connection = manager_join_user(&manager, &room, 1, &media_transport).await;
+    let disconnected_connection = manager_join_user(&manager, &room, 2, &media_transport).await;
+
+    assert!(
+        manager
+            .close_session(
+                room.uuid(),
+                &closed_user,
+                closed_connection,
+                &media_transport,
+            )
+            .await
+    );
+    manager
+        .disconnect_users(
+            room.uuid(),
+            slice::from_ref(&disconnected_user),
+            &media_transport,
+        )
+        .await;
+
+    assert_exact(
+        telemetry_event::ROOM_CREATED,
+        &[
+            ("room_id", Value::from(room.uuid())),
+            ("remote_address", Value::from("203.0.113.1")),
+            ("web_rtc_enabled", Value::from(true)),
+        ],
+    );
+    for (name, user, connection) in [
+        (
+            telemetry_event::USER_JOINED,
+            &closed_user,
+            closed_connection,
+        ),
+        (
+            telemetry_event::USER_JOINED,
+            &disconnected_user,
+            disconnected_connection,
+        ),
+        (
+            telemetry_event::USER_CLOSED,
+            &closed_user,
+            closed_connection,
+        ),
+        (
+            telemetry_event::USER_DISCONNECTED,
+            &disconnected_user,
+            disconnected_connection,
+        ),
+    ] {
+        assert_user_exact(
+            name,
+            room.uuid(),
+            user.path_segment().as_ref(),
+            connection.as_u64(),
+            0,
+            &[],
+        );
+    }
 }
 
 #[tokio::test]
@@ -124,10 +186,7 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
                 test_client_rtp_capabilities(),
             ),
         ),
-        super::super::RoomManagerDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            metrics: Arc::clone(&metrics),
-        },
+        Arc::clone(&metrics),
     ));
     let config = RoomConfig::default();
 
@@ -152,10 +211,7 @@ async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
                 test_client_rtp_capabilities(),
             ),
         ),
-        super::super::RoomManagerDeps {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
-            metrics: Arc::clone(&metrics),
-        },
+        Arc::clone(&metrics),
     ));
     let media_transport = real_adapter();
     let room = manager
@@ -318,8 +374,9 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
     assert_router_count(&room, LOCAL_ROUTER_CAP).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn spillover_media_diagnostics_use_connection_worker() {
+    let _guard = capture().await;
     let manager = manager_with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(2));
     let media_transport = real_adapter();
     let room = serve_test_room(&manager, "issuer-spillover-diagnostics").await;
@@ -356,13 +413,16 @@ async fn spillover_media_diagnostics_use_connection_worker() {
         )
         .await
         .expect("synthetic negotiated publish should commit");
-    assert_event_worker(
-        &room,
-        &publisher_id,
-        publisher_connection_id,
+    assert_user_exact(
         telemetry_event::PUBLISH_COMMITTED,
-        transport_media_id,
+        room.uuid(),
+        publisher_id.path_segment().as_ref(),
+        publisher_connection_id.as_u64(),
         media_worker_id,
+        &[(
+            "transport_media_id",
+            Value::from(transport_media_id.as_u64()),
+        )],
     );
 
     assert!(
@@ -378,12 +438,19 @@ async fn spillover_media_diagnostics_use_connection_worker() {
             .await
             .is_none()
     );
-    assert_event_worker(
-        &room,
-        &publisher_id,
-        publisher_connection_id,
+    assert_user_exact(
         telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
-        transport_media_id,
+        room.uuid(),
+        publisher_id.path_segment().as_ref(),
+        publisher_connection_id.as_u64(),
         media_worker_id,
+        &[
+            (
+                "transport_media_id",
+                Value::from(transport_media_id.as_u64()),
+            ),
+            ("active", Value::from(false)),
+            ("stream_id", Value::from(stream_id.to_string())),
+        ],
     );
 }

@@ -66,9 +66,17 @@ pub(super) fn worker_create_initial_session_offer(
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
+    room_id: Arc<str>,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    ensure_session_ready_for_offer(state, bitrate_registry, snapshot_state, config, session_key)?;
+    ensure_session_ready_for_offer(
+        state,
+        bitrate_registry,
+        snapshot_state,
+        config,
+        room_id,
+        session_key,
+    )?;
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
     }
@@ -418,10 +426,12 @@ fn ensure_session_ready_for_offer(
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
+    room_id: Arc<str>,
     session_key: &TransportSessionKey,
 ) -> Result<(), TransportAdapterError> {
     let created_session = bootstrap::ensure_session_rtc_state_with_stats_interval(
         &mut state.users,
+        room_id,
         session_key,
         config.candidate_addr,
         config.max_bitrate_out,

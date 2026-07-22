@@ -52,8 +52,8 @@ pub use crate::engine::media_transport::TransportSessionHealth;
 use crate::{
     Bitrate,
     engine::media_transport::{
-        ReceiverBandwidthSnapshot, SessionUploadSlot, TransportMediaId, TransportQualitySample,
-        TransportQualitySnapshot, TransportSessionKey,
+        ReceiverBandwidthSnapshot, SessionUploadSlot, TransportHealthSnapshot, TransportMediaId,
+        TransportQualitySample, TransportQualitySnapshot, TransportSessionKey,
     },
 };
 
@@ -108,6 +108,8 @@ where
 /// control commands mutate negotiation or routing facts before the packet loop
 /// polls `rtc`, which keeps `str0m` access ordered without a per-session lock
 pub(super) struct RtcSessionState {
+    /// public room UUID used to correlate structured transport events
+    pub(super) room_id: Arc<str>,
     /// sans-I/O WebRTC engine driven only by the packet-loop worker
     pub(super) rtc: Rtc,
     /// creation time used for transport lifetime metrics during session teardown
@@ -442,6 +444,22 @@ impl RtcSnapshotState {
         self.transport_health_by_session.get(session_key).copied()
     }
 
+    /// Build a transport-health snapshot for the requested sessions.
+    pub fn transport_health_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportHealthSnapshot {
+        session_keys
+            .iter()
+            .filter_map(|key| {
+                self.transport_health_by_session
+                    .get(key)
+                    .copied()
+                    .map(|health| (key.clone(), health))
+            })
+            .collect()
+    }
+
     /// replace the latest receiver bandwidth estimate for one session
     pub(super) fn set_receiver_bandwidth(
         &mut self,
@@ -492,16 +510,14 @@ impl RtcSnapshotState {
         &self,
         session_keys: &[TransportSessionKey],
     ) -> TransportQualitySnapshot {
-        TransportQualitySnapshot {
-            per_session: session_keys
-                .iter()
-                .filter_map(|session_key| {
-                    self.transport_quality_by_session
-                        .get(session_key)
-                        .copied()
-                        .map(|sample| (session_key.clone(), sample))
-                })
-                .collect(),
-        }
+        session_keys
+            .iter()
+            .filter_map(|session_key| {
+                self.transport_quality_by_session
+                    .get(session_key)
+                    .copied()
+                    .map(|sample| (session_key.clone(), sample))
+            })
+            .collect()
     }
 }
