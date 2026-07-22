@@ -32,13 +32,10 @@ pub(crate) use o_sfu_core::{
 };
 pub(crate) use o_sfu_telemetry::{self as telemetry, prometheus};
 use options::{RuntimeConfig, effective_feature_flags};
-use room::{
-    RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomManagerDeps, RoomRuntimePolicy,
-};
+use room::{RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy};
 use telemetry::{init_tracing, schema::event as telemetry_event};
 
 pub(crate) use self::{
-    diagnostics::DiagnosticsStore,
     media_transport::{MediaTransport, MediaTransportConfig, MediaTransportDeps},
     metrics::RuntimeMetrics,
     packet_sinks::RoomPacketSinkRegistry,
@@ -59,7 +56,6 @@ pub(crate) use self::{
 pub struct Runtime {
     config: RuntimeConfig,
     room_manager: Arc<RoomManager>,
-    diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     media_transport: MediaTransport,
 }
@@ -74,7 +70,6 @@ pub struct Runtime {
 pub(super) struct RuntimeState {
     config: RuntimeConfig,
     room_manager: Arc<RoomManager>,
-    diagnostics: Arc<DiagnosticsStore>,
     media_transport: MediaTransport,
     sfu_core: SfuCore,
     metrics: Arc<RuntimeMetrics>,
@@ -83,7 +78,6 @@ pub(super) struct RuntimeState {
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeServices {
-    diagnostics: Arc<DiagnosticsStore>,
     metrics: Arc<RuntimeMetrics>,
     packet_sink_registry: Arc<RoomPacketSinkRegistry>,
 }
@@ -91,7 +85,6 @@ pub(super) struct RuntimeServices {
 impl Default for RuntimeServices {
     fn default() -> Self {
         Self {
-            diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: Arc::new(RuntimeMetrics::default()),
             packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
         }
@@ -122,7 +115,6 @@ impl Runtime {
         Ok(Self {
             config: runtime_config,
             room_manager,
-            diagnostics: services.diagnostics,
             metrics: services.metrics,
             media_transport,
         })
@@ -172,7 +164,6 @@ impl Runtime {
         RuntimeState::from_parts(
             &self.config,
             Arc::clone(&self.room_manager),
-            Arc::clone(&self.diagnostics),
             Arc::clone(&self.metrics),
             self.media_transport.clone(),
         )
@@ -245,7 +236,6 @@ impl RuntimeState {
     fn from_parts(
         config: &RuntimeConfig,
         rooms: Arc<RoomManager>,
-        diagnostics: Arc<DiagnosticsStore>,
         metrics: Arc<RuntimeMetrics>,
         media_transport: MediaTransport,
     ) -> Self {
@@ -257,7 +247,6 @@ impl RuntimeState {
         Self {
             config: config.clone(),
             room_manager: rooms,
-            diagnostics,
             media_transport,
             sfu_core,
             metrics,
@@ -309,7 +298,6 @@ fn build_media_transport(config: &Config, services: &RuntimeServices) -> Result<
             media_quality_interval: config.telemetry.media_quality_interval,
         },
         MediaTransportDeps {
-            diagnostics: Arc::clone(&services.diagnostics),
             packet_sink_registry: Arc::clone(&services.packet_sink_registry),
             metrics: Arc::clone(&services.metrics),
         },
@@ -336,10 +324,7 @@ fn build_room_manager(
 ) -> Arc<RoomManager> {
     Arc::new(RoomManager::new(
         RoomManagerConfig::new(config.transport.rtc_media_worker_count, runtime_policy),
-        RoomManagerDeps {
-            diagnostics: Arc::clone(&services.diagnostics),
-            metrics: Arc::clone(&services.metrics),
-        },
+        Arc::clone(&services.metrics),
     ))
 }
 

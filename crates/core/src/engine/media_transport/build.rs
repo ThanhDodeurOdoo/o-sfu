@@ -75,6 +75,8 @@ impl MediaTransport {
             metrics: deps.metrics,
             #[cfg(test)]
             media_control_batches: Arc::default(),
+            #[cfg(any(test, feature = "testing-transport"))]
+            source_diagnostics_requests: Arc::default(),
             source_policy_signal,
         })
     }

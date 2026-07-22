@@ -8,7 +8,7 @@ use axum::{
 };
 
 use crate::runtime::{
-    DiagnosticsStore, MediaTransport, RuntimeMetrics, RuntimeState,
+    MediaTransport, RuntimeMetrics, RuntimeState,
     auth::{self, HttpDisconnectClaims, HttpRoomClaims},
     http_server::contract::CreateRoomQuery,
     request_origin::RequestOrigin,
@@ -26,7 +26,6 @@ pub(super) struct RoomServices {
 pub(super) struct DiagnosticsServices {
     pub(super) room_manager: Arc<RoomManager>,
     pub(super) media_transport: MediaTransport,
-    pub(super) diagnostics: Arc<DiagnosticsStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +67,6 @@ impl FromRef<RuntimeState> for DiagnosticsServices {
         Self {
             room_manager: Arc::clone(&state.room_manager),
             media_transport: state.media_transport.clone(),
-            diagnostics: Arc::clone(&state.diagnostics),
         }
     }
 }

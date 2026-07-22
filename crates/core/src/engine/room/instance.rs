@@ -14,7 +14,6 @@ use crate::{
     engine::{
         AvailableFeatures, ConnectionId, MediaWorkerId, PeerSnapshot, RecordingState,
         RoomInstanceId, UserId,
-        diagnostics::DiagnosticsStore,
         media_transport::{MediaTransport, TransportSessionKey},
         metrics::RuntimeMetrics,
     },
@@ -48,7 +47,6 @@ pub(crate) struct RoomUserOperation<'a> {
 }
 
 pub struct Room {
-    pub(super) diagnostics: Arc<DiagnosticsStore>,
     pub(super) definition: RoomDefinition,
     pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
     pub(super) metrics: Arc<RuntimeMetrics>,
@@ -63,15 +61,14 @@ impl Room {
             issuer,
             key,
             config,
-            services,
+            metrics,
         } = init;
         let definition =
             RoomDefinition::new(&runtime_context, &runtime_policy, issuer, key, config);
         Self {
-            diagnostics: services.diagnostics,
             definition,
             load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
-            metrics: services.metrics,
+            metrics,
             state: RwLock::new(RoomState::new(
                 &runtime_context,
                 runtime_policy.admission_policy,
@@ -132,11 +129,6 @@ impl Room {
     #[must_use]
     pub fn web_rtc_enabled(&self) -> bool {
         self.definition.web_rtc_enabled()
-    }
-
-    #[must_use]
-    pub async fn assigned_primary_media_worker_id(&self) -> Option<MediaWorkerId> {
-        self.state.read().await.assigned_primary_media_worker_id()
     }
 
     #[must_use]

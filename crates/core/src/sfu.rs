@@ -318,7 +318,7 @@ impl MediaSession {
         let offer = self
             .core
             .media_transport
-            .create_initial_session_offer(&self.transport_user_key)
+            .create_initial_session_offer(self.room.uuid(), &self.transport_user_key)
             .await
             .map_err(SfuCoreError::Transport)?;
         self.phase

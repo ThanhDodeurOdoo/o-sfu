@@ -17,7 +17,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use o_sfu_telemetry::schema::event::TRANSPORT_HEALTH_CHANGED;
+use serde_json::Value;
 use str0m::{
+    Event, IceConnectionState,
     ice::{StunMessage, TransId},
     media::{KeyframeRequestKind, MediaKind, Mid, Rid},
     rtp::Ssrc,
@@ -31,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
+    event_observation::observe_rtc_event,
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_pkt_to_session,
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
@@ -49,11 +53,10 @@ use crate::{
     Bitrate, CodecPreferences, MediaCodecFlags, RtcUdpIoBackend, VideoBitrateLimits,
     engine::{
         RoomInstanceId, UserId,
-        diagnostics::DiagnosticsStore,
         media_transport::{
             SourcePolicySignal, TransportMediaId, TransportSessionKey, TransportSourceKey,
             rtc::{
-                RtcWorkerConfig, RtpProfile,
+                RtcWorker, RtcWorkerConfig, RtpProfile,
                 bitrate::BitrateRegistry,
                 bootstrap,
                 commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
@@ -82,6 +85,7 @@ use crate::{
             PacketSink as MediaPacketSink, PacketSinkRouteCache, RegisteredPacketSink,
             RoomPacketSinkRegistry,
         },
+        room::TESTS::tracing::{assert_exact, capture},
     },
 };
 
@@ -721,7 +725,6 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
             media_quality_interval: None,
             media_id_base: 0,
         },
-        diagnostics: Arc::new(DiagnosticsStore::default()),
         packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
         source_policy_signal: SourcePolicySignal::default(),
         metrics,
@@ -1287,6 +1290,69 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
         harness.metrics.snapshot().rtp_forwarded_packets_local_rtc(),
         0
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn transport_health_events_use_session_room_id_and_deduplicate() {
+    let _guard = capture().await;
+    let worker = RtcWorker::default();
+    let session = test_transport_session_key(318, 0, 319, UserId::Integer(7));
+    assert!(
+        worker
+            .create_initial_session_offer("public-room-uuid", &session)
+            .await
+            .is_ok(),
+        "session offer should be created"
+    );
+
+    let handle = worker.test_handle();
+    let probe_session = session.clone();
+    let room_id = handle
+        .debug_handle
+        .probe(
+            move |state: &PacketLoopState, _: &super::super::worker::WorkerCommandContext<'_>| {
+                state
+                    .users
+                    .get(&probe_session)
+                    .map(|session| Arc::clone(&session.room_id))
+            },
+        )
+        .await
+        .flatten();
+    assert!(room_id.is_some(), "session should reach the packet loop");
+    let Some(room_id) = room_id else {
+        return;
+    };
+    assert_eq!(room_id.as_ref(), "public-room-uuid");
+
+    let observe = |event| {
+        observe_rtc_event(
+            &handle.snapshot_state,
+            &worker.metrics,
+            &worker.source_policy_signal,
+            &room_id,
+            &session,
+            event,
+        );
+    };
+    observe(&Event::Connected);
+    observe(&Event::Connected);
+    observe(&Event::IceConnectionStateChange(
+        IceConnectionState::Disconnected,
+    ));
+
+    for (from, to) in [(None, "connected"), (Some("connected"), "disconnected")] {
+        let mut fields = vec![
+            ("room_id", Value::from("public-room-uuid")),
+            ("user_id", Value::from("7")),
+            ("media_worker_id", Value::from(0)),
+            ("to", Value::from(to)),
+        ];
+        if let Some(from) = from {
+            fields.push(("from", Value::from(from)));
+        }
+        assert_exact(TRANSPORT_HEALTH_CHANGED, &fields);
+    }
 }
 
 #[test]

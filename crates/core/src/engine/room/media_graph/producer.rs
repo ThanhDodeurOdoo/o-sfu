@@ -19,7 +19,7 @@ use super::{
 use crate::{
     Bitrate,
     engine::{
-        ConnectionId, MediaWorkerId, UserId, UserInfo,
+        ConnectionId, UserId, UserInfo,
         media_transport::{
             SessionUploadEncoding, TransportMediaId, TransportSessionKey, TransportSourceKey,
         },
@@ -43,10 +43,6 @@ pub struct ValidatedPublish {
 
 #[derive(Debug)]
 pub struct PublishCommit {
-    pub user: UserId,
-    pub connection: ConnectionId,
-    pub worker: MediaWorkerId,
-    pub media: TransportMediaId,
     pub publish_before: RoomMediaCounts,
     pub publish_after: RoomMediaCounts,
     pub setup_before: RoomMediaCounts,
@@ -197,7 +193,6 @@ impl RoomState {
         let owner_user_id = publish.session_key.user_id().clone();
         let owner_connection_id = publish.session_key.connection_id();
         let stream_id = publish.stream_id.clone();
-        let media_worker_id = publish.session_key.media_worker_id();
         let presence = publish.presence.clone();
         let publish_before = self.media_counts();
         let source_id = match self.topology.commit_publication(
@@ -233,10 +228,6 @@ impl RoomState {
             )
         });
         Some(PublishCommit {
-            user: owner_user_id,
-            connection: owner_connection_id,
-            worker: media_worker_id,
-            media: transport_media_id,
             publish_before,
             publish_after,
             setup_before,

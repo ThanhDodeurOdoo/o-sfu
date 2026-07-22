@@ -1,6 +1,7 @@
 #[cfg(any(test, feature = "testing-transport"))]
 use o_sfu_router::rtp::MediaCapabilities;
-use tracing::warn;
+use o_sfu_telemetry::schema::event as telemetry_event;
+use tracing::{info, warn};
 
 use super::{
     BroadcastPayloadError, Room, RoomJoinError, UserOutboundSender,
@@ -10,7 +11,7 @@ use super::{
     state::{ConnectionCloseCommit, RemoteSourceRefresh},
 };
 use crate::engine::{
-    ConnectionId, UserId, UserInfo, UserPermissions, media_transport::MediaTransport,
+    ConnectionId, MediaWorkerId, UserId, UserInfo, UserPermissions, media_transport::MediaTransport,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -44,9 +45,16 @@ impl Room {
         let joined_fanout = context.user_joined_fanout();
         let commit = admission.commit(self, joined_fanout).await?;
         let receipt = commit.receipt.clone();
-        RoomEffects::from_join(self, commit)
-            .execute(self, context)
-            .await;
+        RoomEffects::from_join(commit).execute(self, context).await;
+        let session = &receipt.transport_session_key;
+        info!(
+            event = telemetry_event::USER_JOINED,
+            room_id = self.uuid(),
+            user_id = %session.user_id().path_segment(),
+            connection_id = receipt.connection_id.as_u64(),
+            media_worker_id = session.media_worker_id().as_usize(),
+            "user joined room"
+        );
         Ok(receipt)
     }
 
@@ -75,10 +83,35 @@ impl Room {
             state.close_connection(user_id, connection_id)
         };
         let removed_current_user = matches!(&commit, Some(ConnectionCloseCommit::Current { .. }));
+        let closed = commit.as_ref().and_then(|commit| match commit {
+            ConnectionCloseCommit::Current {
+                user_id,
+                connection_id,
+                session_teardown,
+                ..
+            } => Some((
+                user_id.clone(),
+                *connection_id,
+                session_teardown
+                    .as_ref()
+                    .map(|teardown| teardown.session_key().media_worker_id()),
+            )),
+            ConnectionCloseCommit::StalePlacement { .. } => None,
+        });
         if let Some(commit) = commit {
-            RoomEffects::from_connection_close(self, commit)
+            RoomEffects::from_connection_close(commit)
                 .execute(self, context)
                 .await;
+        }
+        if let Some((user_id, connection_id, media_worker_id)) = closed {
+            info!(
+                event = telemetry_event::USER_CLOSED,
+                room_id = self.uuid(),
+                user_id = %user_id.path_segment(),
+                connection_id = connection_id.as_u64(),
+                media_worker_id = media_worker_id.map(MediaWorkerId::as_usize),
+                "user closed"
+            );
         }
         removed_current_user
     }
@@ -164,9 +197,24 @@ impl Room {
             let mut state = self.state.write().await;
             state.apply_disconnect_users(user_ids)
         };
-        RoomEffects::from_disconnect(self, commit)
+        let sessions = commit
+            .session_teardowns
+            .iter()
+            .map(|teardown| teardown.session_key().clone())
+            .collect::<Vec<_>>();
+        RoomEffects::from_disconnect(commit)
             .execute(self, context)
             .await;
+        for session in sessions {
+            info!(
+                event = telemetry_event::USER_DISCONNECTED,
+                room_id = self.uuid(),
+                user_id = %session.user_id().path_segment(),
+                connection_id = session.connection_id().as_u64(),
+                media_worker_id = session.media_worker_id().as_usize(),
+                "user disconnected"
+            );
+        }
     }
 
     #[cfg(any(test, feature = "testing-transport"))]

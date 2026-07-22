@@ -28,7 +28,6 @@ use crate::{
     Bitrate,
     engine::{
         UserId,
-        diagnostics::DiagnosticsStore,
         media_transport::{SourcePolicySignal, TransportSessionKey},
         metrics::{RtcMetricsRecorder, RuntimeMetrics},
     },
@@ -37,7 +36,6 @@ use crate::{
 pub struct SessionDrainBenchFixture {
     state: PacketLoopState,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    diagnostics: Arc<DiagnosticsStore>,
     metrics: RuntimeMetrics,
     source_policy_signal: SourcePolicySignal,
     buffers: PacketLoopBuffers,
@@ -72,7 +70,6 @@ impl SessionDrainBenchFixture {
         Self {
             state,
             snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
-            diagnostics: Arc::new(DiagnosticsStore::default()),
             metrics: RuntimeMetrics::default(),
             source_policy_signal: SourcePolicySignal::default(),
             buffers: PacketLoopBuffers::new(),
@@ -88,7 +85,6 @@ impl SessionDrainBenchFixture {
         self.buffers.clear();
         let context = SessionDrainContext {
             snapshot_state: &self.snapshot_state,
-            diagnostics: &self.diagnostics,
             metrics: &self.metrics,
             source_policy_signal: &self.source_policy_signal,
         };

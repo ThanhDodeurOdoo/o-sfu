@@ -6,14 +6,11 @@ use o_sfu_router::test_support::rtp_samples::sample_client_rtp_capabilities;
 use super::JoinPlacementTestGate;
 use super::{
     super::{RoomAdmissionPolicy, RoomRuntimePolicy},
-    RoomManager, RoomManagerConfig, RoomManagerDeps,
+    RoomManager, RoomManagerConfig,
 };
 #[cfg(test)]
 use crate::engine::sync::lock_unpoisoned;
-use crate::{
-    RoomMediaLimits, RuntimeFeatureFlags,
-    engine::{diagnostics::DiagnosticsStore, metrics::RuntimeMetrics},
-};
+use crate::{RoomMediaLimits, RuntimeFeatureFlags, engine::metrics::RuntimeMetrics};
 
 const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
 
@@ -45,13 +42,7 @@ impl RoomManager {
 
     #[must_use]
     pub fn for_test_with_config(config: RoomManagerConfig) -> Self {
-        Self::new(
-            config,
-            RoomManagerDeps {
-                diagnostics: Arc::new(DiagnosticsStore::default()),
-                metrics: Arc::new(RuntimeMetrics::default()),
-            },
-        )
+        Self::new(config, Arc::new(RuntimeMetrics::default()))
     }
 
     #[cfg(test)]

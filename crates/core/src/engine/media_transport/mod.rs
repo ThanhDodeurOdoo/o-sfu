@@ -30,6 +30,8 @@ mod types;
 mod workers;
 
 use std::sync::Arc;
+#[cfg(any(test, feature = "testing-transport"))]
+use std::sync::atomic::AtomicUsize;
 
 pub use build::MediaTransportBuildError;
 pub use config::{MediaTransportConfig, MediaTransportDeps};
@@ -62,11 +64,12 @@ pub use types::{
     ActiveSpeakerSourceDiagnostic, AppliedProducer, AppliedSessionAnswer, ConsumerActivity,
     ProducerActivity, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate, RelayRouteActivity,
     SessionOffer, SessionUploadEncoding, SessionUploadSlot, SourcePacketGate,
-    TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute, TransportMediaId,
-    TransportPlacementPressureSnapshot, TransportQualitySample, TransportQualitySnapshot,
-    TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult, TransportRidActivity,
-    TransportSessionHealth, TransportSessionKey, TransportSourceActivity,
-    TransportSourceActivitySnapshot, TransportSourceKey, TransportWorkerPressureSnapshot,
+    TransportAdapterError, TransportBitrateSnapshot, TransportConsumerRoute,
+    TransportHealthSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
+    TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
+    TransportRelayRouteEffect, TransportResult, TransportRidActivity, TransportSessionHealth,
+    TransportSessionKey, TransportSourceActivity, TransportSourceDiagnosticsSnapshot,
+    TransportSourceKey, TransportWorkerPressureSnapshot,
 };
 
 use self::workers::signaling_to_str0m_media_kind;
@@ -89,6 +92,8 @@ pub struct MediaTransport {
     metrics: Arc<RuntimeMetrics>,
     #[cfg(test)]
     media_control_batches: test_support::MediaControlBatchLog,
+    #[cfg(any(test, feature = "testing-transport"))]
+    source_diagnostics_requests: Arc<AtomicUsize>,
     /// Coalesces transport observations for room policy.
     source_policy_signal: SourcePolicySignal,
 }
@@ -150,11 +155,14 @@ impl MediaTransport {
     /// the active backend cannot create the offer.
     pub async fn create_initial_session_offer(
         &self,
+        room_id: &str,
         session_key: &TransportSessionKey,
     ) -> Result<SessionOffer, TransportAdapterError> {
+        let room_id: Arc<str> = Arc::from(room_id);
         self.request_session_command(
             session_key,
-            |response| RtcWorkerCommand::CreateInitialSessionOffer {
+            move |response| RtcWorkerCommand::CreateInitialSessionOffer {
+                room_id,
                 session_key: session_key.clone(),
                 response,
             },

@@ -1,6 +1,6 @@
 #[cfg(any(test, feature = "testing-transport"))]
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
-mod TESTS;
+pub(crate) mod TESTS;
 mod definition;
 mod directory;
 mod effects;
@@ -26,8 +26,8 @@ pub use factory::{RoomAdmissionPolicy, RoomConfig, RoomRuntimePolicy};
 pub(crate) use instance::RoomUserOperation;
 pub use instance::{Room, RoomJoinError, RoomManagerJoinError, RoomMediaCounts};
 pub use manager::{
-    RoomManager, RoomManagerConfig, RoomManagerDeps, RoomUserAdmission,
-    RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot,
+    RoomManager, RoomManagerConfig, RoomUserAdmission, RuntimeRoomDirectorySnapshot,
+    RuntimeRoomStatsSnapshot,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use media_graph::ConsumerRouteState;
@@ -40,7 +40,10 @@ pub use outbound::{
     UserOutboundSender,
 };
 pub use placement::{RoomRuntimeContext, RouterPlacement, RouterPlacements, RouterPlacementsError};
-pub use read_model::{IncomingBitrateSnapshot, RoomUserStatsSnapshot};
+pub use read_model::{
+    IncomingBitrateSnapshot, RoomDetailCapture, RoomOverviewCapture, RoomUserCapture,
+    RoomUserStatsSnapshot, RoomUsersCapture,
+};
 pub(crate) use transition::{PublishIntentOutcome, UnpublishIntentOutcome};
 
 #[cfg(any(test, feature = "testing-transport"))]

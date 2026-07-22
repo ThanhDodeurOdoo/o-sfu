@@ -27,7 +27,7 @@ use super::{
     session,
 };
 use crate::engine::{
-    media_transport::{TransportMediaId, TransportResult, TransportSourceActivitySnapshot},
+    media_transport::{TransportMediaId, TransportResult, TransportSourceDiagnosticsSnapshot},
     metrics::{RtcMetricsRecorder, RuntimeMetrics},
 };
 
@@ -77,6 +77,7 @@ pub fn handle_worker_command(
 ) {
     match command {
         RtcWorkerCommand::CreateInitialSessionOffer {
+            room_id,
             session_key,
             response,
         } => respond(
@@ -86,6 +87,7 @@ pub fn handle_worker_command(
                 context.bitrate_registry,
                 context.snapshot_state,
                 context.offer_bootstrap_config(),
+                room_id,
                 &session_key,
             ),
         ),
@@ -93,14 +95,10 @@ pub fn handle_worker_command(
             response,
             Ok(state.routes.active_speaker_sources(context.now)),
         ),
-        RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response } => respond(
-            response,
-            Ok(state.routes.active_speaker_diagnostics(context.now)),
-        ),
-        RtcWorkerCommand::SourceActivitySnapshot {
+        RtcWorkerCommand::SourceDiagnosticsSnapshot {
             transport_media_ids,
             response,
-        } => respond_source_activity_snapshot(state, &transport_media_ids, context.now, response),
+        } => respond_source_diagnostics(state, &transport_media_ids, context.now, response),
         RtcWorkerCommand::CreateSessionRenegotiationOffer {
             session_key,
             response,
@@ -228,18 +226,24 @@ fn respond<T>(response: oneshot::Sender<TransportResult<T>>, result: TransportRe
     let _ = response.send(result);
 }
 
-fn respond_source_activity_snapshot(
+fn respond_source_diagnostics(
     state: &PacketLoopState,
     transport_media_ids: &[TransportMediaId],
     now: Instant,
-    response: oneshot::Sender<TransportResult<TransportSourceActivitySnapshot>>,
+    response: oneshot::Sender<TransportResult<TransportSourceDiagnosticsSnapshot>>,
 ) {
+    let activity = state.routes.source_activity_snapshot(
+        transport_media_ids,
+        now,
+        &state.incoming_bitrate_counters,
+    );
     respond(
         response,
-        Ok(state.routes.source_activity_snapshot(
-            transport_media_ids,
-            now,
-            &state.incoming_bitrate_counters,
-        )),
+        Ok(TransportSourceDiagnosticsSnapshot {
+            activity,
+            active_speaker_diagnostics: state
+                .routes
+                .active_speaker_diagnostics(transport_media_ids, now),
+        }),
     );
 }

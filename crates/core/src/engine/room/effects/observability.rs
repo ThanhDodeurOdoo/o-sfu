@@ -1,61 +1,8 @@
-use crate::engine::{
-    UserId,
-    diagnostics::DiagnosticsEventData,
-    room::{Room, RoomMediaCounts},
-};
+use crate::engine::room::{Room, RoomMediaCounts};
 
-#[derive(Debug, Default)]
-pub(super) struct RoomObservabilityPlan {
-    gauges: Vec<RoomGaugeDelta>,
-    diagnostics: Vec<DiagnosticsEffect>,
-}
-
-impl RoomObservabilityPlan {
-    pub(super) fn push_gauge(&mut self, delta: RoomGaugeDelta) {
-        self.gauges.push(delta);
-    }
-
-    pub(super) fn extend_gauges(&mut self, deltas: Vec<RoomGaugeDelta>) {
-        self.gauges.extend(deltas);
-    }
-
-    pub(super) fn register_user(&mut self, user: UserId) {
-        self.diagnostics.push(DiagnosticsEffect::RegisterUser(user));
-    }
-
-    pub(super) fn record(&mut self, event: DiagnosticsEventData) {
-        self.diagnostics.push(DiagnosticsEffect::Record(event));
-    }
-
-    pub(super) fn extend_records(&mut self, events: Vec<DiagnosticsEventData>) {
-        self.diagnostics
-            .extend(events.into_iter().map(DiagnosticsEffect::Record));
-    }
-
-    pub(super) fn forget_user(&mut self, user: UserId) {
-        self.diagnostics.push(DiagnosticsEffect::ForgetUser(user));
-    }
-
-    pub(super) fn record_gauges(&mut self, room: &Room) {
-        for delta in self.gauges.drain(..) {
-            delta.record(room);
-        }
-    }
-
-    pub(super) fn record_diagnostics(self, room: &Room) {
-        for effect in self.diagnostics {
-            match effect {
-                DiagnosticsEffect::RegisterUser(user) => {
-                    room.diagnostics.register_user(room.uuid(), &user);
-                }
-                DiagnosticsEffect::Record(event) => {
-                    room.diagnostics.record(event);
-                }
-                DiagnosticsEffect::ForgetUser(user) => {
-                    room.diagnostics.forget_user(room.uuid(), &user);
-                }
-            }
-        }
+pub(super) fn record_gauges(gauges: &mut Vec<RoomGaugeDelta>, room: &Room) {
+    for delta in gauges.drain(..) {
+        delta.record(room);
     }
 }
 
@@ -100,11 +47,4 @@ fn counter_delta(before: usize, after: usize) -> i64 {
     let before = i64::try_from(before).unwrap_or(i64::MAX);
     let after = i64::try_from(after).unwrap_or(i64::MAX);
     after.saturating_sub(before)
-}
-
-#[derive(Debug)]
-enum DiagnosticsEffect {
-    RegisterUser(UserId),
-    Record(DiagnosticsEventData),
-    ForgetUser(UserId),
 }

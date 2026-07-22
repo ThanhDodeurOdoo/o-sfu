@@ -16,16 +16,12 @@ use str0m::{
     bwe::BweKind,
     stats::{MediaEgressStats, MediaIngressStats, PeerStats},
 };
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use super::super::state::{RtcSnapshotState, TransportSessionHealth};
 use crate::{
     Bitrate,
     engine::{
-        diagnostics::{
-            DiagnosticsStore, diagnostics_room_instance_id, health_json_value,
-            maybe_health_json_value,
-        },
         media_transport::{SourcePolicySignal, TransportSessionKey},
         metrics::{
             self, MediaQualityLossDirection, MediaQualitySample, RuntimeMetrics, TransportIceState,
@@ -74,9 +70,9 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
 /// remains authoritative for media behavior.
 pub(super) fn observe_rtc_event(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    diagnostics: &Arc<DiagnosticsStore>,
     metrics: &RuntimeMetrics,
     source_policy_signal: &SourcePolicySignal,
+    room_id: &str,
     session_key: &TransportSessionKey,
     event: &Event,
 ) {
@@ -117,16 +113,22 @@ pub(super) fn observe_rtc_event(
     if previous == Some(health) {
         return;
     }
-    let mut fields = serde_json::Map::new();
-    fields.insert(String::from("from"), maybe_health_json_value(previous));
-    fields.insert(String::from("to"), health_json_value(health));
-    diagnostics.record_transport_user_event(
-        diagnostics_room_instance_id(session_key.room_instance_id()),
-        session_key.user_id(),
-        schema::event::TRANSPORT_HEALTH_CHANGED,
-        session_key.media_worker_id().as_usize(),
-        fields,
+    info!(
+        event = schema::event::TRANSPORT_HEALTH_CHANGED,
+        room_id,
+        user_id = %session_key.user_id().path_segment(),
+        media_worker_id = session_key.media_worker_id().as_usize(),
+        from = previous.map(transport_health_name),
+        to = transport_health_name(health),
+        "transport health changed"
     );
+}
+
+const fn transport_health_name(health: TransportSessionHealth) -> &'static str {
+    match health {
+        TransportSessionHealth::Connected => "connected",
+        TransportSessionHealth::Disconnected => "disconnected",
+    }
 }
 
 fn observe_peer_quality(

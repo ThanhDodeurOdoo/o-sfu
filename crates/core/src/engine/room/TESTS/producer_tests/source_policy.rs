@@ -78,7 +78,7 @@ async fn source_bitrate_cap_limits_or_pauses_consumer_layers() {
         Bitrate::from_kbps(150),
     )
     .await;
-    let sources = room.diagnostics_sources(&adapter).await;
+    let (_, sources) = diagnostics_room_views(&room, &adapter).await;
     let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
     assert!(sources.iter().any(|source| {
         source.owner_user_id == UserId::Integer(1)
@@ -295,10 +295,7 @@ async fn source_policy_ignores_receiver_bandwidth_from_replaced_connection() {
     };
     tx.execute(&scenario.room, &scenario.adapter).await;
 
-    let diagnostics = scenario
-        .room
-        .diagnostics_user_views(&scenario.adapter)
-        .await;
+    let (diagnostics, _) = diagnostics_room_views(&scenario.room, &scenario.adapter).await;
     let subscription = diagnostics
         .iter()
         .find(|view| view.user_id == receiver_user_id)
@@ -663,8 +660,7 @@ async fn source_policy_transaction_from_transport_snapshot(
         let state = scenario.room.state.read().await;
         state
             .transport_user_entries()
-            .into_iter()
-            .map(|(user_id, connection_id)| state.transport_user_key(&user_id, connection_id))
+            .map(|(user_id, connection_id)| state.transport_user_key(user_id, connection_id))
             .collect::<Vec<_>>()
     };
     let receiver_bandwidth_snapshot = scenario.adapter.receiver_bandwidth_snapshot(&session_keys);

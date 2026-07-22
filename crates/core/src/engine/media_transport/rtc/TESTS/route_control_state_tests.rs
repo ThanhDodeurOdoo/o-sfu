@@ -44,10 +44,11 @@ fn assert_single_active_speaker(
 fn assert_single_active_speaker_diagnostic(
     state: &RouteTable,
     now: Instant,
+    src_media: TransportMediaId,
     activity_state: ActiveSpeakerActivityState,
     reason: ActiveSpeakerActivityReason,
 ) {
-    let diagnostics = state.active_speaker_diagnostics(now);
+    let diagnostics = state.active_speaker_diagnostics(&[src_media], now);
     assert_eq!(diagnostics.len(), 1);
     let diagnostic = &diagnostics[0];
     assert_eq!(diagnostic.state(), activity_state);
@@ -369,6 +370,7 @@ fn route_control_vad_true_promotes_active_speaker_immediately() {
     assert_single_active_speaker_diagnostic(
         &state,
         now,
+        src_media,
         ActiveSpeakerActivityState::Active,
         ActiveSpeakerActivityReason::Vad,
     );
@@ -547,6 +549,7 @@ fn route_control_vad_false_overrides_loud_audio_level() {
     assert_single_active_speaker_diagnostic(
         &state,
         now,
+        src_media,
         ActiveSpeakerActivityState::Blocked,
         ActiveSpeakerActivityReason::VadFalse,
     );
@@ -616,6 +619,7 @@ fn route_control_transport_audio_policy_uses_repeated_audio_level_fallback() {
     assert_single_active_speaker_diagnostic(
         &state,
         observed_at,
+        src_media,
         ActiveSpeakerActivityState::Active,
         ActiveSpeakerActivityReason::AudioLevel,
     );
@@ -648,6 +652,7 @@ fn route_control_transport_audio_policy_rejects_persistent_low_noise() {
     assert_single_active_speaker_diagnostic(
         &state,
         now + Duration::from_millis(40),
+        src_media,
         ActiveSpeakerActivityState::Blocked,
         ActiveSpeakerActivityReason::LowNoise,
     );
@@ -666,6 +671,7 @@ fn route_control_active_speaker_expiry_is_observable() {
     assert_single_active_speaker_diagnostic(
         &state,
         expired_at,
+        src_media,
         ActiveSpeakerActivityState::RecentlyExpired,
         ActiveSpeakerActivityReason::Expired,
     );

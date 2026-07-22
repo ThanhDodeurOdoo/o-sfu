@@ -1,6 +1,7 @@
 use std::{
+    error::Error,
     io,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 use tracing::{Subscriber, subscriber};
@@ -33,13 +34,10 @@ struct SharedBufferGuard {
 
 impl io::Write for SharedBufferGuard {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        {
-            let lock = self.buffer.lock();
-            assert!(lock.is_ok());
-            if let Ok(mut guard) = lock {
-                guard.extend_from_slice(buf);
-            }
-        }
+        self.buffer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(buf);
         Ok(buf.len())
     }
 
@@ -48,22 +46,26 @@ impl io::Write for SharedBufferGuard {
     }
 }
 
-fn clone_buffer(writer: &SharedWriter) -> Option<Vec<u8>> {
-    let lock = writer.buffer.lock();
-    assert!(lock.is_ok());
-    lock.map_or(None, |guard| Some(guard.clone()))
-}
-
-fn json_field<'value>(value: &'value Value, key: &str) -> Option<&'value Value> {
-    value.get(key)
+fn json_values(writer: &SharedWriter) -> Result<Vec<Value>, Box<dyn Error>> {
+    let buffer = writer
+        .buffer
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    String::from_utf8(buffer)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .map_err(Into::into)
 }
 
 fn json_string<'value>(value: &'value Value, key: &str) -> Option<&'value str> {
-    json_field(value, key).and_then(Value::as_str)
+    value.get(key).and_then(Value::as_str)
 }
 
 fn json_is_string(value: &Value, key: &str) -> bool {
-    json_field(value, key).is_some_and(Value::is_string)
+    value.get(key).is_some_and(Value::is_string)
 }
 
 fn assert_json_string(value: &Value, key: &str, expected: &str) {
@@ -83,9 +85,8 @@ fn normalize_trace_export_endpoint_appends_default_http_trace_path() {
     );
 }
 
-#[cfg(feature = "otel-tracing")]
 #[test]
-fn json_formatter_emits_common_fields_and_trace_id() {
+fn json_formatter_emits_common_fields() -> Result<(), Box<dyn Error>> {
     let writer = SharedWriter::default();
     let subscriber = json_test_subscriber(writer.clone());
     subscriber::with_default(subscriber, || {
@@ -98,89 +99,69 @@ fn json_formatter_emits_common_fields_and_trace_id() {
         );
     });
 
-    let buffer = clone_buffer(&writer);
-    assert!(buffer.is_some());
-    let Some(buffer) = buffer else {
-        return;
-    };
-    let payload = String::from_utf8(buffer);
-    assert!(payload.is_ok());
-    let Some(payload) = payload.ok() else {
-        return;
-    };
-    let line = payload.lines().find(|line| !line.trim().is_empty());
-    assert!(line.is_some());
-    let Some(line) = line else {
-        return;
-    };
-    let value = serde_json::from_str::<Value>(line);
-    assert!(value.is_ok());
-    let Some(value) = value.ok() else {
-        return;
+    let values = json_values(&writer)?;
+    let [value] = values.as_slice() else {
+        return Err(io::Error::other("expected one JSON log").into());
     };
 
-    assert_json_string(&value, "event", schema::event::USER_JOINED);
-    assert_json_string(&value, "message", "joined user");
-    assert_json_string(&value, "service.name", "o-sfu-test");
-    assert_json_string(&value, "service.version", env!("CARGO_PKG_VERSION"));
-    assert_json_string(&value, "service.instance.id", "test-instance");
-    assert_json_string(&value, "deployment.environment", "test");
-    assert_json_string(&value, "user_id", "user-1");
-    assert_json_string(&value, "target", "o_sfu_telemetry::setup::tests");
-    assert!(json_is_string(&value, "timestamp"));
-    assert!(json_is_string(&value, "trace_id"));
+    assert_json_string(value, "event", schema::event::USER_JOINED);
+    assert_json_string(value, "message", "joined user");
+    assert_json_string(value, "service.name", "o-sfu-test");
+    assert_json_string(value, "service.version", env!("CARGO_PKG_VERSION"));
+    assert_json_string(value, "service.instance.id", "test-instance");
+    assert_json_string(value, "deployment.environment", "test");
+    assert_json_string(value, "user_id", "user-1");
+    assert_json_string(value, "target", "o_sfu_telemetry::setup::tests");
+    assert!(json_is_string(value, "timestamp"));
+    #[cfg(feature = "otel-tracing")]
+    assert!(json_is_string(value, "trace_id"));
+    #[cfg(feature = "otel-tracing")]
     assert_ne!(
-        json_string(&value, "trace_id"),
+        json_string(value, "trace_id"),
         Some("00000000000000000000000000000000")
     );
+    #[cfg(not(feature = "otel-tracing"))]
+    assert!(value.get("trace_id").is_none());
+    Ok(())
 }
 
-#[cfg(not(feature = "otel-tracing"))]
 #[test]
-fn json_formatter_emits_common_fields_without_trace_id() {
+fn json_formatter_preserves_initial_transport_health_origin() -> Result<(), Box<dyn Error>> {
     let writer = SharedWriter::default();
     let subscriber = json_test_subscriber(writer.clone());
     subscriber::with_default(subscriber, || {
-        let span = activated_span(tracing::info_span!("ws.handshake", room_id = "room-a"));
-        let _entered = span.enter();
         tracing::info!(
-            event = schema::event::USER_JOINED,
-            user_id = "user-1",
-            message = "joined user"
+            target: "o_sfu_core::transport",
+            event = schema::event::TRANSPORT_HEALTH_CHANGED,
+            room_id = "room-a",
+            user_id = "7",
+            media_worker_id = 1_u64,
+            from = Option::<&str>::None,
+            to = "connected",
+            "transport health changed"
+        );
+        tracing::info!(
+            target: "o_sfu_core::transport",
+            event = schema::event::TRANSPORT_HEALTH_CHANGED,
+            room_id = "room-a",
+            user_id = "7",
+            media_worker_id = 1_u64,
+            from = "connected",
+            to = "disconnected",
+            "transport health changed"
         );
     });
 
-    let buffer = clone_buffer(&writer);
-    assert!(buffer.is_some());
-    let Some(buffer) = buffer else {
-        return;
-    };
-    let payload = String::from_utf8(buffer);
-    assert!(payload.is_ok());
-    let Some(payload) = payload.ok() else {
-        return;
-    };
-    let line = payload.lines().find(|line| !line.trim().is_empty());
-    assert!(line.is_some());
-    let Some(line) = line else {
-        return;
-    };
-    let value = serde_json::from_str::<Value>(line);
-    assert!(value.is_ok());
-    let Some(value) = value.ok() else {
-        return;
+    let values = json_values(&writer)?;
+    let [initial, transition] = values.as_slice() else {
+        return Err(io::Error::other("expected two JSON logs").into());
     };
 
-    assert_json_string(&value, "event", schema::event::USER_JOINED);
-    assert_json_string(&value, "message", "joined user");
-    assert_json_string(&value, "service.name", "o-sfu-test");
-    assert_json_string(&value, "service.version", env!("CARGO_PKG_VERSION"));
-    assert_json_string(&value, "service.instance.id", "test-instance");
-    assert_json_string(&value, "deployment.environment", "test");
-    assert_json_string(&value, "user_id", "user-1");
-    assert_json_string(&value, "target", "o_sfu_telemetry::setup::tests");
-    assert!(json_is_string(&value, "timestamp"));
-    assert!(json_field(&value, "trace_id").is_none());
+    assert!(initial.get("from").is_some_and(Value::is_null));
+    assert_json_string(initial, "to", "connected");
+    assert_json_string(transition, "from", "connected");
+    assert_json_string(transition, "to", "disconnected");
+    Ok(())
 }
 
 fn json_test_config() -> TelemetryConfig {

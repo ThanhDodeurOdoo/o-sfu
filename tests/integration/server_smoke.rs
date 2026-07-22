@@ -281,8 +281,8 @@ async fn assert_peer_joined(client: &mut ProtocolWebSocketClient, user_id: UserI
 async fn assert_diagnostics_user(server: &TestServer, room_id: &str, user_id: i64) -> TestResult {
     let response = reqwest::Client::new()
         .get(format!(
-            "{}/internal/diagnostics/users/{user_id}",
-            server.http_base_url()
+            "{}/internal/diagnostics/rooms/{room_id}/users/{user_id}",
+            server.http_base_url(),
         ))
         .send()
         .await?;

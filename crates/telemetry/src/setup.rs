@@ -36,7 +36,7 @@ use {
 
 use crate::{TelemetryConfig, TelemetryLogFormat, schema};
 
-const DEFAULT_ENV_FILTER: &str = "o_sfu=info,o_sfu_router=info";
+const DEFAULT_ENV_FILTER: &str = "o_sfu=info,o_sfu_core=info,o_sfu_router=info";
 #[cfg(feature = "otel-tracing")]
 const PRODUCTION_ENVIRONMENT_NAME: &str = "production";
 #[cfg(feature = "otel-tracing")]
@@ -112,6 +112,11 @@ where
         let mut visitor = JsonEventVisitor::default();
         event.record(&mut visitor);
         let mut payload = visitor.fields;
+        if payload.get(schema::field::EVENT).and_then(Value::as_str)
+            == Some(schema::event::TRANSPORT_HEALTH_CHANGED)
+        {
+            payload.entry("from".to_owned()).or_insert(Value::Null);
+        }
         payload.insert(
             schema::field::TIMESTAMP.to_owned(),
             Value::String(

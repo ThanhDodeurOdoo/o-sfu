@@ -127,9 +127,10 @@ impl WorkerLoopBenchFixture {
         reason = "benchmark setup must fail loudly when the worker cannot create its bootstrap offer"
     )]
     fn bootstrap_worker(&self) {
-        let result = self
-            .runtime
-            .block_on(self.worker.create_initial_session_offer(&self.session_key));
+        let result = self.runtime.block_on(
+            self.worker
+                .create_initial_session_offer("test-room", &self.session_key),
+        );
         assert!(
             result.is_ok(),
             "failed to bootstrap current-thread benchmark worker"
@@ -229,7 +230,7 @@ impl WorkerPacketCommandMixBenchFixture {
     fn bootstrap_base_session(&self) {
         let result = self.runtime.block_on(
             self.worker
-                .create_initial_session_offer(&self.base_session_key),
+                .create_initial_session_offer("test-room", &self.base_session_key),
         );
         assert!(result.is_ok(), "failed to bootstrap base worker session");
     }
@@ -245,7 +246,9 @@ impl Drop for WorkerPacketCommandMixBenchFixture {
 
 async fn run_lifecycle_burst(worker: &RtcWorker, session_key: &TransportSessionKey) -> usize {
     require_ok(
-        worker.create_initial_session_offer(session_key).await,
+        worker
+            .create_initial_session_offer("test-room", session_key)
+            .await,
         "temporary session offer failed",
     );
     let media_id = require_ok(

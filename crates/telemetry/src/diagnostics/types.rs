@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 
 use o_sfu_model::{RecordingState, UserId, UserInfo};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -358,7 +357,7 @@ pub struct DiagnosticsWorkerPressure {
     pub worker_pressure_score: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsWorkerSummary {
     pub connected_user_count: usize,
@@ -375,7 +374,6 @@ pub struct DiagnosticsWorkerSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsRoomDetail {
-    pub recent_events: Vec<DiagnosticsEvent>,
     pub users: Vec<DiagnosticsUserView>,
     pub sources: Vec<DiagnosticsSource>,
     pub summary: DiagnosticsRoomSummary,
@@ -385,51 +383,17 @@ pub struct DiagnosticsRoomDetail {
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsUserDetail {
     pub room_id: String,
-    pub recent_events: Vec<DiagnosticsEvent>,
     pub recording_state: RecordingState,
     pub user: DiagnosticsUserView,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsSummaryResponse {
     pub rooms_active: usize,
     pub publications_active: usize,
-    pub recent_events: Vec<DiagnosticsEvent>,
     pub recording_rooms_active: usize,
     pub users_active: usize,
     pub subscriptions_active: usize,
     pub transport: DiagnosticsTransportCounts,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiagnosticsUserLookupConflict {
-    pub matching_room_ids: Vec<String>,
-    pub requested_user_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiagnosticsEvent {
-    pub room_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub connection_id: Option<u64>,
-    pub event: String,
-    #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub fields: Map<String, Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub media_worker_id: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<UserId>,
-    pub timestamp: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transport_media_id: Option<u64>,
-}
-
-#[derive(Debug)]
-pub enum DiagnosticsUserLookup {
-    Missing,
-    Found(Box<DiagnosticsUserDetail>),
-    Conflict(DiagnosticsUserLookupConflict),
 }

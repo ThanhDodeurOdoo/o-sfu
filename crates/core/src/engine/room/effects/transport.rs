@@ -1,9 +1,9 @@
 use o_sfu_router::MediaKind;
-use tracing::warn;
+use o_sfu_telemetry::schema::event as telemetry_event;
+use tracing::{info, warn};
 
 use super::{RoomGaugeDelta, receiver_route::ReceiverSetupTurn};
 use crate::engine::{
-    diagnostics::DiagnosticsEventData,
     media_transport::{
         ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaControlPlan,
         MediaTransport, ProducerActivity, ReceiverBweTargetUpdate, TransportConsumerRoute,
@@ -17,6 +17,7 @@ use crate::engine::{
         },
         source_policy::{ConsumerPacketSelectionUpdate, SourcePolicyTurn},
     },
+    source_model::UserStreamId,
 };
 
 #[derive(Debug, Default)]
@@ -59,24 +60,22 @@ impl RoomTransportPlan {
     pub(super) fn push_producer(
         &mut self,
         source: TransportSourceKey,
+        stream_id: UserStreamId,
         active: bool,
-        diagnostics: DiagnosticsEventData,
     ) {
         self.route_control
-            .producer_activity(source, active, diagnostics);
+            .producer_activity(source, stream_id, active);
     }
 
     pub(super) fn push_receiver_work(
         &mut self,
         mut work: ReceiverRouteWork,
         origin: ConsumerSetupOrigin,
-        mut diagnostics: impl FnMut(&ReceiverRouteActivity) -> DiagnosticsEventData,
     ) {
         extract_relay_teardown(&mut work.relays, &mut self.teardown);
         self.relays.extend(work.relays);
         for activity in work.activities {
-            let event = diagnostics(&activity);
-            self.route_control.receiver_activity(activity, event);
+            self.route_control.receiver_activity(activity);
         }
         for setup in work.setups {
             self.setup_turns.push(ReceiverSetupTurn::new(setup, origin));
@@ -93,8 +92,9 @@ impl RoomTransportPlan {
         };
         let mut outcome = RoomTransportOutcome::default();
         execute_relay_route_effects(media_transport, self.relays).await;
-        let route_outcome = self.route_control.execute(media_transport).await;
-        outcome.diagnostics.extend(route_outcome.diagnostics);
+        self.route_control
+            .execute(room.uuid(), media_transport)
+            .await;
         media_transport.teardown(self.teardown).await;
         for turn in self.setup_turns {
             turn.execute(room, media_transport, &mut outcome).await;
@@ -113,14 +113,7 @@ impl RoomTransportPlan {
 #[derive(Debug, Default)]
 pub(super) struct RoomTransportOutcome {
     pub(super) gauges: Vec<RoomGaugeDelta>,
-    pub(super) diagnostics: Vec<DiagnosticsEventData>,
     pub(super) source_policy: SourcePolicyTurn,
-}
-
-#[derive(Debug, Default)]
-pub(in crate::engine::room) struct RoomRouteOutcome {
-    pub(super) diagnostics: Vec<DiagnosticsEventData>,
-    pub(in crate::engine::room) accepted_policy_updates: Vec<ConsumerPacketSelectionUpdate>,
 }
 
 #[derive(Debug, Default)]
@@ -133,8 +126,8 @@ impl RoomRouteEffects {
     fn producer_activity(
         &mut self,
         source: TransportSourceKey,
+        stream_id: UserStreamId,
         active: bool,
-        diagnostics: DiagnosticsEventData,
     ) {
         let activity = ProducerActivity::from_active(active);
         self.0.push_producer(
@@ -142,24 +135,20 @@ impl RoomRouteEffects {
             activity,
             ProducerRouteFinish {
                 source,
+                stream_id,
                 activity,
-                diagnostics,
             },
         );
     }
 
-    fn receiver_activity(
-        &mut self,
-        activity: ReceiverRouteActivity,
-        diagnostics: DiagnosticsEventData,
-    ) {
+    fn receiver_activity(&mut self, activity: ReceiverRouteActivity) {
         let target = activity.target();
         let active = activity.active();
         self.0.push_consumer(
             ConsumerRouteControl::new(target.transport_route().clone())
                 .activity(ConsumerActivity::from_active(active))
                 .request_keyframe(target.request_keyframe_after_activity(active)),
-            ConsumerRouteFinish::Activity(activity, diagnostics),
+            ConsumerRouteFinish::Activity(activity),
         );
     }
 
@@ -211,11 +200,12 @@ impl RoomRouteEffects {
 
     pub(in crate::engine::room) async fn execute(
         self,
+        room_id: &str,
         media_transport: &MediaTransport,
-    ) -> RoomRouteOutcome {
+    ) -> Vec<ConsumerPacketSelectionUpdate> {
         let transport_outcome = media_transport.apply_media_control(self.0).await;
 
-        let mut outcome = RoomRouteOutcome::default();
+        let mut accepted_policy_updates = Vec::new();
         for (completion, result) in transport_outcome.producers {
             if let Err(error) = result {
                 warn!(
@@ -225,25 +215,42 @@ impl RoomRouteEffects {
                     "media transport failed to update producer route activity"
                 );
             }
-            outcome.diagnostics.push(completion.diagnostics);
+            completion.emit_activity_event(room_id);
         }
         for (completion, result) in transport_outcome.consumers {
-            completion.finish(result, &mut outcome);
+            completion.finish(room_id, result, &mut accepted_policy_updates);
         }
-        outcome
+        accepted_policy_updates
     }
 }
 
 #[derive(Debug)]
 struct ProducerRouteFinish {
     source: TransportSourceKey,
+    stream_id: UserStreamId,
     activity: ProducerActivity,
-    diagnostics: DiagnosticsEventData,
+}
+
+impl ProducerRouteFinish {
+    fn emit_activity_event(&self, room_id: &str) {
+        let session = self.source.session_key();
+        info!(
+            event = telemetry_event::PUBLICATION_ACTIVITY_CHANGED,
+            room_id,
+            user_id = %session.user_id().path_segment(),
+            connection_id = session.connection_id().as_u64(),
+            media_worker_id = session.media_worker_id().as_usize(),
+            transport_media_id = self.source.transport_media_id().as_u64(),
+            active = self.activity.is_active(),
+            stream_id = %self.stream_id,
+            "publication activity changed"
+        );
+    }
 }
 
 #[derive(Debug)]
 enum ConsumerRouteFinish {
-    Activity(ReceiverRouteActivity, DiagnosticsEventData),
+    Activity(ReceiverRouteActivity),
     Keyframe(ConsumerRouteTarget),
     SetupActivity(TransportConsumerRoute, bool),
     SourcePolicy(ConsumerPacketSelectionUpdate),
@@ -254,9 +261,14 @@ impl ConsumerRouteFinish {
         clippy::cognitive_complexity,
         reason = "closed route completion policy is clearer than one use finish helpers"
     )]
-    fn finish(self, result: ConsumerRouteControlOutcome, outcome: &mut RoomRouteOutcome) {
+    fn finish(
+        self,
+        room_id: &str,
+        result: ConsumerRouteControlOutcome,
+        accepted_policy_updates: &mut Vec<ConsumerPacketSelectionUpdate>,
+    ) {
         match self {
-            Self::Activity(activity, diagnostics) => {
+            Self::Activity(activity) => {
                 let target = activity.target();
                 if result.activity_failed() {
                     warn!(
@@ -274,7 +286,20 @@ impl ConsumerRouteFinish {
                         "media transport failed to request a consumer keyframe refresh"
                     );
                 }
-                outcome.diagnostics.push(diagnostics);
+                let session = target.transport_route().consumer_session_key();
+                info!(
+                    event = telemetry_event::SUBSCRIPTION_ACTIVITY_CHANGED,
+                    room_id,
+                    user_id = %session.user_id().path_segment(),
+                    connection_id = session.connection_id().as_u64(),
+                    media_worker_id = session.media_worker_id().as_usize(),
+                    transport_media_id = target.consumer_media_id().as_u64(),
+                    active = activity.active(),
+                    producer_user_id = %target.producer_user_id().path_segment(),
+                    source_transport_media_id = target.source_media_id().as_u64(),
+                    stream_id = %target.stream_id(),
+                    "subscription activity changed"
+                );
             }
             Self::Keyframe(target) => {
                 if result.keyframe_failed() {
@@ -318,7 +343,7 @@ impl ConsumerRouteFinish {
                         "media transport failed to request an adaptation keyframe refresh"
                     );
                 }
-                outcome.accepted_policy_updates.push(update);
+                accepted_policy_updates.push(update);
             }
         }
     }

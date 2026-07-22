@@ -4,16 +4,17 @@ pub(super) use o_sfu_router::{
     MediaKind,
     test_support::rtp_samples::sample_video_rtp_parameters as router_sample_video_rtp_parameters,
 };
+pub(super) use o_sfu_telemetry::diagnostics::{
+    DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSource,
+    DiagnosticsSourceSelector, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
+    DiagnosticsVideoRoutePriority,
+};
 pub(super) use str0m::{Candidate, Rtc, change::SdpOffer};
 
 pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
     Bitrate, RoomMediaLimits, RtcPortRange,
     engine::{
-        diagnostics::{
-            DiagnosticsPolicyPauseReason, DiagnosticsRouteState, DiagnosticsSourceSelector,
-            DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority,
-        },
         media_transport::{
             SessionOffer, TransportMediaId, TransportSessionKey,
             test_support::{test_media_transport_config, test_media_transport_deps},
@@ -21,6 +22,21 @@ pub(super) use crate::{
         room::{PublishIntentOutcome, RemoteSourceSnapshot, Room},
     },
 };
+
+pub(super) async fn diagnostics_room_views(
+    room: &Room,
+    adapter: &MediaTransport,
+) -> (Vec<DiagnosticsUserView>, Vec<DiagnosticsSource>) {
+    let capture = room.diagnostics_detail_capture().await;
+    let session_keys = capture.session_keys();
+    let source_keys = capture.source_keys().cloned().collect::<Vec<_>>();
+    let bitrate = adapter.transport_bitrate_snapshot(session_keys);
+    let quality = adapter.transport_quality_snapshot(session_keys);
+    let health = adapter.transport_health_snapshot(session_keys);
+    let source_diagnostics = adapter.source_diagnostics_snapshot(&source_keys).await;
+    let (_, users, sources) = capture.into_views(&bitrate, &quality, &health, &source_diagnostics);
+    (users, sources)
+}
 
 pub(super) fn assert_remote_source_activity_snapshot(
     message: &UserOutbound,
@@ -126,7 +142,7 @@ pub(super) async fn assert_subscription_layout(
     expected_role: DiagnosticsVideoLayoutRole,
     expected_priority: DiagnosticsVideoRoutePriority,
 ) {
-    let diagnostics = room.diagnostics_user_views(adapter).await;
+    let (diagnostics, _) = diagnostics_room_views(room, adapter).await;
     let Some(user) = diagnostics
         .iter()
         .find(|view| &view.user_id == consumer_user_id)
@@ -151,7 +167,7 @@ pub(super) async fn assert_subscription_selected_rid(
     stream_type: TestSourceKind,
     expected_rid: &str,
 ) {
-    let diagnostics = room.diagnostics_user_views(adapter).await;
+    let (diagnostics, _) = diagnostics_room_views(room, adapter).await;
     let Some(user) = diagnostics
         .iter()
         .find(|view| &view.user_id == consumer_user_id)
@@ -179,7 +195,7 @@ pub(super) async fn assert_subscription_policy_pause_reason(
     stream_type: TestSourceKind,
     expected_reason: Option<DiagnosticsPolicyPauseReason>,
 ) {
-    let diagnostics = room.diagnostics_user_views(adapter).await;
+    let (diagnostics, _) = diagnostics_room_views(room, adapter).await;
     let Some(user) = diagnostics
         .iter()
         .find(|view| &view.user_id == consumer_user_id)
@@ -394,7 +410,7 @@ pub(super) async fn bootstrap_real_rtc_user(
     session_key: &TransportSessionKey,
 ) -> SessionOffer {
     media_transport
-        .create_initial_session_offer(session_key)
+        .create_initial_session_offer("test-room", session_key)
         .await
         .expect("rtc user should produce an initial offer")
 }

@@ -233,7 +233,7 @@ impl RoomUserOperation<'_> {
     }
 
     async fn execute_publication_activity(self, commit: ProducerActivityCommit) {
-        RoomEffects::from_publication_activity(self.room, commit)
+        RoomEffects::from_publication_activity(commit)
             .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
     }

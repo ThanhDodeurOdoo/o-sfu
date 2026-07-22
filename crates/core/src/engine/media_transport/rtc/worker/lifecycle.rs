@@ -53,10 +53,10 @@ use super::{
 use crate::{
     Bitrate, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
     engine::media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, MediaTransportConfig,
-        MediaTransportDeps, ReceiverBandwidthSnapshot, SourcePolicySignal, TransportAdapterError,
-        TransportBitrateSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-        TransportQualitySnapshot, TransportSessionKey, TransportSourceActivitySnapshot,
+        ActiveSpeakerSource, MediaTransportConfig, MediaTransportDeps, ReceiverBandwidthSnapshot,
+        SourcePolicySignal, TransportAdapterError, TransportBitrateSnapshot,
+        TransportHealthSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
+        TransportQualitySnapshot, TransportSessionKey, TransportSourceDiagnosticsSnapshot,
         TransportWorkerPressureSnapshot,
     },
 };
@@ -241,7 +241,6 @@ impl RtcWorker {
                 media_quality_interval: config.media_quality_interval,
                 media_id_base,
             },
-            diagnostics: Arc::clone(&deps.diagnostics),
             packet_sink_registry: Arc::clone(&deps.packet_sink_registry),
             source_policy_signal,
             metrics: Arc::clone(metrics),
@@ -410,6 +409,19 @@ impl RtcWorker {
         snapshot_state.transport_health(session_key)
     }
 
+    /// Reads transport health for selected sessions under one snapshot lock.
+    ///
+    /// Missing sessions are omitted and an unavailable snapshot lock returns no facts
+    pub fn transport_health_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportHealthSnapshot {
+        let Ok(snapshot_state) = self.handle.snapshot_state.lock() else {
+            return TransportHealthSnapshot::default();
+        };
+        snapshot_state.transport_health_snapshot(session_keys)
+    }
+
     /// asks the packet loop for its current active-speaker source snapshot
     ///
     /// this command is read-only but still enters the worker mailbox because
@@ -421,28 +433,14 @@ impl RtcWorker {
             .unwrap_or_default()
     }
 
-    /// asks the packet loop for detailed active-speaker diagnostics
+    /// Reads source activity and active-speaker facts in one worker turn.
     ///
-    /// diagnostics are read through the mailbox for the same ownership reason
-    /// as source snapshots
-    /// dispatch failures return an empty diagnostic set
-    pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        self.request_worker(
-            |response| RtcWorkerCommand::ActiveSpeakerDiagnosticSnapshot { response },
-        )
-        .await
-        .unwrap_or_default()
-    }
-
-    /// asks the packet loop for packet activity on producer media ids
-    ///
-    /// diagnostics query this through the mailbox so steady RTP forwarding does
-    /// not mirror per-packet source ages into shared state
-    pub async fn source_activity_snapshot(
+    /// Missing sources are omitted and dispatch failure returns no facts
+    pub async fn source_diagnostics_snapshot(
         &self,
         transport_media_ids: &[TransportMediaId],
-    ) -> TransportSourceActivitySnapshot {
-        self.request_worker(|response| RtcWorkerCommand::SourceActivitySnapshot {
+    ) -> TransportSourceDiagnosticsSnapshot {
+        self.request_worker(|response| RtcWorkerCommand::SourceDiagnosticsSnapshot {
             transport_media_ids: transport_media_ids.to_vec(),
             response,
         })

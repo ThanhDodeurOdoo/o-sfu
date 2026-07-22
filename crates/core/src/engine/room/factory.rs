@@ -21,10 +21,7 @@ use o_sfu_router::{RouterId, rtp::MediaCapabilities};
 use super::{Room, RoomRuntimeContext};
 use crate::{
     RoomMediaLimits, RoomWorkerPolicy, RuntimeFeatureFlags,
-    engine::{
-        RoomInstanceId, diagnostics::DiagnosticsStore, metrics::RuntimeMetrics,
-        sync::lock_unpoisoned,
-    },
+    engine::{RoomInstanceId, metrics::RuntimeMetrics, sync::lock_unpoisoned},
 };
 
 /// admission limits that stay fixed for one room lifetime
@@ -120,17 +117,6 @@ impl Default for RoomConfig {
     }
 }
 
-/// shared services injected into each room at construction time
-///
-/// these handles are process-wide services rather than room policy
-/// keeping them in one bundle makes `RoomInit` express construction ownership
-/// without a long positional argument list
-#[derive(Debug, Clone)]
-pub(super) struct RoomServices {
-    pub(super) diagnostics: Arc<DiagnosticsStore>,
-    pub(super) metrics: Arc<RuntimeMetrics>,
-}
-
 pub(super) struct RoomInit {
     /// runtime-local instance and primary placement for the room
     pub(super) runtime_context: RoomRuntimeContext,
@@ -142,8 +128,8 @@ pub(super) struct RoomInit {
     pub(super) key: String,
     /// room-level compatibility configuration
     pub(super) config: RoomConfig,
-    /// process services needed by the room facade and observers
-    pub(super) services: RoomServices,
+    /// process metric catalog used by room observers
+    pub(super) metrics: Arc<RuntimeMetrics>,
 }
 
 /// Monotonic placement counters assigned by the current process.
@@ -176,8 +162,8 @@ pub(crate) struct RoomFactory {
     /// Keeping the policy here makes every room start from the validated
     /// boot-time policy while still letting the room own its copy.
     runtime_policy: RoomRuntimePolicy,
-    /// Shared room services cloned into each room.
-    services: RoomServices,
+    /// Process metric catalog cloned into each room.
+    metrics: Arc<RuntimeMetrics>,
     /// Serialized allocator for process-local placement ids.
     ///
     /// This keeps concurrent create requests from receiving the same runtime
@@ -188,17 +174,10 @@ pub(crate) struct RoomFactory {
 impl RoomFactory {
     /// Builds the factory for one [`RoomManager`](super::RoomManager) lifetime.
     #[must_use]
-    pub(crate) fn new(
-        runtime_policy: RoomRuntimePolicy,
-        diagnostics: Arc<DiagnosticsStore>,
-        metrics: Arc<RuntimeMetrics>,
-    ) -> Self {
+    pub(crate) fn new(runtime_policy: RoomRuntimePolicy, metrics: Arc<RuntimeMetrics>) -> Self {
         Self {
             runtime_policy,
-            services: RoomServices {
-                diagnostics,
-                metrics,
-            },
+            metrics,
             allocator: Mutex::new(RoomRuntimeAllocator {
                 next_room_instance_id: 0,
                 next_router_id: 0,
@@ -220,7 +199,7 @@ impl RoomFactory {
             issuer: issuer.to_owned(),
             key: key.to_owned(),
             config: config.clone(),
-            services: self.services.clone(),
+            metrics: Arc::clone(&self.metrics),
         }))
     }
 

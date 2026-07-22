@@ -21,7 +21,6 @@ use o_sfu_core::{
         SourceSubscriptionIntent, UserStreamId, VideoBitrateLimits,
     },
     server::{
-        diagnostics::DiagnosticsStore,
         metrics::RuntimeMetrics,
         packet_sinks::RoomPacketSinkRegistry,
         room::{
@@ -636,7 +635,6 @@ fn media_transport() -> Result<MediaTransport> {
         media_quality_interval: None,
     };
     let deps = MediaTransportDeps {
-        diagnostics: Arc::new(DiagnosticsStore::default()),
         packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
         metrics: Arc::new(RuntimeMetrics::default()),
     };

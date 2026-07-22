@@ -208,10 +208,7 @@ fn packet_loop_state_snapshots_source_and_rid_packet_activity() {
         &state.incoming_bitrate_counters,
     );
 
-    let source = activity
-        .per_media
-        .first()
-        .expect("source activity should be present");
+    let source = activity.first().expect("source activity should be present");
     assert_eq!(source.last_packet_age(), Duration::from_millis(60));
     assert_eq!(source.last_keyframe_age(), Some(Duration::from_millis(60)));
     let rid_activity = source
@@ -253,10 +250,7 @@ fn packet_loop_state_snapshots_ridless_packet_activity_from_ingress_counter() {
         &state.incoming_bitrate_counters,
     );
 
-    let source = activity
-        .per_media
-        .first()
-        .expect("source activity should be present");
+    let source = activity.first().expect("source activity should be present");
     assert_eq!(source.last_packet_age(), Duration::from_millis(60));
     assert_eq!(source.last_keyframe_age(), Some(Duration::from_millis(100)));
     assert!(source.rids().is_empty());

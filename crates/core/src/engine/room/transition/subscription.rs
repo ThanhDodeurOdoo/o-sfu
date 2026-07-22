@@ -43,7 +43,7 @@ impl RoomUserOperation<'_> {
             state.refresh_consumer_readiness(self.user_id, self.connection_id)
         };
         let commit = commit?;
-        RoomEffects::from_consumer_readiness(self.room, commit)
+        RoomEffects::from_consumer_readiness(commit)
             .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())
@@ -59,7 +59,7 @@ impl RoomUserOperation<'_> {
             state.apply_receiver_intent(self.user_id, self.connection_id, target_user_id, intents)
         };
         let commit = commit?;
-        RoomEffects::from_receiver_intent(self.room, commit)
+        RoomEffects::from_receiver_intent(commit)
             .execute(self.room, RoomEffectContext::runtime(self.media_transport))
             .await;
         Some(())

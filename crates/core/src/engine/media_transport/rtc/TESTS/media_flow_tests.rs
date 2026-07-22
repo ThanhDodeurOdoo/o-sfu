@@ -19,14 +19,16 @@ async fn rtc_metrics_track_live_transport_users_without_double_counting() {
     assert_eq!(adapter.metrics.snapshot().active_transport_users(), 0);
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
     assert_eq!(adapter.metrics.snapshot().active_transport_users(), 1);
 
     assert!(matches!(
-        adapter.create_initial_session_offer(&session_key).await,
+        adapter
+            .create_initial_session_offer("test-room", &session_key)
+            .await,
         Err(TransportAdapterError::InvalidInput)
     ));
     assert_eq!(adapter.metrics.snapshot().active_transport_users(), 1);
@@ -43,7 +45,9 @@ async fn rtc_publish_media_uses_signaled_mid_and_ssrc() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 18, UserId::Integer(18));
     let rtp_parameters = sample_router_rtp_parameters("aud-up", 42_424);
-    let bootstrap_result = adapter.create_initial_session_offer(&session_key).await;
+    let bootstrap_result = adapter
+        .create_initial_session_offer("test-room", &session_key)
+        .await;
     assert!(bootstrap_result.is_ok());
 
     let transport_media_id = adapter
@@ -74,7 +78,7 @@ async fn rtc_session_bootstrap_applies_configured_outgoing_bitrate_cap() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -149,7 +153,7 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -175,13 +179,13 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&producer_session_key)
+            .create_initial_session_offer("test-room", &producer_session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .create_initial_session_offer(&consumer_key)
+            .create_initial_session_offer("test-room", &consumer_key)
             .await
             .is_ok()
     );
@@ -245,13 +249,13 @@ async fn rtc_consume_media_can_start_route_inactive() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&producer_session_key)
+            .create_initial_session_offer("test-room", &producer_session_key)
             .await
             .is_ok()
     );
     assert!(
         adapter
-            .create_initial_session_offer(&consumer_key)
+            .create_initial_session_offer("test-room", &consumer_key)
             .await
             .is_ok()
     );
@@ -305,7 +309,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
     ] {
         assert!(
             adapter
-                .create_initial_session_offer(session_key)
+                .create_initial_session_offer("test-room", session_key)
                 .await
                 .is_ok()
         );
@@ -366,7 +370,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     for session_key in [&producer_session_key, &consumer_key] {
         assert!(
             adapter
-                .create_initial_session_offer(session_key)
+                .create_initial_session_offer("test-room", session_key)
                 .await
                 .is_ok()
         );
@@ -447,7 +451,7 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -480,7 +484,7 @@ async fn rtc_incoming_bitrate_snapshot_expires_after_one_second() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -515,7 +519,7 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
@@ -552,7 +556,7 @@ async fn rtc_active_speaker_source_snapshot_orders_recent_audio_sources() {
     for session_key in [&first_session_key, &second_session_key] {
         assert!(
             adapter
-                .create_initial_session_offer(session_key)
+                .create_initial_session_offer("test-room", session_key)
                 .await
                 .is_ok()
         );
@@ -606,7 +610,7 @@ async fn active_speaker_expiry_wakes_policy_without_input() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );

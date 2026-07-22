@@ -4,7 +4,8 @@ use std::{
 };
 
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
-use tracing::warn;
+use o_sfu_telemetry::schema::event as telemetry_event;
+use tracing::{info, warn};
 
 use crate::engine::{
     ConnectionId, UserId,
@@ -175,6 +176,7 @@ impl StagedPublish {
         let connection = self.descriptor.session_key.connection_id();
         let stream_id = self.descriptor.stream_id.clone();
         let media = self.media;
+        let worker = self.descriptor.session_key.media_worker_id();
         let committed = {
             let mut state = room.state.write().await;
             state.commit_publish_reservation(self.descriptor.clone(), rtp, upload_encodings, media)
@@ -191,9 +193,18 @@ impl StagedPublish {
             return None;
         };
         self.commit_reservation();
-        RoomEffects::from_publish(room, commit)
+        RoomEffects::from_publish(commit)
             .execute(room, RoomEffectContext::runtime(operation.media_transport))
             .await;
+        info!(
+            event = telemetry_event::PUBLISH_COMMITTED,
+            room_id = room.uuid(),
+            user_id = %user.path_segment(),
+            connection_id = connection.as_u64(),
+            media_worker_id = worker.as_usize(),
+            transport_media_id = media.as_u64(),
+            "publication committed"
+        );
         Some(stream_id)
     }
 

@@ -41,3 +41,4 @@ workspace = true
 [dev-dependencies]
 o-sfu-telemetry = { workspace = true, features = ["test-support"] }
 o-sfu-router = { workspace = true, features = ["test-support"] }
+tracing-subscriber = { version = "0.3", features = ["json"] }

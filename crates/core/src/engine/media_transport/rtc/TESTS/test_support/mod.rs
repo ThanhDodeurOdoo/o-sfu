@@ -23,13 +23,12 @@ pub use probe::{DebugPacketGate, DebugRouteDestination, DebugRouteEntry};
 #[cfg(any(test, feature = "testing-transport"))]
 pub(super) use probe::{
     DebugProbe, DebugProbeRequest, ObserveAudioActivityProbe, ReceiverBweTargetProbe,
-    RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe, RouteEntryProbe,
-    RtcWorkerDebugChannels, RtcWorkerDebugHandle, handle_debug_probe,
+    RecordIncomingMediaProbe, RouteEntryByConsumerMidProbe, RouteEntryByMediaIdProbe,
+    RouteEntryProbe, RtcWorkerDebugChannels, RtcWorkerDebugHandle, handle_debug_probe,
 };
 #[cfg(test)]
 pub(super) use probe::{
-    RecordIncomingMediaProbe, RememberRemoteAddrProbe, SessionStreamRxSsrcProbe,
-    SessionStreamTxSsrcProbe,
+    RememberRemoteAddrProbe, SessionStreamRxSsrcProbe, SessionStreamTxSsrcProbe,
 };
 #[cfg(test)]
 pub(super) use route_graph::prepare_source_session_with_rid;

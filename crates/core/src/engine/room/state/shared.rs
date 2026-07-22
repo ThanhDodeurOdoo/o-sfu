@@ -127,11 +127,10 @@ impl RoomState {
         self.topology.router().rtp_capabilities().clone()
     }
 
-    pub fn transport_user_entries(&self) -> Vec<(UserId, ConnectionId)> {
+    pub fn transport_user_entries(&self) -> impl Iterator<Item = (&UserId, ConnectionId)> {
         self.users
             .iter()
-            .map(|(user_id, user)| (user_id.clone(), user.connection_id))
-            .collect()
+            .map(|(user_id, user)| (user_id, user.connection_id))
     }
 
     pub fn transport_user_key(

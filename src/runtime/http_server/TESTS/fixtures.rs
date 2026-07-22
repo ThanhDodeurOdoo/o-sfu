@@ -7,6 +7,11 @@ pub(super) use axum::{
     response::Response as AxumResponse,
 };
 pub(super) use o_sfu_protocol::wire::UserId;
+pub(super) use o_sfu_telemetry::diagnostics::{
+    DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSourceSelectionReason,
+    DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserSummary,
+    DiagnosticsWorkerSummary,
+};
 pub(super) use serde::de::DeserializeOwned;
 pub(super) use tower::util::ServiceExt;
 
@@ -14,11 +19,6 @@ pub(super) use super::super::app;
 pub(super) use crate::runtime::{
     RuntimeState,
     auth::{self, HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims},
-    diagnostics::types::{
-        DiagnosticsRoomDetail, DiagnosticsRoomSummary, DiagnosticsSourceSelectionReason,
-        DiagnosticsSummaryResponse, DiagnosticsUserDetail, DiagnosticsUserLookupConflict,
-        DiagnosticsUserSummary, DiagnosticsWorkerSummary,
-    },
     http_server::contract::{CreateRoomQuery, NoopResponse, RoomResponse, StatsResponse, route},
     media_transport::MediaTransport,
     room::{Room, RoomConfig, UserOutboundReceiver},
@@ -162,7 +162,7 @@ pub(super) async fn create_transport_session_offer(
         .await?;
     let session_key = room.transport_user_key(user_id, connection_id).await;
     media_transport
-        .create_initial_session_offer(&session_key)
+        .create_initial_session_offer(room.uuid(), &session_key)
         .await
         .ok()?;
     Some(())

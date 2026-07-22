@@ -19,14 +19,6 @@ pub mod room;
 pub mod source_model;
 pub mod sync;
 
-pub mod diagnostics {
-    pub use super::observability::diagnostics::*;
-    pub(crate) use super::observability::{
-        diagnostics_room_instance_id, diagnostics_transport_health, health_json_value,
-        maybe_health_json_value,
-    };
-}
-
 pub mod metrics {
     pub use super::observability::metrics::*;
     pub(crate) use super::observability::{source_selection_kind, transport_health_state};

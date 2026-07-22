@@ -5,6 +5,8 @@
 //! coordinates cross-worker relay cleanup. Packet-loop hot paths live inside
 //! `engine::media_transport::rtc`.
 
+#[cfg(any(test, feature = "testing-transport"))]
+use std::sync::atomic::Ordering;
 use std::{cmp::Reverse, collections::BTreeMap, ptr};
 
 use str0m::media::MediaKind as Str0mMediaKind;
@@ -13,12 +15,12 @@ use super::rtc::{RtcWorker, RtcWorkerCommand};
 use crate::engine::{
     MediaWorkerId,
     media_transport::{
-        ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, MediaTransport,
-        ReceiverBandwidthSnapshot, TransportAdapterError, TransportBitrateSnapshot,
-        TransportMediaId, TransportPlacementPressureSnapshot, TransportQualitySnapshot,
-        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSessionHealth,
-        TransportSessionKey, TransportSourceActivitySnapshot, TransportSourceKey,
-        TransportTeardown, TransportWorkerPressureSnapshot,
+        ActiveSpeakerSource, MediaTransport, ReceiverBandwidthSnapshot, TransportAdapterError,
+        TransportBitrateSnapshot, TransportHealthSnapshot, TransportMediaId,
+        TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
+        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
+        TransportSourceDiagnosticsSnapshot, TransportSourceKey, TransportTeardown,
+        TransportWorkerPressureSnapshot,
     },
 };
 
@@ -96,41 +98,58 @@ impl MediaTransport {
     ) -> TransportQualitySnapshot {
         let mut snapshot = TransportQualitySnapshot::default();
         self.for_session_workers(session_keys, |worker, worker_session_keys| {
-            let worker_snapshot = worker.transport_quality_snapshot(worker_session_keys);
-            snapshot.per_session.extend(worker_snapshot.per_session);
+            snapshot.extend(worker.transport_quality_snapshot(worker_session_keys));
         });
         snapshot
     }
 
-    /// Returns packet activity for producer sources.
+    /// Returns transport health for the requested sessions with one lock per worker.
     ///
-    /// This is a diagnostics-only view. Missing sources may be inactive,
-    /// removed or not yet observed on the packet path.
-    pub(crate) async fn source_activity_snapshot(
+    /// Missing sessions and unavailable worker snapshots contribute no facts
+    #[must_use]
+    pub fn transport_health_snapshot(
+        &self,
+        session_keys: &[TransportSessionKey],
+    ) -> TransportHealthSnapshot {
+        let mut snapshot = TransportHealthSnapshot::default();
+        self.for_session_workers(session_keys, |worker, worker_session_keys| {
+            snapshot.extend(worker.transport_health_snapshot(worker_session_keys));
+        });
+        snapshot
+    }
+
+    /// Returns source activity and active-speaker facts with one command per worker.
+    ///
+    /// Missing sources and worker dispatch failures contribute no facts
+    pub async fn source_diagnostics_snapshot(
         &self,
         sources: &[TransportSourceKey],
-    ) -> TransportSourceActivitySnapshot {
-        let mut snapshot = TransportSourceActivitySnapshot::default();
-        let mut source_media_by_worker = BTreeMap::<usize, Vec<TransportMediaId>>::new();
+    ) -> TransportSourceDiagnosticsSnapshot {
+        let mut snapshot = TransportSourceDiagnosticsSnapshot::default();
+        let mut media_ids_by_worker = BTreeMap::<usize, Vec<TransportMediaId>>::new();
         for source in sources {
             let Some(worker_index) = self.worker_index_for_user(source.session_key()) else {
                 continue;
             };
-            source_media_by_worker
+            media_ids_by_worker
                 .entry(worker_index)
                 .or_default()
                 .push(source.transport_media_id());
         }
-        for (worker_index, transport_media_ids) in source_media_by_worker {
+        for (worker_index, transport_media_ids) in media_ids_by_worker {
             let Some(worker) = self.worker_for_index(worker_index) else {
                 continue;
             };
-            snapshot.per_media.extend(
-                worker
-                    .source_activity_snapshot(&transport_media_ids)
-                    .await
-                    .per_media,
-            );
+            #[cfg(any(test, feature = "testing-transport"))]
+            self.source_diagnostics_requests
+                .fetch_add(1, Ordering::Relaxed);
+            let worker_snapshot = worker
+                .source_diagnostics_snapshot(&transport_media_ids)
+                .await;
+            snapshot.activity.extend(worker_snapshot.activity);
+            snapshot
+                .active_speaker_diagnostics
+                .extend(worker_snapshot.active_speaker_diagnostics);
         }
         snapshot
     }
@@ -180,17 +199,6 @@ impl MediaTransport {
                 source.transport_media_id().as_u64(),
             )
         });
-        snapshot.dedup_by_key(|source| source.transport_media_id());
-        snapshot
-    }
-
-    /// Returns diagnostic active-speaker state for operator-facing output.
-    pub async fn active_speaker_diagnostic_snapshot(&self) -> Vec<ActiveSpeakerSourceDiagnostic> {
-        let mut snapshot = Vec::new();
-        for worker in self.workers.iter() {
-            snapshot.extend(worker.active_speaker_diagnostic_snapshot().await);
-        }
-        snapshot.sort_by_key(|source| source.transport_media_id().as_u64());
         snapshot.dedup_by_key(|source| source.transport_media_id());
         snapshot
     }

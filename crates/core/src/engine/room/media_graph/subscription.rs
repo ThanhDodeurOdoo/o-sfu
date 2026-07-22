@@ -8,7 +8,7 @@ use super::{
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
 };
 use crate::engine::{
-    ConnectionId, MediaWorkerId, UserId,
+    ConnectionId, UserId,
     media_transport::TransportRelayRouteEffect,
     room::source_policy::VideoAdmissionRank,
     source_model::{
@@ -61,10 +61,7 @@ impl ReceiverRouteWork {
 
 #[derive(Debug)]
 pub struct ReceiverRouteCommit {
-    pub(in crate::engine::room) receiver_user_id: UserId,
-    pub(in crate::engine::room) receiver_connection_id: ConnectionId,
     pub(in crate::engine::room) counts: RoomGaugeDelta,
-    pub(in crate::engine::room) media_worker_id: MediaWorkerId,
     pub(in crate::engine::room) work: ReceiverRouteWork,
 }
 
@@ -85,17 +82,10 @@ impl RoomState {
     ) -> Option<ReceiverRouteCommit> {
         self.user_for_connection(user_id, connection_id)?;
         let before = self.media_counts();
-        let media_worker_id = self
-            .topology
-            .router()
-            .media_worker_id_for_connection(connection_id);
         let work =
             self.plan_receiver_intent_change(user_id, connection_id, target_user_id, intents);
         Some(ReceiverRouteCommit {
-            receiver_user_id: user_id.clone(),
-            receiver_connection_id: connection_id,
             counts: RoomGaugeDelta::media(before, self.media_counts()),
-            media_worker_id,
             work,
         })
     }
@@ -150,13 +140,7 @@ impl RoomState {
         let work =
             self.plan_missing_receiver_routes(ReceiverRouteScope::Receiver(user_id, connection_id));
         Some(ReceiverRouteCommit {
-            receiver_user_id: user_id.clone(),
-            receiver_connection_id: connection_id,
             counts: RoomGaugeDelta::media(before, self.media_counts()),
-            media_worker_id: self
-                .topology
-                .router()
-                .media_worker_id_for_connection(connection_id),
             work,
         })
     }

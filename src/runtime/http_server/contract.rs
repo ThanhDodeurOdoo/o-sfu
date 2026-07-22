@@ -45,16 +45,13 @@ pub mod route {
         /// [`crate::http::telemetry::diagnostics::DiagnosticsUserSummary`] or
         /// `404 Not Found`.
         pub const ROOM_USERS: &str = "/internal/diagnostics/rooms/{uuid}/users";
+        /// returns [`crate::http::telemetry::diagnostics::DiagnosticsUserDetail`]
+        /// or `404 Not Found`.
+        pub const ROOM_USER: &str = "/internal/diagnostics/rooms/{uuid}/users/{id}";
         /// returns a JSON object with `nodes` and `edges` arrays or `404 Not Found`.
         pub const ROOM_GRAPH: &str = "/internal/diagnostics/node-graph/rooms/{uuid}";
         /// returns a JSON object with `nodes` and `edges` arrays or `404 Not Found`.
         pub const USER_GRAPH: &str = "/internal/diagnostics/node-graph/rooms/{uuid}/users/{id}";
-        /// returns [`crate::http::telemetry::diagnostics::DiagnosticsUserDetail`].
-        ///
-        /// missing users return `404 Not Found`.
-        /// ambiguous cross-room ids return `409 Conflict` with
-        /// [`crate::http::telemetry::diagnostics::DiagnosticsUserLookupConflict`].
-        pub const USER: &str = "/internal/diagnostics/users/{id}";
     }
 }
 

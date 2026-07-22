@@ -56,7 +56,9 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
             .is_ok()
     );
     assert_eq!(
-        adapter.create_initial_session_offer(&session_key).await,
+        adapter
+            .create_initial_session_offer("test-room", &session_key)
+            .await,
         Err(TransportAdapterError::UnsupportedFeature)
     );
 }
@@ -114,7 +116,7 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     let session_key = transport_key(1, 134, UserId::Integer(134));
 
     let (offer_sdp, upload_slots) = adapter
-        .create_initial_session_offer(&session_key)
+        .create_initial_session_offer("test-room", &session_key)
         .await
         .expect("initial offer should succeed")
         .into_parts();
@@ -187,7 +189,7 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_h264_leads() {
     let session_key = transport_key(1, 136, UserId::Integer(136));
 
     let (offer_sdp, upload_slots) = adapter
-        .create_initial_session_offer(&session_key)
+        .create_initial_session_offer("test-room", &session_key)
         .await
         .expect("initial offer should succeed")
         .into_parts();
@@ -260,7 +262,7 @@ async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
     let session_key = transport_key(1, 137, UserId::Integer(137));
 
     let (offer_sdp, upload_slots) = adapter
-        .create_initial_session_offer(&session_key)
+        .create_initial_session_offer("test-room", &session_key)
         .await
         .expect("initial offer should succeed")
         .into_parts();
@@ -654,12 +656,14 @@ async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
 
     assert!(
         adapter
-            .create_initial_session_offer(&session_key)
+            .create_initial_session_offer("test-room", &session_key)
             .await
             .is_ok()
     );
     assert_eq!(
-        adapter.create_initial_session_offer(&session_key).await,
+        adapter
+            .create_initial_session_offer("test-room", &session_key)
+            .await,
         Err(TransportAdapterError::InvalidInput)
     );
 }
@@ -854,7 +858,12 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let src_key = transport_key(1, 36, UserId::Integer(36));
     let consumer_key = transport_key(1, 37, UserId::Integer(37));
 
-    assert!(adapter.create_initial_session_offer(&src_key).await.is_ok());
+    assert!(
+        adapter
+            .create_initial_session_offer("test-room", &src_key)
+            .await
+            .is_ok()
+    );
     let source_media_id = adapter
         .add_recv_media(
             &src_key,
@@ -907,7 +916,12 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_consumer_removal() {
     let src_key = transport_key(1, 39, UserId::Integer(39));
     let consumer_key = transport_key(1, 40, UserId::Integer(40));
 
-    assert!(adapter.create_initial_session_offer(&src_key).await.is_ok());
+    assert!(
+        adapter
+            .create_initial_session_offer("test-room", &src_key)
+            .await
+            .is_ok()
+    );
     let source_media_id = adapter
         .add_recv_media(
             &src_key,
@@ -1437,7 +1451,12 @@ async fn setup_queued_removal_sources(
     adapter: &RtcWorker,
     src_key: &TransportSessionKey,
 ) -> (TransportMediaId, TransportMediaId) {
-    assert!(adapter.create_initial_session_offer(src_key).await.is_ok());
+    assert!(
+        adapter
+            .create_initial_session_offer("test-room", src_key)
+            .await
+            .is_ok()
+    );
     let first_source_media_id = adapter
         .add_recv_media(
             src_key,

@@ -49,7 +49,6 @@ use super::{
     udp::{RtcUdpSocket, UdpDatagram, UdpIngress},
 };
 use crate::engine::{
-    diagnostics::DiagnosticsStore,
     media_transport::SourcePolicySignal,
     metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
     packet_sink_registry::{PacketSinkRouteCache, RoomPacketSinkRegistry},
@@ -63,7 +62,6 @@ use crate::engine::{
 /// without exposing direct access to `PacketLoopState`
 pub struct PacketLoopConfig {
     pub worker: RtcWorkerConfig,
-    pub diagnostics: Arc<DiagnosticsStore>,
     pub packet_sink_registry: Arc<RoomPacketSinkRegistry>,
     pub source_policy_signal: SourcePolicySignal,
     pub metrics: Arc<RuntimeMetrics>,
@@ -157,7 +155,6 @@ impl PacketLoopTurn {
         let now = turn_started_at;
         let session_drain_context = SessionDrainContext {
             snapshot_state,
-            diagnostics: &config.diagnostics,
             metrics: &config.metrics,
             source_policy_signal: &config.source_policy_signal,
         };

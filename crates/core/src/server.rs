@@ -1,16 +1,12 @@
 //! server-runtime integration surface for `o-sfu-core`
 //!
-//! this module xposes the pieces the top-level runtime needs to assemble a
-//! process: diagnostics stores, metric catalogs, room managers, packet sink
-//! registries and the media transport
+//! this module exposes the pieces the top-level runtime needs to assemble a
+//! process: diagnostics response types, metric catalogs, room managers, packet
+//! sink registries plus the media transport
 
-/// diagnostics store and event payloads used by runtime inspection endpoints
-///
-/// room and transport code record typed diagnostics here
-/// HTTP diagnostics routes read the same store to render operator-facing
-/// summaries and room detail views
+/// diagnostics response types used by runtime inspection endpoints
 pub mod diagnostics {
-    pub use crate::engine::diagnostics::{DiagnosticsEventData, DiagnosticsStore, types::*};
+    pub use o_sfu_telemetry::diagnostics::*;
 }
 
 /// process-local metric catalog and typed recorders
@@ -70,14 +66,14 @@ pub mod room {
             BroadcastPayload, BroadcastPayloadError, DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
             DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, IncomingBitrateSnapshot, JoinUserRequest,
             MAX_BROADCAST_PAYLOAD_BYTES, RemoteSourceProjection, RemoteSourceSnapshot, Room,
-            RoomAdmissionPolicy, RoomConfig, RoomEventMessage, RoomJoinError, RoomManager,
-            RoomManagerConfig, RoomManagerDeps, RoomManagerJoinError, RoomMediaCounts,
-            RoomRuntimeContext, RoomRuntimePolicy, RoomUserAdmission, RoomUserPermissions,
-            RoomUserStatsSnapshot, RouterPlacement, RouterPlacements, RouterPlacementsError,
-            RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound,
-            UserOutboundEvent, UserOutboundOverflow, UserOutboundOverflowKind,
-            UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
-            UserOutboundSender,
+            RoomAdmissionPolicy, RoomConfig, RoomDetailCapture, RoomEventMessage, RoomJoinError,
+            RoomManager, RoomManagerConfig, RoomManagerJoinError, RoomMediaCounts,
+            RoomOverviewCapture, RoomRuntimeContext, RoomRuntimePolicy, RoomUserAdmission,
+            RoomUserCapture, RoomUserPermissions, RoomUserStatsSnapshot, RoomUsersCapture,
+            RouterPlacement, RouterPlacements, RouterPlacementsError, RuntimeRoomDirectorySnapshot,
+            RuntimeRoomStatsSnapshot, UserCloseReason, UserOutbound, UserOutboundEvent,
+            UserOutboundOverflow, UserOutboundOverflowKind, UserOutboundQueueLimits,
+            UserOutboundReceiver, UserOutboundSendError, UserOutboundSender,
         },
     };
 }
@@ -146,10 +142,11 @@ pub mod transport {
             ProducerActivity, ReceiverBandwidthSnapshot, RelayRouteActivity, SessionOffer,
             SessionUploadEncoding, SessionUploadSlot, SourcePacketGate, SourcePolicySignal,
             SourcePolicyUpdateSubscription, TransportAdapterError, TransportBitrateSnapshot,
-            TransportConsumerRoute, TransportMediaId, TransportPlacementPressureSnapshot,
-            TransportQualitySample, TransportQualitySnapshot, TransportRelayRouteAction,
-            TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
-            TransportSessionKey, TransportSourceKey, TransportWorkerPressureSnapshot,
+            TransportConsumerRoute, TransportHealthSnapshot, TransportMediaId,
+            TransportPlacementPressureSnapshot, TransportQualitySample, TransportQualitySnapshot,
+            TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult,
+            TransportSessionHealth, TransportSessionKey, TransportSourceDiagnosticsSnapshot,
+            TransportSourceKey, TransportWorkerPressureSnapshot,
         },
         prelude::SessionBitrateLimits,
     };
