@@ -257,7 +257,9 @@ fn request_first_video_kf_for_session(
     transport_media_id: TransportMediaId,
     now: Instant,
 ) {
-    if source_is_video(state, src_key, transport_media_id) {
+    if state.routes.source_is_active(transport_media_id)
+        && source_is_video(state, src_key, transport_media_id)
+    {
         request_kf_for_target(
             state,
             metrics,

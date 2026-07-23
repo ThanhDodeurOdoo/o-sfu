@@ -12,8 +12,9 @@ use tracing::debug;
 
 use super::rid_refresh::RidKeyframeRefresh;
 use crate::engine::media_transport::{
-    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError, TransportMediaId,
-    TransportRidActivity, TransportSessionKey, TransportSourceActivity, TransportSourceKey,
+    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityRevision,
+    SourceActivityUpdate, TransportAdapterError, TransportMediaId, TransportRidActivity,
+    TransportSessionKey, TransportSourceActivity, TransportSourceKey,
     rtc::{
         relay_registry::{
             ActiveRelayTarget, RelayPacketMailbox, RelaySourceRegistration, RelayTargetId,
@@ -99,13 +100,29 @@ pub(super) struct RemovedRoute {
     pub(super) stopped_forwarding: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct RouteSource {
+    source_active: bool,
+    source_activity_revision: SourceActivityRevision,
     local_route: Option<MediaRouteEntry>,
     remote: RemoteSourceState,
     relay: Option<RelaySourceRegistration>,
     packet: SourcePacketState,
     pub(super) producer: ProducerSourceState,
+}
+
+impl Default for RouteSource {
+    fn default() -> Self {
+        Self {
+            source_active: true,
+            source_activity_revision: SourceActivityRevision::default(),
+            local_route: None,
+            remote: RemoteSourceState::default(),
+            relay: None,
+            packet: SourcePacketState::default(),
+            producer: ProducerSourceState::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -127,6 +144,10 @@ struct SourcePacketState {
 }
 
 impl RouteSource {
+    pub(super) const fn source_is_active(&self) -> bool {
+        self.source_active
+    }
+
     pub(super) fn local_route(&self) -> Option<&MediaRouteEntry> {
         self.local_route.as_ref()
     }
@@ -148,9 +169,7 @@ impl RouteSource {
         destination: MediaRouteDestination,
     ) -> (usize, bool) {
         let became_forwarding = self.local_route.is_none() && self.relay.is_none();
-        let route = self
-            .local_route
-            .get_or_insert_with(|| MediaRouteEntry::new(true));
+        let route = self.local_route.get_or_insert_with(MediaRouteEntry::new);
         let index = route.destinations.len();
         route.push_destination(destination);
         (index, became_forwarding)
@@ -187,13 +206,23 @@ impl RouteSource {
         })
     }
 
-    pub(super) fn set_source_active(&mut self, active: bool) -> Result<(), TransportAdapterError> {
-        let route = self
-            .local_route
-            .as_mut()
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        route.source_active = active;
-        Ok(())
+    pub(super) fn set_source_active(&mut self, active: bool) {
+        self.source_active = active;
+        if !active {
+            self.producer.pending_rid_refreshes.clear();
+        }
+    }
+
+    pub(super) fn apply_source_activity(&mut self, update: SourceActivityUpdate) -> bool {
+        let active = update.activity().is_active();
+        if update.revision() < self.source_activity_revision
+            || (update.revision() == self.source_activity_revision && active == self.source_active)
+        {
+            return false;
+        }
+        self.source_activity_revision = update.revision();
+        self.set_source_active(active);
+        true
     }
 
     pub(super) fn set_consumer_active(
@@ -239,6 +268,9 @@ impl RouteSource {
         stale: &mut Vec<Rid>,
         pending_selected: &mut Vec<Rid>,
     ) -> RidReadinessRouteUpdate {
+        if !self.source_active {
+            return RidReadinessRouteUpdate::default();
+        }
         let Some(route) = self.local_route.as_mut() else {
             return RidReadinessRouteUpdate::default();
         };
@@ -298,16 +330,18 @@ impl RouteSource {
     }
 
     pub(super) fn has_kf_demand(&self, rid: Option<Rid>) -> bool {
+        if !self.source_active {
+            return false;
+        }
         let local_demand = self.local_route.as_ref().is_some_and(|route| {
-            route.source_active
-                && route.destinations.iter().any(|destination| {
-                    destination.active
-                        && matches!(
-                            destination.keyframe_target_rid(None),
-                            DestinationKeyframeTarget::Current(target_rid)
-                                if target_rid == rid
-                        )
-                })
+            route.destinations.iter().any(|destination| {
+                destination.active
+                    && matches!(
+                        destination.keyframe_target_rid(None),
+                        DestinationKeyframeTarget::Current(target_rid)
+                            if target_rid == rid
+                    )
+            })
         });
         local_demand || self.active_relay_targets().is_some()
     }
@@ -317,7 +351,11 @@ impl RouteSource {
         source: &TransportSourceKey,
         registration: RemoteSourceRegistration,
     ) -> Result<Option<RemoteSourceRegistration>, TransportAdapterError> {
-        self.remote.register(source, registration)
+        let previous = self.remote.register(source, registration)?;
+        if previous.is_none() {
+            self.set_source_active(false);
+        }
+        Ok(previous)
     }
 
     pub(super) fn restore_remote_source(&mut self, registration: RemoteSourceRegistration) {

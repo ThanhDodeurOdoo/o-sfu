@@ -21,8 +21,8 @@ use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, AppliedSessionAnswer, ConsumerRouteControl,
         ConsumerRouteControlOutcome, ProducerRouteControl, ReceiverBweTargetUpdate, SessionOffer,
-        TransportConsumerRoute, TransportMediaId, TransportResult, TransportSessionKey,
-        TransportSourceDiagnosticsSnapshot, TransportSourceKey,
+        SourceActivityUpdate, TransportConsumerRoute, TransportMediaId, TransportResult,
+        TransportSessionKey, TransportSourceDiagnosticsSnapshot, TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -161,6 +161,10 @@ pub enum RouteControlRequest {
         source: TransportSourceKey,
         target_id: RelayTargetId,
         active: bool,
+    },
+    SetRemoteSourceActivity {
+        source: TransportSourceKey,
+        update: SourceActivityUpdate,
     },
     RequestRemoteKeyframe {
         source: TransportSourceKey,

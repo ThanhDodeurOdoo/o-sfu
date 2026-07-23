@@ -69,28 +69,6 @@ async fn fake_rtc_peers_rebootstrap_user_replacement_without_stale_media_routes(
 }
 
 #[tokio::test]
-async fn fake_rtc_replacement_unpublish_and_republish_leave_no_stale_consumer_state()
--> s::TestResult {
-    let _guard = st::full_stack_test_guard().await;
-    let st::ReadyRoomFakePeers {
-        server,
-        room,
-        publisher: mut initial_publisher,
-        mut subscriber,
-    } = st::ready_room_fake_integer_peers("issuer-replacement-unpublish", 82, 83).await?;
-
-    Box::pin(f::assert_replacement_unpublish_and_republish_flow(
-        &server,
-        &room,
-        &mut initial_publisher,
-        &mut subscriber,
-        s::UserId::Integer(82),
-    ))
-    .await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn fake_rtc_subscriber_replacement_preserves_download_mute_after_renegotiation()
 -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;

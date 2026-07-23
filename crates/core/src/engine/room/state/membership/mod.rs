@@ -60,13 +60,6 @@ type RuntimeUserRemoval = (ActiveUser, RoomTransportPlan);
 #[derive(Debug)]
 pub struct PresenceCommit {
     pub fanout: MessageFanout,
-    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteSourceRefresh {
-    Skip,
-    OwnerConsumers,
 }
 
 #[derive(Debug)]
@@ -374,14 +367,12 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
         info: &UserInfo,
-        refresh_sources: RemoteSourceRefresh,
     ) -> Option<PresenceCommit> {
         let Some(current_user) = self.users.get(user_id) else {
             warn!(
                 ?user_id,
                 connection_id = ?connection_id,
                 ?info,
-                ?refresh_sources,
                 "discarding user presence update because the user is missing"
             );
             return None;
@@ -392,7 +383,6 @@ impl RoomState {
                 connection_id = ?connection_id,
                 current_connection_id = ?current_user.connection_id,
                 ?info,
-                ?refresh_sources,
                 "discarding user presence update because the connection is stale"
             );
             return None;
@@ -401,26 +391,16 @@ impl RoomState {
             let user = self.user_mut_for_connection(user_id, connection_id)?;
             user.apply_info_update(info);
         }
-        let source_recipients = (refresh_sources == RemoteSourceRefresh::OwnerConsumers
-            && (info.is_camera_on.is_some() || info.is_screen_sharing_on.is_some()))
-        .then(|| {
-            self.topology
-                .committed_consumer_user_ids_for_owner_sources(user_id)
-        });
         let snapshot = BTreeMap::from([self.user_info_snapshot(user_id)?]);
         debug!(
             ?user_id,
             connection_id = ?connection_id,
             ?info,
-            ?refresh_sources,
             snapshot_len = snapshot.len(),
             "applied user presence update and staged user info fanout"
         );
         Some(PresenceCommit {
             fanout: self.fanout_all(&RoomEventMessage::UserInfoChanged(snapshot)),
-            source_snapshots: source_recipients.map_or_else(Vec::new, |recipients| {
-                self.remote_source_snapshots_for_users(recipients, false)
-            }),
         })
     }
 

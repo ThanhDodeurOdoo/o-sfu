@@ -80,6 +80,20 @@ impl SourcePolicyTurn {
         media_transport: Option<&MediaTransport>,
         active_speaker_sources: Option<&[ActiveSpeakerSource]>,
     ) {
+        if self.trigger.is_none() {
+            return;
+        }
+        let _guard = room.source_policy_turn.lock().await;
+        self.execute_guarded(room, media_transport, active_speaker_sources)
+            .await;
+    }
+
+    pub(in crate::engine::room) async fn execute_guarded(
+        self,
+        room: &Room,
+        media_transport: Option<&MediaTransport>,
+        active_speaker_sources: Option<&[ActiveSpeakerSource]>,
+    ) {
         let Some(trigger) = self.trigger else {
             return;
         };

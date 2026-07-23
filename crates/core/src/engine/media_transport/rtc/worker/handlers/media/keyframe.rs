@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use str0m::media::{KeyframeRequestKind, Mid, Rid};
+use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Rid};
 use tracing::debug;
 
 use super::{
@@ -36,9 +36,10 @@ pub fn worker_request_remote_kf(
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
 ) {
+    let src_media = src.transport_media_id();
     if !state
         .routes
-        .is_relay_target_active(src.transport_media_id(), target_id)
+        .source_relay_target_is_active(src_media, target_id)
     {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         return;
@@ -46,10 +47,38 @@ pub fn worker_request_remote_kf(
     request_kf_for_target(
         state,
         metrics,
-        KeyframeRequestTarget::Local(src.session_key(), src.transport_media_id()),
+        KeyframeRequestTarget::Local(src.session_key(), src_media),
         rid,
         kind,
         KeyframeRequestMode::Track(Instant::now()),
+    );
+}
+
+pub(super) fn worker_request_resumed_video_kf(
+    state: &mut PacketLoopState,
+    metrics: &RtcMetricsRecorder,
+    source: &TransportSourceKey,
+    now: Instant,
+) {
+    let src_media = source.transport_media_id();
+    let Ok(mid) = ensure_local_producer_mid(state, source.session_key(), src_media) else {
+        return;
+    };
+    let is_video = state
+        .users
+        .get(source.session_key())
+        .and_then(|session| session.rtc.media(mid))
+        .is_some_and(|media| matches!(media.kind(), MediaKind::Video));
+    if !is_video {
+        return;
+    }
+    request_kf_for_target(
+        state,
+        metrics,
+        KeyframeRequestTarget::Local(source.session_key(), src_media),
+        None,
+        KeyframeRequestKind::Pli,
+        KeyframeRequestMode::Track(now),
     );
 }
 
@@ -188,19 +217,22 @@ pub fn worker_request_consumer_kf(
         }
         None => return Err(TransportAdapterError::TransportUnavailable),
     }
-    let (dst_active, dst_rid) = state
+    let (route_entry, source_active) = state
         .routes
-        .local_route(src_media)
-        .and_then(|route_entry| {
-            route_entry.destinations.iter().find(|dst| {
-                dst.dest_session == *consumer_key && dst.dest_transport_media_id == consumer_media
-            })
-        })
-        .map(|dst| (dst.active, kf_req_rid(dst)))
+        .local_route_and_activity(src_media)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
-    if !dst_active {
+    let destination = route_entry
+        .destinations
+        .iter()
+        .find(|destination| {
+            destination.dest_session == *consumer_key
+                && destination.dest_transport_media_id == consumer_media
+        })
+        .ok_or(TransportAdapterError::TransportUnavailable)?;
+    if !source_active || !destination.active {
         return Ok(());
     }
+    let dst_rid = kf_req_rid(destination);
     let now = Instant::now();
     match route_source {
         RouteSourceKind::Local => {

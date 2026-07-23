@@ -24,7 +24,6 @@
 //! versus clone decisions.
 
 use str0m::media::Rid;
-use tracing::debug;
 
 use super::{
     forwarded_packet::ForwardedPacket,
@@ -197,13 +196,6 @@ fn populate_local_forwards(
     packet_rid: Option<Rid>,
     forwards: &mut Vec<PacketForward>,
 ) {
-    if !route_entry.source_active {
-        debug!(
-            source_transport_media_id = ?src_media,
-            "skipped forwarding because source route is inactive"
-        );
-        return;
-    }
     if route_entry.active_destination_count == route_entry.destinations.len() {
         for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
             if dst.packet_gate.permits(packet_rid) {
@@ -249,6 +241,6 @@ fn has_routed_forward(
     relay_targets: Option<&[ActiveRelayTarget]>,
     route_entry: Option<&MediaRouteEntry>,
 ) -> bool {
-    route_entry.is_some_and(|entry| entry.source_active && entry.has_active_destinations())
+    route_entry.is_some_and(MediaRouteEntry::has_active_destinations)
         || relay_targets.is_some_and(|targets| !targets.is_empty())
 }

@@ -8,9 +8,8 @@ use tracing::{error, warn};
 use super::{
     super::{
         RoomMediaCounts,
-        effects::transport::RoomTransportPlan,
         outbound::{OutboundSender, RemoteSourceSnapshot},
-        state::{PresenceCommit, RemoteSourceRefresh, RoomState},
+        state::{PresenceCommit, RoomState},
     },
     ReceiverRouteWork,
     source_index::PublishedSources,
@@ -21,13 +20,14 @@ use crate::{
     engine::{
         ConnectionId, UserId, UserInfo,
         media_transport::{
-            SessionUploadEncoding, TransportMediaId, TransportSessionKey, TransportSourceKey,
+            ProducerActivity, SessionUploadEncoding, SourceActivityUpdate, TransportMediaId,
+            TransportSessionKey, TransportSourceActivityEffect, TransportSourceKey,
         },
         source_model::{
             PublishedSourceDescriptor, PublishedSourceDescriptorParts, PublishedSourceId,
             PublishedSourceOwner, SourceEncodingDescriptor, SourceEncodingDescriptorParts,
-            SourceModelError, SourcePolicy, SourcePublishIntent, SourceUnpublishIntent,
-            UploadLayerPolicyRole, UserStreamId,
+            SourceModelError, SourcePolicy, SourcePublishIntent, UploadLayerPolicyRole,
+            UserStreamId,
         },
     },
 };
@@ -63,7 +63,8 @@ pub enum PublishIntentPlan {
 pub struct ProducerActivityCommit {
     pub source: TransportSourceKey,
     pub stream_id: UserStreamId,
-    pub active: bool,
+    pub update: SourceActivityUpdate,
+    pub remote_activity_effects: Vec<TransportSourceActivityEffect>,
     pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
     pub presence: Option<PresenceCommit>,
 }
@@ -80,15 +81,6 @@ pub(in crate::engine::room) enum PublicationCommitError {
     Source(#[from] SourceModelError),
     #[error(transparent)]
     Router(#[from] RouterError),
-}
-
-#[derive(Debug)]
-pub struct UnpublishCommit {
-    pub before: RoomMediaCounts,
-    pub after: RoomMediaCounts,
-    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
-    pub transport_plan: RoomTransportPlan,
-    pub presence: Option<PresenceCommit>,
 }
 
 impl RoomState {
@@ -220,12 +212,7 @@ impl RoomState {
             self.plan_missing_receiver_routes(ReceiverRouteScope::Source(source_id));
         let setup_after = self.media_counts();
         let presence = presence.and_then(|info| {
-            self.apply_presence_update(
-                &owner_user_id,
-                owner_connection_id,
-                &info,
-                RemoteSourceRefresh::Skip,
-            )
+            self.apply_presence_update(&owner_user_id, owner_connection_id, &info)
         });
         Some(PublishCommit {
             publish_before,
@@ -313,32 +300,6 @@ impl RoomState {
         self.published_source_id(user, self.user_connection_id(user)?, stream)
     }
 
-    pub fn unpublish_track(
-        &mut self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        intent: &SourceUnpublishIntent,
-    ) -> Option<UnpublishCommit> {
-        let source_id = self.published_source_id(user_id, connection_id, intent.stream_id())?;
-        let source_recipients = self
-            .topology
-            .committed_consumer_user_ids_for_source(source_id);
-        let before = self.media_counts();
-        let transport_plan = self
-            .topology
-            .unpublish_source(user_id, connection_id, source_id)?;
-        let after = self.media_counts();
-        Some(UnpublishCommit {
-            before,
-            after,
-            source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
-            transport_plan,
-            presence: intent.presence().and_then(|info| {
-                self.apply_presence_update(user_id, connection_id, info, RemoteSourceRefresh::Skip)
-            }),
-        })
-    }
-
     pub fn apply_publication_activity(
         &mut self,
         user_id: &UserId,
@@ -350,12 +311,10 @@ impl RoomState {
         let source_id = self
             .published_source_id(user_id, connection_id, stream_id)
             .ok_or(ProducerActivityRejection::MissingPublication)?;
-        if !self
+        let revision = self
             .topology
             .set_published_source_activity(source_id, connection_id, active)
-        {
-            return Err(ProducerActivityRejection::StalePublication);
-        }
+            .ok_or(ProducerActivityRejection::StalePublication)?;
         let source_recipients = self
             .topology
             .committed_consumer_user_ids_for_source(source_id);
@@ -365,14 +324,16 @@ impl RoomState {
             .ok_or(ProducerActivityRejection::StalePublication)?
             .transport
             .clone();
-        let presence = presence.and_then(|info| {
-            self.apply_presence_update(user_id, connection_id, info, RemoteSourceRefresh::Skip)
-        });
+        let update = SourceActivityUpdate::new(ProducerActivity::from_active(active), revision);
+        let remote_activity_effects = self.topology.source_activity_effects(&source, update);
+        let presence =
+            presence.and_then(|info| self.apply_presence_update(user_id, connection_id, info));
         let source_snapshots = self.remote_source_snapshots_for_users(source_recipients, false);
         Ok(ProducerActivityCommit {
             source,
             stream_id: stream_id.clone(),
-            active,
+            update,
+            remote_activity_effects,
             source_snapshots,
             presence,
         })

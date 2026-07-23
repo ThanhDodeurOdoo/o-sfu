@@ -1,6 +1,7 @@
 import { STREAM_TYPES, type StreamType } from "../public_api.js";
 import { STREAM_KIND, type ClientPeerConnection, type MediaTrack } from "./browser_types.js";
 import { applyUploadPublicationPolicy, type SimulcastEncodingOffer } from "./publication_policy.js";
+import { remoteDescriptionAcceptsUploadMid } from "./sdp_media_direction.js";
 
 type UploadTransition = {
     hadTrack: boolean;
@@ -87,8 +88,8 @@ export class LocalUploads {
         if (generation !== this._peerGeneration) {
             return;
         }
-        updateTransceiverDirection(transceiver, track);
         if (track) {
+            enableTransceiverSend(transceiver);
             await applyUploadPublicationPolicy(
                 streamType,
                 transceiver,
@@ -109,7 +110,6 @@ export class LocalUploads {
         if (!peerConnection) {
             return;
         }
-        const generation = this._peerGeneration;
         const boundMid = this._senderMidByType.get(streamType);
         if (!boundMid) {
             return;
@@ -119,22 +119,19 @@ export class LocalUploads {
             .find((candidate) => candidate.mid === boundMid);
         if (transceiver) {
             await transceiver.sender.replaceTrack(null);
-            if (generation !== this._peerGeneration) {
-                return;
-            }
-            updateTransceiverDirection(transceiver, null);
-        }
-        this._senderMidByType.delete(streamType);
-        if (this.hasPendingPublication(streamType)) {
-            this._attachableTypes.add(streamType);
         }
     }
 
     async attachPendingTracks(
         peerConnection: ClientPeerConnection,
-        uploadSlots: UploadSlot[]
+        uploadSlots: UploadSlot[],
+        offerSdp: string
     ): Promise<void> {
         const generation = this._peerGeneration;
+        await this.reconcileSenderBindings(peerConnection, offerSdp);
+        if (generation !== this._peerGeneration) {
+            return;
+        }
         const pendingStreamTypes = STREAM_TYPES.filter(
             (streamType) =>
                 this.hasPendingPublication(streamType) && this._attachableTypes.has(streamType)
@@ -174,25 +171,41 @@ export class LocalUploads {
         }
     }
 
+    private async reconcileSenderBindings(
+        peerConnection: ClientPeerConnection,
+        offerSdp: string
+    ): Promise<void> {
+        const generation = this._peerGeneration;
+        for (const [streamType, mid] of this._senderMidByType) {
+            if (remoteDescriptionAcceptsUploadMid(offerSdp, mid)) {
+                continue;
+            }
+            const transceiver = peerConnection
+                .getTransceivers()
+                .find((candidate) => candidate.mid === mid);
+            if (transceiver?.sender.track) {
+                await transceiver.sender.replaceTrack(null);
+                if (generation !== this._peerGeneration) {
+                    return;
+                }
+            }
+            this._senderMidByType.delete(streamType);
+            if (this._localTracks.has(streamType)) {
+                this._attachableTypes.add(streamType);
+            }
+        }
+    }
+
     private hasPendingPublication(streamType: StreamType): boolean {
         return this._localTracks.has(streamType) && !this._senderMidByType.has(streamType);
     }
 }
 
-function updateTransceiverDirection(
-    transceiver: ReturnType<ClientPeerConnection["getTransceivers"]>[number],
-    track: MediaTrack | null
+function enableTransceiverSend(
+    transceiver: ReturnType<ClientPeerConnection["getTransceivers"]>[number]
 ): void {
     const direction = transceiver.direction;
-    if (track) {
-        if (direction === "recvonly" || direction === "inactive") {
-            transceiver.direction = "sendonly";
-        }
-        return;
-    }
-    if (direction === "sendonly") {
-        transceiver.direction = "inactive";
-    } else if (direction === "sendrecv") {
-        transceiver.direction = "recvonly";
+    if (direction === "recvonly" || direction === "inactive") {
+        transceiver.direction = "sendonly";
     }
 }

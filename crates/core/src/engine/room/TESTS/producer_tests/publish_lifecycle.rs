@@ -1,12 +1,16 @@
+use std::time::Duration;
+
+use tokio::time::timeout;
+
 use super::support::*;
 use crate::engine::{
     UserInfo,
-    room::UnpublishIntentOutcome,
-    source_model::{SourcePolicy, SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
+    room::DeactivateIntentOutcome,
+    source_model::{SourceDeactivateIntent, SourcePolicy, SourcePublishIntent, UserStreamId},
 };
 
 #[tokio::test]
-async fn production_change_pauses_producer_and_updates_remote_source_snapshot() {
+async fn publication_activity_pauses_and_resumes_committed_source() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -26,17 +30,33 @@ async fn production_change_pauses_producer_and_updates_remote_source_snapshot() 
     assert!(drain_outbound(&mut rx1).is_empty());
 
     let publisher_id = UserId::Integer(1);
+    let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
+    let connection_id = user_connection_id(&room, &publisher_id).await;
+    let source_policy_guard = room.source_policy_turn.lock().await;
+    let pause = room
+        .test_api()
+        .media()
+        .deactivate_publication(&publisher_id, &stream_id, &adapter);
+    tokio::pin!(pause);
     assert!(
-        room.test_api()
-            .media()
-            .set_publication_active(
-                &publisher_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                false,
-                &adapter,
-            )
+        timeout(Duration::from_millis(10), &mut pause)
             .await
+            .is_err()
     );
+    let state = room.state.read().await;
+    let source_id = state
+        .published_source_id(&publisher_id, connection_id, &stream_id)
+        .expect("publication should remain active while source policy is busy");
+    assert!(
+        state
+            .topology
+            .published_source(source_id)
+            .expect("publication should remain in the room graph")
+            .active
+    );
+    drop(state);
+    drop(source_policy_guard);
+    assert!(pause.await);
 
     let msgs1 = drain_outbound(&mut rx1);
     let msgs2 = drain_outbound(&mut rx2);
@@ -53,17 +73,24 @@ async fn production_change_pauses_producer_and_updates_remote_source_snapshot() 
         false,
     );
 
-    assert!(
-        room.test_api()
-            .media()
-            .set_publication_active(
-                &publisher_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                true,
-                &adapter,
-            )
-            .await
+    assert_eq!(
+        room.user_operation(&publisher_id, connection_id, &adapter)
+            .deactivate_publication(&SourceDeactivateIntent::new(stream_id_for_source(
+                TestSourceKind::ScalableVideo,
+            )))
+            .await,
+        DeactivateIntentOutcome::Noop
     );
+    assert!(drain_outbound(&mut rx2).is_empty());
+    assert!(matches!(
+        room.user_operation(&publisher_id, connection_id, &adapter)
+            .start_publish(
+                &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
+                true,
+            )
+            .await,
+        Ok(PublishIntentOutcome::Activated)
+    ));
 
     let msgs2 = drain_outbound(&mut rx2);
     assert_remote_source_activity_snapshot(
@@ -73,10 +100,20 @@ async fn production_change_pauses_producer_and_updates_remote_source_snapshot() 
         true,
         false,
     );
+    assert!(matches!(
+        room.user_operation(&publisher_id, connection_id, &adapter)
+            .start_publish(
+                &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
+                true,
+            )
+            .await,
+        Ok(PublishIntentOutcome::Noop)
+    ));
+    assert!(drain_outbound(&mut rx2).is_empty());
 }
 
 #[tokio::test]
-async fn duplicate_camera_publish_intent_applies_presence_before_remote_snapshot() {
+async fn duplicate_camera_publish_intent_updates_presence_and_remote_activity() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
     let publisher_id = UserId::Integer(1);
     let camera_stream = UserStreamId::new("camera");
@@ -109,7 +146,7 @@ async fn duplicate_camera_publish_intent_applies_presence_before_remote_snapshot
     assert!(
         room.test_api()
             .media()
-            .set_publication_active(&publisher_id, &camera_stream, false, &adapter)
+            .deactivate_publication(&publisher_id, &camera_stream, &adapter)
             .await
     );
     drain_outbound(&mut rx2);
@@ -143,86 +180,6 @@ async fn duplicate_camera_publish_intent_applies_presence_before_remote_snapshot
     assert_eq!(projection.source.stream_id(), &camera_stream);
     assert_eq!(projection.owner_info.is_camera_on, Some(true));
     assert!(projection.producer_active);
-}
-
-#[tokio::test]
-async fn explicit_unpublish_removes_published_track_and_consumer_routes() {
-    let (room, adapter, mut publisher_rx, mut subscriber_rx) = setup_two_ready_users().await;
-
-    publish_track(
-        &room,
-        &UserId::Integer(1),
-        TestSourceKind::ScalableVideo,
-        MediaKind::Video,
-        test_video_rtp_parameters(),
-        &adapter,
-    )
-    .await;
-    assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert!(
-        drain_outbound(&mut subscriber_rx)
-            .iter()
-            .any(|message| remote_source_snapshot(message).is_some())
-    );
-    let Some(transport_media_id) = room
-        .test_api()
-        .inspect()
-        .producer_transport_media_id(
-            &UserId::Integer(1),
-            test_connection_id(0),
-            TestSourceKind::ScalableVideo,
-        )
-        .await
-    else {
-        panic!("published camera should expose a transport media id");
-    };
-
-    assert!(
-        room.test_api()
-            .media()
-            .unpublish_track(
-                &UserId::Integer(1),
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                &adapter,
-            )
-            .await
-    );
-
-    assert_eq!(room.test_api().inspect().producer_count().await, 0);
-    assert_eq!(room.test_api().inspect().consumer_count().await, 0);
-    assert!(
-        !room
-            .test_api()
-            .inspect()
-            .has_published_source(
-                &UserId::Integer(1),
-                test_connection_id(0),
-                TestSourceKind::ScalableVideo,
-            )
-            .await
-    );
-    assert_transport_media_mapping_is_missing(&room, transport_media_id).await;
-    assert_transport_media_owner_mapping_is_missing(&room, transport_media_id).await;
-
-    let publisher_messages = drain_outbound(&mut publisher_rx);
-    let subscriber_messages = drain_outbound(&mut subscriber_rx);
-    let removal_message = subscriber_messages
-        .iter()
-        .find(|message| remote_source_snapshot(message).is_some())
-        .expect("subscriber should receive a removal snapshot");
-    assert_remote_source_removed_snapshot(
-        removal_message,
-        &UserId::Integer(1),
-        TestSourceKind::ScalableVideo,
-    );
-    assert!(publisher_messages.is_empty());
-    assert!(
-        adapter
-            .test_api()
-            .route_entry_by_media_id(transport_media_id)
-            .await
-            .is_none()
-    );
 }
 
 #[tokio::test]
@@ -296,7 +253,7 @@ async fn publish_track_emits_remote_source_snapshot_with_committed_mid() {
 }
 
 #[tokio::test]
-async fn camera_user_info_update_refreshes_remote_source_owner_info() {
+async fn generic_camera_info_cannot_override_publication_presence() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
     let publisher_id = UserId::Integer(1);
     let camera_stream = UserStreamId::new("camera");
@@ -304,7 +261,11 @@ async fn camera_user_info_update_refreshes_remote_source_owner_info() {
         camera_stream.clone(),
         MediaKind::Video,
         SourcePolicy::hidden(),
-    );
+    )
+    .with_presence(Some(UserInfo {
+        is_camera_on: Some(true),
+        ..UserInfo::default()
+    }));
 
     assert!(
         room.test_api()
@@ -334,15 +295,16 @@ async fn camera_user_info_update_refreshes_remote_source_owner_info() {
     )
     .await;
 
-    let snapshot = drain_remote_source_snapshots(&mut rx2)
-        .into_iter()
-        .next()
-        .expect("subscriber should receive a refreshed camera source snapshot");
-    assert!(!snapshot.requires_negotiation);
-    assert!(snapshot.sources.iter().any(|projection| {
-        projection.source.stream_id() == &camera_stream
-            && projection.owner_info.is_camera_on == Some(false)
-    }));
+    assert!(drain_remote_source_snapshots(&mut rx2).is_empty());
+    let Some((_, info)) = room
+        .test_api()
+        .inspect()
+        .user_info_snapshot(&publisher_id)
+        .await
+    else {
+        panic!("publisher user should still be present");
+    };
+    assert_eq!(info.is_camera_on, Some(true));
 }
 
 #[tokio::test]
@@ -397,6 +359,17 @@ async fn user_replacement_purges_all_published_stream_mappings() {
         .await;
     assert!(camera_transport_media_id.is_some());
     assert!(audio_transport_media_id.is_some());
+    assert!(
+        room.test_api()
+            .media()
+            .deactivate_publication(
+                &UserId::Integer(1),
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+                &adapter,
+            )
+            .await
+    );
+    drain_outbound(&mut subscriber_rx);
 
     let (replacement_tx, _replacement_rx) = test_sender();
     assert!(
@@ -441,7 +414,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
 }
 
 #[tokio::test]
-async fn production_change_updates_screen_remote_source_activity() {
+async fn screen_deactivation_updates_remote_source_activity() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -461,10 +434,9 @@ async fn production_change_updates_screen_remote_source_activity() {
     assert!(
         room.test_api()
             .media()
-            .set_publication_active(
+            .deactivate_publication(
                 &publisher_id,
                 &stream_id_for_source(TestSourceKind::ReadableVideo),
-                false,
                 &adapter,
             )
             .await
@@ -481,7 +453,7 @@ async fn production_change_updates_screen_remote_source_activity() {
 }
 
 #[tokio::test]
-async fn production_change_updates_transport_route_activity() {
+async fn publication_deactivation_updates_transport_route_activity() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -500,10 +472,9 @@ async fn production_change_updates_transport_route_activity() {
     assert!(
         room.test_api()
             .media()
-            .set_publication_active(
+            .deactivate_publication(
                 &publisher_id,
                 &stream_id_for_source(TestSourceKind::ScalableVideo),
-                false,
                 &adapter,
             )
             .await
@@ -527,7 +498,7 @@ async fn production_change_updates_transport_route_activity() {
 }
 
 #[tokio::test]
-async fn production_change_commits_user_state_before_transport_update_finishes() {
+async fn publication_deactivation_updates_presence() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -544,16 +515,16 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
 
     let user_id = UserId::Integer(1);
     let connection_id = user_connection_id(&room, &user_id).await;
-    let intent = SourceUnpublishIntent::new(stream_id_for_source(TestSourceKind::ScalableVideo))
+    let intent = SourceDeactivateIntent::new(stream_id_for_source(TestSourceKind::ScalableVideo))
         .with_presence(Some(UserInfo {
             is_camera_on: Some(false),
             ..UserInfo::default()
         }));
-    assert_ne!(
+    assert_eq!(
         room.user_operation(&user_id, connection_id, &adapter)
-            .stop_publish(&intent)
+            .deactivate_publication(&intent)
             .await,
-        UnpublishIntentOutcome::Noop
+        DeactivateIntentOutcome::Deactivated
     );
 
     let Some((_, info)) = room.test_api().inspect().user_info_snapshot(&user_id).await else {
@@ -563,7 +534,7 @@ async fn production_change_commits_user_state_before_transport_update_finishes()
 }
 
 #[tokio::test]
-async fn production_change_ignores_unknown_stream_type() {
+async fn unknown_publication_deactivation_is_a_noop() {
     let (room, adapter, mut rx1, mut _rx2) = setup_two_ready_users().await;
 
     let publisher_id = UserId::Integer(1);
@@ -571,10 +542,9 @@ async fn production_change_ignores_unknown_stream_type() {
         !room
             .test_api()
             .media()
-            .set_publication_active(
+            .deactivate_publication(
                 &publisher_id,
                 &stream_id_for_source(TestSourceKind::AudioDetector),
-                false,
                 &adapter,
             )
             .await
@@ -583,23 +553,5 @@ async fn production_change_ignores_unknown_stream_type() {
     assert!(
         drain_outbound(&mut rx1).is_empty(),
         "no broadcast expected when no producer exists for the stream type"
-    );
-}
-
-#[tokio::test]
-async fn explicit_unpublish_missing_publication_is_a_domain_noop() {
-    let scenario = StagedPublishScenario::new().await;
-
-    assert!(
-        !scenario
-            .room
-            .test_api()
-            .media()
-            .unpublish_track(
-                &scenario.user_id,
-                &stream_id_for_source(TestSourceKind::ScalableVideo),
-                &scenario.adapter,
-            )
-            .await
     );
 }

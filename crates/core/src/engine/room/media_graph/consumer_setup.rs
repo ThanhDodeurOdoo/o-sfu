@@ -18,8 +18,9 @@ use super::{
 use crate::engine::{
     MediaWorkerId,
     media_transport::{
-        ConsumerActivity, MediaTransport, TransportConsumerRoute, TransportMediaId,
-        TransportRelayRouteEffect, TransportSessionKey, TransportSourceKey,
+        ConsumerActivity, MediaTransport, ProducerActivity, SourceActivityUpdate,
+        TransportConsumerRoute, TransportMediaId, TransportRelayRouteEffect, TransportSessionKey,
+        TransportSourceActivityEffect, TransportSourceKey,
     },
     source_model::{PublishedSourceId, UserStreamId},
 };
@@ -70,6 +71,7 @@ pub enum ConsumerSetupOutcome {
         route: TransportConsumerRoute,
         sender: OutboundSender,
         snapshot: RemoteSourceSnapshot,
+        remote_source_activity: Option<TransportSourceActivityEffect>,
         transport_activity_update: Option<bool>,
         readiness_keyframe: Option<ConsumerRouteTarget>,
     },
@@ -105,16 +107,30 @@ impl RoomState {
         let outcome = if self
             .user_for_connection(session.user_id(), session.connection_id())
             .is_some_and(|user| user.parsed_client_rtp_capabilities.is_some())
-            && let Some(source_active) = self
+            && let Some((source_active, source_activity_revision)) = self
                 .topology
                 .published_source(target.source_id)
                 .filter(|source| target.matches_identity(source))
-                .map(|source| source.active)
+                .map(|source| (source.active, source.activity_revision))
         {
             let selection = self.setup_selection(target, source_active);
             let delivery_active = selection.delivery_active();
             match self.topology.commit_consumer_setup(setup, selection) {
                 Ok(commit) => {
+                    let remote_source_activity =
+                        (commit.route.source().session_key().media_worker_id()
+                            != commit.route.consumer_session_key().media_worker_id())
+                        .then(|| TransportSourceActivityEffect {
+                            source: commit.route.source().clone(),
+                            target_media_worker_id: commit
+                                .route
+                                .consumer_session_key()
+                                .media_worker_id(),
+                            update: SourceActivityUpdate::new(
+                                ProducerActivity::from_active(source_active),
+                                source_activity_revision,
+                            ),
+                        });
                     let snapshot =
                         self.remote_source_snapshot_for_user(commit.target.session.user_id(), true);
                     let readiness_keyframe = match origin {
@@ -134,6 +150,7 @@ impl RoomState {
                         route: commit.route,
                         sender: commit.sender,
                         snapshot,
+                        remote_source_activity,
                         transport_activity_update: commit.transport_activity_update,
                         readiness_keyframe,
                     }

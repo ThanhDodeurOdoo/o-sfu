@@ -5,7 +5,9 @@ use std::time::Instant;
 use super::{
     super::{
         super::bwe,
-        keyframe::{worker_request_consumer_kf, worker_request_remote_kf},
+        keyframe::{
+            worker_request_consumer_kf, worker_request_remote_kf, worker_request_resumed_video_kf,
+        },
     },
     routes,
 };
@@ -50,6 +52,9 @@ pub fn apply_route_control_request(
             target_id,
             active,
         } => routes::worker_set_relay_target_active(state, &source, target_id, active),
+        RouteControlRequest::SetRemoteSourceActivity { source, update } => {
+            routes::worker_set_remote_source_activity(state, &source, update)
+        }
         RouteControlRequest::RequestRemoteKeyframe {
             source,
             target_id,
@@ -88,7 +93,12 @@ pub fn apply_media_control_batch(
             bwe::apply_receiver_bwe_target(state, max_bitrate_out, &update)
         })),
         ProducerActivity(updates) => Applied(map_updates(updates, |control| {
-            routes::worker_set_producer_active(state, &control.source, control.activity.is_active())
+            let accepted =
+                routes::worker_apply_producer_activity(state, &control.source, control.update)?;
+            if accepted && control.update.activity().is_active() {
+                worker_request_resumed_video_kf(state, metrics, &control.source, now);
+            }
+            Ok(())
         })),
         ConsumerGates { source, updates } => Applied(routes::worker_set_consumer_pkt_gates(
             state, &source, updates, now,

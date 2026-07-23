@@ -61,25 +61,36 @@ export class PeerSession {
             return {};
         }
         const replacing = transition.hadTrack && transition.hasTrack;
-        const action = replacing ? "replacing" : transition.hadTrack ? "removing" : "publishing";
+        const resuming =
+            !transition.hadTrack && transition.hasTrack && transition.boundMid !== undefined;
+        let action = "publishing";
+        if (replacing) {
+            action = "replacing";
+        } else if (resuming) {
+            action = "resuming";
+        } else if (transition.hadTrack) {
+            action = "pausing";
+        }
         this._log(
             replacing ? CLIENT_LOG_LEVEL.DEBUG : CLIENT_LOG_LEVEL.INFO,
             `${action} ${type} track${transition.boundMid ? ` on mid ${transition.boundMid}` : ""}`
         );
-        if (replacing) {
-            if (!transition.boundMid) {
-                return {};
-            }
+        let peerTask: PublicationEffect["peerTask"];
+        if (transition.boundMid !== undefined) {
             const mid = transition.boundMid;
-            return { peerTask: () => this._uploads.attachTrack(this._activePeer, mid, type) };
+            if (transition.hasTrack) {
+                peerTask = () => this._uploads.attachTrack(this._activePeer, mid, type);
+            } else {
+                peerTask = () => this._uploads.detachTrack(this._activePeer, type);
+            }
         }
-        if (transition.hadTrack) {
-            return {
-                active: false,
-                peerTask: () => this._uploads.detachTrack(this._activePeer, type)
-            };
+        if (transition.hadTrack === transition.hasTrack) {
+            return { peerTask };
         }
-        return { active: true };
+        return {
+            active: transition.hasTrack,
+            peerTask
+        };
     }
 
     create(): void {
@@ -160,7 +171,7 @@ export class PeerSession {
         if (!this.isActive(peer)) {
             return null;
         }
-        await this._uploads.attachPendingTracks(peer, uploadSlots);
+        await this._uploads.attachPendingTracks(peer, uploadSlots, offerSdp);
         if (!this.isActive(peer)) {
             return null;
         }

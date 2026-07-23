@@ -3,7 +3,10 @@ use tracing::info;
 
 use super::{
     RoomGaugeDelta,
-    transport::{RoomRouteEffects, RoomTransportOutcome, execute_relays_and_teardown},
+    transport::{
+        RoomRouteEffects, RoomTransportOutcome, execute_relays_and_teardown,
+        execute_remote_source_activity_effects,
+    },
 };
 use crate::engine::{
     media_transport::{MediaTransport, TransportTeardown},
@@ -56,6 +59,7 @@ impl ReceiverSetupTurn {
                 route,
                 sender,
                 snapshot,
+                remote_source_activity,
                 transport_activity_update,
                 readiness_keyframe,
             } => {
@@ -74,6 +78,9 @@ impl ReceiverSetupTurn {
                     origin = origin.as_diagnostic_str(),
                     "subscription committed"
                 );
+                if let Some(effect) = remote_source_activity {
+                    execute_remote_source_activity_effects(media_transport, [effect]).await;
+                }
                 let mut route_effects = RoomRouteEffects::default();
                 if let Some(active) = transport_activity_update {
                     route_effects.setup_activity(route, target.kind, active);

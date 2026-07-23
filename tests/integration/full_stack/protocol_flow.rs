@@ -84,36 +84,6 @@ async fn fake_peers_keep_room_topology_isolation_with_same_user_ids() -> s::Test
 }
 
 #[tokio::test]
-async fn fake_peers_cover_publish_unpublish_late_join_and_disconnect_deterministically()
--> s::TestResult {
-    let _guard = st::full_stack_test_guard().await;
-    let st::RoomFakePeers {
-        server,
-        room,
-        mut publisher,
-        mut subscriber,
-    } = st::room_fake_integer_peers("issuer-b", 10, 20).await?;
-
-    s::require_some(
-        p::publish_camera_track(&mut publisher, &mut subscriber).await,
-        "camera track should publish",
-    )?;
-
-    p::assert_consumer_download_toggle_round_trip_protocol(&mut subscriber).await;
-    p::assert_camera_unpublish_updates_snapshot_and_info(&mut publisher, &mut subscriber).await;
-
-    let late_subscriber = p::connect_late_subscriber(&server, &room).await;
-    let mut late_subscriber = s::require_some(late_subscriber, "late subscriber should connect")?;
-    p::assert_peer_joined_message_protocol(&mut subscriber, s::UserId::Integer(30)).await;
-    p::assert_late_join_has_no_track_snapshot(&mut late_subscriber).await;
-
-    s::require_some(publisher.close().await, "publisher should close")?;
-    p::assert_departure_message_protocol(&mut subscriber, s::UserId::Integer(10)).await;
-    p::assert_departure_message_protocol(&mut late_subscriber, s::UserId::Integer(10)).await;
-    Ok(())
-}
-
-#[tokio::test]
 async fn fake_peers_cover_user_replacement_and_republish_over_protocol_user_flow() -> s::TestResult
 {
     let _guard = st::full_stack_test_guard().await;

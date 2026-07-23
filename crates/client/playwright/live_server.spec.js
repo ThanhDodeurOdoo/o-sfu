@@ -8,12 +8,15 @@ import {
     createChannel,
     createConnectToken,
     createPeerPage,
+    disconnectPeer,
     forceRecoverableClose,
     latestBroadcastUpdate,
     latestInfoUpdate,
     latestTrackUpdate,
     localSenderEncodings,
-    localSenderTrackId,
+    observeNegotiationNeeded,
+    observeNegotiations,
+    pauseStream,
     peerLocalDescriptionSdp,
     peerSnapshot,
     publishSyntheticAudio,
@@ -21,8 +24,9 @@ import {
     publishSyntheticScreen,
     roomUserInfo,
     setStreamDownload,
+    sourceDescriptor,
     spawnLiveServer,
-    unpublishStream,
+    streamDiagnostics,
     updateInfo,
     waitForCameraSubscriptionSelectedRid,
     waitForDecodedRemoteVideoFrame,
@@ -32,12 +36,14 @@ import {
 const PUBLISHER_SESSION_ID = 41;
 const SUBSCRIBER_SESSION_ID = 42;
 
-test("default VP8 live publish applies RID simulcast and renders remotely", async ({
+test("default VP8 camera pauses and resumes without renegotiation", async ({
     browserName,
     context
 }) => {
+    test.setTimeout(60_000);
     const channelUuid = await createChannel();
     const publisher = await createPeerPage(context);
+    const negotiations = observeNegotiations(publisher);
     const subscriber = await createPeerPage(context);
 
     await connectPeer(publisher, {
@@ -52,9 +58,16 @@ test("default VP8 live publish applies RID simulcast and renders remotely", asyn
     await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
     await expect.poll(async () => (await peerSnapshot(subscriber)).state).toBe("connected");
 
-    await publishSyntheticCamera(publisher, "vp8-simulcast");
-
-    await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
+    await expectCommittedPauseResume({
+        browserName,
+        channelUuid,
+        firstLabel: "camera-one",
+        negotiations,
+        publisher,
+        resumedLabel: "camera-two",
+        streamType: "camera",
+        subscriber
+    });
     await expect
         .poll(async () => localSenderEncodings(publisher, "camera"))
         .toEqual([
@@ -79,17 +92,6 @@ test("default VP8 live publish applies RID simulcast and renders remotely", asyn
     expect(video.hasSendRidLo).toBeTruthy();
     expect(video.hasSendRidHi).toBeTruthy();
     expect(video.hasSendSimulcastLoHi).toBeTruthy();
-
-    if (browserName === "chromium") {
-        const decodedFrame = await waitForDecodedRemoteVideoFrame(
-            subscriber,
-            PUBLISHER_SESSION_ID,
-            "camera"
-        );
-        expect(decodedFrame.width).toBeGreaterThan(0);
-        expect(decodedFrame.height).toBeGreaterThan(0);
-        expect(decodedFrame.pixel.alpha).toBe(255);
-    }
 });
 
 test("browser compatibility upload and download flows survive live-server replacement", async ({
@@ -154,7 +156,7 @@ test("browser compatibility upload and download flows survive live-server replac
 
     await expectCameraTrackUpdate(subscriber, PUBLISHER_SESSION_ID, true);
 
-    await unpublishStream(replacement, "camera");
+    await disconnectPeer(replacement);
 
     await expect
         .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.camera ?? null)
@@ -196,12 +198,14 @@ test("late-joining subscriber receives the already-live publication", async ({ c
         });
 });
 
-test("audio and screen streams publish, replace and clean up independently", async ({
+test("audio and screen streams publish, pause and clean up independently", async ({
     browserName,
     context
 }) => {
+    test.setTimeout(60_000);
     const channelUuid = await createChannel();
     const publisher = await createPeerPage(context);
+    const negotiations = observeNegotiations(publisher);
     const subscriber = await createPeerPage(context);
 
     await connectPeer(publisher, {
@@ -240,16 +244,16 @@ test("audio and screen streams publish, replace and clean up independently", asy
 
     await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, "audio", true, "audio");
 
-    const firstScreen = await publishSyntheticScreen(publisher, "screen-one");
-
-    await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, "screen", true, "video");
-    await expectScreenSource(subscriber, PUBLISHER_SESSION_ID);
-    const canAssertScreenPixels = browserName === "chromium";
-    if (canAssertScreenPixels) {
-        await waitForDecodedRemoteVideoFrame(subscriber, PUBLISHER_SESSION_ID, "screen", {
-            expectedPixel: firstScreen.fillPixel
-        });
-    }
+    await expectCommittedPauseResume({
+        browserName,
+        channelUuid,
+        firstLabel: "screen-one",
+        negotiations,
+        publisher,
+        resumedLabel: "screen-two",
+        streamType: "screen",
+        subscriber
+    });
     await expect
         .poll(async () => localSenderEncodings(publisher, "screen"))
         .toEqual([
@@ -266,39 +270,6 @@ test("audio and screen streams publish, replace and clean up independently", asy
                 scaleResolutionDownBy: 1
             }
         ]);
-    await expect
-        .poll(async () => localSenderTrackId(publisher, "screen"))
-        .toBe(firstScreen.trackId);
-
-    const secondScreen = await publishSyntheticScreen(publisher, "screen-two");
-
-    expect(secondScreen.trackId).not.toBe(firstScreen.trackId);
-    await expect
-        .poll(async () => localSenderTrackId(publisher, "screen"))
-        .toBe(secondScreen.trackId);
-    if (canAssertScreenPixels) {
-        const secondScreenFrame = await waitForDecodedRemoteVideoFrame(
-            subscriber,
-            PUBLISHER_SESSION_ID,
-            "screen",
-            {
-                expectedPixel: secondScreen.fillPixel
-            }
-        );
-        expect(pixelDistance(secondScreenFrame.pixel, firstScreen.fillPixel)).toBeGreaterThan(96);
-    }
-    await expect
-        .poll(async () => {
-            return (
-                (await peerSnapshot(subscriber)).consumers[String(PUBLISHER_SESSION_ID)]?.screen ??
-                null
-            );
-        })
-        .toMatchObject({
-            enabled: true,
-            kind: "video",
-            readyState: "live"
-        });
 
     await setStreamDownload(subscriber, PUBLISHER_SESSION_ID, "screen", false);
 
@@ -308,23 +279,13 @@ test("audio and screen streams publish, replace and clean up independently", asy
 
     await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, "screen", true, "video");
 
-    await unpublishStream(publisher, "screen");
+    await disconnectPeer(publisher);
 
     await expect
-        .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.screen ?? null)
+        .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.audio ?? null)
         .toBeNull();
     await expect
-        .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.audio ?? null)
-        .toMatchObject({
-            enabled: true,
-            kind: "audio",
-            readyState: "live"
-        });
-
-    await unpublishStream(publisher, "audio");
-
-    await expect
-        .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.audio ?? null)
+        .poll(async () => (await peerSnapshot(subscriber)).consumers["41"]?.screen ?? null)
         .toBeNull();
 });
 
@@ -704,6 +665,142 @@ test("live browser negotiation keeps RTX pairs only for eligible optional codecs
     }
 });
 
+async function expectCommittedPauseResume({
+    browserName,
+    channelUuid,
+    firstLabel,
+    httpBaseUrl,
+    negotiations,
+    publisher,
+    resumedLabel,
+    streamType,
+    subscriber
+}) {
+    const firstTrack = await publishSyntheticStream(publisher, streamType, firstLabel);
+    await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, streamType, true, "video");
+    const activeDiagnostics = await expectStreamActivity(
+        subscriber,
+        channelUuid,
+        streamType,
+        true,
+        httpBaseUrl
+    );
+
+    const negotiationNeeded = await observeNegotiationNeeded(publisher);
+    const negotiationNeededCount = await negotiationNeeded();
+    const negotiationCount = negotiations.count();
+    const identity = streamIdentity(activeDiagnostics);
+
+    await pauseStream(publisher, streamType);
+    const pausedDiagnostics = await expectStreamActivity(
+        subscriber,
+        channelUuid,
+        streamType,
+        false,
+        httpBaseUrl
+    );
+
+    expect(streamIdentity(pausedDiagnostics)).toEqual(identity);
+    expect(await negotiationNeeded()).toBe(negotiationNeededCount);
+    expect(negotiations.count()).toBe(negotiationCount);
+
+    const resumedTrack = await publishSyntheticStream(publisher, streamType, resumedLabel);
+    const resumedDiagnostics = await expectStreamActivity(
+        subscriber,
+        channelUuid,
+        streamType,
+        true,
+        httpBaseUrl
+    );
+
+    expect(streamIdentity(resumedDiagnostics)).toEqual(identity);
+    expect(await negotiationNeeded()).toBe(negotiationNeededCount);
+    expect(negotiations.count()).toBe(negotiationCount);
+
+    if (browserName === "chromium") {
+        const frame = await waitForDecodedRemoteVideoFrame(
+            subscriber,
+            PUBLISHER_SESSION_ID,
+            streamType,
+            {
+                expectedPixel: resumedTrack.fillPixel
+            }
+        );
+        expect(frame.width).toBeGreaterThan(0);
+        expect(frame.height).toBeGreaterThan(0);
+        expect(frame.pixel.alpha).toBe(255);
+        expect(pixelDistance(frame.pixel, firstTrack.fillPixel)).toBeGreaterThan(96);
+    }
+}
+
+async function expectStreamActivity(subscriber, roomId, streamType, active, httpBaseUrl) {
+    const state = active ? "active" : "inactive";
+    await expect
+        .poll(() => streamState(roomId, streamType, httpBaseUrl))
+        .toMatchObject({
+            publication: { active },
+            source: { active },
+            subscription: { state }
+        });
+    await expect
+        .poll(() => sourceDescriptor(subscriber, PUBLISHER_SESSION_ID, streamType))
+        .toMatchObject({
+            active,
+            encodings: expect.any(Array),
+            mid: expect.any(String),
+            sessionId: PUBLISHER_SESSION_ID,
+            sourceId: expect.any(String),
+            type: streamType
+        });
+
+    const presenceField = streamType === "camera" ? "isCameraOn" : "isScreenSharingOn";
+    await expect
+        .poll(() => roomUserInfo({ httpBaseUrl, roomId, sessionId: PUBLISHER_SESSION_ID }))
+        .toMatchObject({
+            [presenceField]: active
+        });
+    await expect
+        .poll(() => latestInfoUpdate(subscriber, PUBLISHER_SESSION_ID))
+        .toMatchObject({
+            payload: {
+                [String(PUBLISHER_SESSION_ID)]: {
+                    [presenceField]: active
+                }
+            }
+        });
+
+    return streamState(roomId, streamType, httpBaseUrl);
+}
+
+function streamState(roomId, streamType, httpBaseUrl) {
+    return streamDiagnostics({
+        consumerSessionId: SUBSCRIBER_SESSION_ID,
+        httpBaseUrl,
+        producerSessionId: PUBLISHER_SESSION_ID,
+        roomId,
+        streamType
+    });
+}
+
+function publishSyntheticStream(page, streamType, label) {
+    return streamType === "camera"
+        ? publishSyntheticCamera(page, label)
+        : publishSyntheticScreen(page, label);
+}
+
+function streamIdentity({ publication, source, subscription }) {
+    return {
+        consumerTransportMediaId: subscription.consumerTransportMediaId,
+        publicationSourceId: publication.sourceId,
+        publicationTransportMediaId: publication.transportMediaId,
+        sourceId: source.sourceId,
+        sourceMid: source.mid,
+        sourceTransportMediaId: source.transportMediaId,
+        subscriptionSourceId: subscription.sourceId,
+        subscriptionSourceTransportMediaId: subscription.sourceTransportMediaId
+    };
+}
+
 async function expectCameraTrackUpdate(page, sessionId, active) {
     await expectTrackUpdate(page, sessionId, "camera", active, "video");
 }
@@ -737,31 +834,6 @@ function trackUpdateExpectation(sessionId, type, active, kind) {
 
 function pixelDistance(left, right) {
     return Math.hypot(left.red - right.red, left.green - right.green, left.blue - right.blue);
-}
-
-async function expectScreenSource(page, sessionId) {
-    await expect
-        .poll(async () => {
-            const snapshot = await peerSnapshot(page);
-            return (
-                snapshot.updates
-                    .filter((update) => update.name === "source")
-                    .flatMap((update) => update.payload.sources)
-                    .find(
-                        (source) =>
-                            source.active &&
-                            source.sessionId === sessionId &&
-                            source.type === "screen"
-                    ) ?? null
-            );
-        })
-        .toMatchObject({
-            active: true,
-            encodings: expect.any(Array),
-            sessionId,
-            sourceId: expect.any(String),
-            type: "screen"
-        });
 }
 
 function parseVideoCodecAnswer(sdp) {

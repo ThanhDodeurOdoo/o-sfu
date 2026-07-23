@@ -55,19 +55,13 @@ pub(super) struct MediaRouteDestination {
     pub(super) pending_gate: Option<PacketLayerGate>,
 }
 
-/// packet-loop fanout state for one producer media id
-///
-/// `source_active` is a source-wide route gate
-/// individual destinations still carry their own activity and layer gates so
-/// producer pause, consumer pause and selected-layer policy remain independent
+/// local packet-loop fanout for one producer media id
 ///
 /// callers must mutate `destinations` through this type's helpers
 /// `active_destination_count` is a cached admission invariant used by the hot
 /// planner before it walks the destination vector
 #[derive(Debug, Clone)]
 pub(super) struct MediaRouteEntry {
-    /// source-wide activity gate applied before local destination fanout
-    pub(super) source_active: bool,
     /// active local destinations cached for source-route admission checks
     pub(super) active_destination_count: usize,
     /// local consumer destinations reached from this source media id
@@ -76,12 +70,8 @@ pub(super) struct MediaRouteEntry {
 
 impl MediaRouteEntry {
     /// creates an empty route entry with no local destinations
-    ///
-    /// the active count starts at zero even when the source is active because
-    /// source activity and destination activity are independent gates
-    pub(super) fn new(source_active: bool) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            source_active,
             active_destination_count: 0,
             destinations: Vec::new(),
         }

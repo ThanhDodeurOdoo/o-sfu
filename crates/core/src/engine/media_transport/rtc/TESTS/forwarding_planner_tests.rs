@@ -338,6 +338,59 @@ fn plan_forwards_plans_relay_destinations_without_displacing_local_rtc_flush_ord
 }
 
 #[test]
+fn plan_forwards_gates_relay_only_sources_without_removing_targets() {
+    let producer_session = test_transport_session_key(35, 0, 36, UserId::Integer(37));
+    let mut state = PacketLoopState::default();
+    let packet_sink_registry = RoomPacketSinkRegistry::default();
+    let metrics = RuntimeMetrics::default();
+    let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
+    let src_media =
+        MediaWorkerScenario::new(&mut state).source(producer_session.clone(), Mid::from("cam-up"));
+    state
+        .routes
+        .add_relay_target(src_media, RelayTargetId::new(1), relay_mailbox);
+    state
+        .routes
+        .set_relay_target_active(src_media, RelayTargetId::new(1), true);
+
+    assert!(state.routes.set_source_active(src_media, false).is_ok());
+    assert!(state.routes.local_route(src_media).is_none());
+    assert_eq!(state.routes.active_relay_target_count(src_media), 1);
+    let forwards = plan_forwards(
+        &state,
+        &packet_sink_registry,
+        &metrics,
+        vec![sample_forwarded_packet(
+            producer_session.clone(),
+            "cam-up",
+            b"payload",
+        )],
+    );
+    assert_forward_plan(&state, &forwards, &[]);
+
+    assert!(state.routes.set_source_active(src_media, true).is_ok());
+    assert_eq!(state.routes.active_relay_target_count(src_media), 1);
+    let forwards = plan_forwards(
+        &state,
+        &packet_sink_registry,
+        &metrics,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "cam-up",
+            b"payload",
+        )],
+    );
+    assert_forward_plan(
+        &state,
+        &forwards,
+        &[(
+            0,
+            ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+        )],
+    );
+}
+
+#[test]
 fn plan_forwards_keeps_relay_packets_out_of_recording_and_second_hop_relay_sinks() {
     let producer_session = test_transport_session_key(41, 0, 42, UserId::Integer(43));
     let consumer_session = test_transport_session_key(41, 1, 44, UserId::Integer(45));

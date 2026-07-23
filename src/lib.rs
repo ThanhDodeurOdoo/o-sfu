@@ -169,10 +169,12 @@
 //!
 //! [`core::prelude::SfuCore`] owns admitted media-session construction and
 //! [`core::prelude::MediaSession`] owns the bridge from room intent to
-//! transport effects,
-//! they decide which [`core::prelude::SourcePublishIntent`] values exist, which
-//! receivers want them, which [`core::server::transport::SourcePacketGate`]
-//! should be installed and which resolved teardown operations must run
+//! transport effects.
+//! [`core::prelude::SourcePublishIntent`] starts or reactivates publication
+//! while [`core::prelude::SourceDeactivateIntent`] cancels an uncommitted
+//! publication or makes a committed source inactive without removing its
+//! identity or consumer routes. Session close and replacement perform resolved
+//! publication teardown.
 //!
 //! [`core::server::transport::SessionOffer`],
 //! [`core::server::transport::SessionUploadSlot`] and

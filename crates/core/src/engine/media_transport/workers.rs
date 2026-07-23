@@ -19,8 +19,8 @@ use crate::engine::{
         TransportBitrateSnapshot, TransportHealthSnapshot, TransportMediaId,
         TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
         TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
-        TransportSourceDiagnosticsSnapshot, TransportSourceKey, TransportTeardown,
-        TransportWorkerPressureSnapshot,
+        TransportSourceActivityEffect, TransportSourceDiagnosticsSnapshot, TransportSourceKey,
+        TransportTeardown, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -205,8 +205,8 @@ impl MediaTransport {
 
     /// Applies one cross-worker relay-route effect.
     ///
-    /// Relay installation uses the target worker mailbox while release and
-    /// activity updates address source-worker relay state.
+    /// Relay installation and subscriber activity address source-worker relay
+    /// state.
     pub(super) async fn execute_relay_route_effect(
         &self,
         effect: &TransportRelayRouteEffect,
@@ -227,6 +227,22 @@ impl MediaTransport {
         }
         let request = target_worker.relay_route_request(effect.source.clone(), effect.action);
         source_worker
+            .request_worker(|response| RtcWorkerCommand::RouteControl {
+                request,
+                response: Some(response),
+            })
+            .await
+    }
+
+    pub(super) async fn execute_remote_source_activity_effect(
+        &self,
+        effect: &TransportSourceActivityEffect,
+    ) -> Result<(), TransportAdapterError> {
+        let target_worker =
+            self.require_worker_for_media_worker_id(effect.target_media_worker_id)?;
+        let request =
+            RtcWorker::remote_source_activity_request(effect.source.clone(), effect.update);
+        target_worker
             .request_worker(|response| RtcWorkerCommand::RouteControl {
                 request,
                 response: Some(response),

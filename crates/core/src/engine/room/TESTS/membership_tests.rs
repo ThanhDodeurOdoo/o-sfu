@@ -268,6 +268,16 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
         )
         .await
         .expect("published camera should expose transport media");
+    assert!(
+        room.test_api()
+            .media()
+            .deactivate_publication(
+                &UserId::Integer(1),
+                &stream_id_for_source(TestSourceKind::ScalableVideo),
+                &media_transport,
+            )
+            .await
+    );
 
     assert!(
         room.remove_user_with_teardown(

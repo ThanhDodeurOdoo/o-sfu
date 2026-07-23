@@ -505,12 +505,13 @@ impl PacketLoopState {
             .get(consumer_key)?
             .consumer_mids
             .get(&consumer_mid)?;
-        let route_entry = self.routes.local_route(binding.src_media)?;
+        let (route_entry, source_active) =
+            self.routes.local_route_and_activity(binding.src_media)?;
         // a miss means feedback raced with route teardown or index repair
         let destination = route_entry.destinations.get(binding.dst_idx?)?;
         debug_assert_eq!(&destination.dest_session, consumer_key);
         debug_assert_eq!(destination.dest_transport_media_id, binding.consumer_media);
-        if !route_entry.source_active || !destination.active {
+        if !source_active || !destination.active {
             return None;
         }
         let DestinationKeyframeTarget::Current(rid) = destination.keyframe_target_rid(feedback_rid)

@@ -6,9 +6,9 @@ use super::{RoomGaugeDelta, receiver_route::ReceiverSetupTurn};
 use crate::engine::{
     media_transport::{
         ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaControlPlan,
-        MediaTransport, ProducerActivity, ReceiverBweTargetUpdate, TransportConsumerRoute,
-        TransportRelayRouteAction, TransportRelayRouteEffect, TransportSourceKey,
-        TransportTeardown,
+        MediaTransport, ProducerActivity, ReceiverBweTargetUpdate, SourceActivityUpdate,
+        TransportConsumerRoute, TransportRelayRouteAction, TransportRelayRouteEffect,
+        TransportSourceActivityEffect, TransportSourceKey, TransportTeardown,
     },
     room::{
         Room,
@@ -23,6 +23,7 @@ use crate::engine::{
 #[derive(Debug, Default)]
 pub(in crate::engine::room) struct RoomTransportPlan {
     relays: Vec<TransportRelayRouteEffect>,
+    remote_source_activity: Vec<TransportSourceActivityEffect>,
     teardown: Vec<TransportTeardown>,
     route_control: RoomRouteEffects,
     setup_turns: Vec<ReceiverSetupTurn>,
@@ -45,6 +46,8 @@ impl RoomTransportPlan {
 
     pub(in crate::engine::room) fn extend(&mut self, other: Self) {
         self.relays.extend(other.relays);
+        self.remote_source_activity
+            .extend(other.remote_source_activity);
         self.teardown.extend(other.teardown);
         self.route_control.append(other.route_control);
         self.setup_turns.extend(other.setup_turns);
@@ -61,10 +64,17 @@ impl RoomTransportPlan {
         &mut self,
         source: TransportSourceKey,
         stream_id: UserStreamId,
-        active: bool,
+        update: SourceActivityUpdate,
     ) {
         self.route_control
-            .producer_activity(source, stream_id, active);
+            .producer_activity(source, stream_id, update);
+    }
+
+    pub(super) fn extend_remote_source_activity(
+        &mut self,
+        effects: impl IntoIterator<Item = TransportSourceActivityEffect>,
+    ) {
+        self.remote_source_activity.extend(effects);
     }
 
     pub(super) fn push_receiver_work(
@@ -92,6 +102,7 @@ impl RoomTransportPlan {
         };
         let mut outcome = RoomTransportOutcome::default();
         execute_relay_route_effects(media_transport, self.relays).await;
+        execute_remote_source_activity_effects(media_transport, self.remote_source_activity).await;
         self.route_control
             .execute(room.uuid(), media_transport)
             .await;
@@ -127,16 +138,15 @@ impl RoomRouteEffects {
         &mut self,
         source: TransportSourceKey,
         stream_id: UserStreamId,
-        active: bool,
+        update: SourceActivityUpdate,
     ) {
-        let activity = ProducerActivity::from_active(active);
         self.0.push_producer(
             source.clone(),
-            activity,
+            update,
             ProducerRouteFinish {
                 source,
                 stream_id,
-                activity,
+                activity: update.activity(),
             },
         );
     }
@@ -394,6 +404,17 @@ async fn execute_relay_route_effects(
         }
     }
     applied
+}
+
+pub(super) async fn execute_remote_source_activity_effects(
+    media_transport: &MediaTransport,
+    effects: impl IntoIterator<Item = TransportSourceActivityEffect>,
+) {
+    for effect in effects {
+        let _ = media_transport
+            .apply_remote_source_activity_effect(&effect)
+            .await;
+    }
 }
 
 #[cfg(test)]

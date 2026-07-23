@@ -39,6 +39,24 @@ fn maps_discuss_streams_to_core_source_policy() {
     assert_audio_policy(&source_publish_intent_for_stream_type(StreamType::Audio));
     assert_camera_policy(&source_publish_intent_for_stream_type(StreamType::Camera));
     assert_screen_policy(&source_publish_intent_for_stream_type(StreamType::Screen));
+    assert!(
+        DiscussStream::for_type(StreamType::Audio)
+            .deactivate_intent()
+            .presence()
+            .is_none()
+    );
+    assert!(matches!(
+        DiscussStream::for_type(StreamType::Camera)
+            .deactivate_intent()
+            .presence(),
+        Some(info) if info.is_camera_on == Some(false)
+    ));
+    assert!(matches!(
+        DiscussStream::for_type(StreamType::Screen)
+            .deactivate_intent()
+            .presence(),
+        Some(info) if info.is_screen_sharing_on == Some(false)
+    ));
 }
 
 fn assert_audio_policy(intent: &SourcePublishIntent) {

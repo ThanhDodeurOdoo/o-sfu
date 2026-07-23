@@ -93,11 +93,62 @@ export async function createPeerPage(context) {
             localMedia: {},
             localTrack: null,
             localTrackTicker: null,
+            negotiationNeededByPeer: new WeakMap(),
             stateChanges: [],
             updates: []
         };
     }, AUDIO_OPERATION_TIMEOUT_MS);
     return page;
+}
+
+export function observeNegotiations(page) {
+    let requestCount = 0;
+    page.on("websocket", (socket) => {
+        socket.on("framereceived", ({ payload }) => {
+            const text = typeof payload === "string" ? payload : payload.toString();
+            let batch;
+            try {
+                batch = JSON.parse(text);
+            } catch {
+                return;
+            }
+            if (!Array.isArray(batch)) {
+                return;
+            }
+            for (const envelope of batch) {
+                if (
+                    (envelope?.t === "offer" || envelope?.t === "renegotiate") &&
+                    envelope.q !== undefined
+                ) {
+                    requestCount += 1;
+                }
+            }
+        });
+    });
+    return {
+        count: () => requestCount
+    };
+}
+
+export async function observeNegotiationNeeded(page) {
+    await page.evaluate(() => {
+        const harness = globalThis.__liveHarness;
+        const peer = harness.client?._runtime?._peerSession?._activePeer;
+        if (!peer || harness.negotiationNeededByPeer.has(peer)) {
+            return;
+        }
+        const observation = { count: 0 };
+        harness.negotiationNeededByPeer.set(peer, observation);
+        peer.addEventListener("negotiationneeded", () => {
+            observation.count += 1;
+        });
+    });
+    return () =>
+        page.evaluate(() => {
+            const harness = globalThis.__liveHarness;
+            const peer = harness.client?._runtime?._peerSession?._activePeer;
+            return harness.negotiationNeededByPeer.get(peer)?.count ?? null;
+        });
 }
 
 export async function connectPeer(page, { channelUuid, jwt, url = TEST_SFU_WS_URL }) {
@@ -271,16 +322,30 @@ export async function setStreamDownload(
     );
 }
 
-export async function unpublishStream(page, streamType) {
+export async function pauseStream(page, streamType) {
     assertStreamType(streamType);
-    await page.evaluate(async (streamType) => {
+    await page.evaluate((streamType) => {
         const harness = globalThis.__liveHarness;
         if (!harness.client) {
             throw new Error("browser harness client is not connected");
         }
         harness.client.updateUpload(streamType, null);
-        await globalThis.__liveHarnessStopLocalMedia(harness, streamType);
     }, streamType);
+}
+
+export async function disconnectPeer(page) {
+    await page.evaluate(
+        async (streamTypes) => {
+            const harness = globalThis.__liveHarness;
+            harness.client?.disconnect();
+            await Promise.all(
+                streamTypes.map((streamType) =>
+                    globalThis.__liveHarnessStopLocalMedia(harness, streamType)
+                )
+            );
+        },
+        [...STREAM_TYPES]
+    );
 }
 
 export async function broadcast(page, message) {
@@ -463,20 +528,52 @@ export async function localSenderEncodings(page, streamType) {
     }, streamType);
 }
 
-export async function localSenderTrackId(page, streamType) {
+export async function sourceDescriptor(page, sessionId, streamType) {
     assertStreamType(streamType);
-    return page.evaluate((targetStreamType) => {
-        const harness = globalThis.__liveHarness;
-        const peerConnection = harness.client?._runtime?._peerSession?._activePeer;
-        const localTrack = harness.localMedia?.[targetStreamType]?.track ?? null;
-        if (!peerConnection || !localTrack) {
-            return null;
-        }
-        const transceiver = peerConnection
-            .getTransceivers()
-            .find((candidate) => candidate.sender.track === localTrack);
-        return transceiver?.sender.track?.id ?? null;
-    }, streamType);
+    return page.evaluate(
+        ({ sessionId: targetSessionId, streamType: targetStreamType }) => {
+            const sources = globalThis.__liveHarness.client?.sourceDescriptors ?? [];
+            const source = sources.find(
+                (candidate) =>
+                    String(candidate.sessionId) === String(targetSessionId) &&
+                    candidate.type === targetStreamType
+            );
+            return source ? structuredClone(source) : null;
+        },
+        { sessionId, streamType }
+    );
+}
+
+export async function streamDiagnostics({
+    consumerSessionId,
+    httpBaseUrl = TEST_SFU_HTTP_BASE_URL,
+    producerSessionId,
+    roomId,
+    streamType
+}) {
+    assertStreamType(streamType);
+    const room = await fetchRoomDiagnostics(httpBaseUrl, roomId);
+    const producer = room?.users.find((user) => userIdsMatch(user.userId, producerSessionId));
+    const consumer = room?.users.find((user) => userIdsMatch(user.userId, consumerSessionId));
+    const publication =
+        producer?.publications.find((candidate) => candidate.streamId === streamType) ?? null;
+    const source =
+        room?.sources.find(
+            (candidate) =>
+                userIdsMatch(candidate.ownerUserId, producerSessionId) &&
+                candidate.streamId === streamType
+        ) ?? null;
+    const subscription =
+        consumer?.subscriptions.find(
+            (candidate) =>
+                userIdsMatch(candidate.producerUserId, producerSessionId) &&
+                candidate.streamId === streamType
+        ) ?? null;
+    return {
+        publication,
+        source,
+        subscription
+    };
 }
 
 export async function waitForUserMediaWorker({
@@ -667,8 +764,8 @@ function assertStreamType(streamType) {
 }
 
 function syntheticVideoColors(streamType, label) {
-    if (streamType !== "screen") {
-        return ["#14324a", "#5b2d1f"];
+    if (streamType === "camera") {
+        return label.includes("two") ? ["#d00068", "#f5a000"] : ["#14324a", "#5b2d1f"];
     }
     return label.includes("two") ? ["#d00068"] : ["#0060d4"];
 }

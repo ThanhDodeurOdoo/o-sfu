@@ -6,12 +6,12 @@ use o_sfu_router::{
 };
 use tracing::warn;
 
-use super::super::super::{Room, UnpublishIntentOutcome, transition::StagedPublish};
+use super::super::super::{DeactivateIntentOutcome, Room, transition::StagedPublish};
 use crate::engine::{
     ConnectionId, TestSourceKind, UserId,
     media_transport::{MediaTransport, TransportMediaId},
     source_model::{
-        SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,
+        SourceDeactivateIntent, SourcePublishIntent, SourceSubscriptionIntent, UserStreamId,
         test_support::source_publish_intent_for_source,
     },
 };
@@ -126,7 +126,7 @@ impl RoomTestMedia<'_> {
             .await
     }
 
-    pub async fn unpublish_track(
+    pub async fn deactivate_publication(
         self,
         user_id: &UserId,
         stream_id: &UserStreamId,
@@ -143,32 +143,9 @@ impl RoomTestMedia<'_> {
         };
         self.room
             .user_operation(user_id, connection_id, media_transport)
-            .stop_publish(&SourceUnpublishIntent::new(stream_id.clone()))
+            .deactivate_publication(&SourceDeactivateIntent::new(stream_id.clone()))
             .await
-            != UnpublishIntentOutcome::Noop
-    }
-
-    pub async fn set_publication_active(
-        self,
-        user_id: &UserId,
-        stream_id: &UserStreamId,
-        active: bool,
-        media_transport: &MediaTransport,
-    ) -> bool {
-        let connection_id = self
-            .room
-            .test_api()
-            .inspect()
-            .user_connection_id(user_id)
-            .await;
-        let Some(connection_id) = connection_id else {
-            return false;
-        };
-        self.room
-            .user_operation(user_id, connection_id, media_transport)
-            .set_publication_active(stream_id, active)
-            .await
-            .is_some()
+            != DeactivateIntentOutcome::Noop
     }
 
     pub async fn update_subscription(

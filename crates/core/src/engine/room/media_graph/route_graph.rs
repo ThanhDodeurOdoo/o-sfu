@@ -11,6 +11,7 @@ use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
     media_transport::{
         RelayRouteActivity, TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
+        TransportSourceKey,
     },
     source_model::{PublishedSourceId, SourceSubscriptionIntent},
 };
@@ -401,6 +402,21 @@ impl RouteGraph {
             (relay.replace(next.clone()), next)
         };
         self.replace_relay(&reservation.key, previous, &relay)
+    }
+
+    pub(super) fn source_activity_target_workers<'a>(
+        &'a self,
+        source: &'a TransportSourceKey,
+    ) -> impl Iterator<Item = MediaWorkerId> + 'a {
+        let session = source.session_key();
+        self.relays
+            .keys()
+            .filter(move |route| {
+                route.source_user == *session.user_id()
+                    && route.source_connection == session.connection_id()
+                    && route.source_media == source.transport_media_id()
+            })
+            .map(|route| route.target_worker)
     }
 
     fn entry(&mut self, key: SubscriptionKey) -> &mut Subscription {

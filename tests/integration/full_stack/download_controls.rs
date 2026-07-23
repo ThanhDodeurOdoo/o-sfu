@@ -22,7 +22,7 @@ async fn fake_rtc_peers_forward_media_and_stop_after_download_mute_without_brows
 }
 
 #[tokio::test]
-async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() -> s::TestResult {
+async fn fake_rtc_peers_pause_and_resume_retained_upload_route() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
     let st::ReadyRoomFakePeers {
         server,
@@ -31,12 +31,7 @@ async fn fake_rtc_peers_stop_forwarding_after_explicit_upload_unpublish() -> s::
         mut subscriber,
     } = st::ready_room_fake_integer_peers("issuer-f", 70, 71).await?;
 
-    f::assert_audio_media_arrives_and_explicit_unpublish_stops_flow(
-        &server,
-        &room,
-        &mut publisher,
-        &mut subscriber,
-    )
-    .await;
+    f::assert_audio_publication_pause_and_resume(&server, &room, &mut publisher, &mut subscriber)
+        .await;
     Ok(())
 }

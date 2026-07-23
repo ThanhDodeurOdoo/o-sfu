@@ -23,10 +23,11 @@ impl User {
                 self.subscribe(payload.user_id, payload.states).await
             }
             ClientEnvelope::Message(ClientMessage::Publish(payload)) => {
-                self.publish(payload.stream_type, true).await
+                self.set_publication_active(payload.stream_type, true).await
             }
             ClientEnvelope::Message(ClientMessage::Unpublish(payload)) => {
-                self.publish(payload.stream_type, false).await
+                self.set_publication_active(payload.stream_type, false)
+                    .await
             }
             ClientEnvelope::Response {
                 response_to,

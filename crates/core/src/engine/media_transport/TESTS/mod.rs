@@ -23,10 +23,10 @@ use crate::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
             ConsumerActivity, ConsumerRouteControl, MediaControlPlan, ProducerActivity,
-            ReceiverBweTargetUpdate, RelayRouteActivity, SessionOffer, SourcePacketGate,
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId,
-            TransportRelayRouteAction, TransportRelayRouteEffect, TransportResult,
-            TransportSessionHealth, TransportSessionKey, TransportSourceKey,
+            ReceiverBweTargetUpdate, RelayRouteActivity, SessionOffer, SourceActivityRevision,
+            SourceActivityUpdate, SourcePacketGate, TransportAdapterError, TransportConsumerRoute,
+            TransportMediaId, TransportRelayRouteAction, TransportRelayRouteEffect,
+            TransportResult, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
             rtc::{RtcWorker, WorkerMediaControlBatchOutcome},
             test_support::{
                 DebugPacketGate, test_media_transport as build_test_media_transport,
@@ -292,7 +292,14 @@ async fn assert_media_control_batch_bound(
         } else {
             source.clone()
         };
-        bounded.push_producer(producer, ProducerActivity::Active, index);
+        bounded.push_producer(
+            producer,
+            SourceActivityUpdate::new(
+                ProducerActivity::Active,
+                SourceActivityRevision::default().next(),
+            ),
+            index,
+        );
         bounded.push_consumer(
             ConsumerRouteControl::new(route.clone()).activity(ConsumerActivity::Active),
             index,
@@ -407,11 +414,33 @@ async fn media_transport_plan_updates_source_route() {
         ReceiverBweTargetUpdate::new(consumer_session.clone(), Bitrate::from_kbps(600)),
         ReceiverBweTargetUpdate::new(missing_session, Bitrate::from_kbps(700)),
     ]);
-    plan.push_producer(source.clone(), ProducerActivity::Inactive, 0);
-    plan.push_producer(peer_source.clone(), ProducerActivity::Inactive, 1);
-    plan.push_producer(source.clone(), ProducerActivity::Active, 2);
-    plan.push_producer(peer_source, ProducerActivity::Active, 3);
-    plan.push_producer(missing_source, ProducerActivity::Inactive, 4);
+    let first_revision = SourceActivityRevision::default().next();
+    let second_revision = first_revision.next();
+    plan.push_producer(
+        source.clone(),
+        SourceActivityUpdate::new(ProducerActivity::Inactive, first_revision),
+        0,
+    );
+    plan.push_producer(
+        peer_source.clone(),
+        SourceActivityUpdate::new(ProducerActivity::Inactive, first_revision),
+        1,
+    );
+    plan.push_producer(
+        source.clone(),
+        SourceActivityUpdate::new(ProducerActivity::Active, second_revision),
+        2,
+    );
+    plan.push_producer(
+        peer_source,
+        SourceActivityUpdate::new(ProducerActivity::Active, second_revision),
+        3,
+    );
+    plan.push_producer(
+        missing_source,
+        SourceActivityUpdate::new(ProducerActivity::Inactive, first_revision),
+        4,
+    );
     let follow_up = |route, rid: Option<&str>, active| {
         let packet_gate = rid.map_or(SourcePacketGate::Open, |rid| {
             SourcePacketGate::Rid(rid.into())

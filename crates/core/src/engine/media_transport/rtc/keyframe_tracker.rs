@@ -93,27 +93,18 @@ impl KeyframeRequestTracker {
     }
 
     pub fn forget(&mut self, src_media: TransportMediaId, rid: Option<Rid>) {
-        if let Some(index) = self
-            .pending
-            .iter()
-            .position(|request| request.request.targets(src_media, rid))
-        {
-            self.pending.swap_remove(index);
-        }
+        self.remove_pending(|request| request.request.targets(src_media, rid));
     }
 
     pub fn forget_source(&mut self, src_media: TransportMediaId) {
-        self.pending
-            .retain(|request| request.request.src_media != src_media);
+        self.remove_pending(|request| request.request.src_media == src_media);
     }
 
     pub fn observe_refresh(&mut self, src_media: TransportMediaId, rid: Option<Rid>) -> usize {
-        let before = self.pending.len();
-        self.pending.retain(|request| {
-            request.request.src_media != src_media
-                || (request.request.rid.is_some() && request.request.rid != rid)
-        });
-        before - self.pending.len()
+        self.remove_pending(|request| {
+            request.request.src_media == src_media
+                && (request.request.rid.is_none() || request.request.rid == rid)
+        })
     }
 
     pub fn drain_due(&mut self, now: Instant, retries: &mut Vec<SourceKeyframeRequest>) {
@@ -123,7 +114,6 @@ impl KeyframeRequestTracker {
             Some(Reverse(deadline)) if deadline.deadline <= now
         ) && remaining > 0
         {
-            remaining -= 1;
             let Some(Reverse(deadline)) = self.deadlines.pop() else {
                 break;
             };
@@ -134,6 +124,7 @@ impl KeyframeRequestTracker {
             else {
                 continue;
             };
+            remaining -= 1;
             let Some(request) = self.pending.get_mut(index) else {
                 continue;
             };
@@ -154,6 +145,21 @@ impl KeyframeRequestTracker {
         self.deadlines
             .peek()
             .map(|Reverse(deadline)| deadline.deadline)
+    }
+
+    fn remove_pending(&mut self, mut remove: impl FnMut(&KeyframeRequestState) -> bool) -> usize {
+        let mut removed = 0;
+        let mut index = 0;
+        while let Some(request) = self.pending.get(index) {
+            if remove(request) {
+                let id = self.pending.swap_remove(index).id;
+                self.deadlines.retain(|Reverse(deadline)| deadline.id != id);
+                removed += 1;
+            } else {
+                index += 1;
+            }
+        }
+        removed
     }
 }
 

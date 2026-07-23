@@ -13,7 +13,8 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, RelayRouteActivity, TransportAdapterError, TransportMediaId,
+            ConsumerActivity, ProducerActivity, RelayRouteActivity, SourceActivityRevision,
+            SourceActivityUpdate, TransportAdapterError, TransportMediaId,
             TransportRelayRouteAction, TransportSessionKey, TransportTeardown,
             test_support::{
                 DebugRouteEntry, test_media_transport_config, test_media_transport_deps,
@@ -133,7 +134,14 @@ async fn route_activity_events_survive_transport_failure() -> Result<(), Box<dyn
     let target =
         ConsumerRouteTarget::for_test(route, UserStreamId::from("camera"), MediaKind::Video);
     let mut routes = RoomRouteEffects::default();
-    routes.producer_activity(source, UserStreamId::from("camera"), false);
+    routes.producer_activity(
+        source,
+        UserStreamId::from("camera"),
+        SourceActivityUpdate::new(
+            ProducerActivity::Inactive,
+            SourceActivityRevision::default().next(),
+        ),
+    );
     routes.receiver_activity(ReceiverRouteActivity::new(target, false));
 
     routes
@@ -240,7 +248,10 @@ impl RouteFixture {
         routes.producer_activity(
             self.route.source().clone(),
             UserStreamId::from("camera"),
-            false,
+            SourceActivityUpdate::new(
+                ProducerActivity::Inactive,
+                SourceActivityRevision::default().next(),
+            ),
         );
         routes.receiver_activity(ReceiverRouteActivity::new(self.target.clone(), false));
 
@@ -259,8 +270,7 @@ impl RouteFixture {
             .execute("room-route-effects", &self.media_transport)
             .await;
 
-        let expected_keyframes = if active { keyframes + 1 } else { keyframes };
-        assert_eq!(self.keyframe_request_count(), expected_keyframes);
+        assert_eq!(self.keyframe_request_count(), keyframes);
         self.assert_route_state(usize::from(active), active).await
     }
 

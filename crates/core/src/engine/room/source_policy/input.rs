@@ -102,7 +102,7 @@ fn rank_room_active_speakers(
         state
             .topology
             .source_for_transport_media(source.transport_media_id())
-            .is_some()
+            .is_some_and(|source| source.active)
     });
     sources.sort_unstable_by_key(|source| {
         (

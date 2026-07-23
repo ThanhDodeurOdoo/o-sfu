@@ -8,7 +8,6 @@ use crate::engine::{
         Room,
         media_graph::{
             ConsumerSetupOrigin, ProducerActivityCommit, PublishCommit, ReceiverRouteCommit,
-            UnpublishCommit,
         },
         source_policy::SourcePolicyTurn,
         state::{
@@ -59,6 +58,7 @@ impl<'a> RoomEffectContext<'a> {
 #[must_use = "room effect batches must be executed after the state transition commits"]
 pub struct RoomEffects {
     gauges: Vec<RoomGaugeDelta>,
+    policy_before_transport: bool,
     transport: RoomTransportPlan,
     output: RoomOutputPlan,
     source_policy: SourcePolicyTurn,
@@ -147,26 +147,21 @@ impl RoomEffects {
         let ProducerActivityCommit {
             source,
             stream_id,
-            active,
+            update,
+            remote_activity_effects,
             source_snapshots,
             presence,
         } = commit;
-        let mut batch = Self::default();
-        batch.transport.push_producer(source, stream_id, active);
+        let mut batch = Self {
+            policy_before_transport: update.activity().is_active(),
+            ..Self::default()
+        };
+        batch
+            .transport
+            .extend_remote_source_activity(remote_activity_effects);
+        batch.transport.push_producer(source, stream_id, update);
         batch.output.push_source_snapshots(source_snapshots);
         batch.push_presence(presence);
-        batch.source_policy.fanout_pressure_changed();
-        batch
-    }
-
-    pub(in crate::engine::room) fn from_unpublish(commit: UnpublishCommit) -> Self {
-        let mut batch = Self::default();
-        batch
-            .gauges
-            .push(RoomGaugeDelta::media(commit.before, commit.after));
-        batch.transport.extend(commit.transport_plan);
-        batch.output.push_source_snapshots(commit.source_snapshots);
-        batch.push_presence(commit.presence);
         batch.source_policy.route_graph_changed();
         batch
     }
@@ -190,7 +185,6 @@ impl RoomEffects {
 
     fn push_presence(&mut self, presence: Option<PresenceCommit>) {
         if let Some(presence) = presence {
-            self.output.push_source_snapshots(presence.source_snapshots);
             self.output.push_user_info(presence.fanout);
             self.source_policy.receiver_intent_changed();
         }
@@ -205,10 +199,38 @@ impl RoomEffects {
 
     /// preserves the room-wide side-effect order across transport and policy work
     pub async fn execute(self, room: &Room, context: RoomEffectContext<'_>) {
+        if self.policy_before_transport {
+            let _guard = room.source_policy_turn.lock().await;
+            self.execute_inner(room, context, true).await;
+        } else {
+            self.execute_inner(room, context, false).await;
+        }
+    }
+
+    pub(in crate::engine::room) async fn execute_with_source_policy_guard(
+        self,
+        room: &Room,
+        context: RoomEffectContext<'_>,
+    ) {
+        self.execute_inner(room, context, true).await;
+    }
+
+    async fn execute_inner(
+        self,
+        room: &Room,
+        context: RoomEffectContext<'_>,
+        source_policy_guarded: bool,
+    ) {
         let mut gauges = self.gauges;
         let mut output = self.output;
         let mut source_policy = self.source_policy;
         record_gauges(&mut gauges, room);
+        if self.policy_before_transport {
+            source_policy
+                .execute_guarded(room, context.media_transport(), None)
+                .await;
+            source_policy = SourcePolicyTurn::default();
+        }
         let transport_outcome = self
             .transport
             .execute(room, context.route_transport())
@@ -217,9 +239,15 @@ impl RoomEffects {
         source_policy.extend(&transport_outcome.source_policy);
         record_gauges(&mut gauges, room);
         output.emit_before_policy();
-        source_policy
-            .execute(room, context.media_transport(), None)
-            .await;
+        if source_policy_guarded {
+            source_policy
+                .execute_guarded(room, context.media_transport(), None)
+                .await;
+        } else {
+            source_policy
+                .execute(room, context.media_transport(), None)
+                .await;
+        }
         output.emit_after_policy();
     }
 }

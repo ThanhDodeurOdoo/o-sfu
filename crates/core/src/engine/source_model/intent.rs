@@ -59,14 +59,17 @@ impl SourcePublishIntent {
     }
 }
 
-/// Unpublish intent for one user stream, optionally carrying a presence patch.
+/// Deactivation intent for one user stream.
+///
+/// Pending first publication is cancelled. A committed publication keeps its
+/// source identity and negotiated media until session teardown.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceUnpublishIntent {
+pub struct SourceDeactivateIntent {
     stream_id: UserStreamId,
     presence: Option<UserInfo>,
 }
 
-impl SourceUnpublishIntent {
+impl SourceDeactivateIntent {
     #[must_use]
     pub fn new(stream_id: UserStreamId) -> Self {
         Self {

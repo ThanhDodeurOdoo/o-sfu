@@ -10,5 +10,3 @@ mod source_policy;
 mod staged_negotiation;
 #[path = "producer_tests/support.rs"]
 mod support;
-#[path = "producer_tests/teardown.rs"]
-mod teardown;

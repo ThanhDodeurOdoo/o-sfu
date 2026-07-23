@@ -107,6 +107,39 @@ impl ProducerActivity {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd)]
+pub(crate) struct SourceActivityRevision(u64);
+
+impl SourceActivityRevision {
+    #[must_use]
+    pub(crate) const fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SourceActivityUpdate {
+    activity: ProducerActivity,
+    revision: SourceActivityRevision,
+}
+
+impl SourceActivityUpdate {
+    #[must_use]
+    pub(crate) const fn new(activity: ProducerActivity, revision: SourceActivityRevision) -> Self {
+        Self { activity, revision }
+    }
+
+    #[must_use]
+    pub(crate) const fn activity(self) -> ProducerActivity {
+        self.activity
+    }
+
+    #[must_use]
+    pub(crate) const fn revision(self) -> SourceActivityRevision {
+        self.revision
+    }
+}
+
 /// consumer-side transport activity state
 ///
 /// a consumer can be inactive while the room still owns the subscription

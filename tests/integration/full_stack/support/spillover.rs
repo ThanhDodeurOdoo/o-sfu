@@ -298,7 +298,6 @@ pub(crate) async fn assert_load_triggered_spillover_release_route_flow(
         publisher_user_id,
     )
     .await;
-
     let mut clock = FakeClock::default();
     assert_synthetic_video_packet_forwarded(
         publisher,

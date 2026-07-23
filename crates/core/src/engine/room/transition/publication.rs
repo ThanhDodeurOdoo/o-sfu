@@ -32,7 +32,7 @@ use super::super::{
 use crate::engine::{ConnectionId, UserId};
 use crate::engine::{
     media_transport::{AppliedSessionAnswer, TransportAdapterError},
-    source_model::{SourcePublishIntent, SourceUnpublishIntent, UserStreamId},
+    source_model::{SourceDeactivateIntent, SourcePublishIntent, UserStreamId},
 };
 
 mod staging;
@@ -51,10 +51,10 @@ pub enum PublishIntentOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnpublishIntentOutcome {
+pub enum DeactivateIntentOutcome {
     Noop,
     RolledBack,
-    Unpublished,
+    Deactivated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +151,7 @@ impl RoomUserOperation<'_> {
         if has_staged_publish {
             return Ok(PublishIntentOutcome::Noop);
         }
+        let source_policy_guard = self.room.source_policy_turn.lock().await;
         let plan = {
             let mut state = self.room.state.write().await;
             state.apply_publish_intent(self.user_id, self.connection_id, intent, can_stage)
@@ -160,9 +161,16 @@ impl RoomUserOperation<'_> {
                 self.execute_publication_activity(commit).await;
                 Ok(PublishIntentOutcome::Activated)
             }
-            PublishIntentPlan::Noop => Ok(PublishIntentOutcome::Noop),
-            PublishIntentPlan::Queue => Ok(PublishIntentOutcome::Queue),
+            PublishIntentPlan::Noop => {
+                drop(source_policy_guard);
+                Ok(PublishIntentOutcome::Noop)
+            }
+            PublishIntentPlan::Queue => {
+                drop(source_policy_guard);
+                Ok(PublishIntentOutcome::Queue)
+            }
             PublishIntentPlan::Stage(validated) => {
+                drop(source_policy_guard);
                 if self.stage_validated_publish(validated).await? == PublishStageOutcome::Staged {
                     Ok(PublishIntentOutcome::Staged)
                 } else {
@@ -185,18 +193,29 @@ impl RoomUserOperation<'_> {
         true
     }
 
-    pub(crate) async fn stop_publish(
+    pub(crate) async fn deactivate_publication(
         self,
-        intent: &SourceUnpublishIntent,
-    ) -> UnpublishIntentOutcome {
+        intent: &SourceDeactivateIntent,
+    ) -> DeactivateIntentOutcome {
         if self.rollback_staged_publish(intent.stream_id()).await {
-            return UnpublishIntentOutcome::RolledBack;
+            return DeactivateIntentOutcome::RolledBack;
         }
-        if self.unpublish(intent).await {
-            UnpublishIntentOutcome::Unpublished
-        } else {
-            UnpublishIntentOutcome::Noop
-        }
+        let _source_policy_guard = self.room.source_policy_turn.lock().await;
+        let commit = {
+            let mut state = self.room.state.write().await;
+            state.apply_publication_activity(
+                self.user_id,
+                self.connection_id,
+                intent.stream_id(),
+                false,
+                intent.presence(),
+            )
+        };
+        let Ok(commit) = commit else {
+            return DeactivateIntentOutcome::Noop;
+        };
+        self.execute_publication_activity(commit).await;
+        DeactivateIntentOutcome::Deactivated
     }
 
     pub(crate) async fn commit_staged_publishes(self, applied_answer: &AppliedSessionAnswer) {
@@ -211,45 +230,13 @@ impl RoomUserOperation<'_> {
         }
     }
 
-    #[cfg(any(test, feature = "testing-transport"))]
-    pub(crate) async fn set_publication_active(
-        self,
-        stream_id: &UserStreamId,
-        active: bool,
-    ) -> Option<()> {
-        let commit = {
-            let mut state = self.room.state.write().await;
-            state.apply_publication_activity(
-                self.user_id,
-                self.connection_id,
-                stream_id,
-                active,
-                None,
-            )
-        };
-        let commit = commit.ok()?;
-        self.execute_publication_activity(commit).await;
-        Some(())
-    }
-
     async fn execute_publication_activity(self, commit: ProducerActivityCommit) {
         RoomEffects::from_publication_activity(commit)
-            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
+            .execute_with_source_policy_guard(
+                self.room,
+                RoomEffectContext::runtime(self.media_transport),
+            )
             .await;
-    }
-
-    async fn unpublish(self, intent: &SourceUnpublishIntent) -> bool {
-        let commit = {
-            let mut state = self.room.state.write().await;
-            state.unpublish_track(self.user_id, self.connection_id, intent)
-        };
-        let Some(commit) = commit else {
-            return false;
-        };
-        RoomEffects::from_unpublish(commit)
-            .execute(self.room, RoomEffectContext::runtime(self.media_transport))
-            .await;
-        true
     }
 }
 

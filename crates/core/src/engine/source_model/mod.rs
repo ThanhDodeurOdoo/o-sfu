@@ -14,8 +14,9 @@
 //! inventory without redefining it around local worker placement.
 //!
 //! Application layers should express stream-specific behavior by constructing
-//! [`SourcePublishIntent`] values. Core policy reads the source
-//! [`SourcePolicy`] carried by each source, never compatibility stream labels.
+//! [`SourcePublishIntent`] and [`SourceDeactivateIntent`] values. Core policy
+//! reads the source [`SourcePolicy`] carried by each source, never compatibility
+//! stream labels.
 //!
 //! # Upload layer profiles
 //!
@@ -36,7 +37,7 @@ pub use descriptor::{
 };
 pub use diagnostics::{OverBudgetExceptionReason, ReceiverVideoBudgetDiagnostics};
 pub use ids::{PublishedSourceId, PublishedSourceOwner, SourceEncodingId, UserStreamId};
-pub use intent::{SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent};
+pub use intent::{SourceDeactivateIntent, SourcePublishIntent, SourceSubscriptionIntent};
 pub use policy::{
     ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, PolicyPauseReason,
     SourceAdaptationPolicy, SourceLayoutPolicy, SourcePolicy, SourceRoomPolicySelector,
