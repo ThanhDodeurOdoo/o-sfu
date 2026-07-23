@@ -47,7 +47,7 @@ tokio = { version = "1.52", features = [
     "sync",
     "time",
 ] }
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 tokio-util = "0.7"
 tracing = "0.1"
 thiserror = "2.0"
