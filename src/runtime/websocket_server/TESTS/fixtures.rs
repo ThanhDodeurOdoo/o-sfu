@@ -41,8 +41,8 @@ pub(super) use crate::{
         http_server::app,
         media_transport::MediaTransport,
         room::{
-            JoinUserRequest, Room, RoomConfig, RoomManager, UserOutboundQueueLimits,
-            UserOutboundReceiver, UserOutboundSender,
+            JoinPlacementTestGate, JoinUserRequest, Room, RoomConfig, RoomManager,
+            UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSender,
         },
         test_support::{RuntimeMetricsSnapshotTestExt, RuntimeTestBuilder},
     },
@@ -609,17 +609,6 @@ pub(super) async fn read_websocket_ping(websocket: &mut TestWebSocket) -> Option
     }
 }
 
-pub(super) async fn send_websocket_pong(
-    websocket: &mut TestWebSocket,
-    payload: Vec<u8>,
-) -> Option<()> {
-    websocket
-        .send(tungstenite::Message::Pong(payload.into()))
-        .await
-        .ok()?;
-    Some(())
-}
-
 pub(super) async fn read_text_message(websocket: &mut TestWebSocket) -> Option<String> {
     loop {
         let message = websocket.next().await?;
@@ -660,6 +649,13 @@ pub(super) async fn read_close_code(websocket: &mut TestWebSocket) -> Option<Clo
             | tungstenite::Message::Frame(_) => {}
         }
     }
+}
+
+pub(super) async fn read_close_code_promptly(websocket: &mut TestWebSocket) -> Option<CloseCode> {
+    timeout(Duration::from_secs(1), read_close_code(websocket))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// reads until the timeout close frame arrives without answering ping frames

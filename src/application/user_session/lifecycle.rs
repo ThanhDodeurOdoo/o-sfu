@@ -57,10 +57,8 @@ impl User {
     }
 
     pub async fn close(&mut self) {
-        if !self.cleanup_finished {
-            self.media.close().await;
-            self.cleanup_finished = true;
-        }
+        self.media.close().await;
+        self.cleanup_finished = true;
     }
 
     pub(super) async fn reject_stale_connection(&self) -> Result<(), UserError> {

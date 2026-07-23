@@ -179,6 +179,7 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         ws_user_loop_exits_user_closed => WsUserLoopExitsTotal &[("reason", "user_closed")],
         ws_user_loop_exits_ping_timeout => WsUserLoopExitsTotal &[("reason", "ping_timeout")],
         ws_user_loop_exits_transport_disconnected => WsUserLoopExitsTotal &[("reason", "transport_disconnected")],
+        ws_user_loop_exits_runtime_shutdown => WsUserLoopExitsTotal &[("reason", "runtime_shutdown")],
         ws_bus_parse_failures => WsBusParseFailuresTotal &[],
         ws_bus_invalid_input_failures => WsBusFailuresTotal &[("kind", "invalid_input")],
         ws_bus_unsupported_feature_failures => WsBusFailuresTotal &[("kind", "unsupported_feature")],

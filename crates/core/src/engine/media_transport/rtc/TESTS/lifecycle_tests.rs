@@ -1,15 +1,12 @@
-use std::sync::mpsc;
-
 use futures_util::future::join_all;
 use str0m::{Event, IceConnectionState};
-use tokio::{sync::oneshot, time::timeout};
+use tokio::{sync::oneshot, task::spawn_blocking, time::timeout};
 
 use super::fixtures::*;
 use crate::engine::media_transport::rtc::{
     commands::{RtcWorkerCommand, WorkerMediaControlBatch},
     packet_loop::{transport_health_from_event, transport_ice_state},
-    state::{PacketLoopState, TransportSessionHealth},
-    worker::WorkerCommandContext,
+    state::TransportSessionHealth,
 };
 
 fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
@@ -187,33 +184,19 @@ async fn rtc_transport_close_last_session_reuses_idle_packet_loop_worker() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
+async fn rtc_worker_finishes_accepted_commands_and_cancelled_drop_is_nonblocking() {
     let adapter = RtcWorker::default();
     let first_session = transport_key(1, 144, UserId::Integer(144));
     let second_session = transport_key(1, 145, UserId::Integer(145));
     let _offer = expect_initial_offer(&adapter, &first_session).await;
     let _offer = expect_initial_offer(&adapter, &second_session).await;
     let worker_handle = adapter.test_handle();
-
-    let (probe_entered_tx, probe_entered_rx) = oneshot::channel();
-    let (release_probe_tx, release_probe_rx) = mpsc::channel();
     let updates = [(first_session.clone(), 640), (second_session.clone(), 720)];
-    let debug_handle = worker_handle.debug_handle.clone();
-    let probe = tokio::spawn(async move {
-        debug_handle
-            .probe(move |_: &PacketLoopState, _: &WorkerCommandContext<'_>| {
-                let _ = probe_entered_tx.send(());
-                release_probe_rx
-                    .recv_timeout(Duration::from_secs(1))
-                    .expect("test should release the blocking probe");
-            })
-            .await
-    });
     timeout(Duration::from_secs(1), async {
-        probe_entered_rx
+        let (release_probe_tx, probe) = adapter
+            .pause_for_test()
             .await
             .expect("blocking probe should enter the worker");
-
         let (response_tx, response_rx) = oneshot::channel();
         worker_handle
             .command_tx
@@ -251,6 +234,26 @@ async fn rtc_accepted_command_completes_after_response_waiter_is_dropped() {
     })
     .await
     .expect("accepted worker command should complete before timeout");
+    let (release, probe) = adapter
+        .pause_for_test()
+        .await
+        .expect("blocking probe should enter the worker");
+
+    adapter.cancel();
+    let dropped = timeout(
+        Duration::from_secs(1),
+        spawn_blocking(move || drop(adapter)),
+    )
+    .await;
+
+    release
+        .send(())
+        .expect("blocked worker should still be waiting");
+    assert!(matches!(dropped, Ok(Ok(()))));
+    assert!(matches!(
+        timeout(Duration::from_secs(1), probe).await,
+        Ok(Ok(Some(())))
+    ));
 }
 
 #[tokio::test]

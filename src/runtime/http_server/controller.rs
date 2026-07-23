@@ -1,6 +1,5 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
 
-use anyhow::Result;
 use axum::{
     Router,
     extract::{DefaultBodyLimit, MatchedPath, Path, Request, State},
@@ -41,7 +40,7 @@ const MAX_DISCONNECT_BODY_BYTES: usize = 16 * 1024;
 pub(crate) async fn serve_http(
     state: RuntimeState,
     shutdown_token: CancellationToken,
-) -> Result<()> {
+) -> io::Result<()> {
     let listener = TcpListener::bind(state.config.http.bind_address).await?;
     serve_http_on(listener, state, shutdown_token).await
 }
@@ -50,7 +49,7 @@ pub(crate) async fn serve_http_on(
     listener: TcpListener,
     state: RuntimeState,
     shutdown_token: CancellationToken,
-) -> Result<()> {
+) -> io::Result<()> {
     let local_address = listener.local_addr()?;
     info!(
         event = telemetry_event::HTTP_LISTENER_READY,
@@ -64,8 +63,7 @@ pub(crate) async fn serve_http_on(
         app(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_token.cancelled_owned())
-    .await?;
-    Ok(())
+    .await
 }
 
 /// builds the Axum router for the HTTP control plane and WebSocket listener

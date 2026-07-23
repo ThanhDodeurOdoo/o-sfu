@@ -1,33 +1,10 @@
-//! websocket handshake admission boundary
+//! Authenticates the first WebSocket envelope before room admission.
 //!
-//! this module handles the cold path that authenticates an upgraded socket
-//! the controller handles HTTP upgrade admission
-//! the steady-state session loop handles authenticated signaling
-//! this file covers the narrow interval where the socket is open but not yet
-//! a room user
-//!
-//! admission has four ordered steps:
-//!
-//! - receive exactly one first-frame `auth` envelope before the configured auth timeout
-//! - select the candidate room from the explicit auth payload channel or from a JWT room id
-//! - verify the same JWT with the selected room key before trusting claims
-//! - return the authenticated room join intent to the session owner
-//!
-//! the order is security-critical because decoded JWT contents can only select
-//! a candidate room
-//! identity, permissions and optional labels become trusted only after
-//! room-key verification succeeds
-//! current Odoo uses the explicit payload channel path and signs a legacy
-//! room-scoped token without a room id claim
-//!
-//! rejection is terminal for the socket
-//! helpers that return `None` have already recorded metrics and sent any close
-//! frame that should reach the peer
-//!
-//! pre-auth capacity is released as soon as authentication succeeds and before
-//! room admission allocates post-auth user resources
+//! Room selection precedes JWT verification for legacy Odoo tokens. Decoded
+//! claims select only a candidate room and become trusted after verification
+//! with that room's key.
 
-use std::{sync::Arc, time::Duration};
+use std::{str, sync::Arc, time::Duration};
 
 use axum::extract::ws::Message;
 use futures_util::StreamExt;
@@ -52,26 +29,14 @@ use crate::{
     },
 };
 
-/// legacy Odoo WebSocket claims scoped by the selected room key
-///
-/// current Odoo sends the room id as [`AuthPayload::channel`], not as a signed JWT claim
-/// the JWT still authenticates the user because it is signed with the
-/// room key selected during channel creation
-/// this shape keeps that compatibility path explicit so the modern
-/// [`WebSocketConnectClaims`] verifier can stay room-id-bound
+/// Legacy Odoo claims use [`AuthPayload::channel`] instead of a room-id claim.
 #[derive(Deserialize)]
 struct RoomScopedConnectClaims {
-    /// registered JWT lifetime claims validated by the shared verifier
     #[serde(flatten)]
     registered: RegisteredJwtClaims,
-    /// odoo RTC session id before runtime normalization
     #[serde(rename = "user_id", alias = "session_id")]
     user_id: UserId,
-    /// optional display label forwarded into room membership
-    #[serde(default)]
     label: Option<String>,
-    /// optional room permissions forwarded into room membership
-    #[serde(default)]
     permissions: Option<UserPermissions>,
 }
 
@@ -80,165 +45,92 @@ pub(super) struct AuthenticatedJoin {
     pub(super) claims: WebSocketConnectClaims,
 }
 
-/// authenticate one upgraded socket before room admission
-///
-/// auth failures send terminal close frames
-/// successful authentication returns the room and trusted claims consumed by
-/// the active session owner
-pub(super) async fn receive(
-    state: &WebSocketServices,
-    writer: &mut WsWriter,
-    reader: &mut WsReader,
-    remote_address: &str,
-) -> Option<AuthenticatedJoin> {
-    receive_and_authenticate(state, writer, reader, remote_address).await
+pub(super) enum HandshakeError {
+    PeerClosed,
+    Rejected(WebSocketCloseCode),
+    Shutdown,
 }
 
-/// read the first client frame under the authentication timeout
-///
-/// `Ok(None)` means the peer closed before a frame was available
-/// error variants carry the close code that should be reported by
-/// `reject_handshake`
+/// returns the authenticated room join intent without admitting the user
+pub(super) async fn authenticate(
+    state: &WebSocketServices,
+    reader: &mut WsReader,
+    remote_address: &str,
+) -> Result<AuthenticatedJoin, HandshakeError> {
+    let auth = receive_auth(state, reader).await;
+    if state.shutdown.is_cancelled() {
+        return Err(HandshakeError::Shutdown);
+    }
+    let auth = auth?;
+    state.metrics.record_ws_handshake_credentials_received();
+    let auth = verify_auth_payload(state, &auth, remote_address).await;
+    if state.shutdown.is_cancelled() {
+        return Err(HandshakeError::Shutdown);
+    }
+    auth.map_err(HandshakeError::Rejected)
+}
+
 async fn receive_auth(
     state: &WebSocketServices,
     reader: &mut WsReader,
-) -> Result<Option<AuthPayload>, Option<WebSocketCloseCode>> {
-    match timeout(
-        Duration::from_millis(state.auth.authentication_timeout_ms),
-        reader.next(),
-    )
-    .await
-    {
-        Err(_) => {
-            debug!("timed out waiting for initial websocket auth payload");
-            Err(Some(WebSocketCloseCode::AuthTimeout))
-        }
-        Ok(None) => Ok(None),
-        Ok(Some(Err(_error))) => {
-            debug!("websocket reader returned an error before authentication completed");
-            Err(Some(WebSocketCloseCode::Error))
-        }
-        Ok(Some(Ok(message))) => parse_auth_payload(message).map(Some).map_err(Some),
-    }
-}
-
-/// receive first-frame auth and convert parse failures into socket rejection
-///
-/// this helper is the last point where malformed unauthenticated input can fail
-/// without room context
-/// once it returns an `AuthPayload`, later failures are authentication or
-/// room-admission failures
-async fn receive_auth_or_reject(
-    state: &WebSocketServices,
-    writer: &mut WsWriter,
-    reader: &mut WsReader,
-    remote_address: &str,
-) -> Option<AuthPayload> {
-    match receive_auth(state, reader).await {
-        Ok(Some(auth_payload)) => {
-            state.metrics.record_ws_handshake_credentials_received();
-            Some(auth_payload)
-        }
-        Ok(None) => None,
-        Err(close_code) => {
-            reject_handshake(
-                state,
-                Some(writer),
-                close_code,
-                remote_address,
-                "rejecting websocket during auth receive",
-            )
-            .await
+) -> Result<AuthPayload, HandshakeError> {
+    tokio::select! {
+        biased;
+        () = state.shutdown.cancelled() => Err(HandshakeError::Shutdown),
+        result = timeout(
+            Duration::from_millis(state.auth.authentication_timeout_ms),
+            reader.next(),
+        ) => match result {
+            Err(_) => {
+                debug!("timed out waiting for initial websocket auth payload");
+                Err(HandshakeError::Rejected(WebSocketCloseCode::AuthTimeout))
+            }
+            Ok(None) => Err(HandshakeError::PeerClosed),
+            Ok(Some(Err(_error))) => {
+                debug!("websocket reader returned an error before authentication completed");
+                Err(HandshakeError::Rejected(WebSocketCloseCode::Error))
+            }
+            Ok(Some(Ok(message))) => parse_auth_payload(message).map_err(HandshakeError::Rejected),
         }
     }
 }
 
-/// receive the auth frame and authenticate it against a room
-///
-/// the duration metric includes first-frame wait time plus JWT verification
-/// because both contribute to unauthenticated socket pressure
-async fn receive_and_authenticate(
-    state: &WebSocketServices,
-    writer: &mut WsWriter,
-    reader: &mut WsReader,
-    remote_address: &str,
-) -> Option<AuthenticatedJoin> {
-    let _guard = state.metrics.track_ws_authentication();
-    let auth_payload = receive_auth_or_reject(state, writer, reader, remote_address).await?;
-    verify_auth_or_reject(state, writer, &auth_payload, remote_address).await
-}
-
-/// extract the protocol auth payload from the first WebSocket message
 fn parse_auth_payload(message: Message) -> Result<AuthPayload, WebSocketCloseCode> {
-    let payload = auth_payload_text(message)?;
-    decode_auth_payload_text(&payload)
-}
-
-/// normalize the accepted first-frame wire shapes into UTF-8 JSON text
-///
-/// text and binary frames are accepted for compatibility with WebSocket clients
-/// control frames before authentication are protocol errors except close, which
-/// is treated as clean shutdown
-fn auth_payload_text(message: Message) -> Result<String, WebSocketCloseCode> {
     match message {
-        Message::Text(payload) => {
-            if payload.len() > MAX_CLIENT_FRAME_BYTES {
-                return Err(WebSocketCloseCode::ProtocolError);
-            }
-            Ok(payload.to_string())
+        Message::Text(payload) if payload.len() <= MAX_CLIENT_FRAME_BYTES => {
+            decode_auth_payload_text(&payload)
         }
-        Message::Binary(payload) => {
-            if payload.len() > MAX_CLIENT_FRAME_BYTES {
-                return Err(WebSocketCloseCode::ProtocolError);
-            }
-            String::from_utf8(payload.to_vec()).map_err(|_error| WebSocketCloseCode::ProtocolError)
+        Message::Binary(payload) if payload.len() <= MAX_CLIENT_FRAME_BYTES => {
+            str::from_utf8(&payload)
+                .map_err(|_error| WebSocketCloseCode::ProtocolError)
+                .and_then(decode_auth_payload_text)
         }
         Message::Close(_) => Err(WebSocketCloseCode::Clean),
-        Message::Ping(_) | Message::Pong(_) => Err(WebSocketCloseCode::ProtocolError),
+        _ => Err(WebSocketCloseCode::ProtocolError),
     }
 }
 
-/// decodes the first WebSocket authentication frame
-///
-/// the frame must contain exactly one signaling envelope and that envelope must
-/// be an auth message
-/// steady-state client batches are decoded by `decode_client_batch`
+/// Decodes the single auth envelope required as the first WebSocket frame.
 ///
 /// # Errors
 ///
-/// returns the close code that the WebSocket edge uses when the frame is not a
-/// valid authentication batch
+/// Returns the close code for an invalid authentication batch.
 pub fn decode_auth_payload_text(payload: &str) -> Result<AuthPayload, WebSocketCloseCode> {
-    let mut batch =
-        decode_client_batch(payload).map_err(|_error| WebSocketCloseCode::ProtocolError)?;
-    if batch.len() != 1 {
+    let batch = decode_client_batch(payload).map_err(|_error| WebSocketCloseCode::ProtocolError)?;
+    let [envelope] = batch.try_into().map_err(|batch: Vec<ClientEnvelope>| {
         warn!(
             batch_len = batch.len(),
             "authentication batch must contain exactly one envelope"
         );
-        return Err(WebSocketCloseCode::ProtocolError);
-    }
-    let Some(envelope) = batch.pop() else {
+        WebSocketCloseCode::ProtocolError
+    })?;
+    let ClientEnvelope::Message(ClientMessage::Auth(auth_payload)) = envelope else {
+        debug!("first websocket envelope was not an auth message");
         return Err(WebSocketCloseCode::ProtocolError);
     };
-    match envelope {
-        ClientEnvelope::Message(ClientMessage::Auth(auth_payload)) => Ok(auth_payload),
-        ClientEnvelope::Message(_)
-        | ClientEnvelope::Request { .. }
-        | ClientEnvelope::Response { .. } => {
-            debug!("first websocket envelope was not an auth message");
-            Err(WebSocketCloseCode::ProtocolError)
-        }
-    }
+    Ok(auth_payload)
 }
 
-/// resolve a room and verify the JWT with that room's key
-///
-/// room selection happens before verification so current Odoo can continue to
-/// send the room id in the auth payload
-/// untrusted token fields are used only for candidate room lookup when the
-/// payload has no channel
-/// the returned claims have passed room-key verification
 async fn verify_auth_payload(
     state: &WebSocketServices,
     auth_payload: &AuthPayload,
@@ -254,19 +146,13 @@ async fn verify_auth_payload(
     Ok(AuthenticatedJoin { room, claims })
 }
 
-/// select the candidate room without trusting user claims
-///
-/// explicit `AuthPayload.channel` is the current Odoo path
-/// an absent channel falls back to the token room-id claim shape by decoding
-/// the JWT payload only for room lookup
-/// the caller must still run room-key verification before using any claim data
+/// Selects the candidate room without trusting decoded claims.
 async fn resolve_handshake_room(
     state: &WebSocketServices,
     auth_payload: &AuthPayload,
 ) -> Result<Arc<Room>, WebSocketCloseCode> {
     let Some(explicit_room_id) = auth_payload.channel.as_deref() else {
-        // this decode is only a room-directory lookup hint
-        // trust starts after the token verifies with the selected room key
+        // The decoded room id is only a lookup hint until room-key verification.
         let unverified_claims = auth::decode_unverified_claims::<WebSocketConnectClaims>(
             &auth_payload.jwt,
         )
@@ -279,11 +165,6 @@ async fn resolve_handshake_room(
     resolve_room_by_id(state, explicit_room_id).await
 }
 
-/// look up the selected room id in the live room directory
-///
-/// missing rooms are authentication failures because the client is trying to
-/// join an admission boundary that no longer exists or never existed in this
-/// process
 async fn resolve_room_by_id(
     state: &WebSocketServices,
     room_id: &str,
@@ -301,13 +182,6 @@ async fn resolve_room_by_id(
         })
 }
 
-/// verify user claims with the selected room key
-///
-/// modern claims must contain the same room id that selected the room
-/// legacy Odoo claims omit a room id and are accepted only after the token
-/// verifies with the selected room key
-/// the legacy path constructs canonical `WebSocketConnectClaims` so the rest of
-/// the runtime sees one claim shape
 fn authenticate_room_scoped_claims(
     token: &str,
     key: &str,
@@ -327,8 +201,6 @@ fn authenticate_room_scoped_claims(
         return Ok(claims);
     }
 
-    // current Odoo signs user tokens with the room key but keeps the room id
-    // outside the token in `AuthPayload.channel`
     let claims = auth::verify::<RoomScopedConnectClaims>(token, key).map_err(|_error| {
         warn!(
             remote_address,
@@ -347,51 +219,21 @@ fn authenticate_room_scoped_claims(
     Ok(claims)
 }
 
-/// authenticate a parsed payload and turn auth failures into terminal rejection
-async fn verify_auth_or_reject(
+pub(super) async fn reject(
     state: &WebSocketServices,
     writer: &mut WsWriter,
-    auth_payload: &AuthPayload,
-    remote_address: &str,
-) -> Option<AuthenticatedJoin> {
-    match verify_auth_payload(state, auth_payload, remote_address).await {
-        Ok(result) => Some(result),
-        Err(code) => {
-            reject_handshake(
-                state,
-                Some(writer),
-                Some(code),
-                remote_address,
-                "rejecting websocket during authentication",
-            )
-            .await
-        }
-    }
-}
-
-/// record terminal rejection and close the socket when there is a close code
-///
-/// returning `None` lets call sites use the helper directly in `Option` chains
-pub(super) async fn reject_handshake<T>(
-    state: &WebSocketServices,
-    writer: Option<&mut WsWriter>,
-    close_code: Option<WebSocketCloseCode>,
+    code: WebSocketCloseCode,
     remote_address: &str,
     message: &str,
-) -> Option<T> {
-    state.metrics.record_ws_handshake_rejection(close_code);
-    if let Some(code) = close_code {
-        info!(
-            event = telemetry_event::WS_HANDSHAKE_REJECTED,
-            close_code = u16::from(code),
-            remote_address,
-            "{message}"
-        );
-        if let Some(writer) = writer {
-            close_writer_bounded(writer, code).await;
-        }
-    }
-    None
+) {
+    state.metrics.record_ws_handshake_rejection(Some(code));
+    info!(
+        event = telemetry_event::WS_HANDSHAKE_REJECTED,
+        close_code = u16::from(code),
+        remote_address,
+        "{message}"
+    );
+    close_writer_bounded(writer, code).await;
 }
 
 #[cfg(test)]

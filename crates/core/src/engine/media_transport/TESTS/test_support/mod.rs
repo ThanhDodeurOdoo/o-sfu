@@ -11,7 +11,7 @@ use {
         io::ErrorKind,
         net::{SocketAddrV4, UdpSocket},
         path::{Path, PathBuf},
-        sync::{Mutex, OnceLock, atomic::Ordering},
+        sync::{Mutex, OnceLock, atomic::Ordering, mpsc},
         time::{Duration, Instant, SystemTime},
     },
     str0m::media::Mid,
@@ -82,6 +82,17 @@ impl MediaTransport {
 
 #[cfg(any(test, feature = "testing-transport"))]
 impl MediaTransportTestApi<'_> {
+    /// Pauses the first RTC worker until the returned sender receives a value.
+    pub async fn pause_first_worker(self) -> Option<mpsc::Sender<()>> {
+        let (release, _probe) = self
+            .transport
+            .all_workers()
+            .next()?
+            .pause_for_test()
+            .await?;
+        Some(release)
+    }
+
     /// Returns the number of worker source-diagnostics commands issued.
     #[must_use]
     pub fn source_diagnostics_request_count(self) -> usize {

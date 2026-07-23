@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use o_sfu::{
-    Runtime,
+    Runtime, ServeError,
     auth::{
         HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims, WebSocketConnectClaims, sign,
     },
@@ -39,13 +39,14 @@ use o_sfu_telemetry::diagnostics::{
 use reqwest::StatusCode;
 use tokio::{
     net::{TcpListener, TcpStream},
-    task::{JoinHandle, yield_now},
+    task::yield_now,
     time::timeout,
 };
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{Message, protocol::frame::coding::CloseCode},
 };
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 
 pub type TestWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
@@ -68,7 +69,8 @@ pub fn require_some<T>(value: Option<T>, context: &'static str) -> Result<T> {
 #[derive(Debug)]
 pub struct TestServer {
     addr: SocketAddr,
-    handle: JoinHandle<()>,
+    handle: AbortOnDropHandle<Result<(), ServeError>>,
+    shutdown: CancellationToken,
 }
 
 const TEST_POLL_DEADLINE: Duration = Duration::from_secs(5);
@@ -84,6 +86,21 @@ impl TestServer {
     #[must_use]
     pub fn http_base_url(&self) -> String {
         format!("http://{}", self.addr)
+    }
+
+    pub fn stop(&self) {
+        self.shutdown.cancel();
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the server fails, panics or is cancelled.
+    pub async fn join(self) -> Result<()> {
+        self.shutdown.cancel();
+        self.handle
+            .await
+            .map_err(|error| anyhow!("test server task failed: {error}"))?
+            .map_err(Into::into)
     }
 
     pub async fn wait_for_room_absence(&self, room_id: &str) -> bool {
@@ -348,37 +365,24 @@ fn stream_id_for_stream_type(stream_type: StreamType) -> &'static str {
     }
 }
 
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
-}
-
-/// Spawn the real axum server on an ephemeral port for integration tests.
+/// Spawns the production server on an ephemeral port.
 ///
 /// # Errors
 ///
-/// Returns an error when the runtime cannot be constructed, the test listener
-/// cannot bind, or the local socket address cannot be read.
-///
-/// # Panics
-///
-/// Panics in the spawned server task if the production listener exits with an
-/// error instead of being aborted by test cleanup.
+/// Returns an error when runtime construction or listener binding fails.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let runtime = Runtime::new(&config)?;
     let listener = TcpListener::bind(config.http.bind_address).await?;
     let addr = listener
         .local_addr()
         .map_err(|error| anyhow!("failed to read test listener address: {error}"))?;
-    let handle = tokio::spawn(async move {
-        let result = runtime.serve_listener(listener).await;
-        assert!(
-            result.is_ok(),
-            "test server should stop cleanly: {result:?}"
-        );
-    });
-    Ok(TestServer { addr, handle })
+    let shutdown = CancellationToken::new();
+    let handle = tokio::spawn(runtime.serve_listener(listener, shutdown.clone().cancelled_owned()));
+    Ok(TestServer {
+        addr,
+        handle: AbortOnDropHandle::new(handle),
+        shutdown,
+    })
 }
 
 pub async fn spawn_room_server_with_config(
@@ -403,6 +407,7 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
         http: HttpConfig {
             bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
             trust_proxy_headers: true,
+            shutdown_timeout_ms: 10_000,
         },
         user: UserConfig {
             room_size,

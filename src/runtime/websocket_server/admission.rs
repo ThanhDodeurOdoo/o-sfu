@@ -51,12 +51,11 @@ impl PreAuthWebSocketAdmission {
 
     pub(super) fn try_acquire(
         &self,
-        origin: &str,
+        origin: Arc<str>,
     ) -> Result<PreAuthWebSocketPermit, PreAuthWebSocketAdmissionRejection> {
         let global_permit = Arc::clone(&self.global)
             .try_acquire_owned()
             .map_err(|_error| PreAuthWebSocketAdmissionRejection::Global)?;
-        let origin = Arc::<str>::from(origin);
         let mut origins = lock_origins(&self.origins);
         let origin_admission =
             origins

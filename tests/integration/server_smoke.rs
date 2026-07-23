@@ -11,9 +11,10 @@ use o_sfu_protocol::wire::{
     SubscribePayload, UserId,
 };
 use o_sfu_tests::support::{
-    TEST_ROOM_KEY, TestResult, TestServer, create_room, disconnect_sessions_via_http, metrics_text,
+    TEST_ROOM_KEY, TestResult, TestServer, connect_websocket, create_room,
+    disconnect_sessions_via_http, metrics_text,
     protocol_harness::{ProtocolWebSocketClient, connect_protocol_pair, read_until_server_message},
-    require_some, signed_connect_claims, spawn_test_server, test_config,
+    read_close_code, require_some, signed_connect_claims, spawn_test_server, test_config,
 };
 use reqwest::StatusCode;
 use tokio::time::{Duration, timeout};
@@ -95,6 +96,28 @@ async fn initial_offer(client: &mut ProtocolWebSocketClient) -> TestResult<Serve
         "initial offer should be sent",
     )?;
     Ok(request)
+}
+
+#[tokio::test]
+async fn runtime_shutdown_drains_pending_and_admitted_websockets() -> TestResult {
+    let (server, room) = server_with_room("issuer-runtime-shutdown").await?;
+    let mut pending = require_some(
+        connect_websocket(&server).await,
+        "pending websocket should connect",
+    )?;
+    let mut admitted = client_in_room(&server, &room, UserId::Integer(700)).await?;
+    assert!(matches!(
+        initial_offer(&mut admitted).await?,
+        ServerRequest::Offer(_)
+    ));
+
+    server.stop();
+    let pending_close = timeout(Duration::from_secs(1), read_close_code(&mut pending)).await?;
+    let admitted_close = timeout(Duration::from_secs(1), admitted.read_close_code()).await?;
+    assert_eq!(pending_close, Some(CloseCode::Away));
+    assert_eq!(admitted_close, Some(CloseCode::Away));
+    assert!(connect_websocket(&server).await.is_none());
+    server.join().await
 }
 
 #[tokio::test]

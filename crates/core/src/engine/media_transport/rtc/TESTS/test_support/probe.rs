@@ -130,7 +130,7 @@ pub trait DebugProbe: Send + 'static {
     ) -> Self::Output;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 impl<F, Output> DebugProbe for F
 where
     F: FnOnce(&PacketLoopState, &WorkerCommandContext<'_>) -> Output + Send + 'static,

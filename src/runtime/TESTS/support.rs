@@ -3,6 +3,8 @@ use std::{
     sync::Arc,
 };
 
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
 pub(super) use crate::runtime::metrics::test_support::RuntimeMetricsSnapshotTestExt;
 use crate::{
     config::{
@@ -49,6 +51,7 @@ impl RuntimeTestBuilder {
                 http: HttpConfig {
                     bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
                     trust_proxy_headers: false,
+                    shutdown_timeout_ms: 10_000,
                 },
                 user: UserConfig {
                     room_size: 100,
@@ -136,10 +139,12 @@ impl RuntimeTestBuilder {
         );
         let runtime_config = RuntimeConfig::from_config(&self.config);
         let state = RuntimeState::from_parts(
-            &runtime_config,
+            runtime_config,
             Arc::clone(&room_manager),
             Arc::clone(&services.metrics),
             media_transport.clone(),
+            CancellationToken::new(),
+            TaskTracker::new(),
         );
         RuntimeTestState {
             state,

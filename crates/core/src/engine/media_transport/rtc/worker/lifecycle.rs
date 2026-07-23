@@ -34,6 +34,7 @@ use std::{
 use tokio::{
     runtime::Builder as TokioRuntimeBuilder,
     sync::{mpsc, oneshot},
+    task::yield_now,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -181,8 +182,11 @@ fn panic_message(payload: &(dyn Any + Send)) -> &str {
 
 impl Drop for RtcWorker {
     fn drop(&mut self) {
+        let shutdown_started = self.shutdown.is_cancelled();
         self.shutdown.cancel();
-        if let Some(thread) = self.thread.take() {
+        if let Some(thread) = self.thread.take()
+            && (!shutdown_started || thread.is_finished())
+        {
             let _ = thread.join();
         }
     }
@@ -291,6 +295,19 @@ impl RtcWorker {
             #[cfg(test)]
             source_policy_signal: test_source_policy_signal,
         })
+    }
+
+    pub(in crate::engine::media_transport) fn cancel(&self) {
+        self.shutdown.cancel();
+    }
+
+    pub(in crate::engine::media_transport) async fn wait_for_shutdown(&self) {
+        self.handle.command_tx.closed().await;
+        if let Some(thread) = &self.thread {
+            while !thread.is_finished() {
+                yield_now().await;
+            }
+        }
     }
 
     /// sends a request command to the ready worker

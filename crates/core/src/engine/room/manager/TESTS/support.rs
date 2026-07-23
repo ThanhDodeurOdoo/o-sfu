@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use o_sfu_router::test_support::rtp_samples::sample_client_rtp_capabilities;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 use super::JoinPlacementTestGate;
 use super::{
     super::{RoomAdmissionPolicy, RoomRuntimePolicy},
     RoomManager, RoomManagerConfig,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::sync::lock_unpoisoned;
 use crate::{RoomMediaLimits, RuntimeFeatureFlags, engine::metrics::RuntimeMetrics};
 
@@ -45,12 +45,12 @@ impl RoomManager {
         Self::new(config, Arc::new(RuntimeMetrics::default()))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub fn set_join_placement_gate_for_test(&self, gate: Arc<JoinPlacementTestGate>) {
         *lock_unpoisoned(&self.join_placement_gate) = Some(gate);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn join_placement_gate_for_test(&self) -> Option<Arc<JoinPlacementTestGate>> {
         lock_unpoisoned(&self.join_placement_gate).clone()
     }

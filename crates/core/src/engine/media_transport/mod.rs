@@ -121,6 +121,21 @@ fn warn_session_command_failed(
 }
 
 impl MediaTransport {
+    /// Cancels every RTC worker without waiting for termination.
+    pub fn cancel(&self) {
+        for worker in self.workers.iter() {
+            worker.cancel();
+        }
+    }
+
+    /// Cancels every RTC worker and waits for its thread to terminate.
+    pub async fn shutdown(&self) {
+        self.cancel();
+        for worker in self.workers.iter() {
+            worker.wait_for_shutdown().await;
+        }
+    }
+
     /// returns the router capability snapshot compiled from the RTC wire profile
     #[must_use]
     pub fn router_rtp_capabilities(&self) -> MediaCapabilities {

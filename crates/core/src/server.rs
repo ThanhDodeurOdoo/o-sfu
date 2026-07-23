@@ -59,7 +59,7 @@ pub mod room {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
-    pub use crate::engine::room::ConsumerRouteState;
+    pub use crate::engine::room::{ConsumerRouteState, JoinPlacementTestGate};
     pub use crate::{
         MediaWorkerId,
         engine::room::{

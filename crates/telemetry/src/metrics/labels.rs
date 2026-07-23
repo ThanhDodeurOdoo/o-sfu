@@ -60,6 +60,7 @@ pub(super) trait ExportedMetricLabelPair: MetricLabel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsSessionLoopExitReason {
+    RuntimeShutdown,
     UserClosed,
     ReaderError,
     BusBreak,
@@ -427,6 +428,7 @@ impl_exported_metric_label!(WsSessionLoopExitReason {
     OutboundCloseSignal => (6, "outbound_close_signal"),
     OutboundMessageSendFailure => (7, "outbound_message_send_failure"),
     OutboundQueueOverflow => (8, "outbound_queue_overflow"),
+    RuntimeShutdown => (9, "runtime_shutdown"),
 });
 
 impl_exported_metric_label!(WsBusDirection {

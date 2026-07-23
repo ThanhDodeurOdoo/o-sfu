@@ -198,10 +198,7 @@ async fn websocket_rejects_mismatched_negotiation_response_kind() {
     .await;
 
     assert_eq!(
-        timeout(Duration::from_secs(1), read_close_code(&mut websocket))
-            .await
-            .ok()
-            .flatten(),
+        read_close_code_promptly(&mut websocket).await,
         Some(CloseCode::Protocol),
     );
 }
@@ -242,10 +239,7 @@ async fn invalid_protocol_initial_answer_closes_before_user_negotiates() {
     );
 
     assert_eq!(
-        timeout(Duration::from_secs(1), read_close_code(&mut websocket))
-            .await
-            .ok()
-            .flatten(),
+        read_close_code_promptly(&mut websocket).await,
         Some(CloseCode::Protocol),
     );
     assert!(

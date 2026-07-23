@@ -125,14 +125,12 @@ async fn websocket_times_out_when_client_never_authenticates() {
         return;
     };
 
-    let close_code = timeout(Duration::from_secs(1), read_close_code(&mut websocket)).await;
-    assert!(
-        close_code.is_ok(),
-        "timeout close should arrive promptly: {close_code:?}"
+    assert_eq!(
+        read_close_code_promptly(&mut websocket).await,
+        Some(CloseCode::Library(u16::from(
+            WebSocketCloseCode::AuthTimeout
+        )))
     );
-    assert_eq!(close_code.ok().flatten(), Some(CloseCode::Library(4107)));
-
-    sleep(Duration::from_millis(20)).await;
     let metrics = server.state.metrics.snapshot();
     assert_eq!(metrics.ws_connections_accepted(), 1);
     assert_eq!(metrics.ws_handshake_rejected_timeout(), 1);
@@ -285,13 +283,8 @@ async fn websocket_closes_authenticated_user_when_room_is_full() -> TestResult {
         "bob should connect before room-full rejection",
     )?;
 
-    let close_code = timeout(Duration::from_secs(1), read_close_code(&mut bob)).await;
-    assert!(
-        close_code.is_ok(),
-        "room-full close should arrive promptly: {close_code:?}"
-    );
     assert_eq!(
-        close_code.ok().flatten(),
+        read_close_code_promptly(&mut bob).await,
         Some(CloseCode::Library(u16::from(WebSocketCloseCode::RoomFull)))
     );
 

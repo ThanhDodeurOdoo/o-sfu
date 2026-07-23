@@ -1,102 +1,178 @@
+#[cfg(unix)]
+use std::{
+    env,
+    process::{self, Command},
+};
 use std::{
     future::pending,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    io,
+    net::SocketAddr,
     sync::{Arc, Weak},
     time::Duration,
 };
 
 use tokio::{
-    task::yield_now,
+    net::{TcpListener, TcpStream},
+    sync::oneshot,
+    task::{JoinHandle, yield_now},
     time::{sleep, timeout},
 };
+use tokio_util::{sync::CancellationToken, task::task_tracker::TaskTrackerToken};
 
-use super::{Result, RoomManager, Runtime};
-use crate::{
-    config::{
-        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
-        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
-    },
-    core::server::room::{
-        DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-    },
+use super::{
+    AnyResult, RoomManager, RoomPacketSinkRegistry, Runtime, RuntimeServices, ServeError,
+    serve_http_on, test_support::RuntimeTestBuilder,
 };
 
-#[tokio::test]
-async fn cancelling_serve_future_stops_runtime_background_tasks() {
-    let runtime = Runtime::new(&test_config());
-    assert!(runtime.is_ok());
-    let Ok(runtime) = runtime else {
-        return;
-    };
-    let rooms = Arc::downgrade(&runtime.room_manager);
-    let server = tokio::spawn(runtime.serve(|_shutdown_token| pending::<Result<()>>()));
+const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
-    let task_started = timeout(Duration::from_secs(1), wait_for_runtime_task_start(&rooms)).await;
-    assert!(task_started.is_ok());
+#[tokio::test]
+async fn runtime_shutdown_cancels_drains_and_preserves_errors() -> AnyResult<()> {
+    let runtime = Runtime::new(RuntimeTestBuilder::new().config())?;
+    let rooms = Arc::downgrade(&runtime.room_manager);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(runtime.serve(
+        move |state, listener_shutdown| {
+            let _result = shutdown_tx.send((listener_shutdown, state.session_shutdown));
+            pending::<io::Result<()>>()
+        },
+        pending::<io::Result<()>>(),
+    ));
+    let (listener_shutdown, session_shutdown) = timeout(TEST_TIMEOUT, shutdown_rx).await??;
 
     server.abort();
     assert!(server.await.is_err());
+    assert!(listener_shutdown.is_cancelled());
+    assert!(session_shutdown.is_cancelled());
 
-    let room_manager_dropped =
-        timeout(Duration::from_secs(1), wait_for_room_manager_drop(&rooms)).await;
-    assert!(room_manager_dropped.is_ok());
+    timeout(TEST_TIMEOUT, wait_for_room_manager_drop(&rooms)).await?;
+
+    let (shutdown, task, mut server, worker_resources, address) = tracked_runtime(1_000).await?;
+    shutdown.cancel();
+    timeout(TEST_TIMEOUT, listener_refused(address)).await?;
+    assert!(
+        timeout(Duration::from_millis(20), &mut server)
+            .await
+            .is_err()
+    );
+    assert!(worker_resources.upgrade().is_some());
+    drop(task);
+    let result = timeout(TEST_TIMEOUT, server).await??;
+    result?;
+    assert!(worker_resources.upgrade().is_none());
+
+    let (shutdown, task, server, _resources, _address) = tracked_runtime(20).await?;
+    shutdown.cancel();
+    assert!(matches!(
+        timeout(TEST_TIMEOUT, server).await??,
+        Err(ServeError::ShutdownIncomplete {
+            remaining_sessions: 1
+        })
+    ));
+    drop(task);
+
+    let mut config = RuntimeTestBuilder::new().config().clone();
+    let runtime = Runtime::new(&config)?;
+    let result = runtime
+        .serve(
+            |_state, _shutdown| async { Err(io::ErrorKind::BrokenPipe.into()) },
+            pending(),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(ServeError::Io(error)) if error.kind() == io::ErrorKind::BrokenPipe
+    ));
+
+    config.http.shutdown_timeout_ms = 20;
+    let runtime = Runtime::new(&config)?;
+    let (task_tx, task_rx) = oneshot::channel();
+    let server = tokio::spawn(runtime.serve(
+        move |state, _shutdown| async move {
+            let _result = task_tx.send(state.session_tasks.token());
+            Err(io::ErrorKind::BrokenPipe.into())
+        },
+        pending(),
+    ));
+    let task = task_rx.await?;
+    assert!(matches!(
+        timeout(TEST_TIMEOUT, server).await??,
+        Err(ServeError::ShutdownIncomplete {
+            remaining_sessions: 1
+        })
+    ));
+    drop(task);
+    Ok(())
 }
 
-async fn wait_for_runtime_task_start(rooms: &Weak<RoomManager>) {
-    loop {
-        if rooms.strong_count() > 1 {
-            return;
-        }
+#[cfg(unix)]
+const SIGNAL_CHILD_ENV: &str = "O_SFU_SHUTDOWN_SIGNAL_CHILD";
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_signals_stop_isolated_process() -> io::Result<()> {
+    if let Ok(signal) = env::var(SIGNAL_CHILD_ENV) {
+        let kill = tokio::spawn(async move {
+            yield_now().await;
+            Command::new("kill")
+                .args([format!("-{signal}"), process::id().to_string()])
+                .status()
+        });
+        super::shutdown_signal().await?;
+        assert!(kill.await.map_err(io::Error::other)??.success());
+        return Ok(());
+    }
+    let executable = env::current_exe()?;
+    for signal in ["INT", "TERM"] {
+        let status = Command::new(&executable)
+            .args(["shutdown_signals_stop_isolated_process", "--nocapture"])
+            .env(SIGNAL_CHILD_ENV, signal)
+            .status()?;
+        assert!(status.success());
+    }
+    Ok(())
+}
+
+async fn tracked_runtime(
+    shutdown_timeout_ms: u64,
+) -> AnyResult<(
+    CancellationToken,
+    TaskTrackerToken,
+    JoinHandle<Result<(), ServeError>>,
+    Weak<RoomPacketSinkRegistry>,
+    SocketAddr,
+)> {
+    let mut config = RuntimeTestBuilder::new().config().clone();
+    config.http.shutdown_timeout_ms = shutdown_timeout_ms;
+    let services = RuntimeServices::default();
+    let worker_resources = Arc::downgrade(&services.packet_sink_registry);
+    let runtime = Runtime::from_services(&config, services)?;
+    let shutdown = CancellationToken::new();
+    let trigger = shutdown.clone();
+    let (task_tx, task_rx) = oneshot::channel();
+    let listener = TcpListener::bind(config.http.bind_address).await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(runtime.serve(
+        move |state, listener_shutdown| {
+            let _result = task_tx.send(state.session_tasks.token());
+            serve_http_on(listener, state, listener_shutdown)
+        },
+        async move {
+            trigger.cancelled().await;
+            Ok(())
+        },
+    ));
+    Ok((shutdown, task_rx.await?, server, worker_resources, address))
+}
+
+async fn listener_refused(address: SocketAddr) {
+    while TcpStream::connect(address).await.is_ok() {
         yield_now().await;
     }
 }
 
 async fn wait_for_room_manager_drop(rooms: &Weak<RoomManager>) {
-    loop {
-        if rooms.upgrade().is_none() {
-            return;
-        }
+    while rooms.upgrade().is_some() {
         sleep(Duration::from_millis(1)).await;
-    }
-}
-
-fn test_config() -> Config {
-    Config {
-        auth: AuthConfig {
-            key: "dGVzdC1rZXk=".to_owned(),
-            authentication_timeout_ms: 1_000,
-            max_pre_auth_websocket_sessions: 512,
-            max_pre_auth_websocket_sessions_per_origin: 16,
-        },
-        http: HttpConfig {
-            bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
-            trust_proxy_headers: false,
-        },
-        user: UserConfig {
-            room_size: 10,
-            timeout_ms: 1_000,
-            ping_interval_ms: 60_000,
-            outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
-            outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
-        },
-        transport: TransportConfig {
-            announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            max_bitrate_in: Bitrate::from_mbps(8),
-            max_bitrate_out: Bitrate::from_mbps(10),
-            video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range: RtcPortRange::new(41_000, 41_009),
-            rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
-            rtc_media_worker_count: 1,
-            room_worker_policy: RoomWorkerPolicy::strict_single_router(),
-            room_media_limits: RoomMediaLimits::default(),
-        },
-        codecs: CodecConfig {
-            flags: MediaCodecFlags::default(),
-            preferences: CodecPreferences::default(),
-        },
-        features: RuntimeFeatureFlags::default(),
-        telemetry: TelemetryConfig::default(),
-        diagnostics: DiagnosticsConfig::default(),
     }
 }
