@@ -209,7 +209,7 @@ async fn publish_capped_camera(room: &Arc<Room>, adapter: &MediaTransport, cap: 
 }
 
 #[tokio::test]
-async fn source_policy_resets_receiver_bwe_target_after_last_video_route_removal() {
+async fn source_policy_resets_receiver_bwe_target_after_publication_deactivation() {
     let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
     publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
     assert_receiver_bwe_target(
@@ -223,15 +223,16 @@ async fn source_policy_resets_receiver_bwe_target_after_last_video_route_removal
     assert!(
         room.test_api()
             .media()
-            .unpublish_track(
+            .deactivate_publication(
                 &UserId::Integer(1),
                 &stream_id_for_source(TestSourceKind::ScalableVideo),
                 &adapter,
             )
             .await
     );
-    refresh_source_policy(&room, &adapter).await;
 
+    assert_eq!(room.test_api().inspect().producer_count().await, 1);
+    assert_eq!(room.test_api().inspect().consumer_count().await, 1);
     assert_receiver_bwe_target(&room, &adapter, &UserId::Integer(2), Bitrate::zero()).await;
 }
 
@@ -394,7 +395,7 @@ async fn active_speaker_camera_policy_prefers_louder_same_observation_speaker() 
 }
 
 #[tokio::test]
-async fn audio_only_speaker_limit_ignores_foreign_sources() {
+async fn audio_speaker_limit_ignores_foreign_and_inactive_sources() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],
         RoomMediaLimits::try_new(1, 10).unwrap(),
@@ -432,6 +433,13 @@ async fn audio_only_speaker_limit_ignores_foreign_sources() {
         .expect("audio speaker limit should update the overflow route")
     };
     tx.execute(&scenario.room, &scenario.adapter).await;
+    scenario
+        .mark_active_speakers_with_levels([
+            (first_audio_media_id, -20),
+            (third_audio_media_id, -30),
+        ])
+        .await;
+    scenario.refresh_policy().await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -449,6 +457,28 @@ async fn audio_only_speaker_limit_ignores_foreign_sources() {
         &UserId::Integer(3),
         TestSourceKind::AudioDetector,
         Some(DiagnosticsPolicyPauseReason::AudioSpeakerLimit),
+    )
+    .await;
+
+    assert!(
+        scenario
+            .room
+            .test_api()
+            .media()
+            .deactivate_publication(
+                &UserId::Integer(1),
+                &stream_id_for_source(TestSourceKind::AudioDetector),
+                &scenario.adapter,
+            )
+            .await
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(3),
+        TestSourceKind::AudioDetector,
+        None,
     )
     .await;
 }

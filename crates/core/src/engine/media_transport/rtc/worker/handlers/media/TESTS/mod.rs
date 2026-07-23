@@ -17,7 +17,10 @@ use fixtures::{
     set_consumer_packet_gate_at,
 };
 use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, PayloadType, StreamBinding};
-use str0m::media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid};
+use str0m::{
+    media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
+    rtp::Ssrc,
+};
 use tokio::sync::mpsc;
 
 use super::{
@@ -30,8 +33,9 @@ use crate::{
     engine::{
         UserId,
         media_transport::{
-            ConsumerActivity, ConsumerRouteControl, TransportAdapterError, TransportConsumerRoute,
-            TransportMediaId, TransportSourceKey,
+            ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, ProducerActivity,
+            ProducerRouteControl, SourceActivityRevision, SourceActivityUpdate,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSourceKey,
             rtc::{
                 bootstrap,
                 commands::{
@@ -56,9 +60,34 @@ use crate::{
                 worker::RtcWorkerCommand,
             },
         },
-        metrics::{RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt},
+        metrics::{
+            RtcMetricsRecorder, RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
+        },
     },
 };
+
+fn apply_source_activity(
+    state: &mut PacketLoopState,
+    rtc_metrics: &RtcMetricsRecorder,
+    source: TransportSourceKey,
+    update: SourceActivityUpdate,
+    now: Instant,
+) {
+    let outcome = apply_media_control_batch(
+        state,
+        rtc_metrics,
+        Bitrate::from_mbps(10),
+        now,
+        WorkerMediaControlBatch::ProducerActivity(vec![(
+            0,
+            ProducerRouteControl { source, update },
+        )]),
+    );
+    let WorkerMediaControlBatchOutcome::Applied(results) = outcome else {
+        panic!("producer activity should return applied results");
+    };
+    assert_eq!(results, vec![Ok(())]);
+}
 
 #[test]
 fn media_removal_rejects_a_registered_handle_without_its_owner_session() {
@@ -106,6 +135,87 @@ fn remote_keyframe_requests_drop_when_the_relay_target_is_inactive() {
     assert_eq!(snapshot.rtc_route_control_forwarded(), 0);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
     assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops(), 1);
+}
+
+#[test]
+fn remote_source_activity_gates_feedback_and_rejects_stale_reconciliation() {
+    let now = Instant::now();
+    let mut route = RemoteVideoRoute::new(106, 66_668, 10);
+    let source = TransportSourceKey::new(route.source_session.clone(), route.src_media);
+    let first_revision = SourceActivityRevision::default().next();
+    let second_revision = first_revision.next();
+    let third_revision = second_revision.next();
+
+    assert_remote_packet_gate_command(
+        &mut route.control_rx,
+        &route.source_session,
+        route.src_media,
+        route.target_id,
+        PacketLayerGate::Open,
+    );
+    route.request_kf();
+    route.request_kf();
+    assert_remote_keyframe_command(
+        &mut route.control_rx,
+        &route.source_session,
+        route.src_media,
+        route.target_id,
+        None,
+    );
+    assert!(route.state.routes.next_kf_deadline().is_some());
+    route.state.routes.schedule_rid_refresh(
+        route.src_media,
+        Rid::from("hi"),
+        now + Duration::from_secs(1),
+    );
+    assert!(route.state.routes.next_rid_refresh_deadline().is_some());
+
+    apply_route_control_request(
+        &mut route.state,
+        &route.rtc_metrics,
+        RouteControlRequest::SetRemoteSourceActivity {
+            source: source.clone(),
+            update: SourceActivityUpdate::new(ProducerActivity::Inactive, second_revision),
+        },
+        None,
+    );
+
+    assert!(!route.state.routes.source_is_active(route.src_media));
+    let mut retries = Vec::new();
+    route
+        .state
+        .routes
+        .drain_due_kf_reqs(now + Duration::from_secs(2), &mut retries);
+    assert!(retries.is_empty());
+    assert!(route.state.routes.next_rid_refresh_deadline().is_none());
+    let WorkerMediaControlBatchOutcome::Consumers(results) = route.request_kf() else {
+        panic!("inactive source feedback should return a consumer result");
+    };
+    assert_eq!(results, [ConsumerRouteControlOutcome::default()]);
+    assert!(route.control_rx.try_recv().is_err());
+
+    apply_route_control_request(
+        &mut route.state,
+        &route.rtc_metrics,
+        RouteControlRequest::SetRemoteSourceActivity {
+            source: source.clone(),
+            update: SourceActivityUpdate::new(ProducerActivity::Active, first_revision),
+        },
+        None,
+    );
+    assert!(!route.state.routes.source_is_active(route.src_media));
+
+    apply_route_control_request(
+        &mut route.state,
+        &route.rtc_metrics,
+        RouteControlRequest::SetRemoteSourceActivity {
+            source,
+            update: SourceActivityUpdate::new(ProducerActivity::Active, third_revision),
+        },
+        None,
+    );
+    assert!(route.state.routes.source_is_active(route.src_media));
+    assert!(route.control_rx.try_recv().is_err());
 }
 
 #[test]
@@ -157,6 +267,87 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
     assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops(), 0);
+}
+
+#[test]
+fn source_only_activity_respects_revision_and_media_kind() {
+    for (seed, ssrc, kind, expected_kf) in [
+        (112, 77_778, MediaKind::Video, 1),
+        (113, 77_779, MediaKind::Audio, 0),
+    ] {
+        let now = Instant::now();
+        let source_session = test_source_session_key(seed);
+        let mut state = PacketLoopState::default();
+        let metrics = RuntimeMetrics::default();
+        let rtc_metrics = metrics.register_rtc_worker();
+        assert!(
+            bootstrap::ensure_session_rtc_state(
+                &mut state.users,
+                &source_session,
+                SocketAddr::from(([127, 0, 0, 1], 47_001)),
+                Bitrate::from_mbps(10),
+            )
+            .is_ok()
+        );
+        let source_mid = Mid::from(if kind == MediaKind::Video {
+            "cam-up"
+        } else {
+            "aud-up"
+        });
+        let Some(session) = state.users.get_mut(&source_session) else {
+            panic!("source session should exist after RTC state bootstrap");
+        };
+        let mut direct_api = session.rtc.direct_api();
+        direct_api.declare_media(source_mid, kind);
+        direct_api.expect_stream_rx(Ssrc::from(ssrc), None, source_mid, None);
+        let src_media = state.register_media_handle(RegisteredMediaHandle::Producer {
+            session_key: source_session.clone(),
+            mid: source_mid,
+        });
+        let source = TransportSourceKey::new(source_session.clone(), src_media);
+        let pause_revision = SourceActivityRevision::default().next();
+        let resume_revision = pause_revision.next();
+        assert!(state.routes.local_route(src_media).is_none());
+
+        apply_source_activity(
+            &mut state,
+            &rtc_metrics,
+            source.clone(),
+            SourceActivityUpdate::new(ProducerActivity::Inactive, pause_revision),
+            now,
+        );
+        apply_source_activity(
+            &mut state,
+            &rtc_metrics,
+            source.clone(),
+            SourceActivityUpdate::new(ProducerActivity::Active, resume_revision),
+            now + Duration::from_millis(1),
+        );
+
+        assert!(state.routes.source_is_active(src_media));
+        assert_eq!(
+            drain_ready_sessions(&mut state),
+            if expected_kf == 1 {
+                vec![source_session]
+            } else {
+                vec![]
+            }
+        );
+        assert_eq!(
+            metrics.snapshot().rtc_keyframe_requests_forwarded(),
+            expected_kf
+        );
+
+        apply_source_activity(
+            &mut state,
+            &rtc_metrics,
+            source,
+            SourceActivityUpdate::new(ProducerActivity::Inactive, pause_revision),
+            now + Duration::from_millis(2),
+        );
+        assert!(state.routes.source_is_active(src_media));
+        assert!(drain_ready_sessions(&mut state).is_empty());
+    }
 }
 
 #[test]

@@ -16,7 +16,7 @@ use super::super::super::{
     TESTS::tracing::{assert_user_exact, capture},
     UserOutbound, UserOutboundReceiver, UserOutboundSender,
     media_graph::ConsumerRouteState,
-    transition::PublishStageOutcome,
+    transition::{PublishIntentOutcome, PublishStageOutcome},
 };
 use crate::{
     RoomWorkerPolicy, RuntimeFeatureFlags,
@@ -330,7 +330,7 @@ async fn destination_active(
 }
 
 #[tokio::test]
-async fn stored_receiver_intent_applies_before_publish_and_after_republish() {
+async fn stored_receiver_intent_applies_before_publish_and_across_activity() {
     let room = RoomManager::for_test()
         .serve_room(
             "issuer-transition-subscription-intent",
@@ -373,7 +373,7 @@ async fn stored_receiver_intent_applies_before_publish_and_after_republish() {
     assert!(
         room.test_api()
             .media()
-            .unpublish_track(&publisher_id, &stream_id, &media_transport)
+            .deactivate_publication(&publisher_id, &stream_id, &media_transport)
             .await
     );
     assert_eq!(
@@ -381,15 +381,17 @@ async fn stored_receiver_intent_applies_before_publish_and_after_republish() {
             .inspect()
             .consumer_route_state(&subscriber_id, &publisher_id, &stream_id)
             .await,
-        Some(ConsumerRouteState::Absent)
+        Some(ConsumerRouteState::Inactive)
     );
-    publish_scalable_video(
-        &room,
-        &media_transport,
-        &publisher_id,
-        publisher_connection_id,
-    )
-    .await;
+    assert!(matches!(
+        room.user_operation(&publisher_id, publisher_connection_id, &media_transport)
+            .start_publish(
+                &source_publish_intent_for_source(TestSourceKind::ScalableVideo),
+                true,
+            )
+            .await,
+        Ok(PublishIntentOutcome::Activated)
+    ));
     assert_eq!(
         room.test_api()
             .inspect()

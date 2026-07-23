@@ -54,19 +54,6 @@ pub(super) fn assert_remote_source_activity_snapshot(
     }));
 }
 
-pub(super) fn assert_remote_source_removed_snapshot(
-    message: &UserOutbound,
-    user_id: &UserId,
-    stream_type: TestSourceKind,
-) {
-    let snapshot = expect_remote_source_snapshot(message);
-    assert!(snapshot.requires_negotiation);
-    assert!(!snapshot.sources.iter().any(|projection| {
-        projection.source.owner().user_id() == user_id
-            && projection.source.stream_id() == &stream_id_for_source(stream_type)
-    }));
-}
-
 pub(super) fn remote_source_snapshot(message: &UserOutbound) -> Option<&RemoteSourceSnapshot> {
     match message {
         UserOutbound::RemoteSources(snapshot) => Some(snapshot),
@@ -104,19 +91,6 @@ pub(super) async fn assert_transport_media_mapping_is_missing(
             .await
             .is_none()
     );
-}
-
-pub(super) async fn assert_transport_media_owner_mapping_is_missing(
-    room: &Arc<Room>,
-    transport_media_id: TransportMediaId,
-) {
-    let state = room.state.read().await;
-    let user_mapping_exists = state
-        .inspect_producer_owner_user_id_for_transport_media_id(transport_media_id)
-        .is_some();
-    drop(state);
-
-    assert!(!user_mapping_exists);
 }
 
 pub(super) async fn assert_user_has_no_published_source(

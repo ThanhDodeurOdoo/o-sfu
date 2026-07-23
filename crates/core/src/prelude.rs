@@ -4,9 +4,9 @@ pub use crate::{
         media_transport::TransportSessionHealth,
         source_model::{
             ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole,
-            SourceAdaptationPolicy, SourceLayoutPolicy, SourcePolicy, SourcePublishIntent,
-            SourceRoomPolicySelector, SourceRoutePriority, SourceSubscriptionIntent,
-            SourceUnpublishIntent, UploadLayerPolicyRole, UserStreamId,
+            SourceAdaptationPolicy, SourceDeactivateIntent, SourceLayoutPolicy, SourcePolicy,
+            SourcePublishIntent, SourceRoomPolicySelector, SourceRoutePriority,
+            SourceSubscriptionIntent, UploadLayerPolicyRole, UserStreamId,
         },
     },
     options::{

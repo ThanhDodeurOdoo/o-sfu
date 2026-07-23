@@ -1,5 +1,7 @@
 use super::support::*;
-use crate::prelude::{MediaSession, NegotiationOffer, SessionError, SfuCore};
+use crate::prelude::{
+    MediaSession, NegotiationOffer, SessionError, SfuCore, SourceDeactivateIntent,
+};
 
 #[tokio::test]
 async fn media_session_initial_offer_is_one_shot() {
@@ -79,6 +81,146 @@ async fn media_session_keeps_staged_publish_after_invalid_answer() {
         .expect("staged publish should accept a later valid answer");
     assert!(offer.is_none());
     fixture.assert_committed(video, 1).await;
+}
+
+#[tokio::test]
+async fn queued_publish_cancellation_does_not_create_a_follow_up_offer() {
+    let mut fixture = build_publisher_fixture(55_226).await;
+    establish_session(&mut fixture.session, &mut fixture.remote).await;
+    let video = TestSourceKind::ScalableVideo;
+    let audio = TestSourceKind::AudioDetector;
+    let offer = fixture
+        .session
+        .publish(source_publish_intent_for_source(video))
+        .await
+        .expect("first publish should stage")
+        .expect("first publish should create an offer");
+
+    assert!(
+        fixture
+            .session
+            .publish(source_publish_intent_for_source(audio))
+            .await
+            .expect("second publish should queue")
+            .is_none()
+    );
+    assert!(
+        fixture
+            .session
+            .publish(source_publish_intent_for_source(audio))
+            .await
+            .expect("queued publish should be a no-op")
+            .is_none()
+    );
+    fixture
+        .session
+        .deactivate_publication(SourceDeactivateIntent::new(stream_id_for_source(audio)))
+        .await;
+
+    let answer_sdp = remote_answer_sdp(&mut fixture.remote, &offer.sdp);
+    assert!(
+        fixture
+            .session
+            .answer(&answer_sdp)
+            .await
+            .expect("first publish answer should apply")
+            .is_none()
+    );
+    fixture.assert_committed(video, 1).await;
+    fixture.assert_staged(audio, false).await;
+}
+
+#[tokio::test]
+async fn staged_publish_cancellation_creates_one_cleanup_offer() {
+    let mut fixture = build_publisher_fixture(55_227).await;
+    establish_session(&mut fixture.session, &mut fixture.remote).await;
+    let video = TestSourceKind::ScalableVideo;
+    let offer = fixture
+        .session
+        .publish(source_publish_intent_for_source(video))
+        .await
+        .expect("publish should stage")
+        .expect("staged publish should create an offer");
+    assert!(
+        fixture
+            .session
+            .publish(source_publish_intent_for_source(video))
+            .await
+            .expect("staged publish should be a no-op")
+            .is_none()
+    );
+
+    fixture
+        .session
+        .deactivate_publication(SourceDeactivateIntent::new(stream_id_for_source(video)))
+        .await;
+    fixture.assert_staged(video, false).await;
+
+    let answer_sdp = remote_answer_sdp(&mut fixture.remote, &offer.sdp);
+    let cleanup = fixture
+        .session
+        .answer(&answer_sdp)
+        .await
+        .expect("obsolete publish offer should still accept its answer")
+        .expect("staged cancellation should create one cleanup offer");
+    let answer_sdp = remote_answer_sdp(&mut fixture.remote, &cleanup.sdp);
+    assert!(
+        fixture
+            .session
+            .answer(&answer_sdp)
+            .await
+            .expect("cleanup answer should apply")
+            .is_none()
+    );
+    fixture.assert_staged(video, false).await;
+    assert_eq!(fixture.room.test_api().inspect().producer_count().await, 0);
+}
+
+#[tokio::test]
+async fn committed_publication_pauses_and_resumes_without_an_offer() {
+    let mut fixture = build_publisher_fixture(55_228).await;
+    establish_session(&mut fixture.session, &mut fixture.remote).await;
+    let video = TestSourceKind::ScalableVideo;
+    publish_source(&mut fixture, video).await;
+    let inspect = fixture.room.test_api().inspect();
+    let source_id = inspect
+        .source_id_for_owner_stream(&fixture.user_id, video)
+        .await
+        .expect("committed publication should expose a source id");
+    assert!(
+        fixture
+            .session
+            .publish(source_publish_intent_for_source(video))
+            .await
+            .expect("active publication should be a no-op")
+            .is_none()
+    );
+
+    fixture
+        .session
+        .deactivate_publication(SourceDeactivateIntent::new(stream_id_for_source(video)))
+        .await;
+    assert_eq!(
+        inspect
+            .source_id_for_owner_stream(&fixture.user_id, video)
+            .await,
+        Some(source_id)
+    );
+
+    assert!(
+        fixture
+            .session
+            .publish(source_publish_intent_for_source(video))
+            .await
+            .expect("committed publication should resume")
+            .is_none()
+    );
+    assert_eq!(
+        inspect
+            .source_id_for_owner_stream(&fixture.user_id, video)
+            .await,
+        Some(source_id)
+    );
 }
 
 #[tokio::test]
@@ -255,6 +397,24 @@ async fn stage_scalable_video(session: &mut MediaSession) {
         .await
         .expect("publish should stage through the media session");
     expect_renegotiation_offer(offer);
+}
+
+async fn publish_source(fixture: &mut PublisherFixture, source: TestSourceKind) {
+    let offer = fixture
+        .session
+        .publish(source_publish_intent_for_source(source))
+        .await
+        .expect("publish should stage")
+        .expect("publish should create an offer");
+    let answer_sdp = remote_answer_sdp(&mut fixture.remote, &offer.sdp);
+    assert!(
+        fixture
+            .session
+            .answer(&answer_sdp)
+            .await
+            .expect("publish answer should apply")
+            .is_none()
+    );
 }
 
 async fn assert_invalid_answer_is_rejected(session: &mut MediaSession) {

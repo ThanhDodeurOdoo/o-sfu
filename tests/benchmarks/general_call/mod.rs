@@ -256,7 +256,7 @@ impl GeneralCallScenario {
         .await?;
         self.run_media_time(Duration::from_secs(3)).await?;
 
-        self.unpublish_camera(2).await?;
+        self.deactivate_camera(2).await?;
         self.close_user(7).await?;
         self.join_ready_batch(&[11]).await?;
         self.subscribe_all_live_users_to_audio().await?;
@@ -411,17 +411,17 @@ impl GeneralCallScenario {
         Ok(())
     }
 
-    async fn unpublish_camera(&mut self, raw_user_id: RawUserId) -> Result<()> {
+    async fn deactivate_camera(&mut self, raw_user_id: RawUserId) -> Result<()> {
         let user_id = user(raw_user_id);
         let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
         if self
             .room
             .test_api()
             .media()
-            .unpublish_track(&user_id, &stream_id, &self.media_transport)
+            .deactivate_publication(&user_id, &stream_id, &self.media_transport)
             .await
         {
-            if self.media.camera.remove(&raw_user_id).is_none() {
+            if !self.media.camera.contains_key(&raw_user_id) {
                 return Err(anyhow!("user {raw_user_id} camera media was not tracked"));
             }
             self.stats.unpublications = self.stats.unpublications.saturating_add(1);

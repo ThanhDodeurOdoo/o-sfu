@@ -64,7 +64,7 @@ fn track_source_wide(
 }
 
 #[test]
-fn keyframe_tracker_absorbs_repeated_requests_while_pending() {
+fn keyframe_tracker_absorbs_repeated_requests_and_forgets_source_wakeup() {
     let mut state = KeyframeRequestTracker::default();
     let src_media = TransportMediaId::new(17);
     let now = Instant::now();
@@ -78,6 +78,8 @@ fn keyframe_tracker_absorbs_repeated_requests_while_pending() {
         track_source_wide(&mut state, src_media, now),
         KeyframeRequestDecision::Absorb
     );
+    state.forget_source(src_media);
+    assert_eq!(state.next_deadline(), None);
 }
 
 #[test]

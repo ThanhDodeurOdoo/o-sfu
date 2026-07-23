@@ -1,110 +1,20 @@
 use super::*;
 
-pub(crate) async fn publish_camera_track(
-    publisher: &mut ProtocolFakePeer,
-    subscriber: &mut ProtocolFakePeer,
-) -> Option<()> {
-    let source = FakeMediaSource::camera();
-    publisher.publish_track(&source).await?;
-    publisher.complete_next_negotiation().await?;
-    assert_track_snapshot(subscriber, UserId::Integer(10), StreamType::Camera, true).await;
-    assert_peer_info_update(
-        subscriber,
-        UserId::Integer(10),
-        UserInfo {
-            is_camera_on: Some(true),
-            ..UserInfo::default().snapshot_complete()
-        },
-    )
-    .await;
-    Some(())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PublicationSnapshot {
+    pub(crate) track: TrackBinding,
+    pub(crate) source: SourceDescriptor,
 }
 
-pub(crate) async fn assert_consumer_download_toggle_round_trip_protocol(
-    subscriber: &mut ProtocolFakePeer,
+pub(crate) fn assert_retained_publication(
+    initial: &PublicationSnapshot,
+    current: &PublicationSnapshot,
+    active: bool,
 ) {
-    for camera in [Some(false), Some(true)] {
-        assert!(
-            subscriber
-                .update_subscription(
-                    UserId::Integer(10),
-                    super::DownloadStates {
-                        camera,
-                        ..super::DownloadStates::default()
-                    },
-                )
-                .await
-                .is_some()
-        );
-    }
-}
-
-pub(crate) async fn assert_camera_unpublish_updates_snapshot_and_info(
-    publisher: &mut ProtocolFakePeer,
-    subscriber: &mut ProtocolFakePeer,
-) {
-    assert!(
-        publisher
-            .set_publication_active(StreamType::Camera, false)
-            .await
-            .is_some()
-    );
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let messages = [
-        next_server_message(subscriber, "first camera unpublish update").await,
-        next_server_message(subscriber, "second camera unpublish update").await,
-        next_server_message(subscriber, "third camera unpublish update").await,
-    ];
-    let Some(track_snapshot) = messages.iter().find_map(|message| match message {
-        ServerMessage::Tracks(snapshot) => Some(snapshot),
-        _ => None,
-    }) else {
-        panic!("expected track snapshot after camera unpublish");
-    };
-    assert!(
-        track_snapshot.is_empty(),
-        "protocol unpublish should clear the authoritative camera track snapshot"
-    );
-
-    assert!(
-        messages.iter().any(
-            |message| matches!(message, ServerMessage::Sources(snapshot) if snapshot.is_empty())
-        ),
-        "protocol unpublish should clear the authoritative camera source snapshot"
-    );
-
-    let Some(peer_info) = messages.iter().find_map(|message| match message {
-        ServerMessage::PeerInfo(info) => Some(info),
-        _ => None,
-    }) else {
-        panic!("expected peer info update after camera unpublish");
-    };
-    assert_eq!(peer_info.user_id, UserId::Integer(10));
-    assert_eq!(
-        peer_info.info,
-        UserInfo {
-            is_camera_on: Some(false),
-            ..UserInfo::default().snapshot_complete()
-        }
-    );
-}
-
-pub(crate) async fn connect_late_subscriber(
-    server: &TestServer,
-    room: &str,
-) -> Option<ProtocolFakePeer> {
-    super::connect_fake_peer(server, room, UserId::Integer(30), TEST_ROOM_KEY).await
-}
-
-pub(crate) async fn assert_late_join_has_no_track_snapshot(late_subscriber: &mut ProtocolFakePeer) {
-    assert!(
-        timeout(
-            Duration::from_millis(200),
-            late_subscriber.read_next_server_message()
-        )
-        .await
-        .is_err()
-    );
+    let mut expected = initial.clone();
+    expected.track.active = active;
+    expected.source.active = active;
+    assert_eq!(current, &expected);
 }
 
 pub(crate) async fn assert_departure_message_protocol(
@@ -143,6 +53,17 @@ pub(crate) async fn assert_track_snapshot(
     stream_type: StreamType,
     active: bool,
 ) -> TrackBinding {
+    assert_publication_snapshot(subscriber, user_id, stream_type, active)
+        .await
+        .track
+}
+
+pub(crate) async fn assert_publication_snapshot(
+    subscriber: &mut ProtocolFakePeer,
+    user_id: UserId,
+    stream_type: StreamType,
+    active: bool,
+) -> PublicationSnapshot {
     let ServerMessage::Tracks(track_bindings) =
         next_server_message(subscriber, "protocol track snapshot").await
     else {
@@ -154,37 +75,11 @@ pub(crate) async fn assert_track_snapshot(
     assert_eq!(track_binding.user_id, user_id);
     assert_eq!(track_binding.stream_type, stream_type);
     assert_eq!(track_binding.active, active);
-    assert_source_snapshot(subscriber, Some(track_binding)).await;
-    track_binding.clone()
-}
-
-pub(crate) async fn assert_empty_track_snapshot(subscriber: &mut ProtocolFakePeer) {
-    let ServerMessage::Tracks(track_bindings) =
-        next_server_message(subscriber, "empty protocol track snapshot").await
-    else {
-        panic!("expected protocol track snapshot");
-    };
-    assert!(track_bindings.is_empty());
-    assert_source_snapshot(subscriber, None).await;
-}
-
-pub(crate) async fn assert_peer_info_update(
-    subscriber: &mut ProtocolFakePeer,
-    user_id: UserId,
-    expected_info: UserInfo,
-) {
-    for _ in 0..4 {
-        match next_server_message(subscriber, "protocol peer info update").await {
-            ServerMessage::PeerInfo(peer_info) => {
-                assert_eq!(peer_info.user_id, user_id);
-                assert_eq!(peer_info.info, expected_info);
-                return;
-            }
-            ServerMessage::Tracks(_) | ServerMessage::Sources(_) => {}
-            message => panic!("expected protocol peer info update, got {message:?}"),
-        }
+    let source = assert_source_snapshot(subscriber, track_binding).await;
+    PublicationSnapshot {
+        track: track_binding.clone(),
+        source,
     }
-    panic!("expected protocol peer info update");
 }
 
 pub(crate) async fn assert_no_server_message_protocol(subscriber: &mut ProtocolFakePeer) {
@@ -210,16 +105,12 @@ async fn next_server_message(subscriber: &mut ProtocolFakePeer, expected: &str) 
 
 async fn assert_source_snapshot(
     subscriber: &mut ProtocolFakePeer,
-    track_binding: Option<&TrackBinding>,
-) {
+    track_binding: &TrackBinding,
+) -> SourceDescriptor {
     let ServerMessage::Sources(sources) =
         next_server_message(subscriber, "protocol source snapshot").await
     else {
         panic!("expected protocol source snapshot");
-    };
-    let Some(track_binding) = track_binding else {
-        assert!(sources.is_empty());
-        return;
     };
     let [source] = sources.as_slice() else {
         panic!("expected one protocol source descriptor");
@@ -229,4 +120,5 @@ async fn assert_source_snapshot(
     assert_eq!(source.active, track_binding.active);
     assert_eq!(source.mid.as_deref(), Some(track_binding.mid.as_str()));
     assert!(!source.source_id.is_empty());
+    source.clone()
 }

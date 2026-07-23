@@ -3,15 +3,25 @@ use std::{collections::BTreeMap, mem::take};
 use tracing::{debug, warn};
 
 use super::{
-    ConsumerActivity, MediaTransport, ProducerActivity, ReceiverBweTargetUpdate, SourcePacketGate,
-    TransportAdapterError, TransportConsumerRoute, TransportResult, TransportSourceKey,
+    ConsumerActivity, MediaTransport, ReceiverBweTargetUpdate, SourceActivityUpdate,
+    SourcePacketGate, TransportAdapterError, TransportConsumerRoute, TransportResult,
+    TransportSourceKey,
     rtc::{
         PacketLayerGate, RtcWorkerCommand, WorkerMediaControlBatch as WorkerBatch,
         WorkerMediaControlBatchOutcome as WorkerBatchOutcome,
     },
 };
+use crate::MediaWorkerId;
+
 const MAX_MEDIA_CONTROL_BATCH_ITEMS: usize = 64;
 const UNAVAILABLE: TransportAdapterError = TransportAdapterError::TransportUnavailable;
+
+#[derive(Debug)]
+pub(crate) struct TransportSourceActivityEffect {
+    pub(crate) source: TransportSourceKey,
+    pub(crate) target_media_worker_id: MediaWorkerId,
+    pub(crate) update: SourceActivityUpdate,
+}
 
 #[derive(Debug)]
 #[must_use = "media-control plans must be executed or intentionally dropped"]
@@ -25,11 +35,11 @@ impl<P, C> MediaControlPlan<P, C> {
     pub(crate) fn push_producer(
         &mut self,
         source: TransportSourceKey,
-        activity: ProducerActivity,
+        update: SourceActivityUpdate,
         finish: P,
     ) {
         self.producers
-            .push((ProducerRouteControl { source, activity }, finish));
+            .push((ProducerRouteControl { source, update }, finish));
     }
 
     pub(crate) fn push_consumer(&mut self, control: ConsumerRouteControl, finish: C) {
@@ -70,7 +80,7 @@ impl<P, C> Default for MediaControlPlan<P, C> {
 #[derive(Debug)]
 pub(in crate::engine::media_transport) struct ProducerRouteControl {
     pub(in crate::engine::media_transport) source: TransportSourceKey,
-    pub(in crate::engine::media_transport) activity: ProducerActivity,
+    pub(in crate::engine::media_transport) update: SourceActivityUpdate,
 }
 
 #[derive(Debug)]

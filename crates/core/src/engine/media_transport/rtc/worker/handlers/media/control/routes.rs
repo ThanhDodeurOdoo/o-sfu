@@ -5,8 +5,8 @@ use str0m::media::{MediaKind, Mid, Pt};
 
 use super::{super::RouteSourceKind, selected_rid};
 use crate::engine::media_transport::{
-    TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportResult,
-    TransportSessionKey, TransportSourceKey,
+    SourceActivityUpdate, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
+    TransportResult, TransportSessionKey, TransportSourceKey,
     rtc::{
         commands::RemoteSourceControl,
         media_registry::RegisteredMediaHandle,
@@ -268,14 +268,31 @@ fn release_dst_stream(state: &mut PacketLoopState, destination: &MediaRouteDesti
     }
 }
 
-pub(super) fn worker_set_producer_active(
+pub(super) fn worker_apply_producer_activity(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
-    active: bool,
-) -> Result<(), TransportAdapterError> {
+    update: SourceActivityUpdate,
+) -> Result<bool, TransportAdapterError> {
     let src_media = source.transport_media_id();
     ensure_local_producer_mid(state, source.session_key(), src_media)?;
-    state.routes.set_source_active(src_media, active)
+    state.routes.apply_source_activity(src_media, update)
+}
+
+pub(super) fn worker_set_remote_source_activity(
+    state: &mut PacketLoopState,
+    source: &TransportSourceKey,
+    update: SourceActivityUpdate,
+) -> Result<(), TransportAdapterError> {
+    let src_media = source.transport_media_id();
+    match state.routes.remote_source(src_media) {
+        Some(registration) if registration.source() == source => {}
+        Some(_) => return Err(TransportAdapterError::InvalidInput),
+        None => return Ok(()),
+    }
+    state
+        .routes
+        .apply_source_activity(src_media, update)
+        .map(|_| ())
 }
 
 pub(super) fn worker_set_consumer_active(

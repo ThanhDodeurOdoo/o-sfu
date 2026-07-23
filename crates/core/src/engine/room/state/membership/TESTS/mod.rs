@@ -302,7 +302,6 @@ fn presence_update_returns_none_for_stale_connection() {
         &UserId::Integer(1),
         ConnectionId::from_raw(999),
         &UserInfo::default(),
-        RemoteSourceRefresh::OwnerConsumers,
     );
 
     assert!(outcome.is_none());

@@ -4,7 +4,9 @@ use o_sfu_router::{ConsumerId, MediaKind, rtp, topology::RoutedProducerId};
 
 use crate::engine::{
     UserId,
-    media_transport::{TransportConsumerRoute, TransportMediaId, TransportSourceKey},
+    media_transport::{
+        SourceActivityRevision, TransportConsumerRoute, TransportMediaId, TransportSourceKey,
+    },
     source_model::{ConsumerSourceSelection, PublishedSourceDescriptor, UserStreamId},
 };
 
@@ -29,9 +31,7 @@ pub(super) use self::{
         CommittedConsumerSetup, ConsumerSetupOrigin, ConsumerSetupOutcome, ConsumerSetupTarget,
         DeclaredConsumerSetup, PendingConsumerSetup,
     },
-    producer::{
-        ProducerActivityCommit, PublishCommit, PublishIntentPlan, UnpublishCommit, ValidatedPublish,
-    },
+    producer::{ProducerActivityCommit, PublishCommit, PublishIntentPlan, ValidatedPublish},
     subscription::{ReceiverRouteActivity, ReceiverRouteCommit, ReceiverRouteWork},
     topology::{
         CommittedTransportReceipt, RoomTopology, SessionPlacementCommit, SessionPlacementRejection,
@@ -68,6 +68,7 @@ pub(super) struct PublishedSource {
     pub rtp: rtp::MediaStream,
     pub routed: RoutedProducerId,
     pub active: bool,
+    pub activity_revision: SourceActivityRevision,
 }
 
 #[derive(Debug, Clone)]

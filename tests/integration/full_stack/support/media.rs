@@ -1,23 +1,8 @@
-use super::{protocol::assert_track_snapshot, setup::assert_video_subscription_enabled, *};
-
-async fn publish_source_and_track_snapshot(
-    publisher: &mut ProtocolFakePeer,
-    subscriber: &mut ProtocolFakePeer,
-    publisher_user_id: &UserId,
-    source: &FakeMediaSource,
-) -> TrackBinding {
-    assert!(publisher.publish_track(source).await.is_some());
-    assert!(publisher.complete_next_negotiation().await.is_some());
-    let track_binding = assert_track_snapshot(
-        subscriber,
-        publisher_user_id.clone(),
-        source.stream_type(),
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    track_binding
-}
+use super::{
+    protocol::{PublicationSnapshot, assert_publication_snapshot, assert_track_snapshot},
+    setup::assert_video_subscription_enabled,
+    *,
+};
 
 pub(crate) async fn publish_source_and_ready_route(
     server: &TestServer,
@@ -27,18 +12,46 @@ pub(crate) async fn publish_source_and_ready_route(
     publisher_user_id: &UserId,
     source: &FakeMediaSource,
 ) -> TrackBinding {
-    let track_binding =
-        publish_source_and_track_snapshot(publisher, subscriber, publisher_user_id, source).await;
+    publish_source_and_ready_publication(
+        server,
+        room,
+        publisher,
+        subscriber,
+        publisher_user_id,
+        source,
+    )
+    .await
+    .track
+}
+
+pub(crate) async fn publish_source_and_ready_publication(
+    server: &TestServer,
+    room: &str,
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: &UserId,
+    source: &FakeMediaSource,
+) -> PublicationSnapshot {
+    assert!(publisher.publish_track(source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    let snapshot = assert_publication_snapshot(
+        subscriber,
+        publisher_user_id.clone(),
+        source.stream_type(),
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
     assert_consumer_route(
         server,
         room,
         subscriber,
         publisher_user_id,
-        track_binding.stream_type,
+        snapshot.track.stream_type,
         RouteState::Active,
     )
     .await;
-    track_binding
+    snapshot
 }
 
 pub(crate) async fn consume_video_source_and_ready_route(
@@ -168,7 +181,6 @@ async fn read_expected_rtp_payload(
 pub(crate) enum RouteState {
     Active,
     Inactive,
-    Absent,
 }
 
 pub(crate) async fn assert_consumer_route(
@@ -193,16 +205,6 @@ pub(crate) async fn assert_consumer_route(
         RouteState::Inactive => {
             server
                 .wait_for_consumer_route_inactive(
-                    room,
-                    subscriber.user_id(),
-                    publisher_user_id,
-                    stream_type,
-                )
-                .await
-        }
-        RouteState::Absent => {
-            server
-                .wait_for_consumer_route_absence(
                     room,
                     subscriber.user_id(),
                     publisher_user_id,

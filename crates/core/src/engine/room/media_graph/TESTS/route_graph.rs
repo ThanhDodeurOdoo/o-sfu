@@ -402,3 +402,37 @@ fn rejected_route_preserves_selection_and_shared_relay() {
         [TransportRelayRouteAction::Release]
     );
 }
+
+#[test]
+fn source_activity_targets_pending_and_committed_relay_workers() {
+    let mut graph = RouteGraph::default();
+    let target = target(2, 20, SOURCE_ONE);
+    let key = key(2);
+    let reservation = reserve(
+        &mut graph,
+        &key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(true),
+    );
+    let worker = MediaWorkerId::from_raw(1);
+    let _ = graph.reserve_relay(&reservation, &target, worker, true);
+    assert_eq!(
+        graph
+            .source_activity_target_workers(&target.source)
+            .collect::<Vec<_>>(),
+        [worker]
+    );
+    commit_route(
+        &mut graph,
+        reservation,
+        &target,
+        101,
+        ConsumerSourceSelection::open(true),
+    );
+    assert_eq!(
+        graph
+            .source_activity_target_workers(&target.source)
+            .collect::<Vec<_>>(),
+        [worker]
+    );
+}

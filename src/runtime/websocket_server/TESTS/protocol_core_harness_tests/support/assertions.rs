@@ -20,12 +20,16 @@ pub(crate) async fn consume_peer_info_update(
     user_id: ProtocolSessionId,
     info: ProtocolSessionInfo,
 ) -> Option<()> {
+    let expected = BundleUpdate::SessionInfoChange(BTreeMap::from([(
+        bundle_session_info_key(&user_id),
+        info,
+    )]));
+    if peer.updates.last() == Some(&expected) {
+        return Some(());
+    }
     consume_session_info_update(
         peer,
-        BundleUpdate::SessionInfoChange(BTreeMap::from([(
-            bundle_session_info_key(&user_id),
-            info,
-        )])),
+        expected,
         "peer info should project into the post-auth user-info update surface",
     )
     .await

@@ -1764,8 +1764,9 @@ test("cancelled track detach cannot clear a recovered peer binding", async () =>
     assert.equal(recoveredSender.track, thirdTrack);
 });
 
-test("publish detaches the local sender before signaling unpublish", async () => {
+test("updateUpload pauses then reuses the negotiated sender without another answer", async () => {
     const track = createCameraTrack("camera-track-1");
+    const resumedTrack = createCameraTrack("camera-track-2");
     const { client, core, emitMessage, open, peerConnections, sockets, connect } =
         createSfuClientHarness();
     const originalPublish = core.publish.bind(core);
@@ -1788,67 +1789,58 @@ test("publish detaches the local sender before signaling unpublish", async () =>
     assert.equal(peerConnections[0].transceivers[1].sender.track, track);
     assert.deepEqual(core.publicationUpdates, [{ active: true, type: "camera" }]);
 
-    const unpublishOrder = [];
+    const peer = peerConnections[0];
+    const transceiver = peerConnections[0].transceivers[1];
+    const answerCount = peer.answerSnapshots.length;
+    const direction = transceiver.direction;
+    const mid = transceiver.mid;
+    const transceiverCount = peer.transceivers.length;
+    const pauseOrder = [];
     const socket = sockets[0];
     const originalSend = socket.send.bind(socket);
     socket.send = (frame) => {
-        unpublishOrder.push(`send:${frame}`);
+        pauseOrder.push(`send:${frame}`);
         originalSend(frame);
     };
-    const sender = peerConnections[0].transceivers[1].sender;
+    const sender = transceiver.sender;
     const originalReplaceTrack = sender.replaceTrack.bind(sender);
     sender.replaceTrack = async (replacementTrack) => {
         assert.equal(replacementTrack, null);
         await originalReplaceTrack(replacementTrack);
-        unpublishOrder.push("detach");
+        pauseOrder.push("detach");
     };
 
-    client.publish("camera", null);
+    client.updateUpload("camera", undefined);
     await tick();
 
-    assert.deepEqual(unpublishOrder, ["detach", "send:unpublish:camera"]);
-    assert.equal(peerConnections[0].transceivers[1].sender.track, null);
+    assert.deepEqual(pauseOrder, ["detach", "send:unpublish:camera"]);
+    assert.equal(transceiver.sender.track, null);
+    assert.equal(transceiver.direction, direction);
     assert.deepEqual(core.publicationUpdates, [
         { active: true, type: "camera" },
         { active: false, type: "camera" }
     ]);
+
+    sender.replaceTrack = originalReplaceTrack;
+    client.updateUpload("camera", resumedTrack);
+    await tick();
+
+    assert.equal(transceiver.sender.track, resumedTrack);
+    assert.equal(transceiver.direction, direction);
+    assert.equal(transceiver.mid, mid);
+    assert.equal(peer.transceivers.length, transceiverCount);
+    assert.equal(peer.answerSnapshots.length, answerCount);
+    assert.deepEqual(core.publicationUpdates, [
+        { active: true, type: "camera" },
+        { active: false, type: "camera" },
+        { active: true, type: "camera" }
+    ]);
 });
 
-test("duplicate unpublish keeps later re-publish eligible for a new upload mid", async () => {
+test("rapid pause and resume converges on the latest track without negotiation", async () => {
+    const { promise: detachGate, resolve: releaseDetach } = Promise.withResolvers();
     const harness = createRecoveryHarness();
-    const { client, emitMessage, peerConnections } = harness;
-    const firstTrack = createCameraTrack("camera-track-first");
-    const secondTrack = createCameraTrack("camera-track-second");
-
-    await connectRealWithWelcome(harness);
-    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
-
-    client.publish("camera", firstTrack);
-    await tick();
-    await emitMessage(buildVideoRenegotiationFrame("9", { mid: "2", simulcastEncodings: [] }));
-
-    client.publish("camera", null);
-    client.publish("camera", null);
-    await tick();
-
-    client.publish("camera", secondTrack);
-    await tick();
-    await emitMessage(buildVideoRenegotiationFrame("10", { mid: "3", simulcastEncodings: [] }));
-
-    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "3");
-    assert.ok(transceiver);
-    assert.equal(transceiver.sender.track, secondTrack);
-    assert.equal(
-        peerConnections[0].answerSnapshots
-            .at(-1)
-            .find((snapshot) => snapshot.mid === transceiver.mid)?.senderTrack,
-        secondTrack
-    );
-});
-
-test("same-turn unpublish and republish keeps the new track upload-eligible", async () => {
-    const harness = createRecoveryHarness();
-    const { client, emitMessage, peerConnections } = harness;
+    const { client, emitMessage, peerConnections, sockets, timers } = harness;
     const secondTrack = createCameraTrack("camera-track-same-turn-second");
 
     await connectRealWithWelcome(harness);
@@ -1858,14 +1850,134 @@ test("same-turn unpublish and republish keeps the new track upload-eligible", as
     await tick();
     await emitMessage(buildVideoRenegotiationFrame("9", { mid: "2", simulcastEncodings: [] }));
 
+    const peer = peerConnections[0];
+    const transceiver = peer.transceivers.find((candidate) => candidate.mid === "2");
+    assert.ok(transceiver);
+    const answerCount = peer.answerSnapshots.length;
+    const direction = transceiver.direction;
+    const replaceTrack = transceiver.sender.replaceTrack.bind(transceiver.sender);
+    let detachStarted = false;
+    transceiver.sender.replaceTrack = async (track) => {
+        if (track === null) {
+            detachStarted = true;
+            await detachGate;
+        }
+        await replaceTrack(track);
+    };
+
     client.publish("camera", null);
     client.publish("camera", secondTrack);
     await tick();
-    await emitMessage(buildVideoRenegotiationFrame("10", { mid: "3", simulcastEncodings: [] }));
+    assert.equal(detachStarted, true);
 
-    const transceiver = peerConnections[0].transceivers.find((candidate) => candidate.mid === "3");
-    assert.ok(transceiver);
+    releaseDetach();
+    await tick();
+    timers.fireByDelay(100);
+    await tick();
+
     assert.equal(transceiver.sender.track, secondTrack);
+    assert.equal(transceiver.direction, direction);
+    assert.equal(peer.answerSnapshots.length, answerCount);
+    const publicationEnvelopes = sockets[0].sent
+        .flatMap((_, index) => decodeSentFrame(sockets[0], index))
+        .filter((envelope) => envelope.t === "publish" || envelope.t === "unpublish");
+    assert.deepEqual(publicationEnvelopes.at(-1), {
+        t: "publish",
+        p: {
+            type: "camera"
+        }
+    });
+});
+
+test("cleanup offer rebinds a staged camera without disturbing a bound screen", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, peerConnections } = harness;
+    const screenTrack = createScreenTrack("screen-track");
+    const latestTrack = createCameraTrack("camera-track-latest");
+
+    await connectRealWithWelcome(harness);
+    client.publish("screen", screenTrack);
+    await tick();
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    client.publish("camera", createCameraTrack("camera-track-cancelled"));
+    client.publish("camera", null);
+    client.publish("camera", latestTrack);
+    await tick();
+
+    await emitMessage(
+        buildNegotiationFrame("renegotiate", "9", {
+            sdp: sdp(
+                videoMedia("1", { direction: "recvonly" }),
+                videoMedia("2", { direction: "recvonly" })
+            ),
+            uploadSlots: [videoUploadSlot("2", { simulcastEncodings: [] })]
+        })
+    );
+    const peer = peerConnections[0];
+    const screenTransceiver = peer.transceivers.find((candidate) => candidate.mid === "1");
+    const oldTransceiver = peer.transceivers.find((candidate) => candidate.mid === "2");
+    assert.equal(screenTransceiver.sender.track, screenTrack);
+    assert.equal(oldTransceiver.sender.track, latestTrack);
+
+    await emitMessage(
+        buildNegotiationFrame("renegotiate", "10", {
+            sdp: sdp(
+                videoMedia("1", { direction: "recvonly" }),
+                videoMedia("2", { direction: "inactive" }),
+                videoMedia("3", { direction: "recvonly" })
+            ),
+            uploadSlots: [videoUploadSlot("3", { simulcastEncodings: [] })]
+        })
+    );
+
+    const freshTransceiver = peer.transceivers.find((candidate) => candidate.mid === "3");
+    assert.equal(screenTransceiver.sender.track, screenTrack);
+    assert.equal(oldTransceiver.sender.track, null);
+    assert.equal(freshTransceiver.sender.track, latestTrack);
+    assert.equal(
+        peer.answerSnapshots.at(-1).find((snapshot) => snapshot.mid === "3")?.senderTrack,
+        latestTrack
+    );
+});
+
+test("failed sender resume does not signal an active publication", async () => {
+    const { client, core, emitMessage, handledErrors, open, peerConnections, sockets, connect } =
+        createSfuClientHarness();
+    const originalPublish = core.publish.bind(core);
+    core.publish = (type, active) => {
+        const commands = originalPublish(type, active);
+        commands.push({ frame: `publication:${active}`, kind: "sendWebSocket" });
+        return commands;
+    };
+
+    await connect();
+    await open();
+    await emitMessage("welcome");
+
+    client.publish("camera", createCameraTrack("camera-track-first"));
+    await tick();
+    await emitMessage("offer");
+    client.publish("camera", null);
+    await tick();
+
+    const sender = peerConnections[0].transceivers[1].sender;
+    const secondTrack = createCameraTrack("camera-track-second");
+    const replaceTrack = sender.replaceTrack.bind(sender);
+    sender.replaceTrack = async (track) => {
+        if (track === secondTrack) {
+            throw new Error("sender rejected replacement");
+        }
+        await replaceTrack(track);
+    };
+    sockets[0].sent.length = 0;
+
+    client.publish("camera", secondTrack);
+    await tick();
+
+    assert.deepEqual(sockets[0].sent, []);
+    assert.equal(handledErrors.length, 1);
+    assert.equal(handledErrors[0].message, "sender rejected replacement");
 });
 
 test("explicit disconnect clears publication intent before reconnect", async () => {

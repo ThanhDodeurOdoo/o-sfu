@@ -42,6 +42,7 @@ use o_sfu_router::{
 pub use policy_invalidation::{SourcePolicySignal, SourcePolicyUpdateSubscription};
 pub(crate) use route_control::{
     ConsumerRouteControl, ConsumerRouteControlOutcome, MediaControlPlan,
+    TransportSourceActivityEffect,
 };
 pub(in crate::engine::media_transport) use route_control::{
     ConsumerRouteControlFailure, ProducerRouteControl,
@@ -71,6 +72,7 @@ pub use types::{
     TransportSessionKey, TransportSourceActivity, TransportSourceDiagnosticsSnapshot,
     TransportSourceKey, TransportWorkerPressureSnapshot,
 };
+pub(crate) use types::{SourceActivityRevision, SourceActivityUpdate};
 
 use self::workers::signaling_to_str0m_media_kind;
 use crate::engine::metrics::RuntimeMetrics;
@@ -379,6 +381,29 @@ impl MediaTransport {
                 action = ?effect.action,
                 ?error,
                 "media transport failed to apply relay route effect"
+                );
+            })
+    }
+
+    /// Applies one activity revision to a remote source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportAdapterError`] when the target worker is unavailable
+    /// or rejects the update.
+    pub(crate) async fn apply_remote_source_activity_effect(
+        &self,
+        effect: &TransportSourceActivityEffect,
+    ) -> Result<(), TransportAdapterError> {
+        self.execute_remote_source_activity_effect(effect)
+            .await
+            .inspect_err(|error| {
+                warn!(
+                    source = ?effect.source,
+                    target_media_worker_id = effect.target_media_worker_id.as_usize(),
+                    update = ?effect.update,
+                    ?error,
+                    "media transport failed to apply remote source activity"
                 );
             })
     }

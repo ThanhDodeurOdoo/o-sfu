@@ -73,7 +73,7 @@ use crate::engine::media_transport::{SessionOffer, TransportMediaId, TransportSe
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::metrics::RuntimeMetrics;
 use crate::engine::{
-    media_transport::{TransportRelayRouteAction, TransportSourceKey},
+    media_transport::{SourceActivityUpdate, TransportRelayRouteAction, TransportSourceKey},
     metrics::RtcMetricsRecorder,
 };
 
@@ -287,6 +287,13 @@ impl RtcWorker {
                 }
             }
         }
+    }
+
+    pub(crate) fn remote_source_activity_request(
+        source: TransportSourceKey,
+        update: SourceActivityUpdate,
+    ) -> RouteControlRequest {
+        RouteControlRequest::SetRemoteSourceActivity { source, update }
     }
 }
 

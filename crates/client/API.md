@@ -111,7 +111,7 @@ or disconnected state according to the protocol state machine.
 
 ## publish(type, track)
 
-Publishes or unpublishes a local media track.
+Sets the desired local media track.
 
 ```js
 const audioTrack = audioStream.getAudioTracks()[0];
@@ -137,7 +137,18 @@ The supplied track must match the stream type:
 - `camera` requires a video `MediaStreamTrack`
 - `screen` requires a video `MediaStreamTrack`
 
-Passing `null` or `undefined` stops publishing that stream type.
+The first non-null track may require SDP negotiation. The server classifies an
+inactive request when it applies it. A queued or staged first publication is
+cancelled. A committed publication is paused.
+
+The client uses `RTCRtpSender.replaceTrack(null)` for a committed publication
+while retaining the negotiated sender, transceiver direction and MID. The
+server keeps the same source identity and consumer routes in an inactive state.
+
+Restoring a compatible track uses `replaceTrack(track)` on the same sender then
+reactivates the committed publication without another SDP exchange. Disconnect,
+recovery and peer replacement clear the old peer-generation MID. Session close
+or replacement performs the complete server-side publication teardown.
 
 ### updateUpload(type, track)
 
@@ -326,6 +337,10 @@ interface SessionInfo {
     isRaisingHand?: boolean;
 }
 ```
+
+`isCameraOn` and `isScreenSharingOn` remain accepted for compatibility. Their
+published values are derived from committed publication activity. Generic
+`updateInfo()` calls do not change them.
 
 `options.needRefresh` is accepted for legacy callers and is currently a
 compatibility no-op.

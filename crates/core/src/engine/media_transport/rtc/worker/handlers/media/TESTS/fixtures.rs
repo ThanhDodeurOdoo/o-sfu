@@ -13,10 +13,13 @@ use crate::{
     Bitrate,
     engine::{
         media_transport::{
-            ConsumerRouteControl, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
-            TransportSourceKey,
+            ConsumerRouteControl, ProducerActivity, SourceActivityRevision, SourceActivityUpdate,
+            TransportConsumerRoute, TransportMediaId, TransportSessionKey, TransportSourceKey,
             rtc::{
-                commands::{RemoteSourceControl, RtcWorkerCommand, WorkerMediaControlBatch},
+                commands::{
+                    RemoteSourceControl, RtcWorkerCommand, WorkerMediaControlBatch,
+                    WorkerMediaControlBatchOutcome,
+                },
                 relay_registry::RelayTargetId,
                 route_control::PacketLayerGate,
                 state::PacketLoopState,
@@ -231,6 +234,16 @@ impl RemoteVideoRoute {
                 )
                 .is_ok()
         );
+        assert_eq!(
+            state.routes.apply_source_activity(
+                src_media,
+                SourceActivityUpdate::new(
+                    ProducerActivity::Active,
+                    SourceActivityRevision::default(),
+                ),
+            ),
+            Ok(true)
+        );
         let consumer_media = install_video_route_with_gate(
             &mut state,
             src_media,
@@ -251,13 +264,13 @@ impl RemoteVideoRoute {
         }
     }
 
-    pub fn request_kf(&mut self) {
+    pub fn request_kf(&mut self) -> WorkerMediaControlBatchOutcome {
         let route = TransportConsumerRoute::new(
             self.consumer_session.clone(),
             self.consumer_media,
             TransportSourceKey::new(self.source_session.clone(), self.src_media),
         );
-        let _ = apply_media_control_batch(
+        apply_media_control_batch(
             &mut self.state,
             &self.rtc_metrics,
             Bitrate::from_mbps(10),
@@ -266,7 +279,7 @@ impl RemoteVideoRoute {
                 0,
                 ConsumerRouteControl::new(route).request_keyframe(true),
             )]),
-        );
+        )
     }
 }
 

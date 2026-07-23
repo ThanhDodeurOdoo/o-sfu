@@ -53,16 +53,6 @@ impl RoomState {
     }
 
     #[cfg(test)]
-    pub fn inspect_producer_owner_user_id_for_transport_media_id(
-        &self,
-        transport_media_id: TransportMediaId,
-    ) -> Option<UserId> {
-        self.topology
-            .source_for_transport_media(transport_media_id)
-            .map(|source| source.descriptor.owner().user_id().clone())
-    }
-
-    #[cfg(test)]
     pub fn inspect_source_id_for_transport_media_id(
         &self,
         transport_media_id: TransportMediaId,

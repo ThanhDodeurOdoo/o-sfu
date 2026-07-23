@@ -46,7 +46,7 @@ pub use read_model::{
     IncomingBitrateSnapshot, RoomDetailCapture, RoomOverviewCapture, RoomUserCapture,
     RoomUserStatsSnapshot, RoomUsersCapture,
 };
-pub(crate) use transition::{PublishIntentOutcome, UnpublishIntentOutcome};
+pub(crate) use transition::{DeactivateIntentOutcome, PublishIntentOutcome};
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub use self::effects::batch::RoomEffectContext;

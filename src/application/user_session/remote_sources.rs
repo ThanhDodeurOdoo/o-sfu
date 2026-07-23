@@ -1,5 +1,5 @@
 use o_sfu_protocol::wire::{
-    ServerMessage, SourceDescriptor, SourceEncodingDescriptor, StreamType, TrackBinding,
+    ServerMessage, SourceDescriptor, SourceEncodingDescriptor, TrackBinding,
     UploadLayerPolicyRole as ProtocolRole,
 };
 
@@ -20,12 +20,7 @@ pub fn snapshot_messages(snapshot: &RemoteSourceSnapshot) -> [ServerMessage; 2] 
             continue;
         };
         let user_id = projection.source.owner().user_id().clone();
-        let active = match stream_type {
-            StreamType::Audio => None,
-            StreamType::Camera => projection.owner_info.is_camera_on,
-            StreamType::Screen => projection.owner_info.is_screen_sharing_on,
-        }
-        .unwrap_or(projection.producer_active);
+        let active = projection.producer_active;
         tracks.push(TrackBinding {
             mid: projection.consumer_mid.clone(),
             user_id: user_id.clone(),

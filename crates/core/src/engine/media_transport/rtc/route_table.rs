@@ -37,8 +37,9 @@ use super::{
     source_route::{MediaRouteDestination, MediaRouteEntry, PacketCodec, RemoteSourceRegistration},
 };
 use crate::engine::media_transport::{
-    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, TransportAdapterError, TransportMediaId,
-    TransportSessionKey, TransportSourceActivity, TransportSourceKey,
+    ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityUpdate,
+    TransportAdapterError, TransportMediaId, TransportSessionKey, TransportSourceActivity,
+    TransportSourceKey,
 };
 
 #[derive(Debug, Default)]
@@ -64,16 +65,37 @@ impl RouteTable {
         let Some(source) = self.sources.get(&source_id) else {
             return (None, None, None);
         };
-        let relays = if include_relays {
-            source.active_relay_targets()
+        let (route, relays) = if source.source_is_active() {
+            (
+                source.local_route(),
+                if include_relays {
+                    source.active_relay_targets()
+                } else {
+                    None
+                },
+            )
         } else {
-            None
+            (None, None)
         };
-        (source.local_route(), relays, source.packet_filter_gate())
+        (route, relays, source.packet_filter_gate())
     }
 
     pub(super) fn local_route(&self, source_id: TransportMediaId) -> Option<&MediaRouteEntry> {
         self.sources.get(&source_id)?.local_route()
+    }
+
+    pub(super) fn local_route_and_activity(
+        &self,
+        source_id: TransportMediaId,
+    ) -> Option<(&MediaRouteEntry, bool)> {
+        let source = self.sources.get(&source_id)?;
+        Some((source.local_route()?, source.source_is_active()))
+    }
+
+    pub(super) fn source_is_active(&self, source_id: TransportMediaId) -> bool {
+        self.sources
+            .get(&source_id)
+            .is_some_and(RouteSource::source_is_active)
     }
 
     pub(super) fn has_forwarding_sources(&self) -> bool {
@@ -120,6 +142,7 @@ impl RouteTable {
         Some(removed)
     }
 
+    #[cfg(test)]
     pub(super) fn set_source_active(
         &mut self,
         source_id: TransportMediaId,
@@ -128,7 +151,27 @@ impl RouteTable {
         self.sources
             .get_mut(&source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?
-            .set_source_active(active)
+            .set_source_active(active);
+        if !active {
+            self.keyframe_requests.forget_source(source_id);
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_source_activity(
+        &mut self,
+        source_id: TransportMediaId,
+        update: SourceActivityUpdate,
+    ) -> Result<bool, TransportAdapterError> {
+        let accepted = self
+            .sources
+            .get_mut(&source_id)
+            .ok_or(TransportAdapterError::TransportUnavailable)?
+            .apply_source_activity(update);
+        if accepted && !update.activity().is_active() {
+            self.keyframe_requests.forget_source(source_id);
+        }
+        Ok(accepted)
     }
 
     pub(super) fn set_consumer_active(
@@ -664,7 +707,7 @@ impl RouteTable {
         self.active.take_expired(now)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn effective_packet_gate(
         &self,
         source_id: TransportMediaId,
@@ -729,14 +772,14 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn is_relay_target_active(
+    pub(super) fn source_relay_target_is_active(
         &self,
         source_id: TransportMediaId,
         target_id: RelayTargetId,
     ) -> bool {
-        self.sources
-            .get(&source_id)
-            .is_some_and(|source| source.is_relay_target_active(target_id))
+        self.sources.get(&source_id).is_some_and(|source| {
+            source.source_is_active() && source.is_relay_target_active(target_id)
+        })
     }
 
     #[cfg(test)]

@@ -20,8 +20,9 @@ use super::{
 use crate::engine::{
     ConnectionId, MediaWorkerId, RoomInstanceId, UserId,
     media_transport::{
-        SessionUploadEncoding, TransportConsumerRoute, TransportMediaId, TransportRelayRouteEffect,
-        TransportSessionKey, TransportSourceKey, TransportTeardown,
+        SessionUploadEncoding, SourceActivityRevision, SourceActivityUpdate,
+        TransportConsumerRoute, TransportMediaId, TransportRelayRouteEffect, TransportSessionKey,
+        TransportSourceActivityEffect, TransportSourceKey, TransportTeardown,
     },
     room::{
         RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
@@ -552,6 +553,7 @@ impl RoomTopology {
             rtp,
             routed,
             active: true,
+            activity_revision: SourceActivityRevision::default(),
         });
         Ok(source_id)
     }
@@ -622,52 +624,36 @@ impl RoomTopology {
             .collect()
     }
 
-    pub(super) fn unpublish_source(
-        &mut self,
-        user_id: &UserId,
-        connection_id: ConnectionId,
-        source_id: PublishedSourceId,
-    ) -> Option<RoomTransportPlan> {
-        let source = self.sources.source(source_id)?;
-        if source.descriptor.owner().user_id() != user_id
-            || source.transport.session_key().connection_id() != connection_id
-        {
-            return None;
-        }
-        let routed = source.routed;
-        if let Some(error) = self.router.remove_producer(routed).err() {
-            error!(
-                ?user_id,
-                ?source_id,
-                ?error,
-                "repaired published track room state after router producer teardown failed"
-            );
-        }
-        let (source, removed) = self.remove_source(source_id)?;
-        let teardown = Self::media_teardowns([source.transport], removed.routes);
-        let relay_effects = self.resolve_relay_effects(removed.relays);
-        Some(RoomTransportPlan::from_relays_and_teardown(
-            relay_effects,
-            teardown,
-        ))
-    }
-
     pub fn set_published_source_activity(
         &mut self,
         source_id: PublishedSourceId,
         connection_id: ConnectionId,
         active: bool,
-    ) -> bool {
-        let Some(source) = self.sources.source_mut(source_id) else {
-            return false;
-        };
+    ) -> Option<SourceActivityRevision> {
+        let source = self.sources.source_mut(source_id)?;
         if source.transport.session_key().connection_id() != connection_id
             || source.active == active
         {
-            return false;
+            return None;
         }
         source.active = active;
-        true
+        source.activity_revision = source.activity_revision.next();
+        Some(source.activity_revision)
+    }
+
+    pub(super) fn source_activity_effects(
+        &self,
+        source: &TransportSourceKey,
+        update: SourceActivityUpdate,
+    ) -> Vec<TransportSourceActivityEffect> {
+        self.route_graph
+            .source_activity_target_workers(source)
+            .map(|target_media_worker_id| TransportSourceActivityEffect {
+                source: source.clone(),
+                target_media_worker_id,
+                update,
+            })
+            .collect()
     }
 
     /// commits the new connection before returning teardown for displaced placement

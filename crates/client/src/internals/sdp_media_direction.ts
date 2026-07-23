@@ -1,8 +1,15 @@
 type SdpMediaDirection = "sendrecv" | "sendonly" | "recvonly" | "inactive";
 
+type SdpMediaSection = {
+    direction?: SdpMediaDirection;
+    mid?: string;
+    rejected: boolean;
+};
+
 const DEFAULT_MEDIA_DIRECTION: SdpMediaDirection = "sendrecv";
 const SDP_MEDIA_PREFIX = "m=";
 const SDP_ATTRIBUTE_PREFIX = "a=";
+const SDP_MID_PREFIX = "a=mid:";
 const MEDIA_DIRECTIONS = new Set<SdpMediaDirection>([
     "sendrecv",
     "sendonly",
@@ -20,36 +27,59 @@ const MEDIA_DIRECTIONS = new Set<SdpMediaDirection>([
  * transport as ready.
  */
 export function localDescriptionHasOnlyInactiveMedia(sdp: string): boolean {
+    const { mediaSections, sessionDirection } = parseMediaSections(sdp);
+    return (
+        mediaSections.length > 0 &&
+        mediaSections.every(
+            (media) =>
+                (media.direction ?? sessionDirection ?? DEFAULT_MEDIA_DIRECTION) === "inactive"
+        )
+    );
+}
+
+export function remoteDescriptionAcceptsUploadMid(sdp: string, mid: string): boolean {
+    const { mediaSections, sessionDirection } = parseMediaSections(sdp);
+    const media = mediaSections.find((candidate) => candidate.mid === mid);
+    if (!media || media.rejected) {
+        return false;
+    }
+    const direction = media.direction ?? sessionDirection ?? DEFAULT_MEDIA_DIRECTION;
+    return direction === "recvonly" || direction === "sendrecv";
+}
+
+function parseMediaSections(sdp: string): {
+    mediaSections: SdpMediaSection[];
+    sessionDirection?: SdpMediaDirection;
+} {
     let sessionDirection: SdpMediaDirection | undefined;
-    let currentMediaIndex: number | undefined;
-    const mediaDirections: (SdpMediaDirection | undefined)[] = [];
+    let currentMedia: SdpMediaSection | undefined;
+    const mediaSections: SdpMediaSection[] = [];
 
     for (const rawLine of sdp.split(/\r\n|\n|\r/)) {
         const line = rawLine.trimEnd();
         if (line.startsWith(SDP_MEDIA_PREFIX)) {
-            mediaDirections.push(undefined);
-            currentMediaIndex = mediaDirections.length - 1;
+            currentMedia = {
+                rejected: mediaLinePort(line) === "0"
+            };
+            mediaSections.push(currentMedia);
             continue;
         }
 
         const direction = parseDirectionAttribute(line);
-        if (!direction) {
+        if (direction) {
+            if (currentMedia) {
+                currentMedia.direction = direction;
+            } else {
+                sessionDirection = direction;
+            }
             continue;
         }
-        if (currentMediaIndex === undefined) {
-            sessionDirection = direction;
-        } else {
-            mediaDirections[currentMediaIndex] = direction;
+        if (currentMedia && line.startsWith(SDP_MID_PREFIX)) {
+            currentMedia.mid = line.slice(SDP_MID_PREFIX.length);
         }
     }
 
-    return (
-        mediaDirections.length > 0 &&
-        mediaDirections.every(
-            (mediaDirection) =>
-                (mediaDirection ?? sessionDirection ?? DEFAULT_MEDIA_DIRECTION) === "inactive"
-        )
-    );
+    return { mediaSections, sessionDirection };
 }
 
 function parseDirectionAttribute(line: string): SdpMediaDirection | undefined {
@@ -62,4 +92,8 @@ function parseDirectionAttribute(line: string): SdpMediaDirection | undefined {
 
 function isSdpMediaDirection(value: string): value is SdpMediaDirection {
     return MEDIA_DIRECTIONS.has(value as SdpMediaDirection);
+}
+
+function mediaLinePort(line: string): string | undefined {
+    return line.split(/\s+/, 3)[1]?.split("/", 1)[0];
 }

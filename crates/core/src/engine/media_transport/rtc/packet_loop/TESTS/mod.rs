@@ -17,6 +17,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use o_sfu_rfc::rtp::CodecName;
+use o_sfu_router::{
+    MediaKind as RouterMediaKind,
+    rtp::{MediaFormat, MediaStream as RouterRtpParameters, PayloadType},
+};
 use o_sfu_telemetry::schema::event::TRANSPORT_HEALTH_CHANGED;
 use serde_json::Value;
 use str0m::{
@@ -54,7 +59,8 @@ use crate::{
     engine::{
         RoomInstanceId, UserId,
         media_transport::{
-            SourcePolicySignal, TransportMediaId, TransportSessionKey, TransportSourceKey,
+            ProducerActivity, SourceActivityRevision, SourceActivityUpdate, SourcePolicySignal,
+            TransportMediaId, TransportSessionKey, TransportSourceKey,
             rtc::{
                 RtcWorker, RtcWorkerConfig, RtpProfile,
                 bitrate::BitrateRegistry,
@@ -69,11 +75,11 @@ use crate::{
                 state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
                 test_support::{
                     DebugProbe, DebugProbeRequest, collect_ready_session_keys,
-                    sample_already_relayed_audio_packet_at, sample_already_relayed_packet,
-                    sample_forwarded_packet, sample_forwarded_packet_with_audio_activity,
-                    sample_forwarded_packet_with_rid, sample_forwarded_packet_without_mid,
-                    sample_local_forwarded_packet, sample_rtp_packet, serialize_stun_message,
-                    test_transport_session_key,
+                    prepare_source_session_with_rid, sample_already_relayed_audio_packet_at,
+                    sample_already_relayed_packet, sample_forwarded_packet,
+                    sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_rid,
+                    sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
+                    sample_rtp_packet, serialize_stun_message, test_transport_session_key,
                 },
             },
         },
@@ -657,6 +663,16 @@ impl PacketLoopHarness {
                 RemoteSourceControl::new(control_tx, target_id, Arc::clone(&self.rtc_metrics)),
             )
             .expect("remote source should register");
+        assert_eq!(
+            self.state.routes.apply_source_activity(
+                src_media,
+                SourceActivityUpdate::new(
+                    ProducerActivity::Active,
+                    SourceActivityRevision::default(),
+                ),
+            ),
+            Ok(true)
+        );
         control_rx
     }
 
@@ -1067,6 +1083,78 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
             .and_then(|facts| facts.rid),
         Some(Rid::from("hi"))
     );
+}
+
+#[test]
+fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
+    let producer_session = test_transport_session_key(89, 0, 90, UserId::Integer(91));
+    let consumer_session = test_transport_session_key(89, 0, 92, UserId::Integer(93));
+    let producer_mid = Mid::from("cam-up");
+    let selected_rid = Rid::from("hi");
+    let mut state = PacketLoopState::default();
+    let src_media = prepare_source_session_with_rid(
+        &mut state,
+        &producer_session,
+        producer_mid,
+        4_321,
+        Some(selected_rid),
+    );
+    state.routes.refresh_packet_codecs(
+        src_media,
+        &RouterRtpParameters::new(
+            vec![MediaFormat::new(
+                RouterMediaKind::Video,
+                CodecName::H264,
+                PayloadType::new(111),
+                90_000,
+            )],
+            vec![],
+            vec![],
+        ),
+    );
+    register_consumer_route_fixture(
+        &mut state,
+        &consumer_session,
+        "cam-down",
+        src_media,
+        true,
+        PacketLayerGate::Block,
+        Some(PacketLayerGate::Rid(selected_rid)),
+    );
+    assert!(set_source_route_active(&mut state, src_media, false));
+    let metrics = RuntimeMetrics::default();
+    let packet_recorder = metrics.register_rtp_worker();
+    let control_recorder = metrics.register_rtc_worker();
+    let mut buffers = PacketLoopBuffers::new();
+    buffers
+        .pending_packets
+        .push(sample_forwarded_packet_with_rid(
+            producer_session,
+            "cam-up",
+            Some("hi"),
+            &[0x65, 0x88],
+        ));
+
+    record_incoming_stats(
+        &mut state,
+        &SourcePolicySignal::default(),
+        &control_recorder,
+        &packet_recorder,
+        &mut buffers,
+    );
+
+    assert!(state.routes.local_route(src_media).is_some_and(|route| {
+        route.destinations.iter().any(|destination| {
+            destination.packet_gate == PacketLayerGate::Block
+                && destination.pending_gate == Some(PacketLayerGate::Rid(selected_rid))
+        })
+    }));
+    assert!(drain_ready_sessions(&mut state).is_empty());
+    assert_eq!(state.routes.next_rid_refresh_deadline(), None);
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 0);
+    assert_eq!(snapshot.rtc_keyframe_requests_forwarded(), 0);
+    assert_eq!(snapshot.rtp_payload_bytes_ingress(), 2);
 }
 
 #[test]

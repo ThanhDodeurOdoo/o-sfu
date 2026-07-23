@@ -8,7 +8,7 @@ use super::{
     effects::batch::{RoomEffectContext, RoomEffects},
     media_graph::CommittedTransportReceipt,
     placement::JoinAdmissionTurn,
-    state::{ConnectionCloseCommit, RemoteSourceRefresh},
+    state::ConnectionCloseCommit,
 };
 use crate::engine::{
     ConnectionId, MediaWorkerId, UserId, UserInfo, UserPermissions, media_transport::MediaTransport,
@@ -153,16 +153,13 @@ impl Room {
         user_id: &UserId,
         connection_id: ConnectionId,
         media_transport: &MediaTransport,
-        info: UserInfo,
+        mut info: UserInfo,
     ) {
+        info.is_camera_on = None;
+        info.is_screen_sharing_on = None;
         let commit = {
             let mut state = self.state.write().await;
-            state.apply_presence_update(
-                user_id,
-                connection_id,
-                &info,
-                RemoteSourceRefresh::OwnerConsumers,
-            )
+            state.apply_presence_update(user_id, connection_id, &info)
         };
         if let Some(commit) = commit {
             RoomEffects::from_presence(commit)
@@ -173,7 +170,6 @@ impl Room {
                 ?user_id,
                 connection_id = ?connection_id,
                 ?info,
-                refresh_sources = ?RemoteSourceRefresh::OwnerConsumers,
                 "user info update was rejected by room state"
             );
         }

@@ -249,7 +249,7 @@ async fn source_fanout_pressure_places_next_join_on_spillover_worker() -> Result
 }
 
 #[tokio::test]
-async fn source_fanout_pressure_clears_after_unpublish() -> Result<()> {
+async fn source_fanout_pressure_clears_after_deactivation() -> Result<()> {
     let manager = manager_with_policy(load_triggered_policy(99, 1, 1)?);
     let media_transport = media_transport()?;
     let room = serve_room(&manager, "issuer-load-fanout-clear").await;
@@ -259,7 +259,7 @@ async fn source_fanout_pressure_clears_after_unpublish() -> Result<()> {
     assert!(
         room.test_api()
             .media()
-            .unpublish_track(&publisher_id, &stream_id, &media_transport)
+            .deactivate_publication(&publisher_id, &stream_id, &media_transport)
             .await
     );
     join_user(&manager, &room, 3, &media_transport).await?;
@@ -427,7 +427,7 @@ async fn publication_activity_after_source_owner_leave_is_a_noop() -> Result<()>
             .room
             .test_api()
             .media()
-            .set_publication_active(&publisher_id, &stream_id, false, &ready.media_transport)
+            .deactivate_publication(&publisher_id, &stream_id, &ready.media_transport,)
             .await
     );
     Ok(())

@@ -26,7 +26,10 @@ use crate::{
     Bitrate, RoomMediaLimits,
     engine::{
         ConnectionId, MediaWorkerId, RoomInstanceId, TestSourceKind, UserId, UserPermissions,
-        media_transport::{SessionUploadEncoding, TransportConsumerRoute, TransportMediaId},
+        media_transport::{
+            ProducerActivity, SessionUploadEncoding, SourceActivityRevision, SourceActivityUpdate,
+            TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+        },
         metrics::RuntimeMetrics,
         room::{
             RoomAdmissionPolicy, RoomRuntimeContext, RouterPlacement, UserOutboundSender,
@@ -518,8 +521,16 @@ fn consumer_setup_commit_uses_latest_room_state() {
         subscriber_user_id,
         subscriber_connection_id,
         stream_id,
-        setup,
+        mut setup,
     ) = pending_consumer_setup();
+    let target_session = &setup.target.session;
+    let target_worker = MediaWorkerId::from_raw(1);
+    setup.target.session = TransportSessionKey::new(
+        target_session.room_instance_id(),
+        target_worker,
+        target_session.connection_id(),
+        target_session.user_id().clone(),
+    );
 
     let publisher_connection_id = state
         .user_connection_id(&publisher_user_id)
@@ -527,11 +538,12 @@ fn consumer_setup_commit_uses_latest_room_state() {
     let source_id = state
         .published_source_id(&publisher_user_id, publisher_connection_id, &stream_id)
         .expect("published source should exist");
-    assert!(state.topology.set_published_source_activity(
-        source_id,
-        publisher_connection_id,
-        false
-    ));
+    assert!(
+        state
+            .topology
+            .set_published_source_activity(source_id, publisher_connection_id, false)
+            .is_some()
+    );
 
     let intents = subscription_intents_from_test_states(&scalable_video_states(false));
     let change = state.plan_receiver_route_work(
@@ -544,6 +556,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
 
     let ConsumerSetupOutcome::Committed {
         snapshot,
+        remote_source_activity,
         transport_activity_update,
         ..
     } = commit_setup(&mut state, setup)
@@ -559,6 +572,16 @@ fn consumer_setup_commit_uses_latest_room_state() {
     let transport_activity_update =
         transport_activity_update.expect("transport declaration should be corrected");
     assert!(!transport_activity_update);
+    let remote_source_activity =
+        remote_source_activity.expect("remote setup should reconcile source activity");
+    assert_eq!(remote_source_activity.target_media_worker_id, target_worker);
+    assert_eq!(
+        remote_source_activity.update,
+        SourceActivityUpdate::new(
+            ProducerActivity::Inactive,
+            SourceActivityRevision::default().next(),
+        )
+    );
     assert_eq!(
         state.consumer_route_state(&subscriber_user_id, &publisher_user_id, &stream_id),
         Some(ConsumerRouteState::Inactive)

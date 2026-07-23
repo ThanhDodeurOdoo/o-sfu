@@ -13,8 +13,8 @@ use super::{User, UserError, UserOutput};
 use crate::{
     application::stream_catalog::{DiscussStream, source_publish_intent_for_stream_type},
     core::prelude::{
-        Bitrate, MediaSession, NegotiationOffer, SessionError, SfuCoreError, SourcePublishIntent,
-        SourceUnpublishIntent,
+        Bitrate, MediaSession, NegotiationOffer, SessionError, SfuCoreError,
+        SourceDeactivateIntent, SourcePublishIntent,
     },
     runtime::telemetry::schema::event as telemetry_event,
 };
@@ -55,19 +55,21 @@ impl User {
             active
         )
     )]
-    pub(super) async fn publish(
+    pub(super) async fn set_publication_active(
         &mut self,
         stream_type: StreamType,
         active: bool,
     ) -> Result<UserOutput, UserError> {
-        let result = if active {
+        if active {
             let intent = source_publish_intent_for_stream_type(stream_type);
-            self.media.publish(intent).await
-        } else {
-            let intent = DiscussStream::for_type(stream_type).unpublish_intent();
-            self.media.unpublish(intent).await
-        };
-        result.map_err(|error| self.publish_error(stream_type, error))
+            return self
+                .media
+                .publish(intent)
+                .await
+                .map_err(|error| self.publish_error(stream_type, error));
+        }
+        let intent = DiscussStream::for_type(stream_type).deactivate_intent();
+        Ok(self.media.deactivate_publication(intent).await)
     }
 
     #[instrument(
@@ -156,12 +158,9 @@ impl ServerMediaNegotiation {
         Ok(self.issue(NegotiationKind::Renegotiate, offer))
     }
 
-    async fn unpublish(
-        &mut self,
-        intent: SourceUnpublishIntent,
-    ) -> Result<UserOutput, SessionError> {
-        let offer = self.session.unpublish(intent).await?;
-        Ok(self.issue(NegotiationKind::Renegotiate, offer))
+    async fn deactivate_publication(&mut self, intent: SourceDeactivateIntent) -> UserOutput {
+        self.session.deactivate_publication(intent).await;
+        UserOutput::new()
     }
 
     async fn answer(

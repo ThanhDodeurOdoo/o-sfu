@@ -17,7 +17,10 @@ use super::super::{
 };
 use crate::engine::{
     UserId,
-    media_transport::{TransportMediaId, TransportSessionKey, TransportSourceKey},
+    media_transport::{
+        ProducerActivity, SourceActivityRevision, SourceActivityUpdate, TransportMediaId,
+        TransportSessionKey, TransportSourceKey,
+    },
     metrics::{RtcMetricsRecorder, RuntimeMetrics},
 };
 
@@ -57,6 +60,10 @@ impl RidReadinessBenchFixture {
         let _ = state.routes.register_remote_source(
             &source,
             RemoteSourceControl::new(control_tx, RelayTargetId::new(1), Arc::clone(&rtc_metrics)),
+        );
+        let _ = state.routes.apply_source_activity(
+            src_media,
+            SourceActivityUpdate::new(ProducerActivity::Active, SourceActivityRevision::default()),
         );
 
         let mut scenario = MediaWorkerScenario::new(&mut state);
@@ -127,6 +134,10 @@ impl KeyframeCoalescingBenchFixture {
         let _ = state.routes.register_remote_source(
             &source,
             RemoteSourceControl::new(control_tx, RelayTargetId::new(2), Arc::clone(&rtc_metrics)),
+        );
+        let _ = state.routes.apply_source_activity(
+            src_media,
+            SourceActivityUpdate::new(ProducerActivity::Active, SourceActivityRevision::default()),
         );
 
         let mut scenario = MediaWorkerScenario::new(&mut state);

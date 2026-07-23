@@ -300,6 +300,34 @@ fn protocol_core_updates_sticky_intents_while_recovering_before_replay() {
             })),
         ]
     );
+
+    let commands = core.on_transport_ready();
+    assert!(decode_sent_client_envelopes(&commands).is_empty());
+}
+
+#[test]
+fn protocol_core_replays_latest_reactivated_publish_after_recovery() {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let _ = core.accept_welcome(sample_welcome_payload());
+    let _ = core.on_transport_ready();
+    let _ = core.publish(StreamType::Camera, true);
+    let _ = core.on_ws_close(1011);
+    let _ = core.publish(StreamType::Camera, false);
+    let _ = core.publish(StreamType::Camera, true);
+    let _ = core.on_timer(RECOVERY_TIMER_ID);
+    let _ = core.accept_welcome(sample_welcome_payload());
+
+    let commands = core.on_transport_ready();
+
+    assert_eq!(
+        decode_sent_client_envelopes(&commands),
+        vec![ClientEnvelope::Message(ClientMessage::Publish(
+            StreamIntentPayload {
+                stream_type: StreamType::Camera,
+            },
+        ))]
+    );
 }
 
 #[test]

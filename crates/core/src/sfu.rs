@@ -8,9 +8,10 @@
 //! SfuCore::admit_user -> MediaSession
 //!
 //! establish -> send offer -> answer
-//! publish   -> maybe send renegotiation -> answer
-//! subscribe -> room state only
-//! close     -> rollback staged media and remove the connection
+//! publish    -> maybe send renegotiation -> answer
+//! deactivate -> retain negotiated publication without sending media
+//! subscribe  -> room state only
+//! close      -> rollback staged media and remove the connection
 //! ```
 //!
 //! negotiation is serialized through `&mut MediaSession`
@@ -69,11 +70,11 @@ use crate::{
             MediaTransport, TransportAdapterError, TransportSessionHealth, TransportSessionKey,
         },
         room::{
-            BroadcastPayloadError, JoinUserRequest, PublishIntentOutcome, Room, RoomManager,
-            RoomManagerJoinError, RoomUserOperation, UnpublishIntentOutcome,
+            BroadcastPayloadError, DeactivateIntentOutcome, JoinUserRequest, PublishIntentOutcome,
+            Room, RoomManager, RoomManagerJoinError, RoomUserOperation,
         },
         source_model::{
-            SourcePublishIntent, SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,
+            SourceDeactivateIntent, SourcePublishIntent, SourceSubscriptionIntent, UserStreamId,
         },
     },
 };
@@ -119,7 +120,6 @@ impl SessionPhase {
         if let Self::WaitingForAnswer(pending) = self {
             let stream_id = intent.stream_id().clone();
             pending.queued_publishes.insert(stream_id, intent);
-            pending.follow_up_renegotiation = true;
         }
     }
 
@@ -413,30 +413,22 @@ impl MediaSession {
         }
     }
 
-    /// removes queued, staged or live publish intent for one stream
+    /// deactivates one publication without changing negotiated media
     ///
-    /// queued and staged publishes are cancelled without a client-visible
-    /// publication update
-    /// live publications may require a refresh offer for the browser
-    ///
-    /// # Errors
-    ///
-    /// returns [`SessionError::Core`] when follow-up renegotiation fails after
-    /// removing a live publication
-    pub async fn unpublish(
-        &mut self,
-        intent: SourceUnpublishIntent,
-    ) -> Result<Option<NegotiationOffer>, SessionError> {
+    /// a queued first publication is cancelled
+    /// a staged first publication is rolled back and its pending answer creates
+    /// the cleanup offer
+    /// a committed publication keeps its source identity, routes and negotiated
+    /// MID until session teardown
+    pub async fn deactivate_publication(&mut self, intent: SourceDeactivateIntent) {
         if self.phase.remove_queued_publish(intent.stream_id()) {
-            return Ok(None);
+            return;
         }
-        match self.room_operation().stop_publish(&intent).await {
-            UnpublishIntentOutcome::RolledBack => {
+        match self.room_operation().deactivate_publication(&intent).await {
+            DeactivateIntentOutcome::RolledBack => {
                 self.phase.mark_follow_up_renegotiation();
-                Ok(None)
             }
-            UnpublishIntentOutcome::Unpublished => self.renegotiate().await,
-            UnpublishIntentOutcome::Noop => Ok(None),
+            DeactivateIntentOutcome::Deactivated | DeactivateIntentOutcome::Noop => {}
         }
     }
 

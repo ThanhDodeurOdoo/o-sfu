@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
 use super::{
     definition::RoomDefinition, factory::RoomInit, placement::LoadTriggeredPlacementState,
@@ -50,6 +50,7 @@ pub struct Room {
     pub(super) definition: RoomDefinition,
     pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
     pub(super) metrics: Arc<RuntimeMetrics>,
+    pub(super) source_policy_turn: AsyncMutex<()>,
     pub(super) state: RwLock<RoomState>,
 }
 
@@ -69,6 +70,7 @@ impl Room {
             definition,
             load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
             metrics,
+            source_policy_turn: AsyncMutex::new(()),
             state: RwLock::new(RoomState::new(
                 &runtime_context,
                 runtime_policy.admission_policy,

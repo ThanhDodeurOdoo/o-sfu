@@ -5,8 +5,8 @@ use o_sfu_router::MediaKind;
 
 use crate::core::prelude::{
     ActiveSpeakerGroup, ActiveSpeakerPolicy, ActiveSpeakerSourceRole, SourceAdaptationPolicy,
-    SourceLayoutPolicy, SourcePolicy, SourcePublishIntent, SourceRoomPolicySelector,
-    SourceSubscriptionIntent, SourceUnpublishIntent, UserStreamId,
+    SourceDeactivateIntent, SourceLayoutPolicy, SourcePolicy, SourcePublishIntent,
+    SourceRoomPolicySelector, SourceSubscriptionIntent, UserStreamId,
 };
 
 pub(crate) const AUDIO_STREAM_LABEL: &str = "audio";
@@ -97,8 +97,9 @@ impl DiscussStream {
             .with_presence(self.publication_presence(true))
     }
 
-    pub(crate) fn unpublish_intent(self) -> SourceUnpublishIntent {
-        SourceUnpublishIntent::new(self.stream_id()).with_presence(self.publication_presence(false))
+    pub(crate) fn deactivate_intent(self) -> SourceDeactivateIntent {
+        SourceDeactivateIntent::new(self.stream_id())
+            .with_presence(self.publication_presence(false))
     }
 
     pub(crate) fn subscription_intent_if_requested(
