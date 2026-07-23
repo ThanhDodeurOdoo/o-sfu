@@ -101,24 +101,21 @@
 //!
 //! # shutdown and teardown
 //!
-//! [`Runtime::serve_listener`] scopes background tasks to the server future
-//! normal shutdown cancels the shared token and waits for those tasks to finish
-//! if the server future is dropped first, the drop path cancels the same token
-//! and aborts remaining task handles
+//! [`Runtime::serve_listener`] stops listener acceptance when its shutdown
+//! future resolves. It then closes the session tracker, sends close code 1001,
+//! drains every tracked WebSocket and stops background tasks plus RTC workers within
+//! [`config::HttpConfig::shutdown_timeout_ms`]. Dropping the server future
+//! cancels the same runtime tokens.
 //!
 //! ```text
 //! Runtime::serve_listener
 //!     |
-//!     +-> spawn RuntimeTasks
-//!     |     +-> source-policy sync
+//!     +-> stop listener
+//!     +-> close tracker and cancel sessions
+//!     +-> wait for tracker emptiness
+//!     +-> stop source-policy sync and media workers
 //!     |
-//!     +-> serve HTTP and WebSocket
-//!     |
-//!     +-> cancel task token
-//!     |
-//!     +-> join background tasks
-//!     |
-//!     +-> return server result
+//!     +-> return or ServeError::ShutdownIncomplete
 //! ```
 //!
 //! user and media teardown is explicit async work,
@@ -585,4 +582,4 @@ pub mod websocket {
     };
 }
 
-pub use self::runtime::{Runtime, run};
+pub use self::runtime::{Runtime, ServeError, run};

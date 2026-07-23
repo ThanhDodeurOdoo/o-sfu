@@ -3,15 +3,11 @@ use std::time::Instant;
 use str0m::media::Mid;
 #[cfg(test)]
 use {
-    super::{
-        super::{
-            RtpProfile,
-            state::PacketLoopState,
-            test_support::{
-                RememberRemoteAddrProbe, SessionStreamRxSsrcProbe, SessionStreamTxSsrcProbe,
-            },
+    super::super::{
+        RtpProfile,
+        test_support::{
+            RememberRemoteAddrProbe, SessionStreamRxSsrcProbe, SessionStreamTxSsrcProbe,
         },
-        WorkerCommandContext,
     },
     crate::{
         CodecPreferences, MediaCodecFlags, MediaWorkerId, RtcPortRange, RtcUdpIoBackend,
@@ -29,6 +25,12 @@ use {
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::Arc,
     },
+};
+#[cfg(any(test, feature = "testing-transport"))]
+use {
+    super::{super::state::PacketLoopState, WorkerCommandContext},
+    std::sync::mpsc,
+    tokio::{sync::oneshot, task::JoinHandle},
 };
 
 use super::{
@@ -62,10 +64,23 @@ impl RtcWorker {
         &self.handle
     }
 
-    #[cfg(test)]
-    pub(crate) async fn stop_for_test(&self) {
-        self.shutdown.cancel();
-        self.handle.command_tx.closed().await;
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(in crate::engine::media_transport) async fn pause_for_test(
+        &self,
+    ) -> Option<(mpsc::Sender<()>, JoinHandle<Option<()>>)> {
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let debug_handle = self.handle.debug_handle.clone();
+        let probe = tokio::spawn(async move {
+            debug_handle
+                .probe(move |_: &PacketLoopState, _: &WorkerCommandContext<'_>| {
+                    let _ = entered_tx.send(());
+                    let _result = release_rx.recv();
+                })
+                .await
+        });
+        entered_rx.await.ok()?;
+        Some((release_tx, probe))
     }
 
     #[cfg(test)]

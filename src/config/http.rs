@@ -2,7 +2,10 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 
-use super::{HttpConfig, env::Env};
+use super::{
+    HttpConfig,
+    env::{Env, positive},
+};
 
 impl HttpConfig {
     pub(super) fn from_env(env: &Env<'_>) -> Result<Self> {
@@ -11,6 +14,10 @@ impl HttpConfig {
                 .var("BIND_ADDRESS")
                 .default(SocketAddr::from(([0, 0, 0, 0], 8070)))?,
             trust_proxy_headers: env.var("PROXY").default(false)?,
+            shutdown_timeout_ms: env
+                .var("SHUTDOWN_TIMEOUT_MS")
+                .check(positive)
+                .default(10_000)?,
         })
     }
 }

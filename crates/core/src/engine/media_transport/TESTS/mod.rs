@@ -869,7 +869,8 @@ async fn media_transport_terminal_teardown_falls_back_and_continues_batch() {
             .is_ok()
     );
     assert_eq!(transport_cleanup_failures(&adapter), 1);
-    worker.stop_for_test().await;
+    worker.cancel();
+    worker.wait_for_shutdown().await;
     adapter
         .teardown([TransportTeardown::CloseSession {
             session_key: source_session,

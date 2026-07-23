@@ -188,7 +188,6 @@ impl ServerMediaNegotiation {
     }
 
     pub(super) async fn close(&mut self) {
-        self.pending = None;
         self.session.close().await;
     }
 

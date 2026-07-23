@@ -466,6 +466,7 @@ HTTP, proxy and diagnostics:
 | `BIND_ADDRESS` | `0.0.0.0:8070` | HTTP and WebSocket listening address |
 | `PROXY` | `false` | trusts proxy-provided request metadata when `true` |
 | `DIAGNOSTICS_AUTH_TOKEN` | unset | bearer token for `/internal/diagnostics/...`, diagnostics are allowed only on loopback listeners when unset |
+| `SHUTDOWN_TIMEOUT_MS` | `10000` | positive total deadline in milliseconds for listener, WebSocket session, background task and RTC worker drainage |
 
 authentication and websocket admission:
 

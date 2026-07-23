@@ -1,16 +1,18 @@
-//! process runtime shell that wires subsystems and owns server lifecycle
+//! Wires process services and drains them during shutdown.
 //!
-//! [`Runtime`] turns loaded configuration into process-owned services, starts
-//! HTTP and websocket serving, runs background policy work and cancels runtime
-//! tasks on shutdown
-//! request handlers receive [`RuntimeState`] so they cannot depend on process
-//! boot details or full lifecycle ownership
+//! Request handlers receive [`RuntimeState`] without boot or teardown control.
 
-use std::{future::Future, process, sync::Arc};
+use std::{future::Future, io, process, sync::Arc, time::Duration};
 
-use anyhow::Result;
-use tokio::{net::TcpListener, runtime::Builder, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
+use anyhow::Result as AnyResult;
+use thiserror::Error;
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::{net::TcpListener, runtime::Builder, signal::ctrl_c, task::JoinHandle, time::sleep};
+use tokio_util::{
+    sync::CancellationToken,
+    task::{AbortOnDropHandle, TaskTracker},
+};
 use tracing::{info, warn};
 
 use crate::{config::Config, core::prelude::SfuCore};
@@ -41,17 +43,23 @@ pub(crate) use self::{
     packet_sinks::RoomPacketSinkRegistry,
 };
 
-/// state for shared runtime services
-///
-/// [`Runtime`] keeps boot-time configuration plus the long-lived services
-/// shared by every request. It exists to keep process lifecycle decisions together:
-/// service construction, listener serving, background task supervision and
-/// graceful shutdown
-///
-/// request handlers do not receive this full object
-/// they receive a runtime
-/// state handle with only the cheap service handles needed while a request or
-/// websocket connection is active
+/// Failure to serve or fully drain a [`Runtime`].
+#[derive(Debug, Error)]
+pub enum ServeError {
+    /// The listener or process shutdown signal failed.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    /// The deadline elapsed before runtime drainage finished.
+    #[error(
+        "runtime shutdown exceeded its deadline with {remaining_sessions} WebSocket sessions remaining"
+    )]
+    ShutdownIncomplete {
+        /// Tracked WebSocket sessions whose finalizers had not returned.
+        remaining_sessions: usize,
+    },
+}
+
+/// Process services and lifecycle configuration.
 #[derive(Debug)]
 pub struct Runtime {
     config: RuntimeConfig,
@@ -60,12 +68,7 @@ pub struct Runtime {
     media_transport: MediaTransport,
 }
 
-/// cheap-to-clone snapshot of runtime dependencies for per-request handlers
-///
-/// this is the standard shared state passed to axum handlers and websocket
-/// loops
-/// it provides access to room management, diagnostics, media transport
-/// plus media core operations without exposing the full process lifecycle
+/// Cloneable request dependencies without process lifecycle control.
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeState {
     config: RuntimeConfig,
@@ -74,36 +77,28 @@ pub(super) struct RuntimeState {
     sfu_core: SfuCore,
     metrics: Arc<RuntimeMetrics>,
     pre_auth_websocket_admission: websocket_server::PreAuthWebSocketAdmission,
+    session_shutdown: CancellationToken,
+    session_tasks: TaskTracker,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default)]
 pub(super) struct RuntimeServices {
     metrics: Arc<RuntimeMetrics>,
     packet_sink_registry: Arc<RoomPacketSinkRegistry>,
 }
 
-impl Default for RuntimeServices {
-    fn default() -> Self {
-        Self {
-            metrics: Arc::new(RuntimeMetrics::default()),
-            packet_sink_registry: Arc::new(RoomPacketSinkRegistry::default()),
-        }
-    }
-}
-
 impl Runtime {
-    /// build the process runtime from loaded configuration
-    ///
-    /// this bootstraps the entire server instance by initializing telemetry,
-    /// creating the room manager and preparing the media transport workers
+    /// Builds the room manager and media workers from loaded configuration.
     ///
     /// # Errors
     ///
-    /// returns an error when the media transport cannot be constructed from the
-    /// configured RTC settings
-    pub fn new(config: &Config) -> Result<Self> {
+    /// Returns an error when the configured media transport cannot be built.
+    pub fn new(config: &Config) -> AnyResult<Self> {
+        Self::from_services(config, RuntimeServices::default())
+    }
+
+    fn from_services(config: &Config, services: RuntimeServices) -> AnyResult<Self> {
         let runtime_config = RuntimeConfig::from_config(config);
-        let services = RuntimeServices::default();
         let media_transport = build_media_transport(config, &services)?;
         let room_runtime_policy = build_room_runtime_policy(config, &media_transport);
         info!(
@@ -120,124 +115,141 @@ impl Runtime {
         })
     }
 
-    /// serve HTTP and websocket traffic on a caller-provided listener
-    ///
-    /// this is the embedder-friendly sibling of [`run`]
-    /// it lets integration
-    /// tests and external hosts bind an ephemeral port before handing the
-    /// socket to the production runtime
+    /// Serves a caller-provided listener until `shutdown` resolves.
     ///
     /// # Errors
     ///
-    /// returns an error when the Axum server fails while serving the supplied
-    /// listener
-    pub async fn serve_listener(self, listener: TcpListener) -> Result<()> {
-        let state = self.state();
-        self.serve(|shutdown_token| serve_http_on(listener, state, shutdown_token))
-            .await
-    }
-
-    /// default entrypoint for the production server loop
-    async fn run_until_stopped(self) -> Result<()> {
-        let state = self.state();
-        self.serve(|shutdown_token| serve_http(state, shutdown_token))
-            .await
-    }
-
-    /// core execution lifecycle manager
-    ///
-    /// coordinates the control plane with background workers
-    ///
-    /// background tasks are explicitly joined when the server stops
-    async fn serve<F, HttpServer>(self, http_server: F) -> Result<()>
-    where
-        F: FnOnce(CancellationToken) -> HttpServer,
-        HttpServer: Future<Output = Result<()>>,
-    {
-        let tasks = RuntimeTasks::spawn(&self);
-        let result = http_server(tasks.shutdown_token()).await;
-        tasks.shutdown().await;
-        result
-    }
-
-    fn state(&self) -> RuntimeState {
-        RuntimeState::from_parts(
-            &self.config,
-            Arc::clone(&self.room_manager),
-            Arc::clone(&self.metrics),
-            self.media_transport.clone(),
+    /// Returns [`ServeError::Io`] for serving failures or
+    /// [`ServeError::ShutdownIncomplete`] when the drainage deadline expires.
+    pub async fn serve_listener(
+        self,
+        listener: TcpListener,
+        shutdown: impl Future<Output = ()>,
+    ) -> Result<(), ServeError> {
+        self.serve(
+            |state, token| serve_http_on(listener, state, token),
+            async move {
+                shutdown.await;
+                Ok(())
+            },
         )
+        .await
+    }
+
+    async fn serve<F, HttpServer, Shutdown>(
+        self,
+        http_server: F,
+        shutdown: Shutdown,
+    ) -> Result<(), ServeError>
+    where
+        F: FnOnce(RuntimeState, CancellationToken) -> HttpServer,
+        HttpServer: Future<Output = io::Result<()>>,
+        Shutdown: Future<Output = io::Result<()>>,
+    {
+        let timeout = Duration::from_millis(self.config.http.shutdown_timeout_ms);
+        let tasks = RuntimeTasks::spawn(Arc::clone(&self.room_manager), self.media_transport);
+        let state = RuntimeState::from_parts(
+            self.config,
+            self.room_manager,
+            self.metrics,
+            tasks.media_transport.clone(),
+            tasks.session_shutdown.clone(),
+            tasks.session_tasks.clone(),
+        );
+        let listener_shutdown = tasks.shutdown_token.child_token();
+        let server = http_server(state, listener_shutdown.clone());
+        tokio::pin!(server);
+        tokio::pin!(shutdown);
+        let (server_done, mut failure) = tokio::select! {
+            result = &mut server => (true, result.err()),
+            result = &mut shutdown => {
+                listener_shutdown.cancel();
+                (false, result.err())
+            }
+        };
+        let deadline = sleep(timeout);
+        tokio::pin!(deadline);
+        if let Some(error) = &failure {
+            warn!(?error, "runtime serving stopped with an error");
+        }
+        let session_tasks = tasks.session_tasks.clone();
+        let teardown = async move {
+            if !server_done && let Err(error) = server.await {
+                warn!(?error, "HTTP server stopped with an error during shutdown");
+                failure.get_or_insert(error);
+            }
+            tasks.shutdown().await;
+            failure.map_or(Ok(()), |error| Err(ServeError::Io(error)))
+        };
+        tokio::select! {
+            biased;
+            () = &mut deadline => Err(ServeError::ShutdownIncomplete {
+                remaining_sessions: session_tasks.len(),
+            }),
+            result = teardown => result,
+        }
     }
 }
 
-/// runtime background tasks for the lifetime of one server future
-///
-/// normal shutdown asks tasks to exit through the shared cancellation token and
-/// waits for them
-/// dropping the server future cancels the token and aborts any
-/// remaining task so embedders cannot detach process workers by cancelling
-/// [`Runtime::serve_listener`]
+/// Cancels process work when the server future is dropped.
 struct RuntimeTasks {
     shutdown_token: CancellationToken,
-    source_packet_policy_sync: Option<JoinHandle<()>>,
+    session_shutdown: CancellationToken,
+    session_tasks: TaskTracker,
+    source_packet_policy_sync: AbortOnDropHandle<()>,
+    media_transport: MediaTransport,
 }
 
 impl RuntimeTasks {
-    fn spawn(runtime: &Runtime) -> Self {
+    fn spawn(room_manager: Arc<RoomManager>, media_transport: MediaTransport) -> Self {
         let shutdown_token = CancellationToken::new();
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
-            Arc::clone(&runtime.room_manager),
-            runtime.media_transport.clone(),
+            room_manager,
+            media_transport.clone(),
             shutdown_token.child_token(),
         );
         Self {
+            session_shutdown: shutdown_token.child_token(),
             shutdown_token,
-            source_packet_policy_sync: Some(source_packet_policy_sync),
+            session_tasks: TaskTracker::new(),
+            source_packet_policy_sync: AbortOnDropHandle::new(source_packet_policy_sync),
+            media_transport,
         }
     }
 
-    /// provides a child token that will be cancelled when the runtime tasks stop
-    fn shutdown_token(&self) -> CancellationToken {
-        self.shutdown_token.child_token()
-    }
-
-    /// signals background tasks to stop and waits for their completion
     async fn shutdown(mut self) {
+        self.session_tasks.close();
+        self.session_shutdown.cancel();
+        self.session_tasks.wait().await;
         self.shutdown_token.cancel();
-        if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
-            wait_for_runtime_task(source_packet_policy_sync, "source packet policy update").await;
+        if let Err(error) = (&mut self.source_packet_policy_sync).await
+            && !error.is_cancelled()
+        {
+            warn!(
+                ?error,
+                task = "source packet policy update",
+                "runtime background task stopped unexpectedly"
+            );
         }
-    }
-}
-
-async fn wait_for_runtime_task(task: JoinHandle<()>, name: &'static str) {
-    if let Err(error) = task.await
-        && !error.is_cancelled()
-    {
-        warn!(
-            ?error,
-            task = name,
-            "runtime background task stopped unexpectedly"
-        );
+        self.media_transport.shutdown().await;
     }
 }
 
 impl Drop for RuntimeTasks {
     fn drop(&mut self) {
-        // cancellation is idempotent, ensure tasks stop even if explicit shutdown was skipped
         self.shutdown_token.cancel();
-        if let Some(source_packet_policy_sync) = self.source_packet_policy_sync.take() {
-            source_packet_policy_sync.abort();
-        }
+        self.media_transport.cancel();
     }
 }
 
 impl RuntimeState {
     fn from_parts(
-        config: &RuntimeConfig,
+        config: RuntimeConfig,
         rooms: Arc<RoomManager>,
         metrics: Arc<RuntimeMetrics>,
         media_transport: MediaTransport,
+        session_shutdown: CancellationToken,
+        session_tasks: TaskTracker,
     ) -> Self {
         let sfu_core = SfuCore::new(media_transport.clone(), Arc::clone(&rooms));
         let pre_auth_websocket_admission = websocket_server::PreAuthWebSocketAdmission::new(
@@ -245,14 +257,29 @@ impl RuntimeState {
             config.auth.max_pre_auth_websocket_sessions_per_origin,
         );
         Self {
-            config: config.clone(),
+            config,
             room_manager: rooms,
             media_transport,
             sfu_core,
             metrics,
             pre_auth_websocket_admission,
+            session_shutdown,
+            session_tasks,
         }
     }
+}
+
+async fn shutdown_signal() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate = signal(SignalKind::terminate())?;
+        tokio::select! {
+            result = ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    ctrl_c().await
 }
 
 /// Recomputes room packet policy after transport observations change.
@@ -281,7 +308,7 @@ fn spawn_source_packet_policy_update_task(
     })
 }
 
-fn build_media_transport(config: &Config, services: &RuntimeServices) -> Result<MediaTransport> {
+fn build_media_transport(config: &Config, services: &RuntimeServices) -> AnyResult<MediaTransport> {
     Ok(MediaTransport::build(
         MediaTransportConfig {
             worker_count: config.transport.rtc_media_worker_count,
@@ -330,17 +357,16 @@ fn build_room_manager(
 
 /// # Errors
 ///
-/// returns an error when tracing initialization fails, configuration loading fails,
-/// the Tokio runtime cannot be built, or the HTTP/WebSocket listener exits with an
-/// error
-pub fn run() -> Result<()> {
+/// Returns an error when configuration, tracing, Tokio startup, serving or
+/// shutdown fails.
+pub fn run() -> AnyResult<()> {
     let config = Config::from_env()?;
     let _telemetry = init_tracing(&config.telemetry, process::id())?;
     let runtime = Runtime::new(&config)?;
-    Builder::new_multi_thread()
+    Ok(Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(runtime.run_until_stopped())
+        .block_on(runtime.serve(serve_http, shutdown_signal()))?)
 }
 
 #[cfg(test)]

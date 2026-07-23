@@ -12,7 +12,7 @@
 //! directory-current rooms accept manager mutations. empty-room removal waits
 //! for accepted leases to finish before the directory row is forgotten
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 use std::sync::Mutex;
 use std::{collections::BTreeSet, future::Future, sync::Arc};
 
@@ -20,7 +20,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
 use tracing::info;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 pub use super::placement::JoinPlacementTestGate;
 use super::{
     Room, RoomConfig, RoomJoinError, RoomManagerJoinError, RoomRuntimePolicy,
@@ -111,7 +111,7 @@ pub struct RuntimeRoomDirectorySnapshot {
 pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
     factory: RoomFactory,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     join_placement_gate: Mutex<Option<Arc<JoinPlacementTestGate>>>,
     media_worker_count: usize,
     metrics: Arc<RuntimeMetrics>,
@@ -128,7 +128,7 @@ impl RoomManager {
         Self {
             directory: RwLock::new(RoomDirectory::default()),
             factory,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing-transport"))]
             join_placement_gate: Mutex::new(None),
             media_worker_count: config.media_worker_count.max(1),
             metrics,
@@ -270,7 +270,7 @@ impl RoomManager {
                     let worker_loads = self.worker_load_index(media_transport).await;
                     let admission =
                         JoinAdmissionTurn::from_factory(request, worker_loads, &self.factory);
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "testing-transport"))]
                     let admission = admission.with_gate(self.join_placement_gate_for_test());
                     room.admit_session(admission, RoomEffectContext::runtime(media_transport))
                         .await

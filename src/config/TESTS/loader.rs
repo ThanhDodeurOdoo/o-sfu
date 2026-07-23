@@ -71,6 +71,7 @@ fn config_validates_auth_key_material() -> anyhow::Result<()> {
 fn config_uses_defaults_and_explicit_values() -> anyhow::Result<()> {
     let config = config_from(&[])?;
     assert_eq!(config.http.bind_address.to_string(), "0.0.0.0:8070");
+    assert_eq!(config.http.shutdown_timeout_ms, 10_000);
     assert_eq!(config.auth.key, TEST_AUTH_KEY);
     assert_eq!(config.auth.authentication_timeout_ms, 10_000);
     assert_eq!(
@@ -127,6 +128,7 @@ fn config_accepts_proxy_flag() -> anyhow::Result<()> {
 fn config_accepts_explicit_http_auth_and_user_settings() -> anyhow::Result<()> {
     let config = config_from(&[
         ("BIND_ADDRESS", "127.0.0.1:9000"),
+        ("SHUTDOWN_TIMEOUT_MS", "2500"),
         ("AUTHENTICATION_TIMEOUT_MS", "1500"),
         ("MAX_PRE_AUTH_WEBSOCKET_SESSIONS", "12"),
         ("MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN", "3"),
@@ -137,6 +139,7 @@ fn config_accepts_explicit_http_auth_and_user_settings() -> anyhow::Result<()> {
         ("USER_OUTBOUND_QUEUE_BYTE_CAPACITY", "8192"),
     ])?;
     assert_eq!(config.http.bind_address.to_string(), "127.0.0.1:9000");
+    assert_eq!(config.http.shutdown_timeout_ms, 2500);
     assert_eq!(config.auth.authentication_timeout_ms, 1500);
     assert_eq!(config.auth.max_pre_auth_websocket_sessions, 12);
     assert_eq!(config.auth.max_pre_auth_websocket_sessions_per_origin, 3);
@@ -159,8 +162,12 @@ fn config_rejects_invalid_proxy_flag() {
 }
 
 #[test]
-fn config_rejects_zero_auth_and_user_limits() {
+fn config_rejects_zero_runtime_limits() {
     let cases = [
+        (
+            "SHUTDOWN_TIMEOUT_MS",
+            "SHUTDOWN_TIMEOUT_MS must be greater than zero",
+        ),
         ("ROOM_SIZE", "ROOM_SIZE must be greater than zero"),
         (
             "USER_TIMEOUT_MS",

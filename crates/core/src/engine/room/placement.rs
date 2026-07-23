@@ -2,7 +2,7 @@ use o_sfu_router::RouterId;
 pub use o_sfu_router::topology::{
     PlacementSnapshot, RouterPlacement, RouterPlacements, RouterPlacementsError,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 use {std::sync::Arc, tokio::sync::Barrier};
 
 use super::{
@@ -92,7 +92,7 @@ pub(super) struct JoinAdmissionTurn<A = fn() -> RouterId> {
     request: JoinUserRequest,
     loads: WorkerLoadIndex,
     allocate_spillover_router: A,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     gate: Option<Arc<JoinPlacementTestGate>>,
 }
 
@@ -168,7 +168,7 @@ impl JoinAdmissionTurn {
             request,
             loads,
             allocate_spillover_router: move || factory.allocate_spillover_router(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing-transport"))]
             gate: None,
         }
     }
@@ -183,14 +183,14 @@ impl JoinAdmissionTurn {
             request,
             loads,
             allocate_spillover_router: move || spillover_router_id,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing-transport"))]
             gate: None,
         }
     }
 }
 
 impl<A: FnOnce() -> RouterId> JoinAdmissionTurn<A> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn with_gate(mut self, gate: Option<Arc<JoinPlacementTestGate>>) -> Self {
         self.gate = gate;
         self
@@ -202,7 +202,7 @@ impl<A: FnOnce() -> RouterId> JoinAdmissionTurn<A> {
         joined_fanout: UserJoinedFanout,
     ) -> Result<JoinCommit, RoomJoinError> {
         let plan = JoinPlacementPlan::plan(room, self.loads).await;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "testing-transport"))]
         if let Some(gate) = self.gate {
             gate.wait_after_planning().await;
         }
@@ -298,15 +298,16 @@ impl JoinPlacementPlan {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 #[derive(Debug)]
 pub struct JoinPlacementTestGate {
     planned: Barrier,
     release: Barrier,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing-transport"))]
 impl JoinPlacementTestGate {
+    #[must_use]
     pub fn new(expected: usize) -> Self {
         Self {
             planned: Barrier::new(expected + 1),

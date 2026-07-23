@@ -1,47 +1,39 @@
 //! websocket controller for one upgraded socket
 //!
-//! this module accepts the HTTP upgrade, delegates first-frame auth to
-//! [`super::session_loop::ActiveWebSocketSession`] then leaves authenticated
-//! socket lifecycle and room cleanup to that session owner
+//! this module bounds upgrade admission before handing the socket to
+//! [`super::session::WebSocketSession`]
 
 use std::sync::Arc;
 
 use axum::{
-    extract::{
-        FromRef, State,
-        ws::{WebSocket, WebSocketUpgrade},
-    },
+    extract::{FromRef, State, ws::WebSocketUpgrade},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use tracing::{Instrument, Span, field, warn};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tracing::warn;
 
 use super::{
-    admission::{PreAuthWebSocketAdmissionRejection, PreAuthWebSocketPermit},
-    io::MAX_CLIENT_FRAME_BYTES,
-    session_loop::ActiveWebSocketSession,
+    admission::PreAuthWebSocketAdmissionRejection, io::MAX_CLIENT_FRAME_BYTES,
+    session::WebSocketSession,
 };
 use crate::{
     config::{AuthConfig, UserConfig},
     core::prelude::SfuCore,
     runtime::{
-        RuntimeMetrics, RuntimeState,
-        request_origin::RequestOrigin,
-        room::RoomManager,
-        telemetry::{
-            self,
-            schema::{event as telemetry_event, field as telemetry_field},
-        },
+        RuntimeMetrics, RuntimeState, request_origin::RequestOrigin, room::RoomManager,
+        telemetry::schema::event as telemetry_event,
     },
 };
 
-#[derive(Debug, Clone)]
 pub(crate) struct WebSocketServices {
     pub(super) auth: AuthConfig,
     pub(super) user: UserConfig,
     pub(super) room_manager: Arc<RoomManager>,
     pub(super) sfu_core: SfuCore,
     pub(super) metrics: Arc<RuntimeMetrics>,
+    pub(super) shutdown: CancellationToken,
+    sessions: TaskTracker,
     pre_auth_websocket_admission: super::PreAuthWebSocketAdmission,
 }
 
@@ -53,6 +45,8 @@ impl FromRef<RuntimeState> for WebSocketServices {
             room_manager: Arc::clone(&state.room_manager),
             sfu_core: state.sfu_core.clone(),
             metrics: Arc::clone(&state.metrics),
+            shutdown: state.session_shutdown.clone(),
+            sessions: state.session_tasks.clone(),
             pre_auth_websocket_admission: state.pre_auth_websocket_admission.clone(),
         }
     }
@@ -66,7 +60,7 @@ pub(crate) async fn upgrade(
     let remote_address = Arc::<str>::from(origin.remote_address);
     let pre_auth_permit = match services
         .pre_auth_websocket_admission
-        .try_acquire(remote_address.as_ref())
+        .try_acquire(Arc::clone(&remote_address))
     {
         Ok(permit) => permit,
         Err(rejection) => {
@@ -74,10 +68,14 @@ pub(crate) async fn upgrade(
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
+    let session_task = services.sessions.token();
     websocket
         .max_message_size(MAX_CLIENT_FRAME_BYTES)
         .max_frame_size(MAX_CLIENT_FRAME_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, services, remote_address, pre_auth_permit))
+        .on_upgrade(move |socket| async move {
+            WebSocketSession::run(socket, services, remote_address, pre_auth_permit).await;
+            drop(session_task);
+        })
 }
 
 fn reject_pre_auth_admission(
@@ -104,36 +102,4 @@ fn reject_pre_auth_admission(
             );
         }
     }
-}
-
-async fn handle_socket(
-    socket: WebSocket,
-    services: WebSocketServices,
-    remote_address: Arc<str>,
-    pre_auth_permit: PreAuthWebSocketPermit,
-) {
-    async move {
-        let current_span = Span::current();
-        current_span.record(
-            telemetry_field::REMOTE_ADDRESS,
-            field::display(remote_address.as_ref()),
-        );
-        services.metrics.record_ws_connection_accepted();
-        let handshake_span = telemetry::ws_handshake_span();
-        handshake_span.record(
-            telemetry_field::REMOTE_ADDRESS,
-            field::display(remote_address.as_ref()),
-        );
-        let Some(session) =
-            ActiveWebSocketSession::accept(socket, services, remote_address, pre_auth_permit)
-                .instrument(handshake_span)
-                .await
-        else {
-            return;
-        };
-        session.record_upgrade_span();
-        session.serve().await;
-    }
-    .instrument(telemetry::ws_upgrade_span())
-    .await;
 }
