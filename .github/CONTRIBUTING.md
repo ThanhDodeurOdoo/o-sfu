@@ -15,10 +15,19 @@ If you want to make a PR that does substantial changes to the codebase, before w
 >
 > The author must always understand all the added code and can justify the changes (replying with copy-pasted AI responses does not count).
 
-## Learning resources
+## Learning Rust
 
+### videos
+- ["Rust for Everyone!" by Will Crichton](https://www.youtube.com/watch?v=R0dP-QR5wQo)
+- ["The Rust Programming Language" by Aaron Turon](https://youtu.be/O5vzLKg7y-k)
+- ["Considering Rust" by Jon Gjengset](https://www.youtube.com/watch?v=DnT-LUQgc7s)
+- ["Rust makes cents" by No Boilerplate](https://www.youtube.com/watch?v=4dvf6kM70qM)
+
+### guides
 - [The Rust Book](https://doc.rust-lang.org/book/)
 - [Comprehensive Rust by Google](https://google.github.io/comprehensive-rust)
+
+### references
 - [Canonical's rust best practices](https://canonical.github.io/rust-best-practices/)
 - [The Rustonomicon (unsafe/advanced)](https://doc.rust-lang.org/nomicon/)
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
@@ -27,9 +36,6 @@ If you want to make a PR that does substantial changes to the codebase, before w
 - [The Tokio doc](https://docs.rs/tokio/latest/tokio/)
 - [Idiomatic Rust snippets](https://idiomatic-rust-snippets.org/)
 - [The Rust Performance Book by N. Nethercote](https://nnethercote.github.io/perf-book/introduction.html)
-- ["The Rust Programming Language" by Aaron Turon (video)](https://youtu.be/O5vzLKg7y-k)
-- ["Living with Rust Long-Term" by Jon Gjengset (video)](https://youtu.be/r35cBkPRNMI)
-- ["Rust makes cents" by No Boilerplate (video)](https://www.youtube.com/watch?v=4dvf6kM70qM)
 
 ## Style guidelines
 
