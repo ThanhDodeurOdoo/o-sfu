@@ -15,8 +15,8 @@ impl StagedPublish {
         operation: RoomUserOperation<'_>,
         rtp: RouterRtpParameters,
     ) -> Option<UserStreamId> {
-        self.commit_with_negotiated_parameters(operation, rtp, &[])
-            .await
+        let _source_policy_guard = operation.room.source_policy_turn.lock().await;
+        self.commit_rtp_guarded(operation, rtp, &[]).await
     }
 }
 

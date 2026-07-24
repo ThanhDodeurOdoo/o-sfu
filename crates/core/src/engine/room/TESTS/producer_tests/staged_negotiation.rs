@@ -1,3 +1,7 @@
+use std::time::Duration;
+
+use tokio::time::timeout;
+
 use super::support::*;
 
 #[tokio::test]
@@ -52,6 +56,19 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
         .staged_media_id(TestSourceKind::ScalableVideo)
         .await;
 
+    {
+        let source_policy_guard = scenario.room.source_policy_turn.lock().await;
+        let mut commit = Box::pin(scenario.commit());
+        assert!(
+            timeout(Duration::from_millis(10), commit.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(scenario.room.test_api().inspect().producer_count().await, 0);
+        assert_eq!(scenario.staged_count().await, 1);
+        drop(commit);
+        drop(source_policy_guard);
+    }
     scenario.commit().await;
 
     assert_eq!(scenario.staged_count().await, 0);

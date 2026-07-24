@@ -7,6 +7,7 @@ use crate::engine::room::{
 #[derive(Debug, Default)]
 pub(super) struct RoomOutputPlan {
     source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
+    user_info_before_policy: Vec<MessageFanout>,
     user_info: Vec<MessageFanout>,
     lifecycle: Vec<LifecycleEffects>,
 }
@@ -23,6 +24,10 @@ impl RoomOutputPlan {
         self.user_info.push(fanout);
     }
 
+    pub(super) fn push_user_info_before_policy(&mut self, fanout: MessageFanout) {
+        self.user_info_before_policy.push(fanout);
+    }
+
     pub(super) fn push_lifecycle(&mut self, effects: LifecycleEffects) {
         self.lifecycle.push(effects);
     }
@@ -30,6 +35,13 @@ impl RoomOutputPlan {
     pub(super) fn emit_before_policy(&mut self) {
         for (recipient, snapshot) in self.source_snapshots.drain(..) {
             let _ = recipient.send(UserOutbound::RemoteSources(snapshot));
+        }
+        self.emit_user_info_before_policy();
+    }
+
+    pub(super) fn emit_user_info_before_policy(&mut self) {
+        for fanout in self.user_info_before_policy.drain(..) {
+            fanout.emit();
         }
     }
 

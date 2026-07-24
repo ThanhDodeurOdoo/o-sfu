@@ -219,6 +219,7 @@ impl RoomUserOperation<'_> {
     }
 
     pub(crate) async fn commit_staged_publishes(self, applied_answer: &AppliedSessionAnswer) {
+        let _source_policy_guard = self.room.source_policy_turn.lock().await;
         let staged = {
             let mut state = self.room.state.write().await;
             state
@@ -226,7 +227,7 @@ impl RoomUserOperation<'_> {
                 .take_for_connection(self.user_id, self.connection_id)
         };
         for publish in staged {
-            publish.commit_from_answer(self, applied_answer).await;
+            publish.commit_answer_guarded(self, applied_answer).await;
         }
     }
 

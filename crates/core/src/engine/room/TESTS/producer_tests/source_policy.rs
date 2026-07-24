@@ -2,11 +2,15 @@ use std::time::Duration;
 
 use super::support::*;
 use crate::engine::{
+    UserInfo,
     media_transport::{
         ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId, TransportTeardown,
     },
-    room::source_policy::SourcePolicyTransaction,
-    source_model::{ConsumerSourceSelection, PublishedSourceId, SourcePolicy, SourcePublishIntent},
+    room::{DeactivateIntentOutcome, source_policy::SourcePolicyTransaction},
+    source_model::{
+        ConsumerSourceSelection, PublishedSourceId, SourceDeactivateIntent, SourcePolicy,
+        SourcePublishIntent,
+    },
 };
 
 #[tokio::test]
@@ -239,7 +243,6 @@ async fn source_policy_resets_receiver_bwe_target_after_publication_deactivation
 #[tokio::test]
 async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
     let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
-    let featured_user_id = UserId::Integer(1);
     scenario.publish_audio_and_camera(1).await;
     let audio_media_id = scenario.audio_media_id(1).await;
     scenario.mark_active_speaker(audio_media_id).await;
@@ -249,21 +252,13 @@ async fn source_policy_stale_featured_update_does_not_mark_replacement_user() {
     join_user_without_transport_teardown(
         &scenario.room,
         &scenario.adapter,
-        featured_user_id.clone(),
+        UserId::Integer(1),
         replacement_tx,
     )
     .await;
     tx.execute(&scenario.room, &scenario.adapter).await;
 
-    let info = scenario
-        .room
-        .test_api()
-        .inspect()
-        .user_info_snapshot(&featured_user_id)
-        .await
-        .expect("replacement user should still be present")
-        .1;
-    assert_eq!(info.is_featured, Some(false));
+    assert_featured(&scenario, 1, false).await;
 }
 
 #[tokio::test]
@@ -337,6 +332,77 @@ async fn active_speaker_camera_policy_selects_the_observed_speaker() {
 }
 
 #[tokio::test]
+async fn active_speaker_camera_policy_tracks_camera_activity() {
+    let (room, adapter, _owner_rx, mut observer_rx) = setup_two_ready_users().await;
+    let scenario = SourcePolicyScenario { room, adapter };
+    let owner_id = UserId::Integer(1);
+    publish_track(
+        &scenario.room,
+        &owner_id,
+        TestSourceKind::AudioDetector,
+        MediaKind::Audio,
+        test_audio_rtp_parameters(),
+        &scenario.adapter,
+    )
+    .await;
+    let audio_media_id = scenario.audio_media_id(1).await;
+
+    scenario.mark_active_speaker(audio_media_id).await;
+    scenario.refresh_policy().await;
+    assert_featured(&scenario, 1, false).await;
+    drain_outbound(&mut observer_rx);
+
+    let camera = source_publish_intent_for_source(TestSourceKind::ScalableVideo).with_presence(
+        Some(UserInfo {
+            is_camera_on: Some(true),
+            ..UserInfo::default()
+        }),
+    );
+    scenario
+        .room
+        .test_api()
+        .media()
+        .publish_intent(
+            &owner_id,
+            &camera,
+            MediaKind::Video,
+            test_simulcast_video_rtp_parameters(),
+            &scenario.adapter,
+        )
+        .await
+        .expect("camera publication should succeed");
+    assert_camera_feature_fanout(&mut observer_rx, &owner_id, true);
+
+    let connection_id = user_connection_id(&scenario.room, &owner_id).await;
+    let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
+    let pause = SourceDeactivateIntent::new(stream_id).with_presence(Some(UserInfo {
+        is_camera_on: Some(false),
+        ..UserInfo::default()
+    }));
+    assert_eq!(
+        scenario
+            .room
+            .user_operation(&owner_id, connection_id, &scenario.adapter)
+            .deactivate_publication(&pause)
+            .await,
+        DeactivateIntentOutcome::Deactivated
+    );
+
+    assert_eq!(scenario.room.test_api().inspect().producer_count().await, 2);
+    assert_camera_feature_fanout(&mut observer_rx, &owner_id, false);
+    assert!(matches!(
+        scenario
+            .room
+            .user_operation(&owner_id, connection_id, &scenario.adapter)
+            .start_publish(&camera, true)
+            .await,
+        Ok(PublishIntentOutcome::Activated)
+    ));
+
+    assert_camera_feature_fanout(&mut observer_rx, &owner_id, true);
+}
+
+#[tokio::test]
 async fn active_speaker_camera_policy_prefers_louder_same_observation_speaker() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],
@@ -355,24 +421,8 @@ async fn active_speaker_camera_policy_prefers_louder_same_observation_speaker() 
         .await;
     scenario.refresh_policy_until_upgrades_settle().await;
 
-    let first_info = scenario
-        .room
-        .test_api()
-        .inspect()
-        .user_info_snapshot(&UserId::Integer(1))
-        .await
-        .unwrap()
-        .1;
-    let third_info = scenario
-        .room
-        .test_api()
-        .inspect()
-        .user_info_snapshot(&UserId::Integer(3))
-        .await
-        .unwrap()
-        .1;
-    assert_eq!(first_info.is_featured, Some(false));
-    assert_eq!(third_info.is_featured, Some(true));
+    assert_featured(&scenario, 1, false).await;
+    assert_featured(&scenario, 3, true).await;
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -701,6 +751,35 @@ async fn source_policy_transaction_from_transport_snapshot(
         &receiver_bandwidth_snapshot,
     )
     .expect("source policy transaction should contain work before execution")
+}
+
+async fn assert_featured(scenario: &SourcePolicyScenario, user_id: i64, expected: bool) {
+    let info = scenario
+        .room
+        .test_api()
+        .inspect()
+        .user_info_snapshot(&UserId::Integer(user_id))
+        .await
+        .expect("user should still be present")
+        .1;
+    assert_eq!(info.is_featured, Some(expected));
+}
+
+fn assert_camera_feature_fanout(rx: &mut UserOutboundReceiver, user: &UserId, expected: bool) {
+    let info = drain_outbound(rx)
+        .into_iter()
+        .rev()
+        .find_map(|message| match message {
+            UserOutbound::Message(RoomEventMessage::UserInfoChanged(mut snapshot)) => {
+                snapshot.remove(user)
+            }
+            UserOutbound::Message(_) | UserOutbound::RemoteSources(_) | UserOutbound::Close(_) => {
+                None
+            }
+        })
+        .expect("user info fanout should contain the target user");
+    assert_eq!(info.is_camera_on, Some(expected));
+    assert_eq!(info.is_featured, Some(expected));
 }
 
 async fn reset_subscription_selection_to_open(
