@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use futures_util::SinkExt;
 use o_sfu_protocol::wire::{
-    AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, EnvelopeBatch, RequestId,
-    ServerEnvelope, ServerMessage, ServerRequest, UserId, WelcomePayload,
+    AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientResponse,
+    EnvelopeBatch, RequestId, ServerEnvelope, ServerMessage, ServerRequest, UserId, WelcomePayload,
 };
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -83,8 +83,32 @@ impl ProtocolWebSocketClient {
         let ServerRequest::Offer(_) = request else {
             return None;
         };
-        self.respond_to_negotiation_request(request_id, request)
+        send_server_request_response(&mut self.websocket, &mut self.rtc_peer, request_id, request)
             .await
+    }
+
+    pub async fn finish_initial_negotiation_without_candidates(&mut self) -> Option<()> {
+        let (response_to, request) = self.read_server_request().await?;
+        let ServerRequest::Offer(payload) = request else {
+            return None;
+        };
+        let answer = self
+            .rtc_peer
+            .answer_offer_without_candidates(&payload.sdp)?;
+        self.websocket
+            .send(tungstenite::Message::Text(
+                encode_client_batch(vec![ClientEnvelope::Response {
+                    response_to,
+                    response: ClientResponse::Offer(answer),
+                }])?
+                .into(),
+            ))
+            .await
+            .ok()
+    }
+
+    pub async fn wait_until_connected(&mut self, timeout_window: Duration) -> Option<()> {
+        self.rtc_peer.wait_until_connected(timeout_window).await
     }
 
     pub async fn send_message(&mut self, message: ClientMessage) -> Option<()> {
@@ -133,20 +157,6 @@ impl ProtocolWebSocketClient {
         duration: Duration,
     ) -> Option<ServerMessage> {
         timeout(duration, self.read_server_message()).await.ok()?
-    }
-
-    pub async fn respond_to_negotiation_request(
-        &mut self,
-        response_to: RequestId,
-        request: ServerRequest,
-    ) -> Option<()> {
-        send_server_request_response(
-            &mut self.websocket,
-            &mut self.rtc_peer,
-            response_to,
-            request,
-        )
-        .await
     }
 
     pub async fn read_close_code(&mut self) -> Option<CloseCode> {

@@ -151,9 +151,9 @@ export async function observeNegotiationNeeded(page) {
         });
 }
 
-export async function connectPeer(page, { channelUuid, jwt, url = TEST_SFU_WS_URL }) {
+export async function connectPeer(page, { channelUuid, iceServers, jwt, url = TEST_SFU_WS_URL }) {
     await page.evaluate(
-        async ({ channelUuid, jwt, url }) => {
+        async ({ channelUuid, iceServers, jwt, url }) => {
             const serializeTrack = (track) =>
                 track
                     ? {
@@ -195,11 +195,9 @@ export async function connectPeer(page, { channelUuid, jwt, url = TEST_SFU_WS_UR
             client.addEventListener("update", (event) => {
                 harness.updates.push(serializeUpdate(event.detail));
             });
-            client.connect(url, jwt, {
-                channelUUID: channelUuid
-            });
+            client.connect(url, jwt, { channelUUID: channelUuid, iceServers });
         },
-        { channelUuid, jwt, url }
+        { channelUuid, iceServers, jwt, url }
     );
 }
 
@@ -406,9 +404,11 @@ export async function peerSnapshot(page) {
             );
         const harness = globalThis.__liveHarness;
         const client = harness.client;
+        const peerConnection = client?._runtime?._peerSession?._activePeer;
         return {
             consumers: client ? serializeConsumers(client._consumers) : {},
             errors: [...harness.errors],
+            peerConnectionState: peerConnection?.connectionState ?? null,
             state: client?.state ?? null,
             stateChanges: [...harness.stateChanges],
             updates: [...harness.updates]

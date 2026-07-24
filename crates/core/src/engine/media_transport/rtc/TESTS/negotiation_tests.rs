@@ -22,7 +22,7 @@ const FIREFOX_OFFER_AUDIO_ONLY: &str = include_str!("testdata/firefox_offer_audi
 const SAFARI_DATA_CHANNEL_OFFER: &str = include_str!("testdata/safari_datachannel_offer.sdp");
 
 #[tokio::test]
-async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
+async fn rtc_initial_session_offer_accepts_answer_without_candidates() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 34, UserId::Integer(34));
 
@@ -33,25 +33,19 @@ async fn rtc_initial_session_offer_round_trips_through_str0m_answer() {
     assert!(offer_sdp.contains("a=recvonly"));
 
     let mut remote = Rtc::new(Instant::now());
-    assert!(
-        remote
-            .add_local_candidate(
-                Candidate::host(SocketAddr::from(([127, 0, 0, 1], 55_000)), "udp")
-                    .expect("test host candidate should build"),
-            )
-            .is_some()
-    );
-    let answer = remote
+    let answer_sdp = remote
         .sdp_api()
         .accept_offer(
             SdpOffer::from_sdp_string(&offer_sdp)
                 .expect("adapter should return parseable SDP offer"),
         )
-        .expect("remote RTC should accept the adapter offer");
+        .expect("remote RTC should accept the adapter offer")
+        .to_sdp_string();
+    assert!(!answer_sdp.contains("a=candidate:"));
 
     assert!(
         adapter
-            .apply_session_answer(&session_key, &answer.to_sdp_string())
+            .apply_session_answer(&session_key, &answer_sdp)
             .await
             .is_ok()
     );
@@ -1432,12 +1426,12 @@ async fn apply_offer_answer(
     remote: &mut Rtc,
     offer_sdp: String,
 ) {
+    let offer =
+        SdpOffer::from_sdp_string(&offer_sdp).expect("adapter should return parseable SDP offer");
+    assert!(offer.session.end_of_candidates());
     let answer = remote
         .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&offer_sdp)
-                .expect("adapter should return parseable SDP offer"),
-        )
+        .accept_offer(offer)
         .expect("remote answer should build");
     assert!(
         adapter
