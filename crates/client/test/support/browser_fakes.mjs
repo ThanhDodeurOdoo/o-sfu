@@ -78,8 +78,6 @@ export class FakePeerConnection {
         {
             answerSdp = "answer-sdp",
             autoConnect = true,
-            gatheredAnswerSdp = null,
-            preCompleteAnswerSdp = null,
             peerConnectionStats = undefined,
             senderOptionsByMid = {}
         } = {}
@@ -89,15 +87,11 @@ export class FakePeerConnection {
         this.answerSnapshots = [];
         this.connectionState = "new";
         this.config = config;
-        this.gatheredAnswerSdp = gatheredAnswerSdp;
-        this.iceGatheringState = "new";
         this.localDescription = null;
         this.onconnectionstatechange = null;
-        this.onicecandidate = null;
-        this.onicegatheringstatechange = null;
+        this.onicecandidateerror = null;
         this.ontrack = null;
         this.peerConnectionStats = peerConnectionStats;
-        this.preCompleteAnswerSdp = preCompleteAnswerSdp;
         this.senderOptionsByMid = senderOptionsByMid;
         this.transceivers = [this._transceiver("0", "audio"), this._transceiver("1", "video")];
     }
@@ -124,18 +118,6 @@ export class FakePeerConnection {
                 transceiver.currentDirection = "inactive";
             }
         });
-        if (this.gatheredAnswerSdp) {
-            this.iceGatheringState = "gathering";
-            queueMicrotask(() => {
-                if (this.preCompleteAnswerSdp) {
-                    this._completeCandidateGathering(description);
-                    return;
-                }
-                this._completeIceGathering(description, true);
-            });
-        } else {
-            this.iceGatheringState = "complete";
-        }
         if (this.autoConnect) {
             this.emitConnectionState("connected");
         }
@@ -180,42 +162,14 @@ export class FakePeerConnection {
         this.onconnectionstatechange?.();
     }
 
+    emitIceCandidateError({ errorCode, errorText, url }) {
+        this.onicecandidateerror?.({ errorCode, errorText, url });
+    }
+
     _addRemoteTransceiver(description, mid, kind) {
         if (description.sdp.includes(`a=mid:${mid}`) && !this._hasTransceiver(mid)) {
             this.transceivers.push(this._transceiver(mid, kind));
         }
-    }
-
-    _completeCandidateGathering(description) {
-        this.localDescription = {
-            ...description,
-            sdp: this.preCompleteAnswerSdp
-        };
-        this.onicecandidate?.({
-            candidate: {
-                candidate: "candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
-            }
-        });
-        queueMicrotask(() => {
-            this._completeIceGathering(description);
-        });
-    }
-
-    _completeIceGathering(description, emitCandidate = false) {
-        this.localDescription = {
-            ...description,
-            sdp: this.gatheredAnswerSdp
-        };
-        this.iceGatheringState = "complete";
-        if (emitCandidate) {
-            this.onicecandidate?.({
-                candidate: {
-                    candidate: "candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
-                }
-            });
-        }
-        this.onicegatheringstatechange?.();
-        this.onicecandidate?.({ candidate: null });
     }
 
     _hasTransceiver(mid) {

@@ -713,28 +713,6 @@ test("negotiation creates a peer connection and emits lowercase track updates", 
     assert.equal(client._consumers.get(42).camera.track, track);
 });
 
-test("offer waits for the ICE-complete local description before replying", async () => {
-    const { core, emitMessage, peerConnections, connectWithWelcome } = createSfuClientHarness({
-        peerConnectionOptions: {
-            answerSdp: "answer-sdp",
-            gatheredAnswerSdp:
-                "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
-        }
-    });
-
-    await connectWithWelcome();
-    await emitMessage("offer");
-
-    assert.equal(peerConnections.length, 1);
-    assert.deepEqual(core.submittedAnswers, [
-        {
-            negotiationKind: "offer",
-            requestId: "7",
-            sdp: "answer-sdp\r\na=candidate:1 1 udp 2113937151 127.0.0.1 54400 typ host"
-        }
-    ]);
-});
-
 test("protocol inputs wait for an in-flight negotiation to finish", async () => {
     const { promise: answerGate, resolve: releaseAnswer } = Promise.withResolvers();
     const callOrder = [];
@@ -1394,6 +1372,32 @@ test("peer connection disconnected does not tear down the websocket session", as
     assert.equal(client.state, "connected");
 });
 
+test("ICE candidate errors emit a warning without tearing down the session", async () => {
+    const { client, connectWithWelcome, emitMessage, handledErrors, peerConnections, sockets } =
+        createSfuClientHarness();
+    const logs = [];
+    client.addEventListener("log", (event) => logs.push(event.detail));
+
+    await connectWithWelcome();
+    await emitMessage("offer");
+
+    peerConnections[0].emitIceCandidateError({
+        errorCode: 701,
+        errorText: "STUN binding request timed out.",
+        url: "stun:stun.example.test:3478"
+    });
+    await tick();
+
+    assert.deepEqual(logs.at(-1), {
+        id: "browser_runtime",
+        level: "warn",
+        message: "ice candidate error: STUN binding request timed out."
+    });
+    assert.deepEqual(handledErrors, []);
+    assert.equal(sockets[0].closeCode, null);
+    assert.equal(client.state, "connected");
+});
+
 test("stale peer connection callbacks cannot affect the active session", async () => {
     const core = new FakeProtocolCore();
     core.transportFailureState = "recovering";
@@ -1401,6 +1405,8 @@ test("stale peer connection callbacks cannot affect the active session", async (
         createSfuClientHarness({
             protocolCore: core
         });
+    const logs = [];
+    client.addEventListener("log", (event) => logs.push(event.detail));
 
     await connect();
     await open();
@@ -1416,10 +1422,16 @@ test("stale peer connection callbacks cannot affect the active session", async (
     assert.equal(peerConnections.length, 2);
     assert.equal(stalePeerConnection.closed, true);
     const transportReadyCalls = core.transportReadyCalls;
+    const logCount = logs.length;
 
     stalePeerConnection.emitTrack(createCameraTrack("stale-camera"), "0");
     stalePeerConnection.emitConnectionState("connected");
     stalePeerConnection.emitConnectionState("failed");
+    stalePeerConnection.emitIceCandidateError({
+        errorCode: 701,
+        errorText: "STUN binding request timed out.",
+        url: "stun:stale.example.test:3478"
+    });
     await tick();
 
     assert.deepEqual(updates, []);
@@ -1428,6 +1440,7 @@ test("stale peer connection callbacks cannot affect the active session", async (
     assert.equal(sockets[0].closeCode, null);
     assert.equal(client.state, "connected");
     assert.equal(client._consumers.size, 0);
+    assert.equal(logs.length, logCount);
 });
 
 test("peer teardown clears bindings before the next peer can emit tracks", async () => {
@@ -2223,25 +2236,41 @@ test("initial offer binds a pending local track before answering", async () => {
     );
 });
 
-test("offer waits for ice gathering completion before submitting the final answer", async () => {
-    const { core, emitMessage, connectWithWelcome } = createSfuClientHarness({
-        peerConnectionOptions: {
-            autoConnect: false,
-            gatheredAnswerSdp: "gathered-answer-sdp",
-            preCompleteAnswerSdp: "candidate-answer-sdp"
+test("offer submits its local description while ice gathering continues", async () => {
+    class GatheringPeerConnection extends FakePeerConnection {
+        async setLocalDescription(description) {
+            await super.setLocalDescription(description);
+            this.iceGatheringState = "gathering";
         }
+
+        completeIceGathering() {
+            this.iceGatheringState = "complete";
+            this.onicegatheringstatechange?.();
+        }
+    }
+    const { core, emitMessage, connectWithWelcome, peerConnections } = createSfuClientHarness({
+        createPeerConnection: (config) =>
+            new GatheringPeerConnection(config, {
+                answerSdp: "answer-with-ice-credentials",
+                autoConnect: false
+            })
     });
 
     await connectWithWelcome();
     await emitMessage("offer");
 
-    assert.deepEqual(core.submittedAnswers, [
-        {
-            negotiationKind: "offer",
-            requestId: "7",
-            sdp: "gathered-answer-sdp"
-        }
-    ]);
+    try {
+        assert.deepEqual(core.submittedAnswers, [
+            {
+                negotiationKind: "offer",
+                requestId: "7",
+                sdp: "answer-with-ice-credentials"
+            }
+        ]);
+    } finally {
+        peerConnections[0].completeIceGathering();
+        await tick();
+    }
 });
 
 test("renegotiation binds pending camera and screen tracks to distinct offer-ordered mids", async () => {

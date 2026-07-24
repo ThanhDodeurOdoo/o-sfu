@@ -88,22 +88,36 @@ impl FakeRtcPeer {
         })
     }
 
+    pub fn answer_offer_without_candidates(
+        &mut self,
+        offer_sdp: &str,
+    ) -> Option<SessionDescriptionPayload> {
+        let mut answer = self.answer_offer(offer_sdp)?;
+        answer.sdp = answer
+            .sdp
+            .split_inclusive("\r\n")
+            .filter(|line| {
+                !line
+                    .strip_prefix(webrtc::sdp::ATTRIBUTE_PREFIX)
+                    .is_some_and(|attribute| {
+                        attribute.starts_with(webrtc::ice::candidate_attribute::PREFIX)
+                    })
+            })
+            .collect();
+        Some(answer)
+    }
+
     pub async fn wait_until_connected(&mut self, timeout_window: Duration) -> Option<()> {
-        let deadline = Instant::now() + timeout_window;
-        if pump_until(
+        pump_until(
             &mut self.rtc,
             &self.socket,
             self.local_addr,
             &mut self.connected,
-            deadline,
+            Instant::now() + timeout_window,
             true,
         )
         .await?
-        {
-            Some(())
-        } else {
-            None
-        }
+        .then_some(())
     }
 
     pub async fn send_rtp_packets(
@@ -249,16 +263,9 @@ async fn pump_until(
                     return Some(true);
                 }
             }
-            Output::Event(Event::IceConnectionStateChange(state)) => match state {
-                IceConnectionState::Connected | IceConnectionState::Completed => {
-                    *connected = true;
-                    if stop_on_connected {
-                        return Some(true);
-                    }
-                }
-                IceConnectionState::Disconnected => return None,
-                _ => {}
-            },
+            Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected)) => {
+                return None;
+            }
             Output::Event(_) => {}
             Output::Timeout(timeout_at) => {
                 if timeout_at <= now {
@@ -324,13 +331,9 @@ async fn pump_until_rtp(
             Output::Event(Event::Connected) => {
                 *connected = true;
             }
-            Output::Event(Event::IceConnectionStateChange(state)) => match state {
-                IceConnectionState::Connected | IceConnectionState::Completed => {
-                    *connected = true;
-                }
-                IceConnectionState::Disconnected => return None,
-                _ => {}
-            },
+            Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected)) => {
+                return None;
+            }
             Output::Event(_) => {}
             Output::Timeout(timeout_at) => {
                 if timeout_at <= now {

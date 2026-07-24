@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
+use o_sfu_rfc::webrtc::{self, MediaKind as ProtocolMediaKind};
 use str0m::{
     change::{SdpAnswer, SdpApi},
     media::{Direction, Media, MediaKind, Mid},
@@ -111,11 +111,12 @@ pub(super) fn worker_create_initial_session_offer(
         .staged_offer_upload_slots
         .clear();
     Ok(
-        SessionOffer::new(offer.to_sdp_string()).with_upload_slots(initial_upload_slots(
-            bootstrap_mids,
-            config.profile,
-            config.video_bitrate_limits,
-        )),
+        SessionOffer::new(offer_sdp_with_end_of_candidates(offer.to_sdp_string()))
+            .with_upload_slots(initial_upload_slots(
+                bootstrap_mids,
+                config.profile,
+                config.video_bitrate_limits,
+            )),
     )
 }
 
@@ -139,7 +140,10 @@ pub(super) fn worker_create_session_renegotiation_offer(
         .sdp_negotiation
         .staged_offer_upload_slots
         .clone();
-    Ok(SessionOffer::new(offer_sdp).with_upload_slots(upload_slots))
+    Ok(
+        SessionOffer::new(offer_sdp_with_end_of_candidates(offer_sdp))
+            .with_upload_slots(upload_slots),
+    )
 }
 
 /// Accept the currently pending local offer and reconcile every worker-local
@@ -367,6 +371,14 @@ fn stage_queued_removal_offer(session_state: &mut super::super::super::state::Rt
         .sdp_negotiation
         .staged_offer_upload_slots
         .clear();
+}
+
+fn offer_sdp_with_end_of_candidates(mut offer_sdp: String) -> String {
+    let media_line_start = offer_sdp
+        .find("\r\nm=")
+        .map_or(offer_sdp.len(), |index| index + 2);
+    offer_sdp.insert_str(media_line_start, webrtc::sdp::END_OF_CANDIDATES_LINE);
+    offer_sdp
 }
 
 fn ensure_initial_negotiation_media(

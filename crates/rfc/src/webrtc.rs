@@ -251,6 +251,10 @@ pub mod rtcp_feedback {
 
 pub mod sdp {
     pub const ATTRIBUTE_PREFIX: &str = "a=";
+    /// Session-level end-of-candidates indication.
+    ///
+    /// Reference: RFC 8840 section 8.
+    pub const END_OF_CANDIDATES_LINE: &str = "a=end-of-candidates\r\n";
     pub const MEDIA_PREFIX: &str = "m=";
 
     pub mod group_semantics {

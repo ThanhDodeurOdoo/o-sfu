@@ -17,6 +17,7 @@ use o_sfu_tests::support::{
     read_close_code, require_some, signed_connect_claims, spawn_test_server, test_config,
 };
 use reqwest::StatusCode;
+use str0m::change::SdpOffer;
 use tokio::time::{Duration, timeout};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
@@ -131,6 +132,13 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
         panic!("expected offer request");
     };
     assert!(payload.sdp.contains("a=ice-lite"));
+    assert!(payload.sdp.contains("a=ice-options:trickle"));
+    let parsed_offer = require_some(
+        SdpOffer::from_sdp_string(&payload.sdp).ok(),
+        "offer should contain parseable SDP",
+    )?;
+    assert!(parsed_offer.session.end_of_candidates());
+    assert_eq!(payload.sdp.matches("a=end-of-candidates").count(), 1);
     assert!(payload.sdp.contains("a=fingerprint:sha-256"));
     assert!(payload.sdp.contains("a=candidate:"));
     assert!(payload.sdp.contains("127.0.0.1"));
@@ -150,6 +158,23 @@ async fn websocket_welcome_and_initial_offer_expose_real_rtc_transport_details()
         "candidate should expose an RTC port",
     )?;
     assert!(rtc_port_range.ports().any(|candidate| candidate == port));
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_candidate_free_answer_establishes_rtc_transport() -> TestResult {
+    let (server, room) = server_with_room("issuer-candidate-free-answer").await?;
+    let mut client = client_in_room(&server, &room, UserId::Integer(703)).await?;
+
+    require_some(client.read_welcome().await, "welcome should be sent")?;
+    require_some(
+        client.finish_initial_negotiation_without_candidates().await,
+        "candidate-free answer should be accepted",
+    )?;
+    require_some(
+        client.wait_until_connected(Duration::from_secs(5)).await,
+        "candidate-free answer should establish ICE and DTLS",
+    )?;
     Ok(())
 }
 

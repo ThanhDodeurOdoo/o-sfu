@@ -1,3 +1,6 @@
+import { createSocket } from "node:dgram";
+import { once } from "node:events";
+
 import { expect, test } from "@playwright/test";
 
 import {
@@ -35,6 +38,47 @@ import {
 
 const PUBLISHER_SESSION_ID = 41;
 const SUBSCRIBER_SESSION_ID = 42;
+const STUN_MAGIC_COOKIE = 0x2112a442;
+
+test("unresponsive STUN does not block the initial answer", async ({ browserName, context }) => {
+    test.skip(browserName !== "chromium", "Chromium-specific ICE gathering regression");
+    test.setTimeout(15_000);
+    const stun = createSocket("udp4");
+    let listening = false;
+    let stunRequests = 0;
+    stun.on("message", (message) => {
+        if (message.length >= 20 && message.readUInt32BE(4) === STUN_MAGIC_COOKIE) {
+            stunRequests += 1;
+        }
+    });
+
+    try {
+        stun.bind(0, "127.0.0.1");
+        await once(stun, "listening");
+        listening = true;
+        const channelUuid = await createChannel();
+        const peer = await createPeerPage(context);
+
+        await connectPeer(peer, {
+            channelUuid,
+            iceServers: [{ urls: `stun:127.0.0.1:${stun.address().port}` }],
+            jwt: createConnectToken(channelUuid, PUBLISHER_SESSION_ID)
+        });
+
+        await expect.poll(() => stunRequests).toBeGreaterThan(0);
+        await expect
+            .poll(async () => (await peerSnapshot(peer)).peerConnectionState, { timeout: 8_000 })
+            .toBe("connected");
+        const snapshot = await peerSnapshot(peer);
+        expect(snapshot.state).toBe("connected");
+    } finally {
+        if (listening) {
+            const closed = once(stun, "close");
+            stun.close();
+            await closed;
+        }
+    }
+});
 
 test("default VP8 camera pauses and resumes without renegotiation", async ({
     browserName,

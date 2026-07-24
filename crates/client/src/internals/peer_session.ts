@@ -102,6 +102,7 @@ export class PeerSession {
         });
         this._log(CLIENT_LOG_LEVEL.DEBUG, "created RTCPeerConnection");
         peer.onconnectionstatechange = () => this.handleConnectionState(peer);
+        peer.onicecandidateerror = (event) => this.handleIceCandidateError(peer, event);
         peer.ontrack = (event) => {
             if (this._activePeer !== peer) {
                 return;
@@ -183,9 +184,11 @@ export class PeerSession {
         if (!this.isActive(peer)) {
             return null;
         }
-        const answerSdp = await this.awaitStableLocalDescription(peer);
-        if (!this.isActive(peer)) {
-            return null;
+        const answerSdp = peer.localDescription?.sdp;
+        if (!answerSdp) {
+            throw new Error(
+                "peer connection local description is missing after setLocalDescription"
+            );
         }
         this._log(
             CLIENT_LOG_LEVEL.DEBUG,
@@ -214,6 +217,16 @@ export class PeerSession {
         };
     }
 
+    private handleIceCandidateError(
+        peer: ClientPeerConnection,
+        event: RTCPeerConnectionIceErrorEvent
+    ): void {
+        if (!this.isActive(peer)) {
+            return;
+        }
+        this._log(CLIENT_LOG_LEVEL.WARN, `ice candidate error: ${event.errorText}`);
+    }
+
     private handleConnectionState(peer: ClientPeerConnection): void {
         if (!this.isActive(peer)) {
             return;
@@ -228,47 +241,6 @@ export class PeerSession {
         } else if (state === "failed") {
             this._closeSocketForTransportFailure();
         }
-    }
-
-    private async awaitStableLocalDescription(peer: ClientPeerConnection): Promise<string> {
-        const initialSdp = peer.localDescription?.sdp;
-        if (!initialSdp) {
-            throw new Error("peer connection local description is missing after createAnswer");
-        }
-        if (peer.iceGatheringState === "complete") {
-            return initialSdp;
-        }
-
-        return new Promise((resolve) => {
-            const previousIceCandidate = peer.onicecandidate;
-            const previousIceGatheringStateChange = peer.onicegatheringstatechange;
-            const finishIfReady = (candidate: { candidate: string } | null | undefined) => {
-                const localSdp = peer.localDescription?.sdp;
-                if (!localSdp) {
-                    return;
-                }
-                if (candidate !== null && peer.iceGatheringState !== "complete") {
-                    return;
-                }
-                peer.onicecandidate = previousIceCandidate;
-                peer.onicegatheringstatechange = previousIceGatheringStateChange;
-                resolve(localSdp);
-            };
-
-            peer.onicecandidate = (event) => {
-                previousIceCandidate?.(event);
-                finishIfReady(event.candidate);
-            };
-            peer.onicegatheringstatechange = () => {
-                previousIceGatheringStateChange?.();
-                if (peer.iceGatheringState === "complete") {
-                    finishIfReady(undefined);
-                }
-            };
-            if (peer.iceGatheringState === "complete") {
-                finishIfReady(undefined);
-            }
-        });
     }
 
     private isActive(peer: ClientPeerConnection): boolean {
