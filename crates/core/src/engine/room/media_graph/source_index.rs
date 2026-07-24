@@ -98,7 +98,9 @@ impl PublishedSources {
         group: ActiveSpeakerGroup,
     ) -> bool {
         self.ids_for_owner(owner)
-            .filter_map(|id| self.source(id).map(|source| &source.descriptor))
+            .filter_map(|id| self.source(id))
+            .filter(|source| source.active)
+            .map(|source| &source.descriptor)
             .any(|source| {
                 source.policy().active_speaker().is_some_and(|policy| {
                     policy.group() == group && policy.role() == ActiveSpeakerSourceRole::Promotable

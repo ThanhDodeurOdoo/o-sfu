@@ -137,7 +137,7 @@ impl StagedPublish {
         )
     }
 
-    pub(super) async fn commit_from_answer(
+    pub(super) async fn commit_answer_guarded(
         self,
         operation: RoomUserOperation<'_>,
         applied_answer: &AppliedSessionAnswer,
@@ -161,11 +161,10 @@ impl StagedPublish {
             return None;
         };
         let encodings = applied_answer.negotiated_producer_upload_encodings(media);
-        self.commit_with_negotiated_parameters(operation, rtp, encodings)
-            .await
+        self.commit_rtp_guarded(operation, rtp, encodings).await
     }
 
-    pub(super) async fn commit_with_negotiated_parameters(
+    pub(super) async fn commit_rtp_guarded(
         self,
         operation: RoomUserOperation<'_>,
         rtp: RouterRtpParameters,
@@ -193,8 +192,9 @@ impl StagedPublish {
             return None;
         };
         self.commit_reservation();
+        let context = RoomEffectContext::runtime(operation.media_transport);
         RoomEffects::from_publish(commit)
-            .execute(room, RoomEffectContext::runtime(operation.media_transport))
+            .execute_with_source_policy_guard(room, context)
             .await;
         info!(
             event = telemetry_event::PUBLISH_COMMITTED,

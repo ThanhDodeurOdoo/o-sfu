@@ -119,7 +119,8 @@ impl RoomEffects {
 
     pub(in crate::engine::room) fn from_presence(commit: PresenceCommit) -> Self {
         let mut batch = Self::default();
-        batch.push_presence(Some(commit));
+        batch.output.push_user_info(commit.fanout);
+        batch.source_policy.receiver_intent_changed();
         batch
     }
 
@@ -136,7 +137,7 @@ impl RoomEffects {
         batch
             .transport
             .push_receiver_work(commit.receiver_route_work, ConsumerSetupOrigin::Publish);
-        batch.push_presence(commit.presence);
+        batch.push_presence_before_policy(commit.presence);
         batch.source_policy.route_graph_changed();
         batch
     }
@@ -161,7 +162,7 @@ impl RoomEffects {
             .extend_remote_source_activity(remote_activity_effects);
         batch.transport.push_producer(source, stream_id, update);
         batch.output.push_source_snapshots(source_snapshots);
-        batch.push_presence(presence);
+        batch.push_presence_before_policy(presence);
         batch.source_policy.route_graph_changed();
         batch
     }
@@ -183,9 +184,9 @@ impl RoomEffects {
         batch
     }
 
-    fn push_presence(&mut self, presence: Option<PresenceCommit>) {
+    fn push_presence_before_policy(&mut self, presence: Option<PresenceCommit>) {
         if let Some(presence) = presence {
-            self.output.push_user_info(presence.fanout);
+            self.output.push_user_info_before_policy(presence.fanout);
             self.source_policy.receiver_intent_changed();
         }
     }
@@ -226,6 +227,7 @@ impl RoomEffects {
         let mut source_policy = self.source_policy;
         record_gauges(&mut gauges, room);
         if self.policy_before_transport {
+            output.emit_user_info_before_policy();
             source_policy
                 .execute_guarded(room, context.media_transport(), None)
                 .await;
