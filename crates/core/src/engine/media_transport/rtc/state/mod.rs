@@ -114,6 +114,8 @@ pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
     /// creation time used for transport lifetime metrics during session teardown
     pub(super) started_at: Instant,
+    /// shared writer and cold-reader handle for sent media bitrate
+    pub(super) egress_bitrate: Arc<MediaBitrateCounter>,
     /// local ICE fragment registered in demux recovery hints
     pub(super) local_ice_ufrag: String,
     #[cfg(test)]
@@ -200,8 +202,6 @@ pub(super) struct PacketLoopState {
     pub(super) rid_readiness_scratch: RidReadinessScratch,
     /// packet-loop write handles for incoming media bitrate accounting
     pub(super) incoming_bitrate_counters: BTreeMap<TransportMediaId, Arc<MediaBitrateCounter>>,
-    /// packet-loop write handles for per-session egress bitrate accounting
-    pub(super) egress_bitrate_counters: BTreeMap<TransportSessionKey, Arc<MediaBitrateCounter>>,
     /// worker-local UDP ingress demux hints
     pub(super) remote_addr_demux: RemoteAddrDemux,
     /// primary media handle table keyed by stable transport media id
@@ -384,24 +384,15 @@ impl RidReadinessScratch {
 /// worker-local and single-threaded
 #[derive(Debug, Default)]
 pub struct RtcSnapshotState {
-    /// demux hints visible to diagnostics and recovery tooling
-    pub(super) remote_addr_demux: RemoteAddrDemux,
-    /// sessions that currently have worker-local RTC state
-    pub(super) live_sessions: BTreeSet<TransportSessionKey>,
     /// latest observed transport health by session
-    transport_health_by_session: BTreeMap<TransportSessionKey, TransportSessionHealth>,
+    transport_health: BTreeMap<TransportSessionKey, TransportSessionHealth>,
     /// latest receiver bandwidth estimate by session
-    receiver_bandwidth_by_session: BTreeMap<TransportSessionKey, Bitrate>,
+    receiver_bandwidth: BTreeMap<TransportSessionKey, Bitrate>,
     /// latest sampled media quality by session
-    transport_quality_by_session: BTreeMap<TransportSessionKey, TransportQualitySample>,
+    transport_quality: BTreeMap<TransportSessionKey, TransportQualitySample>,
 }
 
 impl RtcSnapshotState {
-    /// mark a session as visible in read-side RTC state
-    pub(super) fn add_session(&mut self, session_key: &TransportSessionKey) {
-        self.live_sessions.insert(session_key.clone());
-    }
-
     /// remove every read-side fact owned by one session
     ///
     /// returns the previous transport health so teardown metrics can record the
@@ -410,15 +401,9 @@ impl RtcSnapshotState {
         &mut self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        self.live_sessions.remove(session_key);
-        self.remote_addr_demux.forget_user_remote_addrs(session_key);
-        self.remote_addr_demux
-            .forget_user_local_ice_ufrag(session_key);
-        self.remote_addr_demux
-            .forget_user_remote_candidates(session_key);
-        self.receiver_bandwidth_by_session.remove(session_key);
-        self.transport_quality_by_session.remove(session_key);
-        self.transport_health_by_session.remove(session_key)
+        self.receiver_bandwidth.remove(session_key);
+        self.transport_quality.remove(session_key);
+        self.transport_health.remove(session_key)
     }
 
     /// replace the latest transport health observation for one session
@@ -429,8 +414,7 @@ impl RtcSnapshotState {
         session_key: &TransportSessionKey,
         health: TransportSessionHealth,
     ) -> Option<TransportSessionHealth> {
-        self.transport_health_by_session
-            .insert(session_key.clone(), health)
+        self.transport_health.insert(session_key.clone(), health)
     }
 
     /// return the latest health observation for a session
@@ -441,7 +425,7 @@ impl RtcSnapshotState {
         &self,
         session_key: &TransportSessionKey,
     ) -> Option<TransportSessionHealth> {
-        self.transport_health_by_session.get(session_key).copied()
+        self.transport_health.get(session_key).copied()
     }
 
     /// Build a transport-health snapshot for the requested sessions.
@@ -452,7 +436,7 @@ impl RtcSnapshotState {
         session_keys
             .iter()
             .filter_map(|key| {
-                self.transport_health_by_session
+                self.transport_health
                     .get(key)
                     .copied()
                     .map(|health| (key.clone(), health))
@@ -466,7 +450,7 @@ impl RtcSnapshotState {
         session_key: &TransportSessionKey,
         estimate: Bitrate,
     ) -> Option<Bitrate> {
-        self.receiver_bandwidth_by_session
+        self.receiver_bandwidth
             .insert(session_key.clone(), estimate)
     }
 
@@ -482,7 +466,7 @@ impl RtcSnapshotState {
             per_session: session_keys
                 .iter()
                 .filter_map(|session_key| {
-                    self.receiver_bandwidth_by_session
+                    self.receiver_bandwidth
                         .get(session_key)
                         .copied()
                         .map(|estimate| (session_key.clone(), estimate))
@@ -498,7 +482,7 @@ impl RtcSnapshotState {
         update: impl FnOnce(&mut TransportQualitySample),
     ) {
         let sample = self
-            .transport_quality_by_session
+            .transport_quality
             .entry(session_key.clone())
             .or_default();
         sample.sample_count = sample.sample_count.saturating_add(1);
@@ -513,7 +497,7 @@ impl RtcSnapshotState {
         session_keys
             .iter()
             .filter_map(|session_key| {
-                self.transport_quality_by_session
+                self.transport_quality
                     .get(session_key)
                     .copied()
                     .map(|sample| (session_key.clone(), sample))

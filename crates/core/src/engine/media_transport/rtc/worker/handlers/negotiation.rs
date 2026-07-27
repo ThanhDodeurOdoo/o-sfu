@@ -11,7 +11,7 @@ use std::{
     mem,
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use o_sfu_rfc::webrtc::{self, MediaKind as ProtocolMediaKind};
@@ -23,10 +23,8 @@ use tracing::debug;
 
 use super::{
     super::super::{
-        RtpProfile,
-        bitrate::BitrateRegistry,
-        bootstrap, negotiated_capabilities, simulcast,
-        state::{PacketLoopState, RtcSnapshotState},
+        RtpProfile, bitrate::BitrateRegistry, bootstrap, negotiated_capabilities, simulcast,
+        state::PacketLoopState,
     },
     publication::{answer_producer_projection, refresh_negotiated_producer_parameters},
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
@@ -64,19 +62,11 @@ pub(super) struct OfferBootstrapConfig<'a> {
 pub(super) fn worker_create_initial_session_offer(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     room_id: Arc<str>,
     session_key: &TransportSessionKey,
 ) -> Result<SessionOffer, TransportAdapterError> {
-    ensure_session_ready_for_offer(
-        state,
-        bitrate_registry,
-        snapshot_state,
-        config,
-        room_id,
-        session_key,
-    )?;
+    ensure_session_ready_for_offer(state, bitrate_registry, config, room_id, session_key)?;
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
     }
@@ -436,7 +426,6 @@ pub(super) fn upload_kind(media_kind: MediaKind) -> ProtocolMediaKind {
 fn ensure_session_ready_for_offer(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     config: OfferBootstrapConfig<'_>,
     room_id: Arc<str>,
     session_key: &TransportSessionKey,
@@ -450,14 +439,10 @@ fn ensure_session_ready_for_offer(
         config.profile,
         config.media_quality_interval,
     )?;
-    if let Ok(mut snapshot) = snapshot_state.lock() {
-        snapshot.add_session(session_key);
-    }
-    if let Ok(mut bitrate) = bitrate_registry.lock() {
-        let counter = bitrate.register_session_egress(session_key, Instant::now());
-        state.register_egress_bitrate_counter(session_key.clone(), counter);
-    }
     if let Some(session_state) = state.users.get(session_key) {
+        if created_session && let Ok(mut bitrate) = bitrate_registry.lock() {
+            bitrate.register_session_egress(session_key, Arc::clone(&session_state.egress_bitrate));
+        }
         let local_ice_ufrag_changed = state
             .remote_addr_demux
             .remember_local_ice_ufrag(&session_state.local_ice_ufrag, session_key);

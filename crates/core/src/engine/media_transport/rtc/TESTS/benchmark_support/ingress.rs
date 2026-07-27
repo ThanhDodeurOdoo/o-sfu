@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -13,7 +13,7 @@ use super::super::{
         route_queued_ingress_datagrams_for_benchmark,
     },
     routing_miss::DemuxRecoveryState,
-    state::{PacketLoopState, RtcSnapshotState},
+    state::PacketLoopState,
     test_support::{
         sample_rtp_packet_with_len, serialize_stun_message, test_transport_session_key,
     },
@@ -47,7 +47,6 @@ enum IngressRoutingMode {
 pub struct IngressRoutingBenchFixture {
     mode: IngressRoutingMode,
     state: PacketLoopState,
-    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     demux: DemuxRecoveryState,
     _metrics: RuntimeMetrics,
     rtc_metrics: Arc<RtcMetricsRecorder>,
@@ -69,7 +68,6 @@ impl IngressRoutingBenchFixture {
         let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 46_000));
         let session_key = test_transport_session_key(61, 0, 62, UserId::Integer(63));
         let mut state = PacketLoopState::default();
-        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
         let metrics = RuntimeMetrics::default();
         let rtc_metrics = metrics.register_rtc_worker();
 
@@ -84,11 +82,6 @@ impl IngressRoutingBenchFixture {
             let _ = state
                 .remote_addr_demux
                 .remember_remote_addr(source_addr, &session_key);
-            if let Ok(mut snapshot) = snapshot_state.lock() {
-                let _ = snapshot
-                    .remote_addr_demux
-                    .remember_remote_addr(source_addr, &session_key);
-            }
             state
                 .users
                 .get_mut(&session_key)
@@ -108,7 +101,6 @@ impl IngressRoutingBenchFixture {
         Self {
             mode: IngressRoutingMode::CachedAccepted,
             state,
-            snapshot_state,
             demux: DemuxRecoveryState::new(),
             _metrics: metrics,
             rtc_metrics,
@@ -134,13 +126,11 @@ impl IngressRoutingBenchFixture {
         let source_addr = SocketAddr::from(([127, 0, 0, 1], 46_011));
         let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 46_010));
         let state = PacketLoopState::default();
-        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
         let metrics = RuntimeMetrics::default();
         let rtc_metrics = metrics.register_rtc_worker();
         let mut fixture = Self {
             mode: IngressRoutingMode::UnknownSourceMiss,
             state,
-            snapshot_state,
             demux: DemuxRecoveryState::new(),
             _metrics: metrics,
             rtc_metrics,
@@ -167,7 +157,6 @@ impl IngressRoutingBenchFixture {
     fn route_once(&mut self) {
         route_pkt_to_session_at(
             &mut self.state,
-            &self.snapshot_state,
             &mut self.demux,
             &self.rtc_metrics,
             PacketRouteDatagram::new(
@@ -198,7 +187,6 @@ impl IngressBurstBenchFixture {
             let enqueued = self.enqueue_burst();
             routed += route_queued_ingress_datagrams_for_benchmark(
                 &mut self.routing.state,
-                &self.routing.snapshot_state,
                 &mut self.routing.demux,
                 &self.routing.rtc_metrics,
                 self.ingress.ingress_mut(),

@@ -143,13 +143,11 @@ impl RtcWorker {
         &self,
         source_addr: SocketAddr,
     ) -> Option<TransportSessionKey> {
-        self.read_debug_worker(move |_state, context| {
-            context.snapshot_state.lock().ok().and_then(|snapshot| {
-                snapshot
-                    .remote_addr_demux
-                    .session_key_for_remote_addr(source_addr)
-                    .cloned()
-            })
+        self.read_debug_worker(move |state, _context| {
+            state
+                .remote_addr_demux
+                .session_key_for_remote_addr(source_addr)
+                .cloned()
         })
         .await
         .flatten()
@@ -157,15 +155,9 @@ impl RtcWorker {
 
     #[cfg(test)]
     pub async fn debug_has_any_remote_addr_session(&self) -> bool {
-        self.read_debug_worker(|_state, context| {
-            context
-                .snapshot_state
-                .lock()
-                .ok()
-                .is_some_and(|snapshot| !snapshot.remote_addr_demux.is_empty())
-        })
-        .await
-        .unwrap_or(false)
+        self.read_debug_worker(|state, _context| !state.remote_addr_demux.is_empty())
+            .await
+            .unwrap_or(false)
     }
 
     #[cfg(test)]

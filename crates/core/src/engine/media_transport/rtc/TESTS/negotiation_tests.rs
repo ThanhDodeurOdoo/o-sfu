@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use o_sfu_rfc::webrtc;
 use o_sfu_router::{
@@ -11,7 +11,10 @@ use str0m::{
     media::Frequency,
 };
 
-use super::{super::RtpProfile, fixtures::*};
+use super::{
+    super::{RtpProfile, state::PacketLoopState, worker::WorkerCommandContext},
+    fixtures::*,
+};
 use crate::{
     AudioCodecPreference, VideoCodecPreference,
     engine::media_transport::{SessionUploadSlot, TransportMediaId},
@@ -654,12 +657,48 @@ async fn rtc_initial_session_offer_rejects_overlapping_pending_offer() {
             .await
             .is_ok()
     );
+    let handle = adapter.test_handle();
+    let first_counter = handle
+        .bitrate_registry
+        .lock()
+        .ok()
+        .and_then(|registry| {
+            registry
+                .egress_bitrates_by_session
+                .get(&session_key)
+                .cloned()
+        })
+        .expect("initial offer should register its egress counter");
     assert_eq!(
         adapter
             .create_initial_session_offer("test-room", &session_key)
             .await,
         Err(TransportAdapterError::InvalidInput)
     );
+    let probe_key = session_key.clone();
+    let (repeated_counter, registered_counter) = handle
+        .debug_handle
+        .probe(
+            move |state: &PacketLoopState, context: &WorkerCommandContext<'_>| {
+                let session_counter = state
+                    .users
+                    .get(&probe_key)
+                    .map(|session| Arc::clone(&session.egress_bitrate))?;
+                let registered_counter = context
+                    .bitrate_registry
+                    .lock()
+                    .ok()?
+                    .egress_bitrates_by_session
+                    .get(&probe_key)
+                    .cloned()?;
+                Some((session_counter, registered_counter))
+            },
+        )
+        .await
+        .flatten()
+        .expect("repeated offer should retain its egress counter");
+    assert!(Arc::ptr_eq(&first_counter, &repeated_counter));
+    assert!(Arc::ptr_eq(&first_counter, &registered_counter));
 }
 
 #[tokio::test]

@@ -18,13 +18,7 @@
 //! recovers traffic that `str0m` would reject downstream
 
 use core::hint::cold_path;
-use std::{
-    fmt,
-    net::SocketAddr,
-    slice::Iter,
-    sync::{Arc, Mutex},
-    time::Instant,
-};
+use std::{fmt, net::SocketAddr, slice::Iter, time::Instant};
 
 use str0m::{
     Input,
@@ -35,7 +29,7 @@ use tracing::{debug, trace, warn};
 
 use super::super::{
     routing_miss::{DemuxRecoveryState, PacketLoopRoutingMissKey},
-    state::{PacketLoopState, RtcSnapshotState},
+    state::PacketLoopState,
 };
 use crate::engine::{
     media_transport::TransportSessionKey,
@@ -139,7 +133,6 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 #[cfg(test)]
 pub(super) fn route_pkt_to_session(
     state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     demux: &mut DemuxRecoveryState,
     metrics: &RtcMetricsRecorder,
     source_addr: SocketAddr,
@@ -148,7 +141,6 @@ pub(super) fn route_pkt_to_session(
 ) {
     route_pkt_to_session_at(
         state,
-        snapshot_state,
         demux,
         metrics,
         PacketRouteDatagram::new(source_addr, candidate_addr, packet, Instant::now()),
@@ -161,14 +153,12 @@ pub(super) fn route_pkt_to_session(
 /// demux indexes, recent misses and rate limits are bounded recovery hints
 pub fn route_pkt_to_session_at(
     state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     demux: &mut DemuxRecoveryState,
     metrics: &RtcMetricsRecorder,
     datagram: PacketRouteDatagram<'_>,
 ) {
     match route_cached_pkt(
         state,
-        snapshot_state,
         datagram.source_addr,
         datagram.candidate_addr,
         datagram.packet,
@@ -203,7 +193,6 @@ pub fn route_pkt_to_session_at(
         return;
     }
     let route = PacketRouteContext {
-        snapshot_state,
         metrics,
         source_addr: datagram.source_addr,
         candidate_addr: datagram.candidate_addr,
@@ -220,7 +209,6 @@ pub fn route_pkt_to_session_at(
 
 fn route_cached_pkt(
     state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -234,10 +222,6 @@ fn route_cached_pkt(
     };
     let Some(session_state) = state.users.get_mut(session_key) else {
         state.remote_addr_demux.forget_remote_addr(source_addr);
-        if let Ok(mut snapshot) = snapshot_state.lock() {
-            // shared demux snapshots must not keep pins the worker already rejected
-            snapshot.remote_addr_demux.forget_remote_addr(source_addr);
-        }
         return CachedRouteOutcome::NotMatched;
     };
     let Ok(receive) = Receive::new(Protocol::Udp, source_addr, candidate_addr, packet) else {
@@ -256,10 +240,6 @@ fn route_cached_pkt(
             "indexed rtc source address no longer matched the cached user; clearing source-address pin"
         );
         state.remote_addr_demux.forget_remote_addr(source_addr);
-        if let Ok(mut snapshot) = snapshot_state.lock() {
-            // shared demux snapshots must not keep pins the worker already rejected
-            snapshot.remote_addr_demux.forget_remote_addr(source_addr);
-        }
         return CachedRouteOutcome::NotMatched;
     }
     let handle_result = session_state.rtc.handle_input(input);
@@ -424,7 +404,6 @@ fn record_unknown_src_miss(
 }
 
 struct PacketRouteContext<'a> {
-    snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     metrics: &'a RtcMetricsRecorder,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
@@ -464,12 +443,7 @@ fn route_packet_to_session(
     if state
         .remote_addr_demux
         .remember_remote_addr(route.source_addr, session_key)
-        && let Ok(mut snapshot) = route.snapshot_state.lock()
     {
-        // mirror accepted pins so control-plane snapshots track worker state
-        let _ = snapshot
-            .remote_addr_demux
-            .remember_remote_addr(route.source_addr, session_key);
         match previous_session_key {
             Some(previous_session_key) => {
                 debug!(

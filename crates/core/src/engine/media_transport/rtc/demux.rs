@@ -7,7 +7,6 @@
 //! makes the final ownership decision
 //!
 //! the indexes are worker-local state
-//! snapshot state may mirror selected entries for observation
 //! callers must update each demux value through the methods here so forward and
 //! reverse indexes cannot drift apart
 
@@ -190,10 +189,7 @@ impl RemoteAddrDemux {
         }
     }
 
-    /// removes one learned UDP source tuple pin
-    ///
-    /// this is used when the cached path no longer passes `Rtc::accepts()` or
-    /// when snapshot state mirrors a worker cleanup
+    /// removes one learned UDP source tuple pin after cached `Rtc::accepts()` rejection
     pub(super) fn forget_remote_addr(&mut self, source_addr: SocketAddr) {
         let Some(session_key) = self.remote_addr_index.remove(&source_addr) else {
             return;
@@ -201,10 +197,7 @@ impl RemoteAddrDemux {
         self.remove_remote_addr(&session_key, source_addr);
     }
 
-    /// removes every learned UDP source tuple owned by a session
-    ///
-    /// session teardown calls this on both worker and snapshot demux state so
-    /// stale source pins cannot route packets to a removed user
+    /// removes every learned UDP source tuple when its session is removed
     pub(super) fn forget_user_remote_addrs(&mut self, session_key: &TransportSessionKey) {
         let Some(session_addrs) = self.remote_addrs_by_session.remove(session_key) else {
             return;

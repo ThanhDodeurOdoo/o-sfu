@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, time::Instant};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use str0m::{
     media::{MediaKind, Mid},
@@ -88,11 +88,12 @@ impl LocalSendBenchFixture {
                 pending_gate: None,
             },
         );
+        let mut bitrate_registry = BitrateRegistry::default();
+        let counter = Arc::clone(&session.egress_bitrate);
+        bitrate_registry.register_session_egress(&consumer, counter);
+
         let packet = sample_forwarded_packet(producer, "cam-up", LOCAL_SEND_PAYLOAD);
         let observed_at = packet.received_at();
-        let mut bitrate_registry = BitrateRegistry::default();
-        let counter = bitrate_registry.register_session_egress(&consumer, observed_at);
-        state.register_egress_bitrate_counter(consumer.clone(), counter);
         let forward = PacketForward::from_local_route_destination(0, src_media, dst_idx);
         let ForwardSendOutcome::LocalRtc {
             payload_bytes: Some(warmup_bytes),
