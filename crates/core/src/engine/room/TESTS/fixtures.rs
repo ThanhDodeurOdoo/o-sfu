@@ -2,7 +2,8 @@ pub(super) use std::{sync::Arc, time::Instant};
 
 use o_sfu_router::test_support::rtp_samples::{
     sample_audio_rtp_parameters, sample_client_rtp_capabilities,
-    sample_simulcast_video_rtp_parameters, sample_video_rtp_parameters,
+    sample_simulcast_video_rtp_parameters, sample_three_layer_simulcast_video_rtp_parameters,
+    sample_video_rtp_parameters,
 };
 pub(super) use o_sfu_router::{
     MediaKind,
@@ -15,7 +16,7 @@ pub(super) use super::super::{
     UserOutboundSender, source_policy::SourcePolicyTurn, transition::PublishStageOutcome,
 };
 pub(super) use crate::{
-    RoomMediaLimits,
+    RoomMediaLimits, VideoAdaptationTuning,
     engine::{
         ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
         media_transport::{
@@ -405,6 +406,24 @@ pub(super) async fn setup_ready_users_with_transport_and_media_limits(
     (room, adapter)
 }
 
+pub(super) async fn setup_ready_users_with_transport_and_tuning(
+    user_ids: &[i64],
+    tuning: VideoAdaptationTuning,
+) -> (Arc<super::super::Room>, MediaTransport) {
+    let manager = RoomManager::for_test_with_video_adaptation_tuning(tuning);
+    let room = manager
+        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
+        .await;
+    let adapter = real_adapter();
+    for &raw_user_id in user_ids {
+        let (sender, _receiver) = test_sender();
+        let user_id = UserId::Integer(raw_user_id);
+        join_user_without_transport_teardown(&room, &adapter, user_id.clone(), sender).await;
+        make_session_ready_with_transport(&room, &user_id, &adapter).await;
+    }
+    (room, adapter)
+}
+
 pub(super) async fn setup_ready_users_with_transport_receivers(
     user_ids: &[i64],
 ) -> (
@@ -450,6 +469,14 @@ impl SourcePolicyScenario {
     ) -> Self {
         let (room, adapter) =
             setup_ready_users_with_transport_and_media_limits(user_ids, media_limits).await;
+        Self { room, adapter }
+    }
+
+    pub(super) async fn with_ready_users_and_tuning(
+        user_ids: &[i64],
+        tuning: VideoAdaptationTuning,
+    ) -> Self {
+        let (room, adapter) = setup_ready_users_with_transport_and_tuning(user_ids, tuning).await;
         Self { room, adapter }
     }
 
@@ -574,6 +601,22 @@ pub(super) async fn publish_simulcast_camera(
         TestSourceKind::ScalableVideo,
         MediaKind::Video,
         test_simulcast_video_rtp_parameters(),
+        media_transport,
+    )
+    .await
+}
+
+pub(super) async fn publish_three_layer_camera(
+    room: &Arc<super::super::Room>,
+    user_id: &UserId,
+    media_transport: &MediaTransport,
+) -> UserStreamId {
+    publish_track(
+        room,
+        user_id,
+        TestSourceKind::ScalableVideo,
+        MediaKind::Video,
+        sample_three_layer_simulcast_video_rtp_parameters(None),
         media_transport,
     )
     .await

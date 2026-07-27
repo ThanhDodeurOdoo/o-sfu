@@ -3,9 +3,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+use o_sfu_router::MediaKind;
+
 use super::action::FeaturedUserUpdate;
 use crate::{
-    Bitrate, RoomMediaLimits,
+    Bitrate, RoomMediaLimits, VideoAdaptationTuning,
     engine::{
         ConnectionId, UserId,
         media_transport::{
@@ -30,6 +32,8 @@ pub(super) struct SourcePolicySnapshot<'a> {
     pub(super) featured_user_updates: Vec<FeaturedUserUpdate>,
     pub(super) user_count: usize,
     pub(super) media_limits: RoomMediaLimits,
+    pub(super) video_adaptation_tuning: VideoAdaptationTuning,
+    pub(super) audio_reserve_by_connection: BTreeMap<ConnectionId, Bitrate>,
 }
 
 impl<'a> SourcePolicySnapshot<'a> {
@@ -40,6 +44,7 @@ impl<'a> SourcePolicySnapshot<'a> {
     ) -> Self {
         let ranked_sources = rank_room_active_speakers(state, active_speaker_sources);
         let media_limits = state.media_limits;
+        let tuning = state.video_adaptation_tuning;
         let active_speakers = active_speaker_media_ids(&ranked_sources);
         let admitted_audio_speakers =
             admitted_audio_media_ids(&ranked_sources, media_limits.max_active_audio_speakers());
@@ -52,10 +57,15 @@ impl<'a> SourcePolicySnapshot<'a> {
         let routes = state
             .committed_consumer_routes()
             .filter(|route| route.source.active && route.selection.active())
-            .collect();
+            .collect::<Vec<_>>();
+        let audio_reserve_by_connection = audio_reserve_by_connection(
+            &routes,
+            &admitted_audio_speakers,
+            tuning.audio_reserve_per_speaker,
+        );
         Self {
             routes,
-            receiver_bwe_targets: receiver_bwe_targets(state),
+            receiver_bwe_targets: receiver_bwe_targets(state, &audio_reserve_by_connection),
             receiver_bandwidth_by_connection: receiver_bandwidth_by_connection(
                 receiver_bandwidth_snapshot,
             ),
@@ -66,18 +76,60 @@ impl<'a> SourcePolicySnapshot<'a> {
             featured_user_updates,
             user_count: state.user_count(),
             media_limits,
+            video_adaptation_tuning: tuning,
+            audio_reserve_by_connection,
         }
     }
 }
 
-fn receiver_bwe_targets(state: &RoomState) -> BTreeMap<UserId, ReceiverBweTargetUpdate> {
+/// Bandwidth reserved for admitted audio before video budgeting, per receiver
+/// connection.
+///
+/// Each receiver reserves `per_speaker` for every admitted audio route it
+/// actually consumes, so a receiver that disabled audio (or a publisher with no
+/// consumer routes) reserves nothing and keeps its full video budget. The
+/// reserve is fixed per route, so it is deterministic and independent of
+/// policy-turn cadence. A zero per-speaker rate disables the reservation and
+/// returns an empty map.
+fn audio_reserve_by_connection(
+    routes: &[ConsumerRouteView<'_>],
+    admitted_audio_media_ids: &BTreeSet<TransportMediaId>,
+    per_speaker: Bitrate,
+) -> BTreeMap<ConnectionId, Bitrate> {
+    if per_speaker.as_bps() == 0 {
+        return BTreeMap::new();
+    }
+    let mut reserve_by_connection = BTreeMap::new();
+    for route in routes {
+        if route.source.descriptor.media_kind() != MediaKind::Audio
+            || !admitted_audio_media_ids.contains(&route.route.source_transport_media_id())
+        {
+            continue;
+        }
+        let connection_id = route.route.consumer_session_key().connection_id();
+        let reserve = reserve_by_connection
+            .entry(connection_id)
+            .or_insert_with(Bitrate::zero);
+        *reserve = reserve.saturating_add(per_speaker);
+    }
+    reserve_by_connection
+}
+
+fn receiver_bwe_targets(
+    state: &RoomState,
+    audio_reserve_by_connection: &BTreeMap<ConnectionId, Bitrate>,
+) -> BTreeMap<UserId, ReceiverBweTargetUpdate> {
     state
         .transport_user_entries()
         .map(|(user_id, connection_id)| {
             let session = state.transport_user_key(user_id, connection_id);
+            let audio_reserve = audio_reserve_by_connection
+                .get(&connection_id)
+                .copied()
+                .unwrap_or_else(Bitrate::zero);
             (
                 user_id.clone(),
-                ReceiverBweTargetUpdate::new(session, Bitrate::zero()),
+                ReceiverBweTargetUpdate::new(session, audio_reserve),
             )
         })
         .collect()

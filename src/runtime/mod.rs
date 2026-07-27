@@ -342,6 +342,7 @@ fn build_room_runtime_policy(
     )
     .with_room_worker_policy(config.transport.room_worker_policy)
     .with_media_limits(config.transport.room_media_limits)
+    .with_video_adaptation_tuning(config.transport.video_adaptation_tuning)
 }
 
 fn build_room_manager(

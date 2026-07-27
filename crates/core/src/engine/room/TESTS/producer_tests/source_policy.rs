@@ -534,6 +534,171 @@ async fn audio_speaker_limit_ignores_foreign_and_inactive_sources() {
 }
 
 #[tokio::test]
+async fn per_receiver_audio_reserve_excludes_own_and_counts_only_consumed_audio() {
+    // Reserve 40 kbps of video budget per admitted audio speaker the receiver
+    // actually consumes; no headroom so the arithmetic is exact.
+    let tuning = VideoAdaptationTuning::try_new(3, 2, 2, 3, 0, Bitrate::from_kbps(40))
+        .expect("valid tuning should build");
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2, 3], tuning).await;
+    scenario
+        .publish_audio_and_camera_for_users(&[1, 2, 3])
+        .await;
+
+    let first_audio = scenario.audio_media_id(1).await;
+    let second_audio = scenario.audio_media_id(2).await;
+    let third_audio = scenario.audio_media_id(3).await;
+    let observed_at = Instant::now();
+    let speakers = [
+        ActiveSpeakerSource::new(first_audio, observed_at + Duration::from_millis(2)),
+        ActiveSpeakerSource::new(second_audio, observed_at + Duration::from_millis(1)),
+        ActiveSpeakerSource::new(third_audio, observed_at),
+    ];
+
+    // Receiver user 2 has 900 kbps and consumes admitted audio from users 1 and 3
+    // (not its own), so the video budget loses 2 * 40 = 80 kbps -> 820 kbps.
+    let receiver_user_id = UserId::Integer(2);
+    let receiver_connection_id = user_connection_id(&scenario.room, &receiver_user_id).await;
+    let receiver_session_key = scenario
+        .room
+        .transport_user_key(&receiver_user_id, receiver_connection_id)
+        .await;
+    let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
+        per_session: vec![(receiver_session_key, Bitrate::from_kbps(900))],
+    };
+
+    let tx = {
+        let state = scenario.room.state.read().await;
+        SourcePolicyTransaction::plan_from_state(&state, &speakers, &receiver_bandwidth_snapshot)
+            .expect("policy pass should produce budget updates")
+    };
+    tx.execute(&scenario.room, &scenario.adapter).await;
+
+    assert_subscription_selected_video_budget(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(820),
+    )
+    .await;
+
+    // str0m's desired bitrate is the total send allocation, so it must cover the
+    // 80 kbps of admitted audio on top of the selected video; otherwise BWE
+    // under-probes by exactly the reserved audio.
+    let selected_video =
+        receiver_selected_video_bitrate(&scenario.room, &scenario.adapter, &receiver_user_id).await;
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        selected_video.saturating_add(Bitrate::from_kbps(80)),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn audio_only_receiver_reports_its_audio_reserve_as_bwe_demand() {
+    let tuning = VideoAdaptationTuning::try_new(3, 2, 2, 3, 0, Bitrate::from_kbps(40))
+        .expect("valid tuning should build");
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2, 3], tuning).await;
+    // Only audio is published, so receiver user 2 has audio routes but no video
+    // routes — the case where the last video route was dropped while audio keeps
+    // flowing.
+    for user_id in [UserId::Integer(1), UserId::Integer(3)] {
+        publish_track(
+            &scenario.room,
+            &user_id,
+            TestSourceKind::AudioDetector,
+            MediaKind::Audio,
+            test_audio_rtp_parameters(),
+            &scenario.adapter,
+        )
+        .await;
+    }
+    let first_audio = scenario.audio_media_id(1).await;
+    let third_audio = scenario.audio_media_id(3).await;
+    let observed_at = Instant::now();
+    let speakers = [
+        ActiveSpeakerSource::new(first_audio, observed_at + Duration::from_millis(1)),
+        ActiveSpeakerSource::new(third_audio, observed_at),
+    ];
+
+    let tx = {
+        let state = scenario.room.state.read().await;
+        SourcePolicyTransaction::plan_from_state(
+            &state,
+            &speakers,
+            &ReceiverBandwidthSnapshot::default(),
+        )
+        .expect("audio-only receiver should still report BWE demand")
+    };
+    tx.execute(&scenario.room, &scenario.adapter).await;
+
+    // User 2 consumes admitted audio from users 1 and 3 and has no video, so its
+    // desired bitrate is the audio reserve alone (2 * 40 kbps) rather than zero.
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        Bitrate::from_kbps(80),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn overload_steps_thumbnail_down_one_layer_and_keeps_it_deliverable() {
+    // A high multiparty threshold forces each route to start at its top layer, so
+    // the aggregate overload loop — not per-route selection — does the stepping.
+    let tuning = VideoAdaptationTuning::try_new(99, 2, 2, 3, 0, Bitrate::zero())
+        .expect("valid tuning should build");
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2, 3], tuning).await;
+    // Three layers (lo=150, mid=450, hi=900 kbps) so one down-step lands on the
+    // middle layer rather than the cheapest.
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+
+    // Receiver user 2 has 500 kbps: the top layer (900) is over budget but one
+    // step down to the middle layer (450) fits, so the loop stops there.
+    let receiver_user_id = UserId::Integer(2);
+    let receiver_connection_id = user_connection_id(&scenario.room, &receiver_user_id).await;
+    let receiver_session_key = scenario
+        .room
+        .transport_user_key(&receiver_user_id, receiver_connection_id)
+        .await;
+    let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
+        per_session: vec![(receiver_session_key, Bitrate::from_kbps(500))],
+    };
+
+    let tx = {
+        let state = scenario.room.state.read().await;
+        SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth_snapshot)
+            .expect("overload should step the thumbnail down")
+    };
+    tx.execute(&scenario.room, &scenario.adapter).await;
+
+    // The route survives at the middle layer and stays deliverable (no pause),
+    // rather than being dropped to the cheapest layer or paused.
+    assert_subscription_selected_rid(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        "mid",
+    )
+    .await;
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn video_download_limit_pauses_lowest_ranked_receiver_routes() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],

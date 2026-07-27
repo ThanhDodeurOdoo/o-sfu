@@ -75,6 +75,7 @@ impl Room {
                 &runtime_context,
                 runtime_policy.admission_policy,
                 runtime_policy.media_limits,
+                runtime_policy.video_adaptation_tuning,
                 runtime_policy.router_rtp_capabilities,
             )),
         }

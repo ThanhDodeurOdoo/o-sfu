@@ -78,7 +78,7 @@ mod sfu;
 pub(crate) use options::{
     AudioCodecPreference, CodecPreferences, LocalSpilloverPolicy, MediaCodecFlags, RoomMediaLimits,
     RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags,
-    SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
+    SessionBitrateLimits, VideoAdaptationTuning, VideoBitrateLimits, VideoCodecPreference,
 };
 
 /// Media bitrate stored as bits per second (not bytes per second).

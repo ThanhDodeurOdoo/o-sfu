@@ -7,7 +7,7 @@ pub use codecs::{AudioCodecPreference, CodecPreferences, MediaCodecFlags, VideoC
 pub use features::RuntimeFeatureFlags;
 pub use media::{
     RoomMediaLimits, RoomMediaLimitsError, RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits,
-    VideoBitrateLimits,
+    VideoAdaptationTuning, VideoAdaptationTuningError, VideoBitrateLimits,
 };
 pub use routing::{
     LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts, RoomSpilloverMode,

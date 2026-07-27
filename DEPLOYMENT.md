@@ -531,6 +531,17 @@ media policy and codecs:
 | `CODEC_AUDIO_PREFERENCE` | `opus,PCMU,PCMA` | optional comma-separated audio codec preference order |
 | `CODEC_VIDEO_PREFERENCE` | `VP8,H264,H265,VP9,AV1` | optional comma-separated video codec preference order. The first enabled entry selects layered upload eligibility |
 
+receiver video adaptation tuning:
+
+| variable | default | description |
+| --- | --- | --- |
+| `ROOM_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD` | `3` | receiver count at or above which scalable video is layer-selected per receiver instead of forwarded at full quality |
+| `ROOM_THUMBNAIL_BUDGET_DIVISOR` | `2` | divisor applied to the per-source budget when a source is shown as a thumbnail |
+| `ROOM_DOWNSWITCH_PRESSURE_OBSERVATIONS` | `2` | consecutive over-budget observations required before dropping a receiver to a lower layer |
+| `ROOM_UPSWITCH_STABLE_OBSERVATIONS` | `3` | consecutive within-budget observations required before raising a receiver to a higher layer |
+| `ROOM_RECEIVER_BUDGET_HEADROOM_PERCENT` | `0` | percent of the receiver bandwidth estimate held back from the video budget for RTP, RTX and FEC overhead, from `0` to `100` |
+| `ROOM_AUDIO_RESERVE_PER_SPEAKER_BPS` | `0` | fixed bitrate in bps held back from each receiver's video budget for every admitted audio speaker that receiver consumes; a receiver with audio disabled reserves nothing; `0` disables audio reservation |
+
 telemetry:
 
 | variable | default | description |

@@ -20,7 +20,7 @@ use o_sfu_router::{RouterId, rtp::MediaCapabilities};
 
 use super::{Room, RoomRuntimeContext};
 use crate::{
-    RoomMediaLimits, RoomWorkerPolicy, RuntimeFeatureFlags,
+    RoomMediaLimits, RoomWorkerPolicy, RuntimeFeatureFlags, VideoAdaptationTuning,
     engine::{RoomInstanceId, metrics::RuntimeMetrics, sync::lock_unpoisoned},
 };
 
@@ -63,6 +63,8 @@ pub struct RoomRuntimePolicy {
     pub room_worker_policy: RoomWorkerPolicy,
     /// room media activation caps applied by source policy
     pub media_limits: RoomMediaLimits,
+    /// receiver video adaptation knobs applied by source policy
+    pub video_adaptation_tuning: VideoAdaptationTuning,
 }
 
 impl RoomRuntimePolicy {
@@ -78,6 +80,7 @@ impl RoomRuntimePolicy {
             router_rtp_capabilities,
             room_worker_policy: RoomWorkerPolicy::strict_single_router(),
             media_limits: RoomMediaLimits::default(),
+            video_adaptation_tuning: VideoAdaptationTuning::default(),
         }
     }
 
@@ -92,6 +95,15 @@ impl RoomRuntimePolicy {
     #[must_use]
     pub fn with_media_limits(mut self, media_limits: RoomMediaLimits) -> Self {
         self.media_limits = media_limits;
+        self
+    }
+
+    #[must_use]
+    pub fn with_video_adaptation_tuning(
+        mut self,
+        video_adaptation_tuning: VideoAdaptationTuning,
+    ) -> Self {
+        self.video_adaptation_tuning = video_adaptation_tuning;
         self
     }
 }

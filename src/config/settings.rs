@@ -4,7 +4,7 @@ use o_sfu_core::prelude::Bitrate;
 
 use super::{
     CodecPreferences, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange,
-    RtcUdpIoBackend, VideoBitrateLimits, diagnostics::DiagnosticsConfig,
+    RtcUdpIoBackend, VideoAdaptationTuning, VideoBitrateLimits, diagnostics::DiagnosticsConfig,
     feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
 };
 
@@ -60,6 +60,7 @@ pub struct TransportConfig {
     pub rtc_media_worker_count: usize,
     pub room_worker_policy: RoomWorkerPolicy,
     pub room_media_limits: RoomMediaLimits,
+    pub video_adaptation_tuning: VideoAdaptationTuning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

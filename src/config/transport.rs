@@ -3,7 +3,8 @@ use std::{net::IpAddr, num::NonZeroUsize, thread};
 use anyhow::{Result, anyhow, ensure};
 use o_sfu_core::prelude::{
     Bitrate, LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts,
-    RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, VideoBitrateLimits,
+    RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, VideoAdaptationTuning,
+    VideoAdaptationTuningError, VideoBitrateLimits,
 };
 
 use super::{
@@ -89,6 +90,7 @@ impl TransportConfig {
         let room_spillover_mode = env.var("ROOM_SPILLOVER_MODE").optional()?;
         let local_spillover_policy = local_spillover_policy_from_env(env)?;
         let room_media_limits = room_media_limits_from_env(env)?;
+        let video_adaptation_tuning = video_adaptation_tuning_from_env(env)?;
         let rtc_port_range = RtcPortRange::new(rtc_min_port, rtc_max_port);
         ensure!(
             rtc_port_range.min() <= rtc_port_range.max(),
@@ -125,6 +127,7 @@ impl TransportConfig {
             rtc_media_worker_count,
             room_worker_policy,
             room_media_limits,
+            video_adaptation_tuning,
         })
     }
 }
@@ -182,6 +185,40 @@ fn room_media_limits_from_env(env: &Env<'_>) -> Result<RoomMediaLimits> {
     )?)
 }
 
+fn video_adaptation_tuning_from_env(env: &Env<'_>) -> Result<VideoAdaptationTuning> {
+    let multiparty_scalable_video_threshold = env
+        .var("ROOM_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD")
+        .check(positive)
+        .default(VideoAdaptationTuning::DEFAULT_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD)?;
+    let thumbnail_budget_divisor = env
+        .var("ROOM_THUMBNAIL_BUDGET_DIVISOR")
+        .check(positive)
+        .default(VideoAdaptationTuning::DEFAULT_THUMBNAIL_BUDGET_DIVISOR)?;
+    let downswitch_pressure_observations = env
+        .var("ROOM_DOWNSWITCH_PRESSURE_OBSERVATIONS")
+        .check(positive)
+        .default(VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS)?;
+    let upswitch_stable_observations = env
+        .var("ROOM_UPSWITCH_STABLE_OBSERVATIONS")
+        .check(positive)
+        .default(VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS)?;
+    let receiver_budget_headroom_percent = env
+        .var("ROOM_RECEIVER_BUDGET_HEADROOM_PERCENT")
+        .default(VideoAdaptationTuning::DEFAULT_RECEIVER_BUDGET_HEADROOM_PERCENT)?;
+    let audio_reserve_per_speaker_bps = env
+        .var("ROOM_AUDIO_RESERVE_PER_SPEAKER_BPS")
+        .default(VideoAdaptationTuning::DEFAULT_AUDIO_RESERVE_PER_SPEAKER.as_bps())?;
+    VideoAdaptationTuning::try_new(
+        multiparty_scalable_video_threshold,
+        thumbnail_budget_divisor,
+        downswitch_pressure_observations,
+        upswitch_stable_observations,
+        receiver_budget_headroom_percent,
+        Bitrate::from_bps(audio_reserve_per_speaker_bps),
+    )
+    .map_err(video_adaptation_tuning_error)
+}
+
 pub fn default_rtc_media_worker_count() -> usize {
     thread::available_parallelism().map_or(1, NonZeroUsize::get)
 }
@@ -208,6 +245,26 @@ fn select_room_worker_policy(
         }
         (_, RoomSpilloverSetting::Bounded) => {
             RoomWorkerPolicy::bounded_local_spillover(room_max_local_routers)
+        }
+    }
+}
+
+fn video_adaptation_tuning_error(error: VideoAdaptationTuningError) -> anyhow::Error {
+    match error {
+        VideoAdaptationTuningError::MultipartyScalableVideoThresholdZero => {
+            anyhow!("ROOM_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD must be greater than zero")
+        }
+        VideoAdaptationTuningError::ThumbnailBudgetDivisorZero => {
+            anyhow!("ROOM_THUMBNAIL_BUDGET_DIVISOR must be greater than zero")
+        }
+        VideoAdaptationTuningError::DownswitchPressureObservationsZero => {
+            anyhow!("ROOM_DOWNSWITCH_PRESSURE_OBSERVATIONS must be greater than zero")
+        }
+        VideoAdaptationTuningError::UpswitchStableObservationsZero => {
+            anyhow!("ROOM_UPSWITCH_STABLE_OBSERVATIONS must be greater than zero")
+        }
+        VideoAdaptationTuningError::ReceiverBudgetHeadroomPercentTooHigh => {
+            anyhow!("ROOM_RECEIVER_BUDGET_HEADROOM_PERCENT must not exceed 100")
         }
     }
 }

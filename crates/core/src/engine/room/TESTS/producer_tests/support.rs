@@ -161,6 +161,54 @@ pub(super) async fn assert_subscription_selected_rid(
     );
 }
 
+pub(super) async fn receiver_selected_video_bitrate(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    consumer_user_id: &UserId,
+) -> Bitrate {
+    let (diagnostics, _) = diagnostics_room_views(room, adapter).await;
+    let Some(user) = diagnostics
+        .iter()
+        .find(|view| &view.user_id == consumer_user_id)
+    else {
+        panic!("diagnostics should include the consumer user");
+    };
+    let selected_video_bitrate_bps = user
+        .subscriptions
+        .iter()
+        .map(|subscription| subscription.selection.selected_video_bitrate_bps)
+        .max()
+        .unwrap_or_default();
+    Bitrate::from_bps(selected_video_bitrate_bps)
+}
+
+pub(super) async fn assert_subscription_selected_video_budget(
+    room: &Arc<Room>,
+    adapter: &MediaTransport,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+    stream_type: TestSourceKind,
+    expected_budget: Bitrate,
+) {
+    let (diagnostics, _) = diagnostics_room_views(room, adapter).await;
+    let Some(user) = diagnostics
+        .iter()
+        .find(|view| &view.user_id == consumer_user_id)
+    else {
+        panic!("diagnostics should include the consumer user");
+    };
+    assert!(
+        user.subscriptions.iter().any(|subscription| {
+            subscription.producer_user_id == *producer_user_id
+                && subscription.stream_id == stream_id_for_source(stream_type).to_string()
+                && subscription.selection.selected_video_budget_bps
+                    == Some(expected_budget.as_bps())
+        }),
+        "diagnostics should expose the reserved video budget: {:?}",
+        user.subscriptions
+    );
+}
+
 pub(super) async fn assert_subscription_policy_pause_reason(
     room: &Arc<Room>,
     adapter: &MediaTransport,

@@ -11,7 +11,7 @@ use super::{
     projection,
 };
 use crate::{
-    Bitrate,
+    Bitrate, VideoAdaptationTuning,
     engine::{
         UserId,
         media_transport::ReceiverBweTargetUpdate,
@@ -24,15 +24,6 @@ use crate::{
         },
     },
 };
-
-/// room size where scalable video starts using receiver-bandwidth share
-const MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD: usize = 3;
-/// multiplier that halves each thumbnail share before layer selection
-const THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
-/// consecutive pressure observations before a soft downswitch or budget pause
-const DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
-/// consecutive stable observations before a soft resume or upswitch
-const UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
 
 /// ordering key shared by policy refresh and pre-setup receiver admission
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -240,15 +231,22 @@ pub(in crate::engine::room::source_policy) fn append_receiver_video_policy(
 ) {
     let routes = receiver_video_routes(state, input);
     let max_video_downloads_per_receiver = input.media_limits.max_video_downloads_per_receiver();
+    let tuning = input.video_adaptation_tuning;
     for receiver_routes in routes.chunk_by(|left, right| left.key.receiver == right.key.receiver) {
         let Some(first_route) = receiver_routes.first() else {
             continue;
         };
         let consumer_user_id = &first_route.key.receiver;
-        let receiver_bwe_target =
-            append_receiver_policy_updates(tx, receiver_routes, max_video_downloads_per_receiver);
+        let selected_video = append_receiver_policy_updates(
+            tx,
+            receiver_routes,
+            max_video_downloads_per_receiver,
+            tuning,
+        );
+        // The target is seeded with this receiver's audio reserve, so add the
+        // selected video to report the full send allocation to str0m's BWE.
         if let Some(update) = receiver_bwe_targets.get_mut(consumer_user_id) {
-            update.set_target(receiver_bwe_target);
+            update.set_target(update.target().saturating_add(selected_video));
         }
     }
     tx.set_receiver_bwe_targets(receiver_bwe_targets.into_values().collect());
@@ -258,23 +256,30 @@ fn append_receiver_policy_updates<'a>(
     tx: &mut SourcePolicyTransaction,
     receiver_routes: &'a [ReceiverVideoRouteInput<'a>],
     max_video_downloads_per_receiver: usize,
+    tuning: VideoAdaptationTuning,
 ) -> Bitrate {
     let receiver_bandwidth = receiver_routes
         .iter()
         .find_map(|route| route.receiver_bandwidth);
+    let audio_reserve = receiver_routes
+        .first()
+        .map_or_else(Bitrate::zero, |route| route.audio_budget_reserve);
+    let video_budget = receiver_bandwidth
+        .map(|bandwidth| effective_video_budget(bandwidth, tuning, audio_reserve));
     let mut planned_routes = receiver_routes
         .iter()
         .filter_map(|route| {
-            route_plan(route).map(|selection| PlannedReceiverRoute::new(route, selection))
+            route_plan(route, tuning).map(|selection| PlannedReceiverRoute::new(route, selection))
         })
         .collect::<Vec<_>>();
     apply_video_download_limit(&mut planned_routes, max_video_downloads_per_receiver);
-    if let Some(receiver_bandwidth) = receiver_bandwidth {
-        apply_overload_policy(&mut planned_routes, receiver_bandwidth);
+    if let Some(video_budget) = video_budget {
+        apply_overload_policy(&mut planned_routes, video_budget);
     }
-    let budget_diagnostics = receiver_video_budget_diagnostics(&planned_routes, receiver_bandwidth);
+    let budget_diagnostics =
+        receiver_video_budget_diagnostics(&planned_routes, receiver_bandwidth, video_budget);
     for planned_route in planned_routes {
-        let selection = resolve_hysteresis(&planned_route);
+        let selection = resolve_hysteresis(&planned_route, tuning);
         let Some(update) = projection::consumer_packet_selection_update(
             &planned_route,
             selection,
@@ -291,7 +296,10 @@ fn append_receiver_policy_updates<'a>(
     budget_diagnostics.selected_video_bitrate()
 }
 
-fn route_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
+fn route_plan(
+    route: &ReceiverVideoRouteInput<'_>,
+    tuning: VideoAdaptationTuning,
+) -> Option<ReceiverRouteSelection> {
     let policy = route.source.policy().adaptation();
     let source_cap = route.source.policy().video_bitrate_cap();
     match policy {
@@ -301,7 +309,7 @@ fn route_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelect
             None
         }
         SourceAdaptationPolicy::ReadableDetail => highest_allowed_plan(route),
-        SourceAdaptationPolicy::ScalableVideo => scalable_plan(route),
+        SourceAdaptationPolicy::ScalableVideo => scalable_plan(route, tuning),
         SourceAdaptationPolicy::None if source_cap.is_some() => highest_allowed_plan(route),
         SourceAdaptationPolicy::None => None,
     }
@@ -359,6 +367,47 @@ fn cheapest_useful_selector(
         })
 }
 
+/// receiver bandwidth left for video after reserving the configured headroom
+///
+/// the reserve stands in for audio, retransmission, FEC and protocol overhead
+/// that share the same downlink but are not counted in the video budget
+fn effective_video_budget(
+    receiver_bandwidth: Bitrate,
+    tuning: VideoAdaptationTuning,
+    audio_reserve: Bitrate,
+) -> Bitrate {
+    let usable_percent = 100u64.saturating_sub(u64::from(tuning.receiver_budget_headroom_percent));
+    let after_overhead =
+        Bitrate::from_bps(receiver_bandwidth.as_bps().saturating_mul(usable_percent) / 100);
+    after_overhead.saturating_sub(audio_reserve)
+}
+
+/// next allowed, non-featured layer one step below `current`, with its bitrate
+///
+/// returns `None` when the route is already at its lowest usable layer, letting
+/// the overload pass stop degrading a route before it bottoms out
+fn step_down_selector(
+    route: &ReceiverVideoRouteInput<'_>,
+    current: SourceSelector,
+) -> Option<(SourceSelector, Bitrate)> {
+    let source = route.source;
+    let source_cap = source.policy().video_bitrate_cap();
+    let current_index = selector_index(source, current);
+    (0..current_index).rev().find_map(|index| {
+        let encoding = source.selectable_encoding_by_rank(index)?;
+        if matches!(
+            encoding.policy_role(),
+            Some(UploadLayerPolicyRole::Featured)
+        ) {
+            return None;
+        }
+        let bitrate = encoding.max_bitrate()?;
+        source_cap
+            .is_none_or(|cap| bitrate <= cap)
+            .then_some((SourceSelector::Encoding(encoding.encoding_id()), bitrate))
+    })
+}
+
 fn highest_allowed_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
     let target_index =
         allowed_encoding_indices(route.source, route.source.policy().video_bitrate_cap())
@@ -375,14 +424,17 @@ fn highest_allowed_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverR
     ))
 }
 
-fn scalable_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
+fn scalable_plan(
+    route: &ReceiverVideoRouteInput<'_>,
+    tuning: VideoAdaptationTuning,
+) -> Option<ReceiverRouteSelection> {
     let source_cap = route.source.policy().video_bitrate_cap();
     if route.source.selectable_encoding_count() < 2 && source_cap.is_none() {
         return None;
     }
     let current = route.current_selection;
     let current_index = selector_index(route.source, current.selector());
-    let target_index = desired_encoding_index(route, source_cap)?;
+    let target_index = desired_encoding_index(route, source_cap, tuning)?;
     let target_selector = SourceSelector::Encoding(
         route
             .source
@@ -397,14 +449,16 @@ fn scalable_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSel
         if source_cap.is_some_and(|cap| selector_bitrate(route.source, current.selector()) > cap) {
             return Some(adaptation_send(target_selector, request_keyframe));
         }
-        let counts = AdaptationCounts::next_pressure(current, DOWNSWITCH_PRESSURE_OBSERVATIONS);
-        if counts.pressure >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
+        let pressure_limit = tuning.downswitch_pressure_observations;
+        let counts = AdaptationCounts::next_pressure(current, pressure_limit);
+        if counts.pressure >= pressure_limit {
             return Some(adaptation_send(target_selector, request_keyframe));
         }
         return Some(adaptation_hold(current, counts));
     }
-    let counts = AdaptationCounts::next_upgrade(current, UPSWITCH_STABLE_OBSERVATIONS);
-    if counts.upgrade >= UPSWITCH_STABLE_OBSERVATIONS {
+    let stable_limit = tuning.upswitch_stable_observations;
+    let counts = AdaptationCounts::next_upgrade(current, stable_limit);
+    if counts.upgrade >= stable_limit {
         return Some(adaptation_send(target_selector, true));
     }
     Some(adaptation_hold(current, counts))
@@ -427,8 +481,9 @@ const fn adaptation_hold(
 fn desired_encoding_index(
     route: &ReceiverVideoRouteInput<'_>,
     source_cap: Option<Bitrate>,
+    tuning: VideoAdaptationTuning,
 ) -> Option<usize> {
-    if route.user_count < MULTIPARTY_SCALABLE_VIDEO_SELECTION_THRESHOLD {
+    if route.user_count < tuning.multiparty_scalable_video_threshold {
         return allowed_encoding_indices(route.source, source_cap).next_back();
     }
     let uses_featured_quality = route.layout_intent.uses_featured_quality();
@@ -439,12 +494,14 @@ fn desired_encoding_index(
             allowed_encoding_indices(route.source, source_cap).next()
         };
     };
+    let receiver_bandwidth =
+        effective_video_budget(receiver_bandwidth, tuning, route.audio_budget_reserve);
     let budget = if uses_featured_quality || route.visible_scalable_route_count <= 1 {
         receiver_bandwidth
     } else {
         let divisor = u64::try_from(route.visible_scalable_route_count)
             .unwrap_or(u64::MAX)
-            .saturating_mul(THUMBNAIL_BUDGET_DIVISOR);
+            .saturating_mul(tuning.thumbnail_budget_divisor);
         receiver_bandwidth.divided_by(divisor)
     };
     highest_affordable_encoding_index(route.source, budget, uses_featured_quality, source_cap)
@@ -538,27 +595,40 @@ fn video_download_rank(route: &PlannedReceiverRoute<'_>) -> VideoAdmissionRank {
     )
 }
 
-fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], receiver_bandwidth: Bitrate) {
+fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], video_budget: Bitrate) {
     let mut total_bitrate = selected_active_video_bitrate(routes);
-    if total_bitrate <= receiver_bandwidth {
+    if total_bitrate <= video_budget {
         return;
     }
+    // Drop downgradable routes that have no usable layer to fall back to.
     for route in routes.iter_mut().filter(|route| route_can_downgrade(route)) {
-        let Some((selector, bitrate)) = cheapest_useful_selector(route.input) else {
+        if cheapest_useful_selector(route.input).is_none() {
             let selected_bitrate = route.selected_bitrate;
             route.pause(PolicyPauseReason::MissingUsableLayer, RouteOutcome::Neutral);
             total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
-            continue;
-        };
-        if bitrate < route.selected_bitrate {
-            let selected_bitrate = route.selected_bitrate;
-            total_bitrate = total_bitrate
-                .saturating_sub(selected_bitrate)
-                .saturating_add(bitrate);
-            route.send(selector, bitrate, RouteOutcome::Degraded);
         }
     }
-    if total_bitrate <= receiver_bandwidth {
+    // Step the highest-consuming downgradable route down one layer at a time,
+    // stopping as soon as the budget is met so mid-tier layers survive.
+    while total_bitrate > video_budget {
+        let Some((route, selector, bitrate)) = routes
+            .iter_mut()
+            .filter(|route| route_can_downgrade(route))
+            .filter_map(|route| {
+                step_down_selector(route.input, route.selection.selector)
+                    .map(|(selector, bitrate)| (route, selector, bitrate))
+            })
+            .max_by_key(|(route, _selector, _bitrate)| route.selected_bitrate)
+        else {
+            break;
+        };
+        let selected_bitrate = route.selected_bitrate;
+        total_bitrate = total_bitrate
+            .saturating_sub(selected_bitrate)
+            .saturating_add(bitrate);
+        route.send(selector, bitrate, RouteOutcome::Degraded);
+    }
+    if total_bitrate <= video_budget {
         return;
     }
     let mut pause_order = Vec::with_capacity(routes.len());
@@ -573,7 +643,7 @@ fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], receiver_bandw
     }
     pause_order.sort_by_key(|(rank, _)| *rank);
     for (_rank, route) in pause_order {
-        if total_bitrate <= receiver_bandwidth {
+        if total_bitrate <= video_budget {
             break;
         }
         let selected_bitrate = route.selected_bitrate;
@@ -586,14 +656,15 @@ fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], receiver_bandw
 fn receiver_video_budget_diagnostics(
     routes: &[PlannedReceiverRoute<'_>],
     receiver_bandwidth: Option<Bitrate>,
+    video_budget: Option<Bitrate>,
 ) -> ReceiverVideoBudgetDiagnostics {
     let selected_video_bitrate = selected_active_video_bitrate(routes);
-    let over_budget_exception_reason = receiver_bandwidth
+    let over_budget_exception_reason = video_budget
         .filter(|budget| selected_video_bitrate > *budget)
         .map(|_budget| OverBudgetExceptionReason::ProtectedRoute);
     ReceiverVideoBudgetDiagnostics::new(
         receiver_bandwidth,
-        receiver_bandwidth,
+        video_budget,
         active_route_count(routes),
         selected_video_bitrate,
         over_budget_exception_reason,
@@ -641,7 +712,10 @@ fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason
     }
 }
 
-fn resolve_hysteresis(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelection {
+fn resolve_hysteresis(
+    route: &PlannedReceiverRoute<'_>,
+    tuning: VideoAdaptationTuning,
+) -> ReceiverRouteSelection {
     let current = route.input.current_selection;
     let current_pause_reason = current.policy_pause_reason();
     let selection = route.selection;
@@ -650,8 +724,9 @@ fn resolve_hysteresis(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelectio
             ReceiverRouteSelection::send(selection.selector, AdaptationCounts::reset(), true)
         }
         (None, Some(reason)) => {
-            let counts = AdaptationCounts::next_upgrade(current, UPSWITCH_STABLE_OBSERVATIONS);
-            if counts.upgrade >= UPSWITCH_STABLE_OBSERVATIONS {
+            let stable_limit = tuning.upswitch_stable_observations;
+            let counts = AdaptationCounts::next_upgrade(current, stable_limit);
+            if counts.upgrade >= stable_limit {
                 ReceiverRouteSelection::send(selection.selector, AdaptationCounts::reset(), true)
             } else {
                 ReceiverRouteSelection::hold(current, Some(reason), counts)
@@ -664,8 +739,9 @@ fn resolve_hysteresis(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelectio
             ) {
                 return ReceiverRouteSelection::pause(current, reason, AdaptationCounts::reset());
             }
-            let counts = AdaptationCounts::next_pressure(current, DOWNSWITCH_PRESSURE_OBSERVATIONS);
-            if counts.pressure >= DOWNSWITCH_PRESSURE_OBSERVATIONS {
+            let pressure_limit = tuning.downswitch_pressure_observations;
+            let counts = AdaptationCounts::next_pressure(current, pressure_limit);
+            if counts.pressure >= pressure_limit {
                 ReceiverRouteSelection::pause(current, reason, AdaptationCounts::reset())
             } else {
                 ReceiverRouteSelection::hold(current, None, counts)
@@ -674,3 +750,7 @@ fn resolve_hysteresis(route: &PlannedReceiverRoute<'_>) -> ReceiverRouteSelectio
         _ => selection,
     }
 }
+
+#[cfg(test)]
+#[path = "TESTS/solver.rs"]
+mod tests;

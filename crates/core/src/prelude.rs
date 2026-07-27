@@ -13,7 +13,8 @@ pub use crate::{
         AudioCodecPreference, CodecPreferences, LocalSpilloverPolicy, LocalSpilloverPolicyError,
         LocalSpilloverPolicyParts, MediaCodecFlags, RoomMediaLimits, RoomMediaLimitsError,
         RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags,
-        SessionBitrateLimits, VideoBitrateLimits, VideoCodecPreference,
+        SessionBitrateLimits, VideoAdaptationTuning, VideoAdaptationTuningError,
+        VideoBitrateLimits, VideoCodecPreference,
     },
     sfu::{
         MediaSession, NegotiationOffer, SessionError, SfuCore, SfuCoreError, UploadEncoding,

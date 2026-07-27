@@ -10,7 +10,9 @@ use super::{
 };
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::sync::lock_unpoisoned;
-use crate::{RoomMediaLimits, RuntimeFeatureFlags, engine::metrics::RuntimeMetrics};
+use crate::{
+    RoomMediaLimits, RuntimeFeatureFlags, VideoAdaptationTuning, engine::metrics::RuntimeMetrics,
+};
 
 const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
 
@@ -37,6 +39,15 @@ impl RoomManager {
             1,
             test_runtime_policy(RoomAdmissionPolicy::new(DEFAULT_TEST_MAX_SESSIONS))
                 .with_media_limits(media_limits),
+        ))
+    }
+
+    #[must_use]
+    pub fn for_test_with_video_adaptation_tuning(tuning: VideoAdaptationTuning) -> Self {
+        Self::for_test_with_config(RoomManagerConfig::new(
+            1,
+            test_runtime_policy(RoomAdmissionPolicy::new(DEFAULT_TEST_MAX_SESSIONS))
+                .with_video_adaptation_tuning(tuning),
         ))
     }
 
