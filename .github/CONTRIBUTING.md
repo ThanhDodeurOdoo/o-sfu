@@ -30,6 +30,8 @@ If you want to make a PR that does substantial changes to the codebase, before w
 ### references
 - [Canonical's rust best practices](https://canonical.github.io/rust-best-practices/)
 - [The Rustonomicon (unsafe/advanced)](https://doc.rust-lang.org/nomicon/)
+- [Rust cheat sheet](https://cheats.rs/#data-structures)
+- [Clippy](https://rust-lang.github.io/rust-clippy/)
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
 - [Rust Cookbook](https://github.com/rust-lang-nursery/rust-cookbook/)
 - [Rust Atomics and Locks](https://mara.nl/atomics/)
