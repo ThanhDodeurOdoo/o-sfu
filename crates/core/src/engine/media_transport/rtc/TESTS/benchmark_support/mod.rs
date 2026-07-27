@@ -11,6 +11,7 @@ mod drain;
 mod fanout;
 mod ingress;
 mod local_rewrite;
+mod local_send;
 mod observation;
 mod relay;
 mod remote_gates;
@@ -29,6 +30,7 @@ pub use ingress::{
     IngressRoutingBenchFixture,
 };
 pub use local_rewrite::LocalRewriteBenchFixture;
+pub use local_send::LocalSendBenchFixture;
 pub use observation::IncomingObservationBenchFixture;
 pub use relay::{RELAY_MAILBOX_ATTEMPTS, RelayPressureBenchFixture};
 pub use remote_gates::{REMOTE_GATE_RETRY_TURNS, RemoteGateRetryBenchFixture};
