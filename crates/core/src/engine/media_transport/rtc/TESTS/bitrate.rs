@@ -1,4 +1,5 @@
 use std::{
+    slice,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering as AtomicOrdering},
@@ -65,7 +66,8 @@ fn egress_bitrate_snapshot_reports_recent_session_bits() {
     let now = Instant::now();
     let session_key = test_transport_session_key(0, 0, 0, UserId::Integer(7));
     let mut state = BitrateRegistry::default();
-    let counter = state.register_session_egress(&session_key, now);
+    let counter = Arc::new(MediaBitrateCounter::new(now));
+    state.register_session_egress(&session_key, Arc::clone(&counter));
 
     assert!(counter.record(now, 125));
 
@@ -123,12 +125,19 @@ fn removing_session_hides_registered_counters_from_snapshots() {
     let session_key = test_transport_session_key(1, 0, 2, UserId::Integer(3));
     let media_id = TransportMediaId::new(4);
     let counter = state.register_incoming_media(&session_key, media_id, now);
+    let egress = Arc::new(MediaBitrateCounter::new(now));
+    state.register_session_egress(&session_key, Arc::clone(&egress));
     counter.record(now, 16);
+    egress.record(now, 16);
 
     state.remove_session(&session_key);
 
-    let snapshot = state.transport_bitrate_snapshot_at(&[session_key], now);
+    let snapshot = state.transport_bitrate_snapshot_at(slice::from_ref(&session_key), now);
     assert_eq!(snapshot, TransportBitrateSnapshot::default());
+    assert_eq!(
+        state.egress_bitrate_snapshot_at(&[session_key], now),
+        Bitrate::zero()
+    );
 }
 
 #[test]

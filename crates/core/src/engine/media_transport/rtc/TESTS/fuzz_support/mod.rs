@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -8,7 +8,7 @@ use super::{
     bootstrap,
     packet_loop::{PacketRouteDatagram, route_pkt_to_session_at},
     routing_miss::DemuxRecoveryState,
-    state::{PacketLoopState, RtcSnapshotState},
+    state::PacketLoopState,
 };
 use crate::{
     Bitrate,
@@ -52,7 +52,6 @@ pub fn route_packet_loop_ingress_demux(
 
 struct IngressDemuxFuzzFixture {
     state: PacketLoopState,
-    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     demux: DemuxRecoveryState,
     rtc_metrics: Arc<RtcMetricsRecorder>,
     session_key: TransportSessionKey,
@@ -79,7 +78,6 @@ impl IngressDemuxFuzzFixture {
         let metrics = RuntimeMetrics::default();
         Self {
             state,
-            snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
             demux: DemuxRecoveryState::new(),
             rtc_metrics: metrics.register_rtc_worker(),
             session_key,
@@ -94,11 +92,6 @@ impl IngressDemuxFuzzFixture {
             .state
             .remote_addr_demux
             .remember_remote_addr(self.source_addr, &self.session_key);
-        if let Ok(mut snapshot) = self.snapshot_state.lock() {
-            let _ = snapshot
-                .remote_addr_demux
-                .remember_remote_addr(self.source_addr, &self.session_key);
-        }
     }
 
     fn remove_session(&mut self) {
@@ -116,7 +109,6 @@ impl IngressDemuxFuzzFixture {
         let packet = packet.get(..MAX_PACKET_LEN).unwrap_or(packet);
         route_pkt_to_session_at(
             &mut self.state,
-            &self.snapshot_state,
             &mut self.demux,
             &self.rtc_metrics,
             PacketRouteDatagram::new(self.source_addr, self.candidate_addr, packet, self.now),

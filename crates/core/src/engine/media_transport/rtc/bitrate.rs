@@ -31,7 +31,7 @@ pub(super) struct MediaBitrateCounter {
 }
 
 impl MediaBitrateCounter {
-    fn new(now: Instant) -> Self {
+    pub(super) fn new(now: Instant) -> Self {
         Self {
             origin: now,
             window_start_nanos: AtomicU64::new(0),
@@ -164,13 +164,10 @@ impl BitrateRegistry {
     pub(super) fn register_session_egress(
         &mut self,
         session_key: &TransportSessionKey,
-        now: Instant,
-    ) -> Arc<MediaBitrateCounter> {
-        Arc::clone(
-            self.egress_bitrates_by_session
-                .entry(session_key.clone())
-                .or_insert_with(|| Arc::new(MediaBitrateCounter::new(now))),
-        )
+        counter: Arc<MediaBitrateCounter>,
+    ) {
+        self.egress_bitrates_by_session
+            .insert(session_key.clone(), counter);
     }
 
     pub(super) fn remove_incoming_media(
@@ -240,18 +237,6 @@ impl PacketLoopState {
             .insert(transport_media_id, counter);
     }
 
-    pub(super) fn register_egress_bitrate_counter(
-        &mut self,
-        session_key: TransportSessionKey,
-        counter: Arc<MediaBitrateCounter>,
-    ) {
-        self.egress_bitrate_counters.insert(session_key, counter);
-    }
-
-    pub(super) fn remove_egress_bitrate_counter(&mut self, session_key: &TransportSessionKey) {
-        self.egress_bitrate_counters.remove(session_key);
-    }
-
     pub(super) fn remove_incoming_bitrate_counter(&mut self, transport_media_id: TransportMediaId) {
         self.incoming_bitrate_counters.remove(&transport_media_id);
     }
@@ -264,17 +249,6 @@ impl PacketLoopState {
     ) -> Option<bool> {
         self.incoming_bitrate_counters
             .get(&transport_media_id)
-            .map(|bitrate| bitrate.record(now, payload_bytes))
-    }
-
-    pub(super) fn record_egress_bitrate(
-        &self,
-        session_key: &TransportSessionKey,
-        now: Instant,
-        payload_bytes: usize,
-    ) -> Option<bool> {
-        self.egress_bitrate_counters
-            .get(session_key)
             .map(|bitrate| bitrate.record(now, payload_bytes))
     }
 }

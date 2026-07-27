@@ -20,6 +20,7 @@ use tracing::info;
 
 use super::{
     RtpProfile,
+    bitrate::MediaBitrateCounter,
     local_send_rewrite::ConsumerStreamStore,
     packet_loop::{RtcUdpSocket, UdpIngress},
     slots::SessionStore,
@@ -160,6 +161,7 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
             room_id,
             rtc,
             started_at,
+            egress_bitrate: Arc::new(MediaBitrateCounter::new(started_at)),
             local_ice_ufrag,
             #[cfg(test)]
             max_bitrate_in: None,

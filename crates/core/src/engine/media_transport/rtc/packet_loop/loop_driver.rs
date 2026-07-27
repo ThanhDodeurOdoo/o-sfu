@@ -304,7 +304,6 @@ impl PacketLoopTurn {
             PacketLoopTurnInput::Datagram(datagram) => {
                 let packet = route_datagram_to_session(
                     context.packet_loop_state,
-                    context.snapshot_state,
                     context.demux,
                     &context.config.rtc_metrics,
                     datagram,
@@ -469,7 +468,6 @@ pub async fn run_packet_loop(
 
 fn route_datagram_to_session(
     packet_loop_state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     demux: &mut DemuxRecoveryState,
     rtc_metrics: &RtcMetricsRecorder,
     datagram: UdpDatagram,
@@ -482,7 +480,6 @@ fn route_datagram_to_session(
     } = datagram;
     route_pkt_to_session_at(
         packet_loop_state,
-        snapshot_state,
         demux,
         rtc_metrics,
         PacketRouteDatagram::new(source_addr, candidate_addr, packet.as_slice(), received_at),
@@ -493,7 +490,6 @@ fn route_datagram_to_session(
 #[cfg(feature = "internal-benchmarks")]
 pub fn route_queued_ingress_datagrams_for_benchmark(
     packet_loop_state: &mut PacketLoopState,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     demux: &mut DemuxRecoveryState,
     rtc_metrics: &RtcMetricsRecorder,
     ingress: &mut UdpIngress,
@@ -504,13 +500,7 @@ pub fn route_queued_ingress_datagrams_for_benchmark(
         let Some(datagram) = ingress.try_recv() else {
             break;
         };
-        let packet = route_datagram_to_session(
-            packet_loop_state,
-            snapshot_state,
-            demux,
-            rtc_metrics,
-            datagram,
-        );
+        let packet = route_datagram_to_session(packet_loop_state, demux, rtc_metrics, datagram);
         ingress.recycle(packet);
         routed += 1;
     }

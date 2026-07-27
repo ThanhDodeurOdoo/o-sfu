@@ -216,17 +216,11 @@ impl DebugProbe for RememberRemoteAddrProbe {
     fn inspect(
         self,
         state: &mut PacketLoopState,
-        context: &WorkerCommandContext<'_>,
+        _context: &WorkerCommandContext<'_>,
     ) -> Self::Output {
-        if state
+        let _ = state
             .remote_addr_demux
-            .remember_remote_addr(self.source_addr, &self.session_key)
-            && let Ok(mut snapshot) = context.snapshot_state.lock()
-        {
-            let _ = snapshot
-                .remote_addr_demux
-                .remember_remote_addr(self.source_addr, &self.session_key);
-        }
+            .remember_remote_addr(self.source_addr, &self.session_key);
     }
 }
 

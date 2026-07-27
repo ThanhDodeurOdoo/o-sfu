@@ -203,7 +203,7 @@ impl LocalRtcPacketDestination {
     /// queues the packet, so stale local sends do not touch dirty
     /// session scheduling
     fn send(&self, state: &mut PacketLoopState, packet: &ForwardedPacket) -> ForwardSendOutcome {
-        let (payload_bytes, dirty_session_key) = {
+        let (payload_bytes, session_key) = {
             let Some(route_destination) = state
                 .routes
                 .local_route(self.src_media)
@@ -227,16 +227,22 @@ impl LocalRtcPacketDestination {
                 route_destination.nackable,
             );
             let vp8_payload = packet.local_vp8_payload();
-            let payload_bytes =
-                sender.send(session_state, &packet.local_send_packet(), vp8_payload);
-            let dirty_session_key = payload_bytes.is_some().then(|| session_key.clone());
-            (payload_bytes, dirty_session_key)
+            let Some(payload_bytes) =
+                sender.send(session_state, &packet.local_send_packet(), vp8_payload)
+            else {
+                return ForwardSendOutcome::LocalRtc {
+                    payload_bytes: None,
+                };
+            };
+            session_state
+                .egress_bitrate
+                .record(packet.received_at(), payload_bytes);
+            (payload_bytes, session_key.clone())
         };
-        if let (Some(payload_bytes), Some(session_key)) = (payload_bytes, dirty_session_key) {
-            let _ = state.record_egress_bitrate(&session_key, packet.received_at(), payload_bytes);
-            state.mark_session_dirty(&session_key);
+        state.mark_session_dirty(&session_key);
+        ForwardSendOutcome::LocalRtc {
+            payload_bytes: Some(payload_bytes),
         }
-        ForwardSendOutcome::LocalRtc { payload_bytes }
     }
 }
 

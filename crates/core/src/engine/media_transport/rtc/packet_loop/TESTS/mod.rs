@@ -134,7 +134,6 @@ impl MediaPacketSink for CountingSink {
 
 struct IngressRoutingHarness {
     packet_loop_state: PacketLoopState,
-    snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     demux: super::super::routing_miss::DemuxRecoveryState,
     metrics: RuntimeMetrics,
     rtc_metrics: Arc<RtcMetricsRecorder>,
@@ -148,7 +147,6 @@ impl IngressRoutingHarness {
         let rtc_metrics = metrics.register_rtc_worker();
         Self {
             packet_loop_state: PacketLoopState::default(),
-            snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
             demux: super::super::routing_miss::DemuxRecoveryState::new(),
             metrics,
             rtc_metrics,
@@ -160,7 +158,6 @@ impl IngressRoutingHarness {
     fn route(&mut self, packet: &[u8]) {
         route_pkt_to_session(
             &mut self.packet_loop_state,
-            &self.snapshot_state,
             &mut self.demux,
             &self.rtc_metrics,
             self.source_addr,
@@ -893,17 +890,6 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
             .remote_addr_demux
             .remember_remote_addr(harness.source_addr, &session_key)
     );
-    {
-        let Ok(mut snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert!(
-            snapshot
-                .remote_addr_demux
-                .remember_remote_addr(harness.source_addr, &session_key)
-        );
-    }
-
     let username = format!("{}:remote-ufrag", local_ice_credentials.ufrag);
     let packet = serialize_stun_message(
         &StunMessage::binding_request(&username, TransId::new(), true, 1, 1, false),
@@ -934,17 +920,6 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
             .session_key_for_remote_addr(harness.source_addr),
         Some(&session_key)
     );
-    {
-        let Ok(snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert_eq!(
-            snapshot
-                .remote_addr_demux
-                .session_key_for_remote_addr(harness.source_addr),
-            Some(&session_key)
-        );
-    }
     assert!(harness.demux.should_skip_scan(miss_key, &packet));
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
@@ -954,7 +929,7 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
 }
 
 #[test]
-fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static str> {
+fn stale_indexed_route_clears_worker_pin() {
     let mut harness = IngressRoutingHarness::new(45_048, 45_047);
     let stale_session_key = test_transport_session_key(51, 0, 58, UserId::Integer(59));
 
@@ -964,17 +939,6 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
             .remote_addr_demux
             .remember_remote_addr(harness.source_addr, &stale_session_key)
     );
-    {
-        let Ok(mut snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert!(
-            snapshot
-                .remote_addr_demux
-                .remember_remote_addr(harness.source_addr, &stale_session_key)
-        );
-    }
-
     harness.route(&sample_rtp_packet(11, 111));
 
     assert!(
@@ -984,21 +948,9 @@ fn stale_indexed_route_clears_worker_and_snapshot_pins() -> Result<(), &'static 
             .session_key_for_remote_addr(harness.source_addr)
             .is_none()
     );
-    {
-        let Ok(snapshot) = harness.snapshot_state.lock() else {
-            return Err("snapshot state lock poisoned");
-        };
-        assert!(
-            snapshot
-                .remote_addr_demux
-                .session_key_for_remote_addr(harness.source_addr)
-                .is_none()
-        );
-    }
     let snapshot = harness.metrics.snapshot();
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_drops_no_user(), 1);
-    Ok(())
 }
 
 #[test]
@@ -1286,22 +1238,17 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'st
         consumer_mid,
         223_001,
     );
-    let consumer_stream = harness
+    let consumer = harness
         .state
         .users
         .get_mut(&consumer_session)
-        .ok_or("consumer session missing after setup")?
-        .consumer_streams
-        .allocate();
+        .ok_or("consumer session missing after setup")?;
+    let egress_bitrate = Arc::clone(&consumer.egress_bitrate);
+    let consumer_stream = consumer.consumer_streams.allocate();
 
-    harness
-        .buffers
-        .pending_packets
-        .push(sample_forwarded_packet(
-            producer_session,
-            "cam-up",
-            b"payload",
-        ));
+    let packet = sample_forwarded_packet(producer_session, "cam-up", b"payload");
+    let received_at = packet.received_at();
+    harness.buffers.pending_packets.push(packet);
     let src_media = TransportMediaId::new(224);
     insert_open_route(
         &mut harness.state,
@@ -1329,11 +1276,15 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'st
         harness.metrics.snapshot().rtp_forwarded_packets_local_rtc(),
         1
     );
+    assert_eq!(
+        egress_bitrate.last_observed_age(received_at),
+        Some(Duration::ZERO)
+    );
     Ok(())
 }
 
 #[test]
-fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
+fn flush_forward_routes_drops_stale_local_consumer_stream_handle() -> Result<(), &'static str> {
     let producer_session = test_transport_session_key(219, 0, 220, UserId::Integer(221));
     let consumer_session = test_transport_session_key(219, 0, 222, UserId::Integer(223));
     let consumer_mid = Mid::from("cam-down");
@@ -1345,15 +1296,16 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
         consumer_mid,
         224_001,
     );
+    let egress_bitrate = harness
+        .state
+        .users
+        .get(&consumer_session)
+        .map(|session| Arc::clone(&session.egress_bitrate))
+        .ok_or("consumer session missing after setup")?;
 
-    harness
-        .buffers
-        .pending_packets
-        .push(sample_forwarded_packet(
-            producer_session,
-            "cam-up",
-            b"payload",
-        ));
+    let packet = sample_forwarded_packet(producer_session, "cam-up", b"payload");
+    let received_at = packet.received_at();
+    harness.buffers.pending_packets.push(packet);
     let src_media = TransportMediaId::new(225);
     insert_open_route(
         &mut harness.state,
@@ -1378,6 +1330,8 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() {
         harness.metrics.snapshot().rtp_forwarded_packets_local_rtc(),
         0
     );
+    assert_eq!(egress_bitrate.last_observed_age(received_at), None);
+    Ok(())
 }
 
 #[tokio::test(flavor = "current_thread")]

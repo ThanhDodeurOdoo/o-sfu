@@ -85,7 +85,6 @@ pub fn handle_worker_command(
             negotiation::worker_create_initial_session_offer(
                 state,
                 context.bitrate_registry,
-                context.snapshot_state,
                 context.offer_bootstrap_config(),
                 room_id,
                 &session_key,
