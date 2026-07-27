@@ -14,8 +14,9 @@
 //! the measured slices are deliberately narrower than the async worker loop
 //! they cover packet observation, route planning, relay enqueue pressure, UDP
 //! ingress demux, packet-sink fanout, selected-RID readiness, consumer gate
-//! batches, RTP identity rewriting, active-speaker policy and keyframe-request
-//! coalescing without mixing socket waits into the instruction count
+//! batches, RTP identity rewriting, local RTC sends, active-speaker policy and
+//! keyframe-request coalescing without mixing socket waits into the instruction
+//! count
 
 #![allow(
     clippy::exit,
@@ -24,7 +25,7 @@
     reason = "Gungraun's generated harness owns setup values, returns measured outputs and exits with the runner status"
 )]
 
-use std::hint::black_box;
+use std::{hint::black_box, mem::drop};
 
 use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
@@ -32,10 +33,10 @@ use gungraun::{
 use o_sfu_core::server::transport::benchmark_support::{
     ActiveSpeakerBenchFixture, ConsumerGateBatchBenchFixture, FanoutBenchTopology,
     IncomingObservationBenchFixture, IngressBurstBenchFixture, IngressRoutingBenchFixture,
-    KeyframeCoalescingBenchFixture, LocalRewriteBenchFixture, PacketSinkFanoutBenchFixture,
-    RelayDrainBenchFixture, RelayPressureBenchFixture, RemoteGateRetryBenchFixture,
-    RidReadinessBenchFixture, SchedulerBenchFixture, SessionDrainBenchFixture,
-    WorkerPacketCommandMixBenchFixture, routing_miss_packet_fingerprint,
+    KeyframeCoalescingBenchFixture, LocalRewriteBenchFixture, LocalSendBenchFixture,
+    PacketSinkFanoutBenchFixture, RelayDrainBenchFixture, RelayPressureBenchFixture,
+    RemoteGateRetryBenchFixture, RidReadinessBenchFixture, SchedulerBenchFixture,
+    SessionDrainBenchFixture, WorkerPacketCommandMixBenchFixture, routing_miss_packet_fingerprint,
 };
 
 const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
@@ -159,10 +160,11 @@ fn ingress_completed_burst_256(mut fixture: IngressBurstBenchFixture) -> usize {
 // this protects the packet-loop scheduler path from regressing back to full
 // session scans or excessive heap churn while merging dirty sessions and due
 // str0m timeouts
-#[library_benchmark(config = callgrind_config(1.0))]
+#[library_benchmark(config = callgrind_config(1.0), teardown = drop)]
 #[bench::stale_timeouts(SchedulerBenchFixture::stale_timeouts())]
-fn scheduler_churn_128(mut fixture: SchedulerBenchFixture) -> usize {
-    black_box(fixture.collect_ready_and_next_timeout())
+fn scheduler_churn_128(mut fixture: SchedulerBenchFixture) -> SchedulerBenchFixture {
+    black_box(fixture.collect_ready_and_next_timeout());
+    black_box(fixture)
 }
 
 // measures the routing-miss fingerprint helper directly with an RTP-shaped
@@ -247,6 +249,25 @@ fn local_rewrite_4096(mut fixture: LocalRewriteBenchFixture) -> u64 {
     black_box(fixture.project_packets())
 }
 
+// measures successful local RTC writes plus egress bitrate accounting
+//
+// this protects the destination-session lookup and counter update paid after
+// str0m accepts each forwarded packet
+#[allow(
+    clippy::panic,
+    reason = "invalid local-send accounting must fail the benchmark"
+)]
+fn validate_local_send(fixture: LocalSendBenchFixture) {
+    assert!(fixture.accounting_matches());
+}
+
+#[library_benchmark(config = callgrind_config(1.0), teardown = validate_local_send)]
+#[bench::successful(LocalSendBenchFixture::successful())]
+fn local_send_512(mut fixture: LocalSendBenchFixture) -> LocalSendBenchFixture {
+    fixture.send_packets();
+    black_box(fixture)
+}
+
 // measures active-speaker audio observations plus snapshot and expiry queries
 //
 // this protects the packet-level audio policy used by room source-policy
@@ -283,10 +304,11 @@ fn interleaved_fanout(mut fixture: WorkerPacketCommandMixBenchFixture) -> usize 
 }
 
 // measures ready session output draining
-#[library_benchmark(config = callgrind_config(1.0))]
+#[library_benchmark(config = callgrind_config(1.0), teardown = drop)]
 #[bench::drain(SessionDrainBenchFixture::new())]
-fn session_drain_128(mut fixture: SessionDrainBenchFixture) -> usize {
-    black_box(fixture.drain_sessions())
+fn session_drain_128(mut fixture: SessionDrainBenchFixture) -> SessionDrainBenchFixture {
+    black_box(fixture.drain_sessions());
+    black_box(fixture)
 }
 
 // measures relay channel packet draining
@@ -311,6 +333,7 @@ library_benchmark_group!(
         remote_gate_retry,
         rid_readiness_256,
         local_rewrite_4096,
+        local_send_512,
         active_speaker_policy,
         keyframe_coalesce_512,
         interleaved_fanout,
