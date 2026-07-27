@@ -151,13 +151,14 @@ impl Default for RoomMediaLimits {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoAdaptationTuning {
-    multiparty_scalable_video_threshold: usize,
-    thumbnail_budget_divisor: u64,
-    downswitch_pressure_observations: u8,
-    upswitch_stable_observations: u8,
+    pub(crate) multiparty_scalable_video_threshold: usize,
+    pub(crate) thumbnail_budget_divisor: u64,
+    pub(crate) downswitch_pressure_observations: u8,
+    pub(crate) upswitch_stable_observations: u8,
+    pub(crate) receiver_budget_headroom_percent: u8,
+    pub(crate) audio_reserve_per_speaker: Bitrate,
 }
 
-/// Invalid video adaptation tuning input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum VideoAdaptationTuningError {
     #[error("multiparty scalable video threshold must be greater than zero")]
@@ -168,6 +169,8 @@ pub enum VideoAdaptationTuningError {
     DownswitchPressureObservationsZero,
     #[error("upswitch stable observations must be greater than zero")]
     UpswitchStableObservationsZero,
+    #[error("receiver budget headroom percent must not exceed 100")]
+    ReceiverBudgetHeadroomPercentTooHigh,
 }
 
 impl VideoAdaptationTuning {
@@ -175,17 +178,28 @@ impl VideoAdaptationTuning {
     pub const DEFAULT_THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
     pub const DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
     pub const DEFAULT_UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
+    /// No headroom is reserved by default, so video is budgeted against the full
+    /// receiver estimate. Deployments that carry audio, retransmission or FEC
+    /// alongside video should raise this.
+    pub const DEFAULT_RECEIVER_BUDGET_HEADROOM_PERCENT: u8 = 0;
+    /// No per-speaker audio reserve by default, so the video budget is unchanged.
+    /// Set to the nominal audio bitrate to hold that much bandwidth back from the
+    /// video budget for each admitted audio speaker; the reserve is fixed at this
+    /// rate times the admitted audio speaker count. Zero disables audio
+    /// reservation entirely.
+    pub const DEFAULT_AUDIO_RESERVE_PER_SPEAKER: Bitrate = Bitrate::zero();
 
-    /// Build video adaptation tuning after validating its invariants.
-    ///
     /// # Errors
     ///
-    /// Returns [`VideoAdaptationTuningError`] when a knob is zero.
+    /// Returns [`VideoAdaptationTuningError`] when an observation knob is zero or
+    /// the headroom percent exceeds 100.
     pub const fn try_new(
         multiparty_scalable_video_threshold: usize,
         thumbnail_budget_divisor: u64,
         downswitch_pressure_observations: u8,
         upswitch_stable_observations: u8,
+        receiver_budget_headroom_percent: u8,
+        audio_reserve_per_speaker: Bitrate,
     ) -> Result<Self, VideoAdaptationTuningError> {
         if multiparty_scalable_video_threshold == 0 {
             return Err(VideoAdaptationTuningError::MultipartyScalableVideoThresholdZero);
@@ -199,48 +213,30 @@ impl VideoAdaptationTuning {
         if upswitch_stable_observations == 0 {
             return Err(VideoAdaptationTuningError::UpswitchStableObservationsZero);
         }
+        if receiver_budget_headroom_percent > 100 {
+            return Err(VideoAdaptationTuningError::ReceiverBudgetHeadroomPercentTooHigh);
+        }
         Ok(Self {
             multiparty_scalable_video_threshold,
             thumbnail_budget_divisor,
             downswitch_pressure_observations,
             upswitch_stable_observations,
+            receiver_budget_headroom_percent,
+            audio_reserve_per_speaker,
         })
-    }
-
-    #[must_use]
-    pub const fn conservative() -> Self {
-        Self {
-            multiparty_scalable_video_threshold: Self::DEFAULT_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD,
-            thumbnail_budget_divisor: Self::DEFAULT_THUMBNAIL_BUDGET_DIVISOR,
-            downswitch_pressure_observations: Self::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS,
-            upswitch_stable_observations: Self::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
-        }
-    }
-
-    #[must_use]
-    pub const fn multiparty_scalable_video_threshold(self) -> usize {
-        self.multiparty_scalable_video_threshold
-    }
-
-    #[must_use]
-    pub const fn thumbnail_budget_divisor(self) -> u64 {
-        self.thumbnail_budget_divisor
-    }
-
-    #[must_use]
-    pub const fn downswitch_pressure_observations(self) -> u8 {
-        self.downswitch_pressure_observations
-    }
-
-    #[must_use]
-    pub const fn upswitch_stable_observations(self) -> u8 {
-        self.upswitch_stable_observations
     }
 }
 
 impl Default for VideoAdaptationTuning {
     fn default() -> Self {
-        Self::conservative()
+        Self {
+            multiparty_scalable_video_threshold: Self::DEFAULT_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD,
+            thumbnail_budget_divisor: Self::DEFAULT_THUMBNAIL_BUDGET_DIVISOR,
+            downswitch_pressure_observations: Self::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS,
+            upswitch_stable_observations: Self::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
+            receiver_budget_headroom_percent: Self::DEFAULT_RECEIVER_BUDGET_HEADROOM_PERCENT,
+            audio_reserve_per_speaker: Self::DEFAULT_AUDIO_RESERVE_PER_SPEAKER,
+        }
     }
 }
 
@@ -294,3 +290,7 @@ impl Default for VideoBitrateLimits {
         Self::new(Self::DEFAULT_MAX_VIDEO_BITRATE)
     }
 }
+
+#[cfg(test)]
+#[path = "TESTS/media.rs"]
+mod tests;

@@ -20,7 +20,8 @@ use o_sfu::{
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
         MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
-        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning,
+        VideoBitrateLimits,
     },
     core::server::room::{
         DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -426,6 +427,7 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
             rtc_media_worker_count: 1,
             room_worker_policy: RoomWorkerPolicy::strict_single_router(),
             room_media_limits: RoomMediaLimits::default(),
+            video_adaptation_tuning: VideoAdaptationTuning::default(),
         },
         codecs: CodecConfig {
             flags: MediaCodecFlags::default(),

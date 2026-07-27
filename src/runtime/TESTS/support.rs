@@ -10,7 +10,8 @@ use crate::{
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
         MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
-        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoBitrateLimits,
+        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning,
+        VideoBitrateLimits,
     },
     runtime::{
         MediaTransport, RuntimeServices, RuntimeState, build_media_transport, build_room_manager,
@@ -69,6 +70,7 @@ impl RuntimeTestBuilder {
                     rtc_media_worker_count: 1,
                     room_worker_policy: RoomWorkerPolicy::strict_single_router(),
                     room_media_limits: RoomMediaLimits::default(),
+                    video_adaptation_tuning: VideoAdaptationTuning::default(),
                     rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
                 },
                 codecs: CodecConfig {

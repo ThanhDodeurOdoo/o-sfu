@@ -5,7 +5,7 @@ use o_sfu_core::prelude::{LocalSpilloverPolicy, RoomSpilloverMode};
 
 use super::{
     Bitrate, Env, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
-    TransportConfig, VideoBitrateLimits, default_rtc_media_worker_count,
+    TransportConfig, VideoAdaptationTuning, VideoBitrateLimits, default_rtc_media_worker_count,
 };
 
 fn load_transport_config(get_var: impl Fn(&str) -> Option<String>) -> Result<TransportConfig> {
@@ -60,6 +60,7 @@ fn load_transport_config_accepts_public_ip_and_defaults() {
             rtc_media_worker_count: worker_count,
             room_worker_policy: RoomWorkerPolicy::strict_single_router(),
             room_media_limits: RoomMediaLimits::default(),
+            video_adaptation_tuning: VideoAdaptationTuning::default(),
         })
     );
 }
@@ -161,6 +162,51 @@ fn load_transport_config_accepts_room_media_limits() -> Result<()> {
         8
     );
     Ok(())
+}
+
+#[test]
+fn load_transport_config_accepts_video_adaptation_tuning() -> Result<()> {
+    let config = load_transport_config_with_defaults(&[
+        ("ROOM_MULTIPARTY_SCALABLE_VIDEO_THRESHOLD", "5"),
+        ("ROOM_THUMBNAIL_BUDGET_DIVISOR", "3"),
+        ("ROOM_DOWNSWITCH_PRESSURE_OBSERVATIONS", "4"),
+        ("ROOM_UPSWITCH_STABLE_OBSERVATIONS", "6"),
+        ("ROOM_RECEIVER_BUDGET_HEADROOM_PERCENT", "15"),
+        ("ROOM_AUDIO_RESERVE_PER_SPEAKER_BPS", "40000"),
+    ])?;
+
+    assert_eq!(
+        config.video_adaptation_tuning,
+        VideoAdaptationTuning::try_new(5, 3, 4, 6, 15, Bitrate::from_bps(40_000))?
+    );
+    Ok(())
+}
+
+#[test]
+fn load_transport_config_defaults_video_adaptation_tuning() -> Result<()> {
+    let config = load_transport_config_with_defaults(&[])?;
+
+    assert_eq!(
+        config.video_adaptation_tuning,
+        VideoAdaptationTuning::default()
+    );
+    Ok(())
+}
+
+#[test]
+fn load_transport_config_rejects_invalid_video_adaptation_tuning() {
+    assert_invalid_transport_cases(&[
+        InvalidTransportCase {
+            name: "zero downswitch pressure observations",
+            overrides: &[("ROOM_DOWNSWITCH_PRESSURE_OBSERVATIONS", "0")],
+            message: "ROOM_DOWNSWITCH_PRESSURE_OBSERVATIONS must be greater than zero",
+        },
+        InvalidTransportCase {
+            name: "headroom percent above 100",
+            overrides: &[("ROOM_RECEIVER_BUDGET_HEADROOM_PERCENT", "150")],
+            message: "ROOM_RECEIVER_BUDGET_HEADROOM_PERCENT must not exceed 100",
+        },
+    ]);
 }
 
 #[test]

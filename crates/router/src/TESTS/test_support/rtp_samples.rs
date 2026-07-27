@@ -90,6 +90,34 @@ pub fn sample_simulcast_video_rtp_parameters(mid: Option<&str>) -> MediaStream {
     )
 }
 
+#[must_use]
+pub fn sample_three_layer_simulcast_video_rtp_parameters(mid: Option<&str>) -> MediaStream {
+    with_optional_mid(
+        MediaStream::new(
+            vec![video_codec_parameters()],
+            vec![HeaderExtension::new(
+                webrtc::RtpHeaderExtensionUri::Mid,
+                HEADER_EXTENSION_ID_MID,
+            )],
+            vec![
+                StreamBinding::new()
+                    .with_ssrc(32_001)
+                    .with_rid("lo")
+                    .with_max_bitrate(150_000),
+                StreamBinding::new()
+                    .with_ssrc(32_002)
+                    .with_rid("mid")
+                    .with_max_bitrate(450_000),
+                StreamBinding::new()
+                    .with_ssrc(32_003)
+                    .with_rid("hi")
+                    .with_max_bitrate(900_000),
+            ],
+        ),
+        mid,
+    )
+}
+
 fn with_optional_mid(stream: MediaStream, mid: Option<&str>) -> MediaStream {
     match mid {
         Some(mid) => stream.with_mid(mid.to_owned()),

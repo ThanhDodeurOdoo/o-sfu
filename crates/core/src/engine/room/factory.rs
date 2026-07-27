@@ -98,7 +98,6 @@ impl RoomRuntimePolicy {
         self
     }
 
-    /// return a room policy that uses the provided video adaptation tuning
     #[must_use]
     pub fn with_video_adaptation_tuning(
         mut self,
