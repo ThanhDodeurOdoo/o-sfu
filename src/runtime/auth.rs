@@ -17,6 +17,9 @@ use thiserror::Error;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Proves [`verify`] accepted a JWT under the supplied key.
+pub(super) struct AuthProof(());
+
 pub const MAX_JWT_TOKEN_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -156,6 +159,14 @@ where
         .map_err(|_error| AuthenticationError::InvalidJsonPayload)?;
     validate_registered_claims(&registered_claims)?;
     serde_json::from_slice(&claims_bytes).map_err(|_error| AuthenticationError::InvalidJsonPayload)
+}
+
+/// Returns verified claims with proof or the [`AuthenticationError`] from [`verify`].
+pub(super) fn verify_with_proof<T: DeserializeOwned>(
+    token: &str,
+    key_b64: &str,
+) -> Result<(T, AuthProof), AuthenticationError> {
+    verify(token, key_b64).map(|claims| (claims, AuthProof(())))
 }
 
 /// decode untrusted JWT claims for candidate room selection only
