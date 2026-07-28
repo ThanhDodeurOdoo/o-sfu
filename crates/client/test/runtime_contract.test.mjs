@@ -1,273 +1,198 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CLIENT_UPDATE } from "../dist/index.js";
-import { NEGOTIATION_KIND, PENDING_REQUEST_KIND } from "../dist/protocol_contract.js";
+import { CLIENT_UPDATE, SFU_CLIENT_STATE } from "../dist/index.js";
 import {
-    configureDefaultWasmProtocolCoreProvider,
-    createProtocolCore,
-    wrapProtocolCoreBindings
-} from "../dist/runtime_contract.js";
+    COMMAND_KIND,
+    NEGOTIATION_KIND,
+    PENDING_REQUEST_KIND,
+    WS_CLOSE_CODE
+} from "../dist/protocol_contract.js";
+import { createProtocolCore } from "../dist/runtime_contract.js";
+import { audioMedia, sdp, videoMedia, videoUploadSlot } from "./support/negotiation_fixtures.mjs";
 
-const VALID_FEATURES = {
-    rtc: true,
+const EMPTY_FEATURES = {
+    rtc: false,
     transcription: false,
     audioRecording: false,
     videoRecording: false
 };
-const REQUIRED_FEATURE_FIELDS = ["rtc", "transcription", "audioRecording", "videoRecording"];
-const OPTIONAL_RECORDING_FIELDS = ["recording", "audio", "video", "transcription"];
-const OPTIONAL_SESSION_INFO_FIELDS = [
-    "isTalking",
-    "isFeatured",
-    "isCameraOn",
-    "isScreenSharingOn",
-    "isSelfMuted",
-    "isDeaf",
-    "isRaisingHand"
-];
+const AVAILABLE_FEATURES = {
+    rtc: true,
+    transcription: false,
+    audioRecording: true,
+    videoRecording: false
+};
+const RECORDING_STATE = {
+    recording: false,
+    audio: false,
+    transcription: false,
+    video: false
+};
 
-function assertThrowsError(callback) {
-    assert.throws(callback, Error);
-}
-
-function validCore(overrides = {}) {
-    return {
-        state: "disconnected",
-        features: { ...VALID_FEATURES },
-        recordingState: {
-            recording: false
-        },
-        connect() {
-            return [{ kind: "connect", url: "ws://example.test/" }];
-        },
-        onWsOpen() {
-            return [{ kind: "sendWebSocket", frame: "auth" }];
-        },
-        onWsMessage() {
-            return [];
-        },
-        onTransportReady() {
-            return [];
-        },
-        onWsClose() {
-            return [];
-        },
-        onTimer() {
-            return [];
-        },
-        publish() {
-            return [];
-        },
-        subscribe() {
-            return [];
-        },
-        updateInfo() {
-            return [];
-        },
-        broadcast() {
-            return [];
-        },
-        startRecording() {
-            return [];
-        },
-        stopRecording() {
-            return [];
-        },
-        submitNegotiationAnswer() {
-            return [];
-        },
-        disconnect() {
-            return [];
-        },
-        ...overrides
-    };
-}
-
-function assertInjectedCoreThrows(overrides, read) {
-    const core = wrapProtocolCoreBindings(validCore(overrides));
-    assertThrowsError(() => read(core));
-}
-
-function pendingRequest(overrides = {}) {
-    return {
-        requestId: "request-1",
-        kind: PENDING_REQUEST_KIND.START_RECORDING,
-        timeoutMs: 5000,
-        timeoutTimerId: 10_000,
-        ...overrides
-    };
-}
-
-function beginPendingRequest(overrides = {}) {
-    return {
-        kind: "beginPendingRequest",
-        request: pendingRequest(overrides)
-    };
-}
-
-function negotiationCommand(negotiationKind) {
-    return {
-        kind: "applyNegotiation",
-        requestId: negotiationKind,
-        negotiationKind,
-        sdp: "v=0\r\n",
-        uploadSlots: []
-    };
-}
-
-function sparseHostCommands() {
-    const commands = [];
-    commands.length = 1;
-    return commands;
-}
-
-function validSourceDescriptor(encodingOverrides = {}) {
-    return {
-        active: true,
-        encodings: [{ encodingId: "encoding-1", ...encodingOverrides }],
-        sessionId: 7,
-        sourceId: "source-1",
-        type: "camera"
-    };
-}
-
-function sourceUpdate(sources) {
-    return {
-        kind: "emitUpdate",
-        update: {
-            name: CLIENT_UPDATE.SOURCE,
-            payload: { sources }
-        }
-    };
-}
-
-const remoteMediaUpdate = (bindings) => ({
-    kind: "emitUpdate",
-    update: { name: "remote_media", payload: { bindings } }
+const stateChange = (state) => ({
+    kind: COMMAND_KIND.EMIT_STATE_CHANGE,
+    state,
+    cause: undefined
+});
+const encodeFrame = (envelope) => JSON.stringify([envelope]);
+const sendWebSocket = (envelope) => ({
+    kind: COMMAND_KIND.SEND_WEB_SOCKET,
+    frame: encodeFrame(envelope)
 });
 
-test("default WASM protocol core validates host command shape only", () => {
-    const misorderedHostCommands = [negotiationCommand(NEGOTIATION_KIND.OFFER)];
-    configureDefaultWasmProtocolCoreProvider(() =>
-        validCore({
-            connect: () => [{ kind: "emitStateChange", state: "broken" }],
-            onTimer: () => sparseHostCommands(),
-            onWsMessage: () => misorderedHostCommands
-        })
-    );
+function requireCommand(commands, kind) {
+    const command = commands.find((candidate) => candidate.kind === kind);
+    assert.ok(command, `expected ${kind} command`);
+    return command;
+}
+
+test("generated Wasm conforms to the complete host-command contract", () => {
+    const seenKinds = new Set();
     const core = createProtocolCore();
+    const assertCommands = (actual, expected) => {
+        actual.forEach((command) => seenKinds.add(command.kind));
+        assert.deepEqual(actual, expected);
+        return actual;
+    };
 
-    assert.deepEqual(core.onWsMessage("offer"), misorderedHostCommands);
-    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
-    assertThrowsError(() => core.onTimer(1));
-});
+    assert.equal(core.state, SFU_CLIENT_STATE.DISCONNECTED);
+    assert.deepEqual(core.features, EMPTY_FEATURES);
+    assert.deepEqual(core.recordingState, {});
 
-test("injected protocol core validates host command shape only", () => {
-    const commandsWithHostileMap = [{ kind: "sendWebSocket", frame: "auth" }];
-    commandsWithHostileMap.map = () => [{ kind: "closeWebSocket", code: "bad" }];
-    const misorderedHostCommands = [negotiationCommand(NEGOTIATION_KIND.OFFER)];
-    const core = wrapProtocolCoreBindings(
-        validCore({
-            connect: () => [{ kind: "emitStateChange", state: "broken" }],
-            onWsMessage: () => misorderedHostCommands,
-            onTimer: () => sparseHostCommands(),
-            onWsOpen: () => commandsWithHostileMap
-        })
-    );
+    assertCommands(core.connect("ws://example.test/ws", "jwt-token", "channel-a"), [
+        stateChange(SFU_CLIENT_STATE.CONNECTING),
+        { kind: COMMAND_KIND.CONNECT, url: "ws://example.test/ws" }
+    ]);
+    assertCommands(core.onWsOpen(), [
+        sendWebSocket({ t: "auth", p: { channel: "channel-a", jwt: "jwt-token" } })
+    ]);
 
-    assertThrowsError(() => core.connect("ws://example.test", "jwt", null));
-    assertThrowsError(() => core.onTimer(1));
-    assert.deepEqual(core.onWsMessage("offer"), misorderedHostCommands);
-    assert.deepEqual(core.onWsOpen(), [{ kind: "sendWebSocket", frame: "auth" }]);
-});
-
-test("injected protocol core validates pending request start commands", () => {
-    for (const [method, commands, args = []] of [
-        ["startRecording", [beginPendingRequest({ timeoutTimerId: 1 })]],
-        ["startRecording", [beginPendingRequest({ kind: "unknown" })]],
-        ["connect", [beginPendingRequest()], ["ws://example.test", "jwt", null]],
+    const peerInfo = { isTalking: true, isRaisingHand: false };
+    const welcomeCommands = assertCommands(
+        core.onWsMessage(
+            encodeFrame({
+                t: "welcome",
+                p: {
+                    features: AVAILABLE_FEATURES,
+                    recording: RECORDING_STATE,
+                    peers: [{ sessionId: "peer-7", info: peerInfo }]
+                }
+            })
+        ),
         [
-            "startRecording",
-            [{ kind: "sendWebSocket", frame: "before-request" }, beginPendingRequest()]
-        ],
-        ["startRecording", [beginPendingRequest(), beginPendingRequest({ requestId: "request-2" })]]
-    ]) {
-        assertInjectedCoreThrows(
+            stateChange(SFU_CLIENT_STATE.AUTHENTICATED),
             {
-                [method]: () => commands
-            },
-            (core) => core[method](...args)
-        );
-    }
-});
-
-test("injected protocol core validates remote media host updates", () => {
-    assertInjectedCoreThrows(
-        {
-            connect: () => [
-                remoteMediaUpdate([{ active: "yes", mid: "0", sessionId: 7, type: "camera" }])
-            ]
-        },
-        (core) => core.connect("ws://example.test", "jwt", null)
+                kind: COMMAND_KIND.EMIT_UPDATE,
+                update: {
+                    name: CLIENT_UPDATE.INFO_CHANGE,
+                    payload: { "peer-7": peerInfo }
+                }
+            }
+        ]
     );
-});
+    assert.equal(Object.getPrototypeOf(welcomeCommands[1].update.payload), Object.prototype);
+    assert.equal(core.state, SFU_CLIENT_STATE.AUTHENTICATED);
+    assert.deepEqual(core.features, AVAILABLE_FEATURES);
+    assert.deepEqual(core.recordingState, RECORDING_STATE);
 
-test("injected protocol core validates source descriptors", () => {
-    const sparseSources = [];
-    sparseSources.length = 1;
-    for (const sources of [[validSourceDescriptor({ maxBitrate: -1 })], sparseSources]) {
-        assertInjectedCoreThrows(
+    const offerSdp = sdp(audioMedia("0"), videoMedia("1"));
+    const uploadSlot = videoUploadSlot("1");
+    assertCommands(
+        core.onWsMessage(
+            encodeFrame({
+                t: "offer",
+                q: "offer-7",
+                p: { sdp: offerSdp, uploadSlots: [uploadSlot] }
+            })
+        ),
+        [
+            { kind: COMMAND_KIND.CREATE_PEER_CONNECTION },
             {
-                connect: () => [sourceUpdate(sources)]
-            },
-            (core) => core.connect("ws://example.test", "jwt", null)
-        );
-    }
-});
+                kind: COMMAND_KIND.APPLY_NEGOTIATION,
+                requestId: "offer-7",
+                negotiationKind: NEGOTIATION_KIND.OFFER,
+                sdp: offerSdp,
+                uploadSlots: [uploadSlot]
+            }
+        ]
+    );
 
-test("injected protocol core rejects NaN and infinite numeric session IDs", () => {
-    for (const sessionId of [Number.NaN, Number.POSITIVE_INFINITY]) {
-        assertInjectedCoreThrows(
+    const answerSdp = "v=0\r\nanswer";
+    assertCommands(core.submitNegotiationAnswer("offer-7", NEGOTIATION_KIND.OFFER, answerSdp), [
+        sendWebSocket({ t: "offer", p: { sdp: answerSdp }, r: "offer-7" })
+    ]);
+    assertCommands(core.onTransportReady(), [stateChange(SFU_CLIENT_STATE.CONNECTED)]);
+    assert.equal(core.state, SFU_CLIENT_STATE.CONNECTED);
+
+    const recordingCommands = core.startRecording({ audio: true });
+    const { requestId, timeoutTimerId } = requireCommand(
+        recordingCommands,
+        COMMAND_KIND.BEGIN_PENDING_REQUEST
+    ).request;
+    const flushTimerId = requireCommand(recordingCommands, COMMAND_KIND.SCHEDULE_TIMER).id;
+    assert.equal(typeof requestId, "string");
+    assert.equal(Number.isInteger(timeoutTimerId), true);
+    assert.equal(Number.isInteger(flushTimerId), true);
+    assert.notEqual(flushTimerId, timeoutTimerId);
+    assertCommands(recordingCommands, [
+        {
+            kind: COMMAND_KIND.BEGIN_PENDING_REQUEST,
+            request: {
+                requestId,
+                kind: PENDING_REQUEST_KIND.START_RECORDING,
+                timeoutTimerId,
+                timeoutMs: 5000
+            }
+        },
+        { kind: COMMAND_KIND.SCHEDULE_TIMER, id: flushTimerId, ms: 100 }
+    ]);
+    assertCommands(core.onTimer(flushTimerId), [
+        sendWebSocket({
+            t: "startrecording",
+            p: { audio: true },
+            q: requestId
+        })
+    ]);
+    assertCommands(
+        core.onWsMessage(
+            encodeFrame({
+                t: "startrecording",
+                r: requestId,
+                p: { ok: true }
+            })
+        ),
+        [
+            { kind: COMMAND_KIND.CANCEL_TIMER, id: timeoutTimerId },
             {
-                connect: () => [
-                    remoteMediaUpdate([{ active: true, mid: "0", sessionId, type: "camera" }])
-                ]
-            },
-            (core) => core.connect("ws://example.test", "jwt", null)
-        );
-    }
-});
+                kind: COMMAND_KIND.RESOLVE_PENDING_REQUEST,
+                requestId,
+                ok: true
+            }
+        ]
+    );
 
-test("injected protocol core validates boolean fields", () => {
-    for (const field of REQUIRED_FEATURE_FIELDS) {
-        assertInjectedCoreThrows(
-            { features: { ...VALID_FEATURES, [field]: "yes" } },
-            (core) => core.features
-        );
-    }
+    const recoveryCommands = core.onWsClose(WS_CLOSE_CODE.ERROR);
+    const recoveryTimerId = requireCommand(recoveryCommands, COMMAND_KIND.SCHEDULE_TIMER).id;
+    assert.equal(Number.isInteger(recoveryTimerId), true);
+    assertCommands(recoveryCommands, [
+        { kind: COMMAND_KIND.CLOSE_PEER_CONNECTION },
+        stateChange(SFU_CLIENT_STATE.RECOVERING),
+        { kind: COMMAND_KIND.SCHEDULE_TIMER, id: recoveryTimerId, ms: 1000 }
+    ]);
+    assertCommands(core.onTimer(recoveryTimerId), [
+        stateChange(SFU_CLIENT_STATE.CONNECTING),
+        { kind: COMMAND_KIND.CONNECT, url: "ws://example.test/ws" }
+    ]);
+    assertCommands(core.disconnect(), [
+        { kind: COMMAND_KIND.CANCEL_TIMER, id: recoveryTimerId },
+        { kind: COMMAND_KIND.CLOSE_WEB_SOCKET, code: WS_CLOSE_CODE.CLEAN },
+        { kind: COMMAND_KIND.CLOSE_PEER_CONNECTION },
+        stateChange(SFU_CLIENT_STATE.DISCONNECTED)
+    ]);
 
-    for (const field of OPTIONAL_RECORDING_FIELDS) {
-        assertInjectedCoreThrows(
-            { recordingState: { [field]: "yes" } },
-            (core) => core.recordingState
-        );
-    }
-
-    for (const field of OPTIONAL_SESSION_INFO_FIELDS) {
-        assertInjectedCoreThrows(
-            {
-                connect: () => [
-                    {
-                        kind: "emitUpdate",
-                        update: {
-                            name: CLIENT_UPDATE.INFO_CHANGE,
-                            payload: { 7: { [field]: "yes" } }
-                        }
-                    }
-                ]
-            },
-            (core) => core.connect("ws://example.test", "jwt", null)
-        );
-    }
+    assert.equal(core.state, SFU_CLIENT_STATE.DISCONNECTED);
+    assert.deepEqual(core.features, EMPTY_FEATURES);
+    assert.deepEqual(core.recordingState, {});
+    assert.deepEqual([...seenKinds].sort(), Object.values(COMMAND_KIND).sort());
 });

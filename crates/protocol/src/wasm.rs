@@ -9,8 +9,8 @@ use crate::{
 
 /// wasm-bindgen facade for the browser [`ProtocolCore`] contract
 ///
-/// each method returns projected host commands as plain JS objects so the TS
-/// runtime can validate and execute side effects outside [`ProtocolCore`]
+/// protocol transitions return projected host commands as plain JS objects for
+/// the TypeScript browser runtime to execute outside [`ProtocolCore`]
 #[wasm_bindgen(js_name = ProtocolCoreWasm)]
 pub struct WasmProtocolCore {
     inner: ProtocolCore,

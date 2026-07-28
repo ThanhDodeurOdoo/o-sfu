@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use o_sfu_protocol::wire::{
     ServerMessage, SourceDescriptor, SourceEncodingDescriptor, TrackBinding,
     UploadLayerPolicyRole as ProtocolRole,
@@ -49,7 +51,7 @@ fn source_encodings(source: &PublishedSourceDescriptor) -> Vec<SourceEncodingDes
             encoding_id: encoding.encoding_id().to_string(),
             rid: encoding.rid().map(|rid| rid.as_str().to_owned()),
             max_bitrate: encoding.max_bitrate().map(Bitrate::as_bps),
-            resolution_scale: encoding.resolution_scale(),
+            resolution_scale: encoding.resolution_scale().and_then(NonZeroU16::new),
             max_framerate: encoding.max_framerate(),
             policy_role: encoding.policy_role().map(|role| match role {
                 UploadLayerPolicyRole::Featured => ProtocolRole::Featured,

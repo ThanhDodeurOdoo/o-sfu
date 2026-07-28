@@ -309,29 +309,6 @@ test("startRecording rejects when the protocol core throws undefined", async () 
     await assert.rejects(client.startRecording(), (error) => error === undefined);
 });
 
-test("default runtime creates the protocol core from generated wasm bindings", () => {
-    const core = createProtocolCore();
-
-    const connectCommands = core.connect("ws://example.test/ws", "jwt-token", "channel-a");
-    const authCommands = core.onWsOpen();
-
-    assert.deepEqual(connectCommands, [
-        { kind: "emitStateChange", cause: undefined, state: "connecting" },
-        { kind: "connect", url: "ws://example.test/ws" }
-    ]);
-    assert.equal(authCommands.length, 1);
-    assert.equal(authCommands[0].kind, "sendWebSocket");
-    assert.deepEqual(JSON.parse(authCommands[0].frame), [
-        {
-            t: "auth",
-            p: {
-                channel: "channel-a",
-                jwt: "jwt-token"
-            }
-        }
-    ]);
-});
-
 function createRecoveryHarness(options = {}) {
     const timers = createManualTimers();
     return {
@@ -865,37 +842,6 @@ test("same-turn recovery retains queued sticky inputs", async () => {
     assert.deepEqual(core.subscriptionUpdates, [{ sessionId: 42, states: { camera: false } }]);
     assert.deepEqual(core.updateInfoCalls, [{ isCameraOn: false }]);
     assert.deepEqual(core.broadcasts, []);
-});
-
-test("info_change map payloads are normalized into plain objects", async () => {
-    const { emitMessage, updates, connect } = createSfuClientHarness();
-
-    await connect();
-    await emitMessage("info-change-map");
-
-    assert.deepEqual(updates, [
-        {
-            name: CLIENT_UPDATE.INFO_CHANGE,
-            payload: {
-                31: {
-                    isRaisingHand: true
-                }
-            }
-        }
-    ]);
-});
-
-test("info_change map payloads preserve __proto__ as an own property", async () => {
-    const { emitMessage, updates, connect } = createSfuClientHarness();
-
-    await connect();
-    await emitMessage("info-change-map-proto");
-
-    assert.equal(Object.hasOwn(updates[0].payload, "__proto__"), true);
-    assert.deepEqual(Object.keys(updates[0].payload), ["__proto__"]);
-    assert.deepEqual(updates[0].payload.__proto__, {
-        isRaisingHand: true
-    });
 });
 
 test("source descriptor updates are exposed as additive client state", async () => {

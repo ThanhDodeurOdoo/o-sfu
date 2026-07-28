@@ -1,6 +1,9 @@
+use std::num::NonZeroU16;
+
 use serde_json::json;
 
 use super::*;
+use crate::signaling::EnvelopeDecodeError;
 
 #[test]
 fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Result<()> {
@@ -15,7 +18,7 @@ fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Resul
                 encoding_id: String::from("encoding-1"),
                 rid: Some(String::from("lo")),
                 max_bitrate: Some(150_000),
-                resolution_scale: Some(4),
+                resolution_scale: NonZeroU16::new(4),
                 max_framerate: None,
                 policy_role: Some(UploadLayerPolicyRole::Thumbnail),
             },
@@ -23,7 +26,7 @@ fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Resul
                 encoding_id: String::from("encoding-2"),
                 rid: Some(String::from("hi")),
                 max_bitrate: Some(900_000),
-                resolution_scale: Some(1),
+                resolution_scale: NonZeroU16::new(1),
                 max_framerate: None,
                 policy_role: Some(UploadLayerPolicyRole::Featured),
             },
@@ -61,4 +64,24 @@ fn protocol_sources_message_serializes_source_descriptors() -> serde_json::Resul
         })
     );
     Ok(())
+}
+
+#[test]
+fn protocol_sources_message_rejects_zero_resolution_scale() {
+    assert_eq!(
+        ServerEnvelope::decode(Envelope::message(
+            "sources",
+            Some(json!([{
+                "sourceId": "source-7",
+                "sessionId": 5,
+                "type": "camera",
+                "active": true,
+                "encodings": [{
+                    "encodingId": "encoding-1",
+                    "resolutionScale": 0,
+                }],
+            }])),
+        )),
+        Err(EnvelopeDecodeError::InvalidPayload(String::from("sources")))
+    );
 }

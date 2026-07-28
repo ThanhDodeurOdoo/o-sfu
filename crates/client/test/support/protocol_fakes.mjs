@@ -115,26 +115,6 @@ export class FakeProtocolCore {
                     initialOfferCommand("7"),
                     ...this._remoteMediaSnapshot()
                 ]);
-            case "info-change-map":
-                return [
-                    {
-                        kind: "emitUpdate",
-                        update: {
-                            name: CLIENT_UPDATE.INFO_CHANGE,
-                            payload: new Map([["31", { isRaisingHand: true }]])
-                        }
-                    }
-                ];
-            case "info-change-map-proto":
-                return [
-                    {
-                        kind: "emitUpdate",
-                        update: {
-                            name: CLIENT_UPDATE.INFO_CHANGE,
-                            payload: new Map([["__proto__", { isRaisingHand: true }]])
-                        }
-                    }
-                ];
             case "source-descriptors":
                 this.sourceDescriptors.set("source-1", {
                     active: true,
