@@ -11,20 +11,13 @@ import wasmModule from "../generated/o_sfu_protocol_bg.wasm";
 
 let protocolModuleInitialized = false;
 
-function ensureProtocolModuleInitialized() {
-    if (protocolModuleInitialized) {
-        return;
-    }
-    initSync({ module: wasmModule });
-    protocolModuleInitialized = true;
-}
-
 configureDefaultWasmProtocolCoreProvider(() => {
-    ensureProtocolModuleInitialized();
-    // as unknown as cast:
-    // wasm-bindgen widens `state` to `string` in the generated TS,
-    // so the provider needs a local cast back to the validated client
-    // contract until the generated declarations resolve
+    if (!protocolModuleInitialized) {
+        initSync({ module: wasmModule });
+        protocolModuleInitialized = true;
+    }
+    // wasm-bindgen widens `state` to `string`, so this cast restores the
+    // handwritten `ProtocolCoreBindings` contract
     return new ProtocolCoreWasm() as unknown as ProtocolCoreBindings;
 });
 

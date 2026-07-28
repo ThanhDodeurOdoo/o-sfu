@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use o_sfu_rfc::webrtc::MediaKind;
 use serde::{Deserialize, Serialize};
 
@@ -109,7 +111,7 @@ pub struct SourceEncodingDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_bitrate: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolution_scale: Option<u16>,
+    pub resolution_scale: Option<NonZeroU16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_framerate: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]

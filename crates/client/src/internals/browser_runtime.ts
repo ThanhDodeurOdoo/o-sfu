@@ -15,7 +15,6 @@ import {
 } from "../public_api.js";
 import {
     createProtocolCore,
-    wrapProtocolCoreBindings,
     type HostCommand,
     type ProtocolCoreBindings
 } from "../runtime_contract.js";
@@ -82,9 +81,7 @@ export class BrowserRuntime {
 
     constructor(context: BrowserRuntimeContext, dependencies: SfuClientDependencies = {}) {
         this._context = context;
-        this._core = dependencies.createProtocolCore
-            ? wrapProtocolCoreBindings(dependencies.createProtocolCore())
-            : createProtocolCore();
+        this._core = (dependencies.createProtocolCore ?? createProtocolCore)();
         this._setTimer = dependencies.setTimer ?? ((callback, ms) => setTimeout(callback, ms));
         this._clearTimer = dependencies.clearTimer ?? ((handle) => clearTimeout(handle));
         const log = (level: ClientLogDetail["level"], message: string) => this.log(level, message);
