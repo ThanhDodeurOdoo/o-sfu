@@ -14,7 +14,7 @@ use super::{
     WsReader, WsWriter,
     admission::PreAuthWebSocketPermit,
     controller::WebSocketServices,
-    handshake::{self, AuthenticatedJoin, HandshakeError},
+    handshake::{self, AuthenticatedJoin, HandshakeError, WebSocketAuth},
     io::{close_writer_bounded, send_message_bounded, send_user_output_bounded},
 };
 use crate::{
@@ -34,7 +34,8 @@ use crate::{
     },
 };
 
-pub(super) struct WebSocketSession {
+struct AuthenticatedSession {
+    _proof: WebSocketAuth,
     writer: WsWriter,
     reader: WsReader,
     outbound: UserOutboundReceiver,
@@ -55,161 +56,166 @@ impl SessionExit {
     }
 }
 
-impl WebSocketSession {
-    pub(super) async fn run(
-        socket: WebSocket,
-        services: WebSocketServices,
-        remote: Arc<str>,
-        permit: PreAuthWebSocketPermit,
-    ) {
-        async move {
-            Span::current().record(
-                telemetry_field::REMOTE_ADDRESS,
-                field::display(remote.as_ref()),
-            );
-            services.metrics.record_ws_connection_accepted();
-            let handshake_span = telemetry::ws_handshake_span();
-            handshake_span.record(
-                telemetry_field::REMOTE_ADDRESS,
-                field::display(remote.as_ref()),
-            );
-            let Some(mut session) = Self::accept(socket, services, remote, permit)
-                .instrument(handshake_span)
-                .await
-            else {
-                return;
-            };
-            session.record_current_span();
-            session.metrics.record_ws_user_loop_started();
-            let exit = session.run_loop().await;
-            session.finish(exit).await;
+pub(super) async fn run(
+    socket: WebSocket,
+    services: WebSocketServices,
+    remote: Arc<str>,
+    permit: PreAuthWebSocketPermit,
+) {
+    async move {
+        Span::current().record(
+            telemetry_field::REMOTE_ADDRESS,
+            field::display(remote.as_ref()),
+        );
+        services.metrics.record_ws_connection_accepted();
+        let handshake_span = telemetry::ws_handshake_span();
+        handshake_span.record(
+            telemetry_field::REMOTE_ADDRESS,
+            field::display(remote.as_ref()),
+        );
+        if let Some(session) = establish(socket, services, remote, permit)
+            .instrument(handshake_span)
+            .await
+        {
+            session.serve().await;
         }
-        .instrument(telemetry::ws_upgrade_span())
-        .await;
     }
+    .instrument(telemetry::ws_upgrade_span())
+    .await;
+}
 
-    async fn accept(
-        socket: WebSocket,
-        services: WebSocketServices,
-        remote: Arc<str>,
-        permit: PreAuthWebSocketPermit,
-    ) -> Option<Self> {
-        let _guard = services.metrics.track_ws_handshake();
-        let (mut writer, mut reader) = socket.split();
-        let auth = {
-            let _guard = services.metrics.track_ws_authentication();
-            match handshake::authenticate(&services, &mut reader, remote.as_ref()).await {
-                Ok(auth) => auth,
-                Err(HandshakeError::PeerClosed) => return None,
-                Err(HandshakeError::Rejected(code)) => {
-                    handshake::reject(
-                        &services,
-                        &mut writer,
-                        code,
-                        remote.as_ref(),
-                        "rejecting websocket during authentication",
-                    )
-                    .await;
-                    return None;
-                }
-                Err(HandshakeError::Shutdown) => {
-                    close_writer_bounded(&mut writer, CloseCode::Leaving).await;
-                    return None;
-                }
-            }
-        };
-        drop(permit);
-        if services.shutdown.is_cancelled() {
+async fn establish(
+    mut socket: WebSocket,
+    services: WebSocketServices,
+    remote: Arc<str>,
+    permit: PreAuthWebSocketPermit,
+) -> Option<AuthenticatedSession> {
+    let _guard = services.metrics.track_ws_handshake();
+    let auth = {
+        let _guard = services.metrics.track_ws_authentication();
+        handshake::authenticate(&services, &mut socket, remote.as_ref()).await
+    };
+    let (mut writer, reader) = socket.split();
+    let join = match auth {
+        Ok(join) => join,
+        Err(HandshakeError::PeerClosed) => return None,
+        Err(HandshakeError::Rejected(code)) => {
+            handshake::reject(
+                &services,
+                &mut writer,
+                code,
+                remote.as_ref(),
+                "rejecting websocket during authentication",
+            )
+            .await;
+            return None;
+        }
+        Err(HandshakeError::Shutdown) => {
             close_writer_bounded(&mut writer, CloseCode::Leaving).await;
             return None;
         }
-        let (user, outbound) = Self::join(&services, auth, remote, &mut writer).await?;
-        let mut session = Self {
-            writer,
-            reader,
-            outbound,
-            user,
-            user_config: services.user,
-            metrics: Arc::clone(&services.metrics),
-            shutdown: services.shutdown,
-        };
-        session.metrics.record_ws_user_joined();
-        session.record_current_span();
-        if session.shutdown.is_cancelled() {
-            session
-                .finish(SessionExit::BeforeLoop(Some(CloseCode::Leaving)))
-                .await;
-            return None;
-        }
-        if !session.start().await {
-            return None;
-        }
-        Some(session)
+    };
+    drop(permit);
+    if services.shutdown.is_cancelled() {
+        close_writer_bounded(&mut writer, CloseCode::Leaving).await;
+        return None;
     }
+    let (proof, user, outbound) = admit(&services, join, remote, &mut writer).await?;
+    let mut session = AuthenticatedSession {
+        _proof: proof,
+        writer,
+        reader,
+        outbound,
+        user,
+        user_config: services.user,
+        metrics: Arc::clone(&services.metrics),
+        shutdown: services.shutdown,
+    };
+    session.metrics.record_ws_user_joined();
+    session.record_current_span();
+    if session.shutdown.is_cancelled() {
+        session
+            .finish(SessionExit::BeforeLoop(Some(CloseCode::Leaving)))
+            .await;
+        return None;
+    }
+    session.start().await
+}
 
-    #[instrument(
-        name = "room.join",
-        skip_all,
-        fields(room_id = %auth.room.uuid(), user_id = ?auth.claims.user_id)
-    )]
-    async fn join(
-        services: &WebSocketServices,
-        auth: AuthenticatedJoin,
-        remote: Arc<str>,
-        writer: &mut WsWriter,
-    ) -> Option<(User, UserOutboundReceiver)> {
-        let AuthenticatedJoin { room, claims } = auth;
-        let user_id = claims.user_id;
-        let limits = UserOutboundQueueLimits::new(
-            services.user.outbound_queue_capacity,
-            services.user.outbound_queue_byte_capacity,
-        );
-        let (outbound_tx, outbound) =
-            UserOutboundSender::channel_with_limits(limits, Arc::clone(&services.metrics));
-        match services
-            .sfu_core
-            .admit_user(
-                room.uuid(),
-                JoinUserRequest {
-                    user_id: user_id.clone(),
-                    label: claims.label,
-                    permissions: claims.permissions.unwrap_or_default(),
-                    sender: outbound_tx,
-                },
-            )
-            .await
-        {
-            Ok(session) => Some((User::new(session, remote), outbound)),
-            Err(_error) if services.shutdown.is_cancelled() => {
-                close_writer_bounded(writer, CloseCode::Leaving).await;
-                None
-            }
-            Err(error) => {
-                let code = match error {
-                    RoomManagerJoinError::RoomFull => CloseCode::RoomFull,
-                    RoomManagerJoinError::MissingRoom | RoomManagerJoinError::RouterState => {
-                        CloseCode::AuthFailed
-                    }
-                };
-                warn!(
-                    event = telemetry_event::WS_JOIN_FAILED,
-                    ?user_id,
-                    remote_address = remote.as_ref(),
-                    ?error,
-                    close_code = u16::from(code),
-                    "rejecting websocket because the authenticated user could not join the room"
-                );
-                handshake::reject(
-                    services,
-                    writer,
-                    code,
-                    remote.as_ref(),
-                    "rejecting websocket during user join",
-                )
-                .await;
-                None
-            }
+#[instrument(
+    name = "room.join",
+    skip_all,
+    fields(room_id = %room.uuid(), user_id = ?claims.user_id)
+)]
+async fn admit(
+    services: &WebSocketServices,
+    AuthenticatedJoin {
+        room,
+        claims,
+        proof,
+    }: AuthenticatedJoin,
+    remote: Arc<str>,
+    writer: &mut WsWriter,
+) -> Option<(WebSocketAuth, User, UserOutboundReceiver)> {
+    let user_id = claims.user_id;
+    let limits = UserOutboundQueueLimits::new(
+        services.user.outbound_queue_capacity,
+        services.user.outbound_queue_byte_capacity,
+    );
+    let (outbound_tx, outbound) =
+        UserOutboundSender::channel_with_limits(limits, Arc::clone(&services.metrics));
+    match services
+        .sfu_core
+        .admit_user(
+            room.uuid(),
+            JoinUserRequest {
+                user_id: user_id.clone(),
+                label: claims.label,
+                permissions: claims.permissions.unwrap_or_default(),
+                sender: outbound_tx,
+            },
+        )
+        .await
+    {
+        Ok(session) => Some((proof, User::new(session, remote), outbound)),
+        Err(_error) if services.shutdown.is_cancelled() => {
+            close_writer_bounded(writer, CloseCode::Leaving).await;
+            None
         }
+        Err(error) => {
+            let code = match error {
+                RoomManagerJoinError::RoomFull => CloseCode::RoomFull,
+                RoomManagerJoinError::MissingRoom | RoomManagerJoinError::RouterState => {
+                    CloseCode::AuthFailed
+                }
+            };
+            warn!(
+                event = telemetry_event::WS_JOIN_FAILED,
+                ?user_id,
+                remote_address = remote.as_ref(),
+                ?error,
+                close_code = u16::from(code),
+                "rejecting websocket because the authenticated user could not join the room"
+            );
+            handshake::reject(
+                services,
+                writer,
+                code,
+                remote.as_ref(),
+                "rejecting websocket during user join",
+            )
+            .await;
+            None
+        }
+    }
+}
+
+impl AuthenticatedSession {
+    async fn serve(mut self) {
+        self.record_current_span();
+        self.metrics.record_ws_user_loop_started();
+        let exit = self.run_loop().await;
+        self.finish(exit).await;
     }
 
     fn record_current_span(&self) {
@@ -223,7 +229,7 @@ impl WebSocketSession {
         );
     }
 
-    async fn start(&mut self) -> bool {
+    async fn start(mut self) -> Option<Self> {
         let metrics = Arc::clone(&self.metrics);
         let _guard = metrics.track_ws_user_initialization();
         let span = telemetry::activated_span(info_span!(
@@ -233,12 +239,12 @@ impl WebSocketSession {
             connection_id = ?self.user.connection_id(),
             remote_address = %self.user.remote_address()
         ));
-        async {
+        async move {
             match self.start_inner().await {
-                Ok(()) => true,
+                Ok(()) => Some(self),
                 Err(exit) => {
                     self.finish(exit).await;
-                    false
+                    None
                 }
             }
         }

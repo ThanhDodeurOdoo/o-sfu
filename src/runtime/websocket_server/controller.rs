@@ -1,7 +1,7 @@
 //! websocket controller for one upgraded socket
 //!
 //! this module bounds upgrade admission before handing the socket to
-//! [`super::session::WebSocketSession`]
+//! [`super::session::run`]
 
 use std::sync::Arc;
 
@@ -13,10 +13,7 @@ use axum::{
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
-use super::{
-    admission::PreAuthWebSocketAdmissionRejection, io::MAX_CLIENT_FRAME_BYTES,
-    session::WebSocketSession,
-};
+use super::{admission::PreAuthWebSocketAdmissionRejection, io::MAX_CLIENT_FRAME_BYTES, session};
 use crate::{
     config::{AuthConfig, UserConfig},
     core::prelude::SfuCore,
@@ -73,7 +70,7 @@ pub(crate) async fn upgrade(
         .max_message_size(MAX_CLIENT_FRAME_BYTES)
         .max_frame_size(MAX_CLIENT_FRAME_BYTES)
         .on_upgrade(move |socket| async move {
-            WebSocketSession::run(socket, services, remote_address, pre_auth_permit).await;
+            session::run(socket, services, remote_address, pre_auth_permit).await;
             drop(session_task);
         })
 }

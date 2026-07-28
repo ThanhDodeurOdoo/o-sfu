@@ -15,7 +15,7 @@ const SLOW_READER_RECV_BUFFER_BYTES: u32 = 1024;
 #[tokio::test]
 async fn websocket_rejects_pre_auth_connections_over_configured_capacity() {
     let server = TestServerBuilder::new()
-        .pre_auth_capacity(1, 1)
+        .pre_auth_capacity(1, 2)
         .spawn()
         .await;
     assert!(server.is_some());
