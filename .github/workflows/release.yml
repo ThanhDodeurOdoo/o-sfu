@@ -187,13 +187,13 @@ jobs:
 
       - name: Generate artifact attestations
         # actions/attest v4
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-checksums: ${{ steps.assets.outputs.checksums }}
 
       - name: Generate image attestation
         # actions/attest v4
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6
         with:
           subject-name: ${{ steps.release.outputs.image }}
           subject-digest: ${{ steps.image.outputs.digest }}
