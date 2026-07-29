@@ -70,6 +70,7 @@ use crate::{
                 media_registry::RegisteredMediaHandle,
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
+                routing_miss::PacketLoopRoutingMissKey,
                 slots::ConsumerStreamHandle,
                 source_route::MediaRouteDestination,
                 state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
@@ -896,11 +897,8 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         Some(local_ice_credentials.pass.as_bytes()),
     )
     .ok_or("failed to serialize STUN binding request")?;
-    let miss_key = super::super::routing_miss::PacketLoopRoutingMissKey::new(
-        harness.source_addr,
-        harness.candidate_addr,
-        &packet,
-    );
+    let miss_key =
+        PacketLoopRoutingMissKey::new(harness.source_addr, harness.candidate_addr, &packet);
     harness
         .demux
         .record_miss(miss_key, &packet, harness.source_addr, Instant::now());
@@ -1518,6 +1516,11 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
             )
             .is_ok()
         );
+        let source_addr = SocketAddr::from(([127, 0, 0, 1], 42_100));
+        let packet = sample_rtp_packet(421, 422);
+        let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &packet);
+        demux.record_miss(miss_key, &packet, source_addr, Instant::now());
+        assert!(demux.should_skip_scan(miss_key, &packet));
         assert!(
             probe_tx
                 .send(DebugProbeRequest::new(
@@ -1566,6 +1569,7 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
             },
             first_input,
         );
+        assert!(!demux.should_skip_scan(miss_key, &packet));
         dirty_result
             .await
             .map_err(|_error| "dirty probe response should arrive")?;

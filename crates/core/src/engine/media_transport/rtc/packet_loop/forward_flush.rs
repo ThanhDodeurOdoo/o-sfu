@@ -60,6 +60,7 @@ pub(super) fn record_incoming_stats(
     let mut pending_packets = take(&mut buffers.pending_packets);
     for packet in &mut pending_packets {
         if let Some(facts) = packet.resolve_facts(state) {
+            let payload_len = packet.payload().len();
             let transport_media_id = facts.src_media;
             if packet.route_control_mid().is_some() {
                 // MID proves which producer this packet belongs to. Persist the
@@ -118,11 +119,7 @@ pub(super) fn record_incoming_stats(
                 );
             }
             let first_ingress = state
-                .record_incoming_bitrate(
-                    transport_media_id,
-                    packet.received_at(),
-                    facts.payload_len,
-                )
+                .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
                 .unwrap_or(false);
             if first_ingress {
                 cold_path();
@@ -133,7 +130,7 @@ pub(super) fn record_incoming_stats(
                     user_id = ?src_key.user_id(),
                     media_worker_id = src_key.media_worker_id().as_usize(),
                     ?transport_media_id,
-                    payload_bytes = facts.payload_len,
+                    payload_bytes = payload_len,
                     "observed first RTP ingress for published media"
                 );
                 buffers.push_first_video_keyframe(
@@ -142,7 +139,7 @@ pub(super) fn record_incoming_stats(
                     packet.received_at(),
                 );
             }
-            rtp.record_ingress(facts.payload_len);
+            rtp.record_ingress(payload_len);
         }
     }
     buffers.pending_packets = pending_packets;
@@ -323,13 +320,8 @@ pub fn drain_relay_packets(
 
 /// Execute planned forwarding destinations for all staged packets.
 ///
-/// # Payload lifetime
-///
-/// The planner orders forwards by packet index. For relay destinations, this
-/// function promotes the source packet to a shared relay packet once and reuses
-/// it for every relay destination for that packet. For local RTC destinations,
-/// the destination can move the payload when it is the last destination and
-/// clone only when an earlier destination still needs the bytes.
+/// The planner orders forwards by packet index. Each relay destination receives
+/// a distinct packet wrapper whose payload is shared through `Arc<[u8]>`.
 ///
 /// # Error handling
 ///
@@ -351,7 +343,7 @@ pub fn flush_forward_routes(
         };
         let destination = &forward.destination;
         let destination_kind = destination.metrics_kind();
-        let payload_len = packet.payload_len();
+        let payload_len = packet.payload().len();
         match destination.send(state, packet) {
             ForwardSendOutcome::LocalRtc {
                 payload_bytes: Some(payload_len),

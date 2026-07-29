@@ -19,9 +19,7 @@
 //!
 //! Destination order is part of the flush contract. Packet sinks are planned
 //! first so origin-side side effects see publisher packets before relay or
-//! local egress. Relay destinations are planned before local RTC destinations
-//! so the flush step can still identify the last destination for payload move
-//! versus clone decisions.
+//! local egress. Relay destinations are planned before local RTC destinations.
 
 use str0m::media::Rid;
 
