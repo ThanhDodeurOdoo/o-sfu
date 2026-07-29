@@ -197,8 +197,6 @@ impl PacketLoopTurn {
                 &mut self.buffers.forwards,
             );
         }
-        // flushing executes local RTC sends, relay sends and packet-sink fanout
-        // planned destination order preserves payload reuse opportunities
         flush_forward_routes(
             state,
             &config.metrics,
@@ -288,15 +286,19 @@ impl PacketLoopTurn {
         match next_input {
             PacketLoopTurnInput::Timeout => {}
             PacketLoopTurnInput::Control(command) => {
-                handle_control_input(
+                command.dispatch(
                     context.packet_loop_state,
-                    context.bitrate_registry,
-                    context.snapshot_state,
-                    context.candidate_addr,
-                    context.config,
-                    command,
-                    context.demux,
+                    &WorkerCommandContext {
+                        bitrate_registry: context.bitrate_registry,
+                        snapshot_state: context.snapshot_state,
+                        candidate_addr: context.candidate_addr,
+                        now: Instant::now(),
+                        config: &context.config.worker,
+                        runtime_metrics: &context.config.metrics,
+                        rtc_metrics: &context.config.rtc_metrics,
+                    },
                 );
+                context.demux.clear_on_topology_change();
             }
             PacketLoopTurnInput::RelayPacket => {
                 self.staged_relay_packet = context.inputs.take_woken_relay_packet();
@@ -505,34 +507,6 @@ pub fn route_queued_ingress_datagrams_for_benchmark(
         routed += 1;
     }
     routed
-}
-
-/// applies control input and forgets cached demux evidence
-///
-/// this is conservative because control input can change which session owns a
-/// source tuple or ICE username fragment
-fn handle_control_input(
-    packet_loop_state: &mut PacketLoopState,
-    bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    candidate_addr: SocketAddr,
-    config: &PacketLoopConfig,
-    command: PacketLoopControlInput,
-    demux: &mut DemuxRecoveryState,
-) {
-    command.dispatch(
-        packet_loop_state,
-        &WorkerCommandContext {
-            bitrate_registry,
-            snapshot_state,
-            candidate_addr,
-            now: Instant::now(),
-            config: &config.worker,
-            runtime_metrics: &config.metrics,
-            rtc_metrics: &config.rtc_metrics,
-        },
-    );
-    demux.clear_on_topology_change();
 }
 
 /// returns the next time the loop must wake without external input

@@ -132,8 +132,6 @@ pub(super) struct PacketFacts {
     pub(super) src_media: TransportMediaId,
     /// resolved RID used by packet-layer gates
     pub(super) rid: Option<Rid>,
-    /// payload length observed before local egress can move the payload
-    pub(super) payload_len: usize,
     /// room that owns source-policy wakeups for this packet
     pub(super) room_instance_id: RoomInstanceId,
     /// audio activity flag projected from RTP header extensions
@@ -247,7 +245,6 @@ impl ForwardedPacket {
         let facts = PacketFacts {
             src_media,
             rid,
-            payload_len: self.payload_len(),
             room_instance_id: self.src_key(state)?.room_instance_id(),
             voice_activity: extensions.voice_activity,
             audio_level: extensions.audio_level,
@@ -314,10 +311,6 @@ impl ForwardedPacket {
                 header: self.rtp_header().clone(),
             }),
         })
-    }
-
-    pub(super) fn payload_len(&self) -> usize {
-        self.payload.len()
     }
 
     pub(super) const fn visits_origin_sinks(&self) -> bool {
