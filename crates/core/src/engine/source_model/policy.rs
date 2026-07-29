@@ -299,6 +299,8 @@ pub enum PolicyPauseReason {
     MissingUsableLayer,
     /// the active-audio-speaker cap withheld this route
     AudioSpeakerLimit,
+    /// the receiver deafened itself so no audio is delivered to it
+    ReceiverDeafened,
     /// the per-receiver live-video cap withheld this route
     VideoDownloadLimit,
     /// the source bitrate cap withheld this route

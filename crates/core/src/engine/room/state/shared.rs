@@ -59,6 +59,10 @@ impl ActiveUser {
         self.server_featured
     }
 
+    pub(in crate::engine::room) const fn is_deaf(&self) -> bool {
+        matches!(self.info.is_deaf, Some(true))
+    }
+
     pub(in crate::engine::room) fn set_featured(&mut self, featured: Option<bool>) {
         self.server_featured = featured;
     }

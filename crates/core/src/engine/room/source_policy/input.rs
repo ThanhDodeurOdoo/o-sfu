@@ -27,6 +27,7 @@ pub(super) struct SourcePolicySnapshot<'a> {
     pub(super) receiver_bandwidth_by_connection: BTreeMap<ConnectionId, Bitrate>,
     pub(super) active_speaker_media_ids: BTreeSet<TransportMediaId>,
     pub(super) admitted_audio_media_ids: BTreeSet<TransportMediaId>,
+    pub(super) deaf_receiver_connection_ids: BTreeSet<ConnectionId>,
     pub(super) featured_source_user_ids: BTreeSet<UserId>,
     pub(super) active_speaker_rank_by_user: BTreeMap<UserId, usize>,
     pub(super) featured_user_updates: Vec<FeaturedUserUpdate>,
@@ -48,6 +49,7 @@ impl<'a> SourcePolicySnapshot<'a> {
         let active_speakers = active_speaker_media_ids(&ranked_sources);
         let admitted_audio_speakers =
             admitted_audio_media_ids(&ranked_sources, media_limits.max_active_audio_speakers());
+        let deaf_receiver_connection_ids = deaf_receiver_connection_ids(state);
         let featured_source_user_ids = featured_source_user_ids(state, &ranked_sources);
         let active_speaker_rank_by_user = active_speaker_rank_by_user(state, &ranked_sources);
         let desired_featured_user_id = ranked_sources.iter().find_map(|source| {
@@ -61,6 +63,7 @@ impl<'a> SourcePolicySnapshot<'a> {
         let audio_reserve_by_connection = audio_reserve_by_connection(
             &routes,
             &admitted_audio_speakers,
+            &deaf_receiver_connection_ids,
             tuning.audio_reserve_per_speaker,
         );
         Self {
@@ -71,6 +74,7 @@ impl<'a> SourcePolicySnapshot<'a> {
             ),
             active_speaker_media_ids: active_speakers,
             admitted_audio_media_ids: admitted_audio_speakers,
+            deaf_receiver_connection_ids,
             featured_source_user_ids,
             active_speaker_rank_by_user,
             featured_user_updates,
@@ -86,14 +90,15 @@ impl<'a> SourcePolicySnapshot<'a> {
 /// connection.
 ///
 /// Each receiver reserves `per_speaker` for every admitted audio route it
-/// actually consumes, so a receiver that disabled audio (or a publisher with no
-/// consumer routes) reserves nothing and keeps its full video budget. The
-/// reserve is fixed per route, so it is deterministic and independent of
-/// policy-turn cadence. A zero per-speaker rate disables the reservation and
-/// returns an empty map.
+/// actually consumes, so a receiver that disabled audio, deafened itself (or a
+/// publisher with no consumer routes) reserves nothing and keeps its full video
+/// budget. The reserve is fixed per route, so it is deterministic and
+/// independent of policy-turn cadence. A zero per-speaker rate disables the
+/// reservation and returns an empty map.
 fn audio_reserve_by_connection(
     routes: &[ConsumerRouteView<'_>],
     admitted_audio_media_ids: &BTreeSet<TransportMediaId>,
+    deaf_receiver_connection_ids: &BTreeSet<ConnectionId>,
     per_speaker: Bitrate,
 ) -> BTreeMap<ConnectionId, Bitrate> {
     if per_speaker.as_bps() == 0 {
@@ -107,6 +112,9 @@ fn audio_reserve_by_connection(
             continue;
         }
         let connection_id = route.route.consumer_session_key().connection_id();
+        if deaf_receiver_connection_ids.contains(&connection_id) {
+            continue;
+        }
         let reserve = reserve_by_connection
             .entry(connection_id)
             .or_insert_with(Bitrate::zero);
@@ -181,6 +189,15 @@ fn admitted_audio_media_ids(
         .iter()
         .take(limit)
         .map(|source| source.transport_media_id())
+        .collect()
+}
+
+fn deaf_receiver_connection_ids(state: &RoomState) -> BTreeSet<ConnectionId> {
+    state
+        .users
+        .values()
+        .filter(|user| user.is_deaf())
+        .map(|user| user.connection_id)
         .collect()
 }
 

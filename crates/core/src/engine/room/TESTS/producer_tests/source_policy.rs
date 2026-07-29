@@ -6,7 +6,10 @@ use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId, TransportTeardown,
     },
-    room::{DeactivateIntentOutcome, source_policy::SourcePolicyTransaction},
+    room::{
+        DeactivateIntentOutcome, media_graph::ReceiverRouteActivity,
+        source_policy::SourcePolicyTransaction,
+    },
     source_model::{
         ConsumerSourceSelection, PublishedSourceId, SourceDeactivateIntent, SourcePolicy,
         SourcePublishIntent,
@@ -534,6 +537,438 @@ async fn audio_speaker_limit_ignores_foreign_and_inactive_sources() {
 }
 
 #[tokio::test]
+async fn deafening_a_receiver_pauses_its_audio_and_keeps_video() {
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    scenario
+        .publish_audio_and_camera_for_users(&[1, 2, 3])
+        .await;
+    let first_audio = scenario.audio_media_id(1).await;
+    scenario.refresh_policy().await;
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        vec![UserId::Integer(2), UserId::Integer(3)]
+    );
+
+    scenario.set_deaf(2, true).await;
+
+    // User 1's audio now reaches user 3 only, so the deafened receiver is the
+    // single route that stopped being forwarded.
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        vec![UserId::Integer(3)]
+    );
+    for publisher_user_id in [UserId::Integer(1), UserId::Integer(3)] {
+        assert_subscription_policy_pause_reason(
+            &scenario.room,
+            &scenario.adapter,
+            &UserId::Integer(2),
+            &publisher_user_id,
+            TestSourceKind::AudioDetector,
+            Some(DiagnosticsPolicyPauseReason::ReceiverDeafened),
+        )
+        .await;
+    }
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(3),
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        None,
+    )
+    .await;
+    // A receiver-side audio decision must not touch video delivery.
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn undeafening_restores_audio_on_the_negotiated_route() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    scenario.publish_audio_and_camera(1).await;
+    let first_audio = scenario.audio_media_id(1).await;
+    scenario.refresh_policy().await;
+    let destination_before =
+        consumer_destination_identity(&scenario.adapter, first_audio, &UserId::Integer(2)).await;
+
+    scenario.set_deaf(2, true).await;
+    scenario.set_deaf(2, false).await;
+
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        vec![UserId::Integer(2)]
+    );
+    assert_eq!(
+        consumer_destination_identity(&scenario.adapter, first_audio, &UserId::Integer(2)).await,
+        destination_before
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn undeafening_recomputes_the_audio_speaker_limit() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3],
+        RoomMediaLimits::try_new(1, 10).unwrap(),
+    )
+    .await;
+    for user_id in [UserId::Integer(1), UserId::Integer(3)] {
+        publish_track(
+            &scenario.room,
+            &user_id,
+            TestSourceKind::AudioDetector,
+            MediaKind::Audio,
+            test_audio_rtp_parameters(),
+            &scenario.adapter,
+        )
+        .await;
+    }
+    let first_audio = scenario.audio_media_id(1).await;
+    let third_audio = scenario.audio_media_id(3).await;
+    // User 1 is the louder, more recent speaker, so it wins the single slot and
+    // user 3 is the route the speaker cap withholds.
+    scenario
+        .mark_active_speakers_with_levels([(third_audio, -30), (first_audio, -20)])
+        .await;
+    scenario.refresh_policy().await;
+    scenario.set_deaf(2, true).await;
+    for publisher_user_id in [UserId::Integer(1), UserId::Integer(3)] {
+        assert_subscription_policy_pause_reason(
+            &scenario.room,
+            &scenario.adapter,
+            &UserId::Integer(2),
+            &publisher_user_id,
+            TestSourceKind::AudioDetector,
+            Some(DiagnosticsPolicyPauseReason::ReceiverDeafened),
+        )
+        .await;
+    }
+
+    scenario.set_deaf(2, false).await;
+
+    // Undeafening restores only the admitted speaker; the capped route keeps its
+    // own pause reason instead of being blindly resumed. User 3 receives the
+    // admitted speaker throughout because it never deafened.
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        vec![UserId::Integer(2), UserId::Integer(3)]
+    );
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [third_audio]).await,
+        Vec::<UserId>::new()
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        None,
+    )
+    .await;
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(3),
+        TestSourceKind::AudioDetector,
+        Some(DiagnosticsPolicyPauseReason::AudioSpeakerLimit),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn audio_published_while_the_receiver_is_deaf_starts_paused() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    scenario.set_deaf(2, true).await;
+
+    scenario.publish_audio_and_camera(1).await;
+
+    let first_audio = scenario.audio_media_id(1).await;
+    // The route is set up but never forwarded, so no audio leaks between the
+    // publish and the next policy turn.
+    let destination_at_publish =
+        consumer_destination_identity(&scenario.adapter, first_audio, &UserId::Integer(2)).await;
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        Vec::<UserId>::new()
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        Some(DiagnosticsPolicyPauseReason::ReceiverDeafened),
+    )
+    .await;
+
+    scenario.set_deaf(2, false).await;
+
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        vec![UserId::Integer(2)]
+    );
+    assert_eq!(
+        consumer_destination_identity(&scenario.adapter, first_audio, &UserId::Integer(2)).await,
+        destination_at_publish
+    );
+}
+
+#[tokio::test]
+async fn resubscribing_while_deaf_keeps_transport_and_diagnostics_agreed() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    scenario.publish_audio_and_camera(1).await;
+    let first_audio = scenario.audio_media_id(1).await;
+    scenario.set_deaf(2, true).await;
+
+    // Receiver intent only moves the subscription flag. It must not reopen the
+    // transport destination behind a policy pause, or delivery and diagnostics
+    // would disagree until some later turn happened to change the pause reason.
+    scenario.subscribe_audio(2, 1, true).await;
+
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        Vec::<UserId>::new()
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        Some(DiagnosticsPolicyPauseReason::ReceiverDeafened),
+    )
+    .await;
+
+    scenario.set_deaf(2, false).await;
+
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        vec![UserId::Integer(2)]
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_deaf_receiver_keeps_its_video_subscription_deliverable() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    scenario.publish_audio_and_camera(1).await;
+    let first_camera = source_media_id(
+        &scenario.room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
+    scenario.set_deaf(2, true).await;
+
+    // Deafening is audio only. Stamping ReceiverDeafened onto a video route would
+    // freeze it permanently, because audio policy iterates audio routes and so
+    // could never clear it again.
+    scenario.subscribe_scalable_video(2, 1, true).await;
+
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_camera]).await,
+        vec![UserId::Integer(2)]
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn deafening_releases_the_receivers_audio_budget_reserve() {
+    let tuning = VideoAdaptationTuning::try_new(3, 2, 2, 3, 0, Bitrate::from_kbps(40))
+        .expect("valid tuning should build");
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2, 3], tuning).await;
+    for user_id in [UserId::Integer(1), UserId::Integer(3)] {
+        publish_track(
+            &scenario.room,
+            &user_id,
+            TestSourceKind::AudioDetector,
+            MediaKind::Audio,
+            test_audio_rtp_parameters(),
+            &scenario.adapter,
+        )
+        .await;
+    }
+    let first_audio = scenario.audio_media_id(1).await;
+    let third_audio = scenario.audio_media_id(3).await;
+    scenario
+        .mark_active_speakers([first_audio, third_audio])
+        .await;
+    scenario.refresh_policy().await;
+
+    // Receiver 2 has no video, so its whole BWE demand is the audio reserve for
+    // the two admitted speakers it consumes.
+    let receiver_user_id = UserId::Integer(2);
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        Bitrate::from_kbps(80),
+    )
+    .await;
+
+    scenario.set_deaf(2, true).await;
+
+    // A deafened receiver consumes no audio, so it must stop reserving video
+    // budget for audio it will never get.
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        Bitrate::zero(),
+    )
+    .await;
+
+    scenario.set_deaf(2, false).await;
+
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        Bitrate::from_kbps(80),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn reactivating_an_inactive_subscription_while_deaf_plans_no_active_destination() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    scenario.publish_audio_and_camera(1).await;
+    let receiver_user_id = UserId::Integer(2);
+    let publisher_user_id = UserId::Integer(1);
+    // The route is inactive when the deafen turn runs, so the policy snapshot
+    // skips it and it never gets stamped with a pause reason.
+    scenario.subscribe_audio(2, 1, false).await;
+    scenario.set_deaf(2, true).await;
+
+    // Transport applies before the policy turn that would correct it, so the
+    // planned activity itself must already be inactive; otherwise the
+    // destination opens and queued RTP reaches a deafened receiver.
+    let connection_id = user_connection_id(&scenario.room, &receiver_user_id).await;
+    let intents = subscription_intents_from_test_states(&TestSubscriptionStates {
+        audio_detector: Some(true),
+        ..TestSubscriptionStates::default()
+    });
+    let work = {
+        let mut state = scenario.room.state.write().await;
+        state.plan_receiver_route_work(
+            &receiver_user_id,
+            connection_id,
+            &publisher_user_id,
+            &intents,
+        )
+    };
+
+    assert_eq!(
+        work.activities
+            .iter()
+            .map(ReceiverRouteActivity::active)
+            .collect::<Vec<_>>(),
+        vec![false]
+    );
+}
+
+#[tokio::test]
+async fn each_deafen_toggle_moves_audio_delivery() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    scenario.publish_audio_and_camera(1).await;
+    let first_audio = scenario.audio_media_id(1).await;
+    let receiver_user_id = UserId::Integer(2);
+
+    for (toggle, is_deaf) in [true, false, true, false, true].into_iter().enumerate() {
+        scenario.set_deaf(2, is_deaf).await;
+
+        let expected_receivers = if is_deaf {
+            Vec::new()
+        } else {
+            vec![receiver_user_id.clone()]
+        };
+        assert_eq!(
+            active_destination_receivers(&scenario.adapter, [first_audio]).await,
+            expected_receivers,
+            "toggle {toggle} to is_deaf={is_deaf} should move audio delivery"
+        );
+        assert_subscription_policy_pause_reason(
+            &scenario.room,
+            &scenario.adapter,
+            &receiver_user_id,
+            &UserId::Integer(1),
+            TestSourceKind::AudioDetector,
+            is_deaf.then_some(DiagnosticsPolicyPauseReason::ReceiverDeafened),
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn deafen_from_a_stale_connection_keeps_audio_flowing() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    scenario.publish_audio_and_camera(1).await;
+    let first_audio = scenario.audio_media_id(1).await;
+    let receiver_user_id = UserId::Integer(2);
+    let current_connection_id = user_connection_id(&scenario.room, &receiver_user_id).await;
+
+    scenario
+        .set_deaf_for_connection(&receiver_user_id, test_connection_id(u64::MAX), true)
+        .await;
+
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        vec![receiver_user_id.clone()]
+    );
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_user_id,
+        &UserId::Integer(1),
+        TestSourceKind::AudioDetector,
+        None,
+    )
+    .await;
+
+    scenario
+        .set_deaf_for_connection(&receiver_user_id, current_connection_id, true)
+        .await;
+
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_audio]).await,
+        Vec::<UserId>::new()
+    );
+}
+
+#[tokio::test]
 async fn per_receiver_audio_reserve_excludes_own_and_counts_only_consumed_audio() {
     // Reserve 40 kbps of video budget per admitted audio speaker the receiver
     // actually consumes; no headroom so the arithmetic is exact.
@@ -741,14 +1176,15 @@ async fn video_download_limit_pauses_lowest_ranked_receiver_routes() {
         None,
     )
     .await;
+    // Receiver 2 is over its one-video cap, so it keeps user 3's camera and drops
+    // user 1's, while receivers 1 and 3 stay within the cap and keep theirs.
     assert_eq!(
-        active_destination_count_for_receiver(
-            &scenario.adapter,
-            [first_camera_media_id, third_camera_media_id],
-            &UserId::Integer(2),
-        )
-        .await,
-        1
+        active_destination_receivers(&scenario.adapter, [first_camera_media_id]).await,
+        vec![UserId::Integer(3)]
+    );
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [third_camera_media_id]).await,
+        vec![UserId::Integer(1), UserId::Integer(2)]
     );
 }
 

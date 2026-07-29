@@ -18,7 +18,7 @@ pub(super) use super::super::{
 pub(super) use crate::{
     RoomMediaLimits, VideoAdaptationTuning,
     engine::{
-        ConnectionId, TestSourceKind, UserId, UserPermissions, VideoLayoutIntent,
+        ConnectionId, TestSourceKind, UserId, UserInfo, UserPermissions, VideoLayoutIntent,
         media_transport::{
             AppliedSessionAnswer, MediaTransport, TransportMediaId, TransportSessionHealth,
             test_support::{
@@ -549,6 +549,89 @@ impl SourcePolicyScenario {
         for _ in 0..3 {
             self.refresh_policy().await;
         }
+    }
+
+    pub(super) async fn set_deaf(&self, raw_user_id: i64, is_deaf: bool) {
+        let user_id = UserId::Integer(raw_user_id);
+        let connection_id = user_connection_id(&self.room, &user_id).await;
+        self.set_deaf_for_connection(&user_id, connection_id, is_deaf)
+            .await;
+    }
+
+    /// Sends a deafen presence update on an explicit connection.
+    ///
+    /// Tests use this to replay a presence update from a connection that is no
+    /// longer current, which room state must reject.
+    pub(super) async fn set_deaf_for_connection(
+        &self,
+        user_id: &UserId,
+        connection_id: ConnectionId,
+        is_deaf: bool,
+    ) {
+        self.room
+            .update_user_info(
+                user_id,
+                connection_id,
+                &self.adapter,
+                UserInfo {
+                    is_deaf: Some(is_deaf),
+                    ..UserInfo::default()
+                },
+            )
+            .await;
+    }
+
+    /// Replays a receiver audio subscribe intent, as a reconnecting client does.
+    pub(super) async fn subscribe_audio(
+        &self,
+        receiver_user_id: i64,
+        source_user_id: i64,
+        active: bool,
+    ) {
+        self.subscribe(
+            receiver_user_id,
+            source_user_id,
+            TestSubscriptionStates {
+                audio_detector: Some(active),
+                ..TestSubscriptionStates::default()
+            },
+        )
+        .await;
+    }
+
+    pub(super) async fn subscribe_scalable_video(
+        &self,
+        receiver_user_id: i64,
+        source_user_id: i64,
+        active: bool,
+    ) {
+        self.subscribe(
+            receiver_user_id,
+            source_user_id,
+            TestSubscriptionStates {
+                scalable_video: Some(active),
+                ..TestSubscriptionStates::default()
+            },
+        )
+        .await;
+    }
+
+    async fn subscribe(
+        &self,
+        receiver_user_id: i64,
+        source_user_id: i64,
+        states: TestSubscriptionStates,
+    ) {
+        let receiver_user_id = UserId::Integer(receiver_user_id);
+        let source_user_id = UserId::Integer(source_user_id);
+        let intents = subscription_intents_from_test_states(&states);
+        assert!(
+            self.room
+                .test_api()
+                .media()
+                .update_subscription(&receiver_user_id, &source_user_id, &intents, &self.adapter)
+                .await
+        );
     }
 
     pub(super) async fn set_scalable_video_layout(

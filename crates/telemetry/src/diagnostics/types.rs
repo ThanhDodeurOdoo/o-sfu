@@ -59,6 +59,7 @@ pub enum DiagnosticsPolicyPauseReason {
     OverflowTile,
     MissingUsableLayer,
     AudioSpeakerLimit,
+    ReceiverDeafened,
     VideoDownloadLimit,
     SourceBitrateLimit,
 }

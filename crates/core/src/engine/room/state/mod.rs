@@ -8,7 +8,7 @@ pub use self::{
     membership::{
         ConnectionCloseCommit, DisconnectCommit, JoinCommit, LifecycleEffects, PresenceCommit,
     },
-    shared::RoomState,
+    shared::{ActiveUser, RoomState},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

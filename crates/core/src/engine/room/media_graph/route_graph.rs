@@ -13,7 +13,7 @@ use crate::engine::{
         RelayRouteActivity, TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
         TransportSourceKey,
     },
-    source_model::{PublishedSourceId, SourceSubscriptionIntent},
+    source_model::{PolicyPauseReason, PublishedSourceId, SourceSubscriptionIntent},
 };
 
 #[derive(Debug, Default)]
@@ -158,6 +158,7 @@ impl RouteGraph {
         source_id: PublishedSourceId,
         connection_id: ConnectionId,
         active: bool,
+        policy_pause_reason: Option<PolicyPauseReason>,
     ) -> Option<Vec<RelayRouteEffect>> {
         let relay = {
             let current = self
@@ -171,6 +172,9 @@ impl RouteGraph {
                 return None;
             }
             current.selection.set_active(active);
+            if let Some(reason) = policy_pause_reason {
+                current.selection.set_policy_pause_reason(Some(reason));
+            }
             current
                 .realization
                 .set_relay_activity(RelayRouteActivity::from_active(active))
