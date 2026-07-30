@@ -11,8 +11,8 @@
 //!
 //! Same-room worker placement is not decided here. The factory
 //! gives a room its stable instance id and primary router id, while
-//! `RoomManager::join_user` assigns workers from live load snapshots when
-//! sessions arrive.
+//! `RoomManager::join_user` assigns workers from packet-loop heartbeat delays
+//! when sessions arrive.
 
 use std::sync::{Arc, Mutex};
 

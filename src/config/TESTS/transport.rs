@@ -1,7 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use anyhow::Result;
-use o_sfu_core::prelude::{LocalSpilloverPolicy, RoomSpilloverMode};
 
 use super::{
     Bitrate, Env, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
@@ -116,36 +115,14 @@ fn load_transport_config_accepts_room_spillover_policy() -> Result<()> {
     let config = load_transport_config_with_defaults(&[
         ("RTC_MEDIA_WORKER_COUNT", "3"),
         ("ROOM_MAX_LOCAL_ROUTERS", "2"),
-        ("ROOM_SPILLOVER_MIN_RECEIVERS", "8"),
-        ("ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER", "9"),
-        ("ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE", "10"),
-        ("ROOM_SPILLOVER_EGRESS_BITRATE_BPS", "1200"),
-        ("ROOM_SPILLOVER_PACKET_LOOP_LAG_MS", "7"),
-        ("ROOM_SPILLOVER_COMMAND_BACKLOG", "11"),
-        ("ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH", "12"),
-        ("ROOM_SPILLOVER_WORKER_PRESSURE", "50"),
-        ("ROOM_SPILLOVER_ACTIVATION_WINDOW", "1"),
+        ("ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS", "7"),
     ])?;
 
     assert_eq!(config.room_worker_policy.max_local_routers(), 2);
-    let spillover = config.room_worker_policy.spillover();
-    assert!(matches!(
-        spillover,
-        RoomSpilloverMode::LoadTriggeredLocalSpillover(_)
-    ));
-    let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) = spillover else {
-        anyhow::bail!("spillover policy should be load triggered");
-    };
-    let policy = policy.parts();
-    assert_eq!(policy.min_receiver_count, 8);
-    assert_eq!(policy.max_active_consumers_per_router, 9);
-    assert_eq!(policy.max_fanout_per_source, 10);
-    assert_eq!(policy.egress_bitrate_threshold, Bitrate::from_bps(1_200));
-    assert_eq!(policy.packet_loop_lag_threshold_ms, 7);
-    assert_eq!(policy.command_backlog_threshold, 11);
-    assert_eq!(policy.relay_mailbox_depth_threshold, 12);
-    assert_eq!(policy.worker_pressure_threshold, 50);
-    assert_eq!(policy.activation_window, 1);
+    assert_eq!(
+        config.room_worker_policy.packet_loop_delay_threshold_ms(),
+        7
+    );
     Ok(())
 }
 
@@ -210,36 +187,16 @@ fn load_transport_config_rejects_invalid_video_adaptation_tuning() {
 }
 
 #[test]
-fn load_transport_config_accepts_explicit_bounded_spillover_mode() -> Result<()> {
-    let config = load_transport_config_with_defaults(&[
-        ("RTC_MEDIA_WORKER_COUNT", "3"),
-        ("ROOM_MAX_LOCAL_ROUTERS", "2"),
-        ("ROOM_SPILLOVER_MODE", "bounded"),
-    ])?;
-
-    assert_eq!(
-        config.room_worker_policy.spillover(),
-        RoomSpilloverMode::BoundedLocalSpillover
-    );
-    Ok(())
-}
-
-#[test]
-fn load_transport_config_load_policy_defaults_are_conservative() -> Result<()> {
+fn load_transport_config_uses_default_spillover_delay() -> Result<()> {
     let config = load_transport_config_with_defaults(&[
         ("RTC_MEDIA_WORKER_COUNT", "2"),
         ("ROOM_MAX_LOCAL_ROUTERS", "2"),
     ])?;
 
-    let spillover = config.room_worker_policy.spillover();
-    assert!(matches!(
-        spillover,
-        RoomSpilloverMode::LoadTriggeredLocalSpillover(_)
-    ));
-    let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) = spillover else {
-        anyhow::bail!("spillover policy should be load triggered");
-    };
-    assert_eq!(policy, LocalSpilloverPolicy::conservative());
+    assert_eq!(
+        config.room_worker_policy.packet_loop_delay_threshold_ms(),
+        RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS
+    );
     Ok(())
 }
 
@@ -319,45 +276,9 @@ fn load_transport_config_rejects_invalid_transport_values() {
 fn load_transport_config_rejects_invalid_room_policy_values() {
     assert_invalid_transport_cases(&[
         InvalidTransportCase {
-            name: "invalid spillover mode",
-            overrides: &[
-                ("RTC_MEDIA_WORKER_COUNT", "2"),
-                ("ROOM_MAX_LOCAL_ROUTERS", "2"),
-                ("ROOM_SPILLOVER_MODE", "invalid"),
-            ],
-            message: "ROOM_SPILLOVER_MODE must be one of strict, load, load-triggered or bounded, got invalid",
-        },
-        InvalidTransportCase {
-            name: "invalid spillover mode with default router cap",
-            overrides: &[("ROOM_SPILLOVER_MODE", "invalid")],
-            message: "ROOM_SPILLOVER_MODE must be one of strict, load, load-triggered or bounded, got invalid",
-        },
-        InvalidTransportCase {
-            name: "zero spillover activation window",
-            overrides: &[
-                ("RTC_MEDIA_WORKER_COUNT", "2"),
-                ("ROOM_MAX_LOCAL_ROUTERS", "2"),
-                ("ROOM_SPILLOVER_ACTIVATION_WINDOW", "0"),
-            ],
-            message: "ROOM_SPILLOVER_ACTIVATION_WINDOW must be greater than zero",
-        },
-        InvalidTransportCase {
-            name: "zero spillover receiver threshold",
-            overrides: &[
-                ("RTC_MEDIA_WORKER_COUNT", "2"),
-                ("ROOM_MAX_LOCAL_ROUTERS", "2"),
-                ("ROOM_SPILLOVER_MIN_RECEIVERS", "0"),
-            ],
-            message: "ROOM_SPILLOVER_MIN_RECEIVERS must be greater than zero",
-        },
-        InvalidTransportCase {
-            name: "out of range spillover worker pressure",
-            overrides: &[
-                ("RTC_MEDIA_WORKER_COUNT", "2"),
-                ("ROOM_MAX_LOCAL_ROUTERS", "2"),
-                ("ROOM_SPILLOVER_WORKER_PRESSURE", "101"),
-            ],
-            message: "ROOM_SPILLOVER_WORKER_PRESSURE must be less than or equal to 100",
+            name: "zero spillover delay threshold",
+            overrides: &[("ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS", "0")],
+            message: "ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS must be greater than zero",
         },
         InvalidTransportCase {
             name: "zero room router cap",
@@ -424,14 +345,14 @@ fn load_transport_config_preserves_legacy_error_precedence() {
     let error = load_transport_config_with_defaults(&[
         ("RTC_MIN_PORT", "5000"),
         ("RTC_MAX_PORT", "4000"),
-        ("ROOM_SPILLOVER_WORKER_PRESSURE", "101"),
+        ("ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS", "0"),
     ])
     .err()
     .map(|error| error.to_string());
 
     assert_eq!(
         error.as_deref(),
-        Some("ROOM_SPILLOVER_WORKER_PRESSURE must be less than or equal to 100")
+        Some("ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS must be greater than zero")
     );
 }
 
@@ -454,9 +375,9 @@ fn load_transport_config_preserves_numeric_parse_errors() {
             message: "ROOM_MAX_LOCAL_ROUTERS must be a valid usize",
         },
         InvalidTransportCase {
-            name: "invalid spillover worker pressure",
-            overrides: &[("ROOM_SPILLOVER_WORKER_PRESSURE", "abc")],
-            message: "ROOM_SPILLOVER_WORKER_PRESSURE must be a valid u8",
+            name: "invalid spillover delay threshold",
+            overrides: &[("ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS", "abc")],
+            message: "ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS must be a valid u64",
         },
         InvalidTransportCase {
             name: "invalid active audio speaker limit",

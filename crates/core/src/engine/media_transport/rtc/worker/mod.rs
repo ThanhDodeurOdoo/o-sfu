@@ -60,7 +60,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     bitrate::BitrateRegistry,
     commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
-    packet_loop::PacketLoopLagSnapshot,
+    packet_loop::PacketLoopDelaySnapshot,
     relay_registry::{RelayPacketMailbox, RelayTargetId},
     state::RtcSnapshotState,
 };
@@ -90,7 +90,7 @@ pub(super) struct RtcWorkerHandle {
     pub(super) relay_mailbox: RelayPacketMailbox,
     pub(super) bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     pub(super) snapshot_state: Arc<Mutex<RtcSnapshotState>>,
-    pub(super) packet_loop_lag: Arc<PacketLoopLagSnapshot>,
+    pub(super) packet_loop_delay: Arc<PacketLoopDelaySnapshot>,
 }
 
 impl fmt::Debug for RtcWorkerHandle {

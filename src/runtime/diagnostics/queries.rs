@@ -130,17 +130,16 @@ pub(crate) async fn workers_response(
     let mut workers = BTreeMap::new();
     for snapshot in transport.worker_pressure_snapshots() {
         let id = snapshot.media_worker_id.as_usize();
-        let pressure = snapshot.pressure;
         workers.insert(
             id,
             DiagnosticsWorkerSummary {
                 media_worker_id: id,
                 pressure: DiagnosticsWorkerPressure {
-                    command_backlog_depth: pressure.command_backlog_depth,
-                    egress_bitrate_bps: pressure.egress_bitrate.as_bps(),
-                    packet_loop_lag_ms: pressure.packet_loop_lag_ms,
-                    relay_mailbox_depth: pressure.relay_mailbox_depth,
-                    worker_pressure_score: pressure.worker_pressure_score,
+                    command_backlog_depth: snapshot.command_backlog_depth,
+                    egress_bitrate_bps: snapshot.egress_bitrate.as_bps(),
+                    packet_loop_delay_ms: snapshot.packet_loop_delay_ms,
+                    relay_mailbox_depth: snapshot.relay_mailbox_depth,
+                    worker_pressure_score: snapshot.worker_pressure_score,
                 },
                 ..Default::default()
             },

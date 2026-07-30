@@ -23,10 +23,8 @@ mod support;
 
 use support::{
     ReadyRoom, TEST_ROOM_KEY, close_user, home_worker, join_ready_users, join_user,
-    load_triggered_policy, load_triggered_policy_with_cap, manager_with_policy,
-    manager_with_policy_and_worker_count, media_transport, publish_audio_and_camera, publish_track,
-    router_count, seed_source_fanout_pressure, serve_room, test_sender, test_video_rtp_parameters,
-    user_connection_id,
+    manager_with_policy, media_transport, publish_audio_and_camera, publish_track, router_count,
+    serve_room, spillover_policy, test_sender, test_video_rtp_parameters,
 };
 
 type SubscriptionIntents = BTreeMap<UserStreamId, SourceSubscriptionIntent>;
@@ -164,136 +162,113 @@ async fn manager_disconnect_users_removes_empty_room() -> Result<()> {
 }
 
 #[tokio::test]
-async fn load_triggered_join_keeps_small_rooms_on_primary_worker() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(4, 1, 48)?);
+async fn healthy_room_stays_on_its_primary_worker() -> Result<()> {
+    let manager = manager_with_policy(spillover_policy(2)?);
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-small").await;
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0); 4]);
+    let room = serve_room(&manager, "issuer-healthy-room").await;
 
-    join_user(&manager, &room, 1, &media_transport).await?;
-    join_user(&manager, &room, 2, &media_transport).await?;
+    for user_id in 1..=64 {
+        join_user(&manager, &room, user_id, &media_transport).await?;
+    }
 
-    assert_eq!(home_worker(&room, 1).await, Some(0));
-    assert_eq!(home_worker(&room, 2).await, Some(0));
+    let primary_worker = home_worker(&room, 1).await;
+    for user_id in 2..=64 {
+        assert_eq!(home_worker(&room, user_id).await, primary_worker);
+    }
+    assert_eq!(router_count(&room).await, 1);
     Ok(())
 }
 
 #[tokio::test]
-async fn load_triggered_large_room_reaches_but_does_not_exceed_local_router_cap() -> Result<()> {
-    const LOCAL_ROUTER_CAP: usize = 4;
-    const MIN_RECEIVER_COUNT: usize = 3;
-    const MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 2;
-    const ACTIVATION_WINDOW: usize = 1;
-    const MAX_FANOUT_PER_SOURCE: usize = 2;
-
-    let manager = manager_with_policy_and_worker_count(
-        load_triggered_policy_with_cap(
-            LOCAL_ROUTER_CAP,
-            MIN_RECEIVER_COUNT,
-            MAX_ACTIVE_CONSUMERS_PER_ROUTER,
-            ACTIVATION_WINDOW,
-            MAX_FANOUT_PER_SOURCE,
-        )?,
-        LOCAL_ROUTER_CAP,
-    );
+async fn new_rooms_cycle_across_healthy_workers() -> Result<()> {
+    let manager = manager_with_policy(spillover_policy(2)?);
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-large-room-cap").await;
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0); 4]);
+    let mut room_count_by_worker = [0; 4];
 
-    for user_id in 1..=12 {
+    for room_index in 0..8 {
+        let room = serve_room(&manager, &format!("issuer-cyclic-{room_index}")).await;
+        join_user(&manager, &room, 1, &media_transport).await?;
+        let worker = home_worker(&room, 1)
+            .await
+            .ok_or_else(|| anyhow!("joined user should have a worker"))?;
+        *room_count_by_worker
+            .get_mut(worker)
+            .ok_or_else(|| anyhow!("joined user worker should exist"))? += 1;
+    }
+
+    assert_eq!(room_count_by_worker, [2; 4]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn overloaded_room_reaches_but_does_not_exceed_local_router_cap() -> Result<()> {
+    const LOCAL_ROUTER_CAP: usize = 4;
+    let manager = manager_with_policy(spillover_policy(LOCAL_ROUTER_CAP)?);
+    let media_transport = media_transport()?;
+    let room = serve_room(&manager, "issuer-overloaded-room-cap").await;
+
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0), None, None, None]);
+    join_user(&manager, &room, 1, &media_transport).await?;
+    for worker_id in 1..LOCAL_ROUTER_CAP {
+        let mut delays = vec![None; LOCAL_ROUTER_CAP];
+        delays
+            .get_mut(..worker_id)
+            .ok_or_else(|| anyhow!("assigned workers should exist"))?
+            .fill(Some(20));
+        *delays
+            .get_mut(worker_id)
+            .ok_or_else(|| anyhow!("spillover worker should exist"))? = Some(0);
+        media_transport.test_api().set_packet_loop_delays_ms(delays);
+        join_user(
+            &manager,
+            &room,
+            i64::try_from(worker_id + 1)?,
+            &media_transport,
+        )
+        .await?;
+        assert_eq!(
+            home_worker(&room, i64::try_from(worker_id + 1)?).await,
+            Some(worker_id)
+        );
+    }
+
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(20); LOCAL_ROUTER_CAP]);
+    for user_id in 5..=12 {
         join_user(&manager, &room, user_id, &media_transport).await?;
-        assert!(router_count(&room).await <= LOCAL_ROUTER_CAP);
+        assert_eq!(router_count(&room).await, LOCAL_ROUTER_CAP);
     }
-
     assert_eq!(router_count(&room).await, LOCAL_ROUTER_CAP);
-    for (user_id, media_worker) in [
-        (1, 0),
-        (2, 0),
-        (3, 1),
-        (4, 1),
-        (5, 2),
-        (6, 2),
-        (7, 3),
-        (8, 3),
-    ] {
-        assert_eq!(home_worker(&room, user_id).await, Some(media_worker));
-    }
     Ok(())
 }
 
 #[tokio::test]
 async fn next_join_uses_spillover_worker_after_leave() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(2, 1, 48)?);
+    let manager = manager_with_policy(spillover_policy(2)?);
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-reuse").await;
+    let room = serve_room(&manager, "issuer-overload-reuse").await;
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0), None, None, None]);
     join_user(&manager, &room, 1, &media_transport).await?;
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(20), Some(0), None, None]);
     let second_connection = join_user(&manager, &room, 2, &media_transport).await?;
     assert_eq!(home_worker(&room, 2).await, Some(1));
 
     close_user(&manager, &room, 2, second_connection, &media_transport).await?;
     join_user(&manager, &room, 3, &media_transport).await?;
     assert_eq!(home_worker(&room, 3).await, Some(1));
-    Ok(())
-}
-
-#[tokio::test]
-async fn source_fanout_pressure_places_next_join_on_spillover_worker() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 1, 1)?);
-    let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-fanout").await;
-    seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
-
-    join_user(&manager, &room, 3, &media_transport).await?;
-
-    assert_eq!(home_worker(&room, 3).await, Some(1));
-    assert_eq!(router_count(&room).await, 2);
-    Ok(())
-}
-
-#[tokio::test]
-async fn source_fanout_pressure_clears_after_deactivation() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 1, 1)?);
-    let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-fanout-clear").await;
-    let stream_id = seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
-    let publisher_id = UserId::Integer(1);
-
-    assert!(
-        room.test_api()
-            .media()
-            .deactivate_publication(&publisher_id, &stream_id, &media_transport)
-            .await
-    );
-    join_user(&manager, &room, 3, &media_transport).await?;
-
-    assert_eq!(home_worker(&room, 3).await, Some(0));
-    Ok(())
-}
-
-#[tokio::test]
-async fn source_fanout_pressure_clears_after_receiver_leave() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 1, 1)?);
-    let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-fanout-leave").await;
-    seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
-    let receiver_connection = user_connection_id(&room, &UserId::Integer(2)).await?;
-
-    close_user(&manager, &room, 2, receiver_connection, &media_transport).await?;
-    join_user(&manager, &room, 3, &media_transport).await?;
-
-    assert_eq!(home_worker(&room, 3).await, Some(0));
-    Ok(())
-}
-
-#[tokio::test]
-async fn source_fanout_pressure_clears_after_receiver_replacement() -> Result<()> {
-    let manager = manager_with_policy(load_triggered_policy(99, 2, 1)?);
-    let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-load-fanout-replace").await;
-    seed_source_fanout_pressure(&manager, &room, &media_transport).await?;
-
-    join_user(&manager, &room, 2, &media_transport).await?;
-    join_user(&manager, &room, 3, &media_transport).await?;
-
-    assert_eq!(home_worker(&room, 3).await, Some(0));
     Ok(())
 }
 

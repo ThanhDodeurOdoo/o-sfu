@@ -17,10 +17,10 @@ use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, MediaTransport, ReceiverBandwidthSnapshot, TransportAdapterError,
         TransportBitrateSnapshot, TransportHealthSnapshot, TransportMediaId,
-        TransportPlacementPressureSnapshot, TransportQualitySnapshot, TransportRelayRouteAction,
-        TransportRelayRouteEffect, TransportSessionHealth, TransportSessionKey,
-        TransportSourceActivityEffect, TransportSourceDiagnosticsSnapshot, TransportSourceKey,
-        TransportTeardown, TransportWorkerPressureSnapshot,
+        TransportQualitySnapshot, TransportRelayRouteAction, TransportRelayRouteEffect,
+        TransportSessionHealth, TransportSessionKey, TransportSourceActivityEffect,
+        TransportSourceDiagnosticsSnapshot, TransportSourceKey, TransportTeardown,
+        TransportWorkerPressureSnapshot,
     },
 };
 
@@ -154,28 +154,7 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Returns transport-worker pressure for the workers that own the sessions.
-    ///
-    /// Room placement uses this as a best-effort load signal. Missing or drained
-    /// workers return no pressure because room membership remains authoritative.
-    #[must_use]
-    pub fn placement_pressure_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> TransportPlacementPressureSnapshot {
-        let mut snapshot = TransportPlacementPressureSnapshot::default();
-        self.for_session_workers(session_keys, |worker, worker_session_keys| {
-            snapshot =
-                snapshot.merged_with(worker.placement_pressure_snapshot(worker_session_keys));
-        });
-        snapshot
-    }
-
-    /// Returns transport-worker pressure for every worker the backend can rank.
-    ///
-    /// Placement uses this as best-effort process-local load input. Missing
-    /// workers are treated by callers as idle because transport snapshots can
-    /// race with worker startup and teardown.
+    /// Returns transport pressure for every media worker.
     #[must_use]
     pub fn worker_pressure_snapshots(&self) -> Vec<TransportWorkerPressureSnapshot> {
         self.workers
@@ -184,6 +163,13 @@ impl MediaTransport {
             .map(|(worker_index, worker)| {
                 worker.worker_pressure_snapshot(MediaWorkerId::from_raw(worker_index))
             })
+            .collect()
+    }
+
+    pub(crate) fn packet_loop_delays_ms(&self) -> Vec<Option<u64>> {
+        self.workers
+            .iter()
+            .map(RtcWorker::packet_loop_delay_ms)
             .collect()
     }
 

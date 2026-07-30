@@ -56,12 +56,6 @@ pub struct ReceiverRouteWork {
     pub(in crate::engine::room) relays: Vec<TransportRelayRouteEffect>,
 }
 
-impl ReceiverRouteWork {
-    pub(in crate::engine::room) fn route_graph_changed(&self) -> bool {
-        !self.activities.is_empty() || !self.setups.is_empty() || !self.relays.is_empty()
-    }
-}
-
 #[derive(Debug)]
 pub struct ReceiverRouteCommit {
     pub(in crate::engine::room) counts: RoomGaugeDelta,

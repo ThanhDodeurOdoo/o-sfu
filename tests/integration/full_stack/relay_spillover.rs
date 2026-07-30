@@ -2,7 +2,6 @@ use super::support::{self as s, media as m, setup as st, spillover as sp};
 
 enum LowRidProbe {
     None,
-    Drop,
     DropThenForwardSelected,
 }
 
@@ -16,12 +15,12 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() -> s::TestResul
         room,
         mut publisher,
         mut subscriber,
-    } = st::ready_room_fake_peers_with_config(
+    } = Box::pin(st::ready_room_fake_peers_with_config(
         st::cross_worker_test_config(),
         "issuer-cross-worker-vp8-selected-rid",
         publisher_user_id.clone(),
         subscriber_user_id.clone(),
-    )
+    ))
     .await?;
     sp::assert_cross_worker_placement(&server, &room, &publisher_user_id, &subscriber_user_id)
         .await;
@@ -54,12 +53,12 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() -> s
         room,
         mut publisher,
         mut subscriber,
-    } = st::ready_room_fake_peers_with_config(
+    } = Box::pin(st::ready_room_fake_peers_with_config(
         config,
         "issuer-cross-worker-h264-selected-rid",
         publisher_user_id.clone(),
         subscriber_user_id.clone(),
-    )
+    ))
     .await?;
     sp::assert_cross_worker_placement(&server, &room, &publisher_user_id, &subscriber_user_id)
         .await;
@@ -79,42 +78,8 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() -> s
 }
 
 #[tokio::test]
-async fn fake_rtc_load_triggered_spillover_relays_vp8_after_threshold() -> s::TestResult {
-    let _guard = st::full_stack_test_guard().await;
-    let publisher_user_id = s::UserId::Integer(190);
-    let local_subscriber_user_id = s::UserId::Integer(191);
-    let spillover_subscriber_user_id = s::UserId::Integer(192);
-    let sp::SpilloverRoomFakePeers {
-        server,
-        room,
-        mut publisher,
-        local_subscriber: _local_subscriber,
-        mut spillover_subscriber,
-    } = Box::pin(sp::spillover_room_fake_peers(
-        "issuer-load-spillover-vp8-selected-rid",
-        publisher_user_id.clone(),
-        local_subscriber_user_id,
-        spillover_subscriber_user_id,
-    ))
-    .await?;
-
-    let mut source = s::FakeMediaSource::new(s::SyntheticVp8Stream::with_next_keyframe(false));
-    assert_selected_video_relay(
-        &server,
-        &room,
-        &mut publisher,
-        &mut spillover_subscriber,
-        &publisher_user_id,
-        &mut source,
-        LowRidProbe::Drop,
-    )
-    .await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscriber_leaves()
--> s::TestResult {
+async fn fake_rtc_overload_spillover_releases_remote_route_after_subscriber_leaves() -> s::TestResult
+{
     let _guard = st::full_stack_test_guard().await;
     let publisher_user_id = s::UserId::Integer(193);
     let local_subscriber_user_id = s::UserId::Integer(194);
@@ -126,14 +91,14 @@ async fn fake_rtc_load_triggered_spillover_releases_remote_route_after_subscribe
         mut local_subscriber,
         spillover_subscriber,
     } = Box::pin(sp::spillover_room_fake_peers(
-        "issuer-load-spillover-release-route",
+        "issuer-overload-spillover-release-route",
         publisher_user_id.clone(),
         local_subscriber_user_id,
         spillover_subscriber_user_id.clone(),
     ))
     .await?;
 
-    Box::pin(sp::assert_load_triggered_spillover_release_route_flow(
+    Box::pin(sp::assert_spillover_release_route_flow(
         &server,
         &room,
         &mut publisher,
@@ -171,9 +136,6 @@ async fn assert_selected_video_relay(
     m::assert_synthetic_video_packet_forwarded(publisher, subscriber, source, &mut clock).await;
     match low_rid_probe {
         LowRidProbe::None => {}
-        LowRidProbe::Drop => {
-            assert_low_rid_dropped(publisher, subscriber, &mut clock).await;
-        }
         LowRidProbe::DropThenForwardSelected => {
             assert_low_rid_dropped(publisher, subscriber, &mut clock).await;
             m::assert_synthetic_video_packet_forwarded(publisher, subscriber, source, &mut clock)
@@ -192,7 +154,7 @@ async fn assert_low_rid_dropped(
 }
 
 #[tokio::test]
-async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscriber_replacement()
+async fn fake_rtc_overload_spillover_preserves_download_mute_after_subscriber_replacement()
 -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
     let publisher_user_id = s::UserId::Integer(196);
@@ -205,14 +167,14 @@ async fn fake_rtc_load_triggered_spillover_preserves_download_mute_after_subscri
         local_subscriber: _local_subscriber,
         mut spillover_subscriber,
     } = Box::pin(sp::spillover_room_fake_peers(
-        "issuer-load-spillover-replacement-mute",
+        "issuer-overload-spillover-replacement-mute",
         publisher_user_id.clone(),
         local_subscriber_user_id,
         spillover_subscriber_user_id.clone(),
     ))
     .await?;
 
-    Box::pin(sp::assert_load_triggered_spillover_replacement_mute_flow(
+    Box::pin(sp::assert_spillover_replacement_mute_flow(
         &server,
         &room,
         &mut publisher,

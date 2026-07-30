@@ -185,13 +185,6 @@ impl RoomState {
         })
     }
 
-    pub fn source_fanout_pressure(&self, max_fanout_per_source: usize) -> bool {
-        self.topology
-            .source_fanout_pressure(max_fanout_per_source, |user_id| {
-                self.user_connection_id(user_id)
-            })
-    }
-
     pub fn user_connection_id(&self, user_id: &UserId) -> Option<ConnectionId> {
         self.users.get(user_id).map(|user| user.connection_id)
     }

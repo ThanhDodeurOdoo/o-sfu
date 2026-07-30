@@ -34,7 +34,7 @@ pub(crate) use o_sfu_core::{
 };
 pub(crate) use o_sfu_telemetry::{self as telemetry, prometheus};
 use options::{RuntimeConfig, effective_feature_flags};
-use room::{RoomAdmissionPolicy, RoomManager, RoomManagerConfig, RoomRuntimePolicy};
+use room::{RoomAdmissionPolicy, RoomManager, RoomRuntimePolicy};
 use telemetry::{init_tracing, schema::event as telemetry_event};
 
 pub(crate) use self::{
@@ -97,6 +97,13 @@ impl Runtime {
         Self::from_services(config, RuntimeServices::default())
     }
 
+    #[cfg(feature = "testing-transport")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn media_transport_for_test(&self) -> MediaTransport {
+        self.media_transport.clone()
+    }
+
     fn from_services(config: &Config, services: RuntimeServices) -> AnyResult<Self> {
         let runtime_config = RuntimeConfig::from_config(config);
         let media_transport = build_media_transport(config, &services)?;
@@ -106,7 +113,7 @@ impl Runtime {
             rtc_udp_io_backend = config.transport.rtc_udp_io_backend.wire_name(),
             "runtime configuration loaded"
         );
-        let room_manager = build_room_manager(config, room_runtime_policy, &services);
+        let room_manager = build_room_manager(room_runtime_policy, &services);
         Ok(Self {
             config: runtime_config,
             room_manager,
@@ -346,12 +353,11 @@ fn build_room_runtime_policy(
 }
 
 fn build_room_manager(
-    config: &Config,
     runtime_policy: RoomRuntimePolicy,
     services: &RuntimeServices,
 ) -> Arc<RoomManager> {
     Arc::new(RoomManager::new(
-        RoomManagerConfig::new(config.transport.rtc_media_worker_count, runtime_policy),
+        runtime_policy,
         Arc::clone(&services.metrics),
     ))
 }

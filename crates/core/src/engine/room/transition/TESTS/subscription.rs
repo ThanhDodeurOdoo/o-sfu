@@ -3,7 +3,11 @@
     reason = "transition tests fail loudly when fixed room setup is invalid"
 )]
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+};
 
 use o_sfu_router::test_support::rtp_samples::{
     sample_client_rtp_capabilities, sample_simulcast_video_rtp_parameters,
@@ -12,7 +16,7 @@ use o_sfu_telemetry::schema::event as telemetry_event;
 use serde_json::Value;
 
 use super::super::super::{
-    Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig, RoomRuntimePolicy,
+    Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomRuntimePolicy,
     TESTS::tracing::{assert_user_exact, capture},
     UserOutbound, UserOutboundReceiver, UserOutboundSender,
     media_graph::ConsumerRouteState,
@@ -74,6 +78,7 @@ async fn join_negotiated_user(
         user_id,
         create_transport_session,
         test_sender(),
+        None,
     )
     .await
 }
@@ -84,13 +89,25 @@ async fn join_negotiated_user_with_sender(
     user_id: &UserId,
     create_transport_session: bool,
     sender: UserOutboundSender,
+    packet_loop_delays_ms: Option<Vec<Option<u64>>>,
 ) -> ConnectionId {
-    let connection_id = room
-        .test_api()
-        .lifecycle()
-        .join_user(user_id.clone(), None, UserPermissions::default(), sender)
-        .await
-        .expect("test user should join");
+    let lifecycle = room.test_api().lifecycle();
+    let connection_id = if let Some(delays_ms) = packet_loop_delays_ms {
+        lifecycle
+            .join_user_with_packet_loop_delays(
+                user_id.clone(),
+                None,
+                UserPermissions::default(),
+                sender,
+                delays_ms,
+            )
+            .await
+    } else {
+        lifecycle
+            .join_user(user_id.clone(), None, UserPermissions::default(), sender)
+            .await
+    }
+    .expect("test user should join");
     if create_transport_session {
         let session_key = room.transport_user_key(user_id, connection_id).await;
         media_transport
@@ -146,15 +163,18 @@ async fn setup_spillover_subscription_room() -> (
     ConnectionId,
 ) {
     let setup = setup_subscription_room_with_manager(
-        RoomManager::for_test_with_config(RoomManagerConfig::new(
-            2,
+        RoomManager::for_test_with_runtime_policy(
             RoomRuntimePolicy::new(
                 RoomAdmissionPolicy::new(100),
                 RuntimeFeatureFlags::default(),
                 sample_client_rtp_capabilities(),
             )
-            .with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(2)),
-        )),
+            .with_room_worker_policy(RoomWorkerPolicy::new(
+                NonZeroUsize::new(2).expect("test router cap should be positive"),
+                NonZeroU64::new(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS)
+                    .expect("default delay threshold should be positive"),
+            )),
+        ),
         "issuer-transition-subscription-spillover",
         true,
     )
@@ -227,12 +247,31 @@ async fn setup_subscription_room_with_sender(
     let subscriber_id = UserId::Integer(2);
     let publisher_connection_id =
         join_negotiated_user(&room, &media_transport, &publisher_id, true).await;
+    let packet_loop_delays_ms = if room.room_worker_policy().max_local_routers() > 1 {
+        let primary_worker = room
+            .transport_user_key(&publisher_id, publisher_connection_id)
+            .await
+            .media_worker_id();
+        let delays = (0..2)
+            .map(|worker| {
+                Some(if worker == primary_worker.as_usize() {
+                    RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS
+                } else {
+                    0
+                })
+            })
+            .collect();
+        Some(delays)
+    } else {
+        None
+    };
     let subscriber_connection_id = join_negotiated_user_with_sender(
         &room,
         &media_transport,
         &subscriber_id,
         create_subscriber_transport_session,
         subscriber_sender,
+        packet_loop_delays_ms,
     )
     .await;
     (

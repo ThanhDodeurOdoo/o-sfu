@@ -9,7 +9,4 @@ pub use media::{
     RoomMediaLimits, RoomMediaLimitsError, RtcPortRange, RtcUdpIoBackend, SessionBitrateLimits,
     VideoAdaptationTuning, VideoAdaptationTuningError, VideoBitrateLimits,
 };
-pub use routing::{
-    LocalSpilloverPolicy, LocalSpilloverPolicyError, LocalSpilloverPolicyParts, RoomSpilloverMode,
-    RoomWorkerPolicy,
-};
+pub use routing::RoomWorkerPolicy;

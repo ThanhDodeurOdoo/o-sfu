@@ -28,7 +28,7 @@ use o_sfu::{
     },
     http::{CreateRoomQuery, RoomResponse, StatsResponse, route},
 };
-use o_sfu_core::server::transport::test_support::test_rtc_port_range;
+use o_sfu_core::server::transport::{MediaTransport, test_support::test_rtc_port_range};
 use o_sfu_protocol::wire::{
     EnvelopeBatch, ServerEnvelope, ServerMessage, StreamType, UserId, UserPermissions,
     WelcomePayload,
@@ -71,6 +71,7 @@ pub fn require_some<T>(value: Option<T>, context: &'static str) -> Result<T> {
 pub struct TestServer {
     addr: SocketAddr,
     handle: AbortOnDropHandle<Result<(), ServeError>>,
+    media_transport: MediaTransport,
     shutdown: CancellationToken,
 }
 
@@ -91,6 +92,12 @@ impl TestServer {
 
     pub fn stop(&self) {
         self.shutdown.cancel();
+    }
+
+    pub fn set_packet_loop_delays_ms(&self, delays_ms: Vec<Option<u64>>) {
+        self.media_transport
+            .test_api()
+            .set_packet_loop_delays_ms(delays_ms);
     }
 
     /// # Errors
@@ -373,6 +380,7 @@ fn stream_id_for_stream_type(stream_type: StreamType) -> &'static str {
 /// Returns an error when runtime construction or listener binding fails.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     let runtime = Runtime::new(&config)?;
+    let media_transport = runtime.media_transport_for_test();
     let listener = TcpListener::bind(config.http.bind_address).await?;
     let addr = listener
         .local_addr()
@@ -382,6 +390,7 @@ pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
     Ok(TestServer {
         addr,
         handle: AbortOnDropHandle::new(handle),
+        media_transport,
         shutdown,
     })
 }

@@ -18,7 +18,7 @@ worker-benchmarks = ["o-sfu-core/worker-benchmarks"]
 anyhow.workspace = true
 base64.workspace = true
 futures-util.workspace = true
-o-sfu = { path = "..", default-features = false }
+o-sfu = { path = "..", default-features = false, features = ["testing-transport"] }
 o-sfu-core = { path = "../crates/core", features = ["testing-transport"] }
 o-sfu-protocol = { path = "../crates/protocol" }
 o-sfu-rfc = { path = "../crates/rfc" }

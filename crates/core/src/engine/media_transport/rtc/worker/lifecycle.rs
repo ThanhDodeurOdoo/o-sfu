@@ -56,9 +56,8 @@ use crate::{
     engine::media_transport::{
         ActiveSpeakerSource, MediaTransportConfig, MediaTransportDeps, ReceiverBandwidthSnapshot,
         SourcePolicySignal, TransportAdapterError, TransportBitrateSnapshot,
-        TransportHealthSnapshot, TransportMediaId, TransportPlacementPressureSnapshot,
-        TransportQualitySnapshot, TransportSessionKey, TransportSourceDiagnosticsSnapshot,
-        TransportWorkerPressureSnapshot,
+        TransportHealthSnapshot, TransportMediaId, TransportQualitySnapshot, TransportSessionKey,
+        TransportSourceDiagnosticsSnapshot, TransportWorkerPressureSnapshot,
     },
 };
 
@@ -218,7 +217,7 @@ impl RtcWorker {
         // loop, while authoritative state stays owned by the worker task
         let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
-        let packet_loop_lag = Arc::new(packet_loop::PacketLoopLagSnapshot::new(Instant::now()));
+        let packet_loop_delay = Arc::new(packet_loop::PacketLoopDelaySnapshot::new(Instant::now()));
         let shutdown = CancellationToken::new();
         let handle = RtcWorkerHandle {
             command_tx,
@@ -227,7 +226,7 @@ impl RtcWorker {
             relay_mailbox: RelayPacketMailbox::new(relay_tx),
             bitrate_registry: Arc::clone(&bitrate_registry),
             snapshot_state: Arc::clone(&snapshot_state),
-            packet_loop_lag: Arc::clone(&packet_loop_lag),
+            packet_loop_delay: Arc::clone(&packet_loop_delay),
         };
         let packet_loop_inputs =
             packet_loop::PacketLoopInputReceivers::new(command_rx, relay_rx, shutdown.clone());
@@ -250,7 +249,7 @@ impl RtcWorker {
             metrics: Arc::clone(metrics),
             rtp_metrics: metrics.register_rtp_worker_for_media_worker(media_worker_id.as_usize()),
             rtc_metrics: Arc::clone(&rtc_metrics),
-            packet_loop_lag,
+            packet_loop_delay,
         };
         let startup = PacketLoopStartup {
             announced_ip: config.announced_ip,
@@ -375,28 +374,7 @@ impl RtcWorker {
         snapshot_state.transport_quality_snapshot(session_keys)
     }
 
-    /// builds a placement-pressure snapshot for selected sessions
-    ///
-    /// egress bitrate is scoped to the supplied sessions while packet-loop lag
-    /// and mailbox backlogs describe the whole worker because those resources
-    /// are shared by every session on the packet loop
-    pub fn placement_pressure_snapshot(
-        &self,
-        session_keys: &[TransportSessionKey],
-    ) -> TransportPlacementPressureSnapshot {
-        let now = Instant::now();
-        let egress_bitrate = match self.handle.bitrate_registry.lock() {
-            Ok(bitrate_registry) => bitrate_registry.egress_bitrate_snapshot_at(session_keys, now),
-            Err(_error) => Bitrate::zero(),
-        };
-        pressure_snapshot(&self.handle, egress_bitrate, now)
-    }
-
-    /// builds a pressure snapshot for the whole worker
-    ///
-    /// this is used by room placement to compare local workers
-    /// the result is still best-effort and falls back to zero pressure when the
-    /// worker observations are unavailable
+    /// builds a best-effort pressure snapshot for the whole worker
     pub fn worker_pressure_snapshot(
         &self,
         media_worker_id: MediaWorkerId,
@@ -406,10 +384,27 @@ impl RtcWorker {
             Ok(bitrate_registry) => bitrate_registry.total_egress_bitrate_snapshot_at(now),
             Err(_error) => Bitrate::zero(),
         };
-        TransportWorkerPressureSnapshot::new(
+        let command_backlog_depth = sender_backlog_depth(&self.handle.command_tx);
+        let relay_mailbox_depth = self.handle.relay_mailbox.backlog_depth();
+        TransportWorkerPressureSnapshot {
             media_worker_id,
-            pressure_snapshot(&self.handle, egress_bitrate, now),
-        )
+            egress_bitrate,
+            packet_loop_delay_ms: self.handle.packet_loop_delay.packet_loop_delay_ms_at(now),
+            command_backlog_depth,
+            relay_mailbox_depth,
+            worker_pressure_score: worker_pressure_score(
+                command_backlog_depth,
+                self.handle.command_tx.max_capacity(),
+                relay_mailbox_depth,
+                RELAY_MAILBOX_CAPACITY,
+            ),
+        }
+    }
+
+    pub fn packet_loop_delay_ms(&self) -> Option<u64> {
+        self.handle
+            .packet_loop_delay
+            .packet_loop_delay_ms_at(Instant::now())
     }
 
     /// reads the latest transport health side-channel entry for one session
@@ -466,11 +461,7 @@ impl RtcWorker {
     }
 }
 
-/// combines command and relay mailbox saturation into one pressure score
-///
-/// the score is the max of both queues
-/// one saturated input path should make placement avoid the worker even if the
-/// other path is idle
+/// combines command and relay mailbox saturation for diagnostics
 fn worker_pressure_score(
     command_backlog_depth: usize,
     command_capacity: usize,
@@ -481,28 +472,6 @@ fn worker_pressure_score(
         relay_mailbox_depth,
         relay_mailbox_capacity,
     ))
-}
-
-fn pressure_snapshot(
-    worker_handle: &RtcWorkerHandle,
-    egress_bitrate: Bitrate,
-    now: Instant,
-) -> TransportPlacementPressureSnapshot {
-    let packet_loop_lag_ms = worker_handle.packet_loop_lag.packet_loop_lag_ms_at(now);
-    let command_backlog_depth = sender_backlog_depth(&worker_handle.command_tx);
-    let relay_mailbox_depth = worker_handle.relay_mailbox.backlog_depth();
-    TransportPlacementPressureSnapshot {
-        egress_bitrate,
-        packet_loop_lag_ms,
-        command_backlog_depth,
-        relay_mailbox_depth,
-        worker_pressure_score: worker_pressure_score(
-            command_backlog_depth,
-            worker_handle.command_tx.max_capacity(),
-            relay_mailbox_depth,
-            RELAY_MAILBOX_CAPACITY,
-        ),
-    }
 }
 
 /// converts one bounded mailbox depth into a percentage pressure score

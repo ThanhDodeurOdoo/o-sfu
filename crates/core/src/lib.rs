@@ -76,9 +76,9 @@ pub mod server;
 mod sfu;
 
 pub(crate) use options::{
-    AudioCodecPreference, CodecPreferences, LocalSpilloverPolicy, MediaCodecFlags, RoomMediaLimits,
-    RoomSpilloverMode, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags,
-    SessionBitrateLimits, VideoAdaptationTuning, VideoBitrateLimits, VideoCodecPreference,
+    AudioCodecPreference, CodecPreferences, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy,
+    RtcPortRange, RtcUdpIoBackend, RuntimeFeatureFlags, SessionBitrateLimits,
+    VideoAdaptationTuning, VideoBitrateLimits, VideoCodecPreference,
 };
 
 /// Media bitrate stored as bits per second (not bytes per second).

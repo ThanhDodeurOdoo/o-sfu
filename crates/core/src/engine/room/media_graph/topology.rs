@@ -27,7 +27,6 @@ use crate::engine::{
     room::{
         RoomMediaCounts, RoomRuntimeContext, RouterPlacement,
         effects::transport::RoomTransportPlan, outbound::OutboundSender,
-        placement::WorkerLoadIndex,
     },
     source_model::{
         ActiveSpeakerSourceRole, ConsumerSourceSelection, PolicyPauseReason,
@@ -415,71 +414,6 @@ impl RoomTopology {
                 Self::attach_consumer_target(route_graph, &consumer_session, source)
             })
             .collect()
-    }
-
-    pub(in crate::engine::room) fn record_consumer_loads(
-        &self,
-        loads: &mut WorkerLoadIndex,
-        current_connection_id: impl Fn(&UserId) -> Option<ConnectionId>,
-    ) {
-        for (key, current) in self.route_graph.attached() {
-            let connection_id = if let Some((route, _)) = current.committed() {
-                route.consumer_session_key().connection_id()
-            } else if current.is_pending() {
-                let Some(connection_id) = current_connection_id(&key.receiver) else {
-                    continue;
-                };
-                connection_id
-            } else {
-                continue;
-            };
-            loads.record_consumer(self.router.media_worker_id_for_connection(connection_id));
-        }
-    }
-
-    #[must_use]
-    pub(in crate::engine::room) fn source_fanout_pressure(
-        &self,
-        max_fanout_per_source: usize,
-        current_connection_id: impl Fn(&UserId) -> Option<ConnectionId>,
-    ) -> bool {
-        if max_fanout_per_source == 0 {
-            return false;
-        }
-        self.sources.iter().any(|source| {
-            if !source.active {
-                return false;
-            }
-            let mut deliveries_by_worker = BTreeMap::new();
-            for (key, current) in self
-                .route_graph
-                .attached_for_source(source.descriptor.source_id())
-            {
-                if current.committed().is_none() && !current.is_pending() {
-                    continue;
-                }
-                if !current.selection.delivery_active() {
-                    continue;
-                }
-                let Some(connection_id) = current_connection_id(&key.receiver) else {
-                    continue;
-                };
-                let Some(media_worker) = self
-                    .router
-                    .committed_media_worker_id(&key.receiver, connection_id)
-                else {
-                    continue;
-                };
-                deliveries_by_worker
-                    .entry(media_worker)
-                    .and_modify(|count: &mut usize| *count = count.saturating_add(1))
-                    .or_insert(1);
-            }
-            !deliveries_by_worker.is_empty()
-                && deliveries_by_worker
-                    .values()
-                    .all(|count| *count >= max_fanout_per_source)
-        })
     }
 
     pub fn update_consumer_source_selection(

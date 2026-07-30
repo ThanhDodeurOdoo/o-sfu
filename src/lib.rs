@@ -254,7 +254,9 @@
 //! # scaling
 //!
 //! rooms use one [`o_sfu_router::Router`] facade and can opt into additional
-//! same-process local routers through [`config::RoomWorkerPolicy`]
+//! same-process local routers through [`config::RoomWorkerPolicy`]. joins stay
+//! on an assigned healthy packet loop and attach an unused healthy worker only
+//! when every assigned loop exceeds the configured delay threshold
 //!
 //! note: it is later possible to extend the SFU for cross server scaling, but it's not a priority.
 //!
@@ -263,7 +265,7 @@
 //! the root package has a small feature surface,
 //! the default feature enables `otel-tracing`, which turns on OpenTelemetry
 //! tracing support through [`o_sfu_telemetry::TraceExportConfig`].
-//! other features are for tests/bemchanarking.
+//! other features are for tests and benchmarking.
 //! core media behavior is configured at runtime through [`config`], not cargo
 //! features
 //!

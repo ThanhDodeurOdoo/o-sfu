@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
+    delay::PacketLoopDelaySnapshot,
     event_observation::observe_rtc_event,
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::route_pkt_to_session,
@@ -47,7 +48,6 @@ use super::{
         PendingKeyframeRequest, drain_due_kf_retries, flush_pending_kf_reqs,
         flush_pending_kf_reqs_at,
     },
-    lag::PacketLoopLagSnapshot,
     loop_driver::{
         PacketLoopApplyContext, PacketLoopConfig, PacketLoopTurn, PacketLoopTurnInput,
         WaitPhaseSnapshot,
@@ -744,7 +744,7 @@ fn packet_loop_config_for_test() -> PacketLoopConfig {
         metrics,
         rtp_metrics: outbound_recorder,
         rtc_metrics: datagram_recorder,
-        packet_loop_lag: Arc::new(PacketLoopLagSnapshot::new(Instant::now())),
+        packet_loop_delay: Arc::new(PacketLoopDelaySnapshot::new(Instant::now())),
     }
 }
 
@@ -1464,7 +1464,8 @@ fn due_relay_observation_expires_in_same_pump() -> Result<(), &'static str> {
             .await
             .map_err(|_error| "relay packet should enqueue")?;
 
-        let snapshot = PacketLoopTurn::new(Instant::now()).pump(
+        let started_at = Instant::now();
+        let snapshot = PacketLoopTurn::new(started_at).pump(
             &mut state,
             &snapshot_state,
             &config,
@@ -1546,12 +1547,10 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
 
         let first_input = turn
             .wait_for_next_input(
-                WaitPhaseSnapshot {
-                    next_timeout: None,
-                    turn_started_at: Instant::now(),
-                },
+                WaitPhaseSnapshot { next_timeout: None },
                 &mut shared_socket.ingress,
                 &mut inputs,
+                &config.packet_loop_delay,
             )
             .await
             .ok_or("first queued control input should wake the turn")?;
@@ -1580,12 +1579,112 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
         assert!(!state.has_dirty_sessions());
 
         let second_input = turn
-            .wait_for_next_input(snapshot, &mut shared_socket.ingress, &mut inputs)
+            .wait_for_next_input(
+                snapshot,
+                &mut shared_socket.ingress,
+                &mut inputs,
+                &config.packet_loop_delay,
+            )
             .await
             .ok_or("second control input should wake after the pump")?;
 
         assert!(matches!(second_input, PacketLoopTurnInput::Control(_)));
         assert!(!state.has_dirty_sessions());
+        Ok(())
+    })
+}
+
+#[test]
+fn due_heartbeat_yields_to_ready_control_without_reporting_health() -> Result<(), &'static str> {
+    run_packet_loop_io_test(async {
+        let started_at = Instant::now()
+            .checked_sub(Duration::from_millis(250))
+            .ok_or("test instant should support a short subtraction")?;
+        let mut state = PacketLoopState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let config = packet_loop_config_for_test();
+        let mut turn = PacketLoopTurn::new(started_at);
+        let (_command_tx, command_rx) = mpsc::channel(1);
+        let (_relay_tx, relay_rx) = mpsc::channel(1);
+        let (probe_tx, probe_rx) = mpsc::channel(1);
+        let mut inputs =
+            PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new())
+                .with_probe_receiver(probe_rx);
+        let mut shared_socket = test_socket()?;
+        let (response, _result) = oneshot::channel();
+        assert!(
+            probe_tx
+                .send(DebugProbeRequest::new(
+                    MarkSessionDirtyProbe {
+                        session_key: test_transport_session_key(422, 0, 423, UserId::Integer(424),),
+                    },
+                    response,
+                ))
+                .await
+                .is_ok()
+        );
+
+        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
+        turn.flush_outputs(&shared_socket.socket).await;
+        let input = turn
+            .wait_for_next_input(
+                snapshot,
+                &mut shared_socket.ingress,
+                &mut inputs,
+                &config.packet_loop_delay,
+            )
+            .await;
+
+        assert!(matches!(input, Some(PacketLoopTurnInput::Control(_))));
+        assert_eq!(
+            config
+                .packet_loop_delay
+                .packet_loop_delay_ms_at(Instant::now()),
+            Some(0)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn heartbeat_wake_does_not_create_a_timeout_turn() -> Result<(), &'static str> {
+    run_packet_loop_io_test(async {
+        let started_at = Instant::now()
+            .checked_sub(Duration::from_millis(250))
+            .ok_or("test instant should support a short subtraction")?;
+        let mut state = PacketLoopState::default();
+        let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let config = packet_loop_config_for_test();
+        let mut turn = PacketLoopTurn::new(started_at);
+        let (_command_tx, command_rx) = mpsc::channel(1);
+        let (_relay_tx, relay_rx) = mpsc::channel(1);
+        let mut inputs =
+            PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new());
+        let mut shared_socket = test_socket()?;
+
+        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
+        turn.flush_outputs(&shared_socket.socket).await;
+        let wait = timeout(
+            Duration::from_millis(20),
+            turn.wait_for_next_input(
+                snapshot,
+                &mut shared_socket.ingress,
+                &mut inputs,
+                &config.packet_loop_delay,
+            ),
+        )
+        .await;
+
+        assert!(
+            wait.is_err(),
+            "heartbeat-only wake should stay in the wait phase"
+        );
+        assert_eq!(
+            config
+                .packet_loop_delay
+                .packet_loop_delay_ms_at(Instant::now()),
+            None
+        );
         Ok(())
     })
 }
@@ -1612,12 +1711,10 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
 
         let input = turn
             .wait_for_next_input(
-                WaitPhaseSnapshot {
-                    next_timeout: None,
-                    turn_started_at: Instant::now(),
-                },
+                WaitPhaseSnapshot { next_timeout: None },
                 &mut shared_socket.ingress,
                 &mut inputs,
+                &config.packet_loop_delay,
             )
             .await
             .ok_or("queued datagram should wake the turn")?;
@@ -1643,7 +1740,12 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
 
         let second_input = timeout(
             Duration::from_secs(1),
-            turn.wait_for_next_input(snapshot, &mut shared_socket.ingress, &mut inputs),
+            turn.wait_for_next_input(
+                snapshot,
+                &mut shared_socket.ingress,
+                &mut inputs,
+                &config.packet_loop_delay,
+            ),
         )
         .await
         .map_err(|_error| "second datagram should remain available for a later turn")?

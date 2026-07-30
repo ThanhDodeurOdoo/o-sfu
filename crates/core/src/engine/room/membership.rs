@@ -39,7 +39,7 @@ pub struct JoinUserRequest {
 impl Room {
     pub(super) async fn admit_session(
         &self,
-        admission: JoinAdmissionTurn<impl FnOnce() -> o_sfu_router::RouterId>,
+        admission: JoinAdmissionTurn<'_, impl FnOnce() -> o_sfu_router::RouterId>,
         context: RoomEffectContext<'_>,
     ) -> Result<CommittedTransportReceipt, RoomJoinError> {
         let joined_fanout = context.user_joined_fanout();

@@ -1,14 +1,8 @@
-use std::{
-    fmt,
-    sync::{Arc, Mutex},
-};
+use std::{fmt, sync::Arc};
 
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 
-use super::{
-    definition::RoomDefinition, factory::RoomInit, placement::LoadTriggeredPlacementState,
-    state::RoomState,
-};
+use super::{definition::RoomDefinition, factory::RoomInit, state::RoomState};
 use crate::{
     RoomWorkerPolicy,
     engine::{
@@ -48,7 +42,6 @@ pub(crate) struct RoomUserOperation<'a> {
 
 pub struct Room {
     pub(super) definition: RoomDefinition,
-    pub(super) load_triggered_placement: Mutex<LoadTriggeredPlacementState>,
     pub(super) metrics: Arc<RuntimeMetrics>,
     pub(super) source_policy_turn: AsyncMutex<()>,
     pub(super) state: RwLock<RoomState>,
@@ -68,7 +61,6 @@ impl Room {
             RoomDefinition::new(&runtime_context, &runtime_policy, issuer, key, config);
         Self {
             definition,
-            load_triggered_placement: Mutex::new(LoadTriggeredPlacementState::default()),
             metrics,
             source_policy_turn: AsyncMutex::new(()),
             state: RwLock::new(RoomState::new(

@@ -7,6 +7,7 @@
 use std::{
     collections::BTreeMap,
     net::{IpAddr, Ipv4Addr},
+    num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
 };
 
@@ -14,16 +15,16 @@ use anyhow::{Result, anyhow};
 use o_sfu_core::{
     ConnectionId,
     prelude::{
-        Bitrate, CodecPreferences, LocalSpilloverPolicy, LocalSpilloverPolicyParts,
-        MediaCodecFlags, MediaSession, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
-        SessionBitrateLimits, SfuCore, UserStreamId, VideoBitrateLimits,
+        Bitrate, CodecPreferences, MediaCodecFlags, MediaSession, RoomWorkerPolicy,
+        RtcUdpIoBackend, RuntimeFeatureFlags, SessionBitrateLimits, SfuCore, UserStreamId,
+        VideoBitrateLimits,
     },
     server::{
         metrics::RuntimeMetrics,
         packet_sinks::RoomPacketSinkRegistry,
         room::{
-            JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
-            RoomRuntimePolicy, UserOutboundReceiver, UserOutboundSender,
+            JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomRuntimePolicy,
+            UserOutboundReceiver, UserOutboundSender,
             test_support::{TestSourceKind, source_publish_intent_for_source},
         },
         session::{UserId, UserPermissions},
@@ -75,55 +76,21 @@ pub fn media_transport() -> Result<MediaTransport> {
 }
 
 pub fn manager_with_policy(policy: RoomWorkerPolicy) -> RoomManager {
-    manager_with_policy_and_worker_count(policy, 2)
-}
-
-pub fn manager_with_policy_and_worker_count(
-    policy: RoomWorkerPolicy,
-    worker_count: usize,
-) -> RoomManager {
     let runtime_policy = RoomRuntimePolicy::new(
         RoomAdmissionPolicy::new(DEFAULT_MAX_SESSIONS),
         RuntimeFeatureFlags::default(),
         sample_client_rtp_capabilities(),
     )
     .with_room_worker_policy(policy);
-    RoomManager::for_test_with_config(RoomManagerConfig::new(worker_count, runtime_policy))
+    RoomManager::for_test_with_runtime_policy(runtime_policy)
 }
 
-pub fn load_triggered_policy(
-    min_receiver_count: usize,
-    activation_window: usize,
-    max_fanout_per_source: usize,
-) -> Result<RoomWorkerPolicy> {
-    load_triggered_policy_with_cap(
-        2,
-        min_receiver_count,
-        LocalSpilloverPolicy::DEFAULT_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
-        activation_window,
-        max_fanout_per_source,
-    )
-}
-
-pub fn load_triggered_policy_with_cap(
-    max_local_routers: usize,
-    min_receiver_count: usize,
-    max_active_consumers_per_router: usize,
-    activation_window: usize,
-    max_fanout_per_source: usize,
-) -> Result<RoomWorkerPolicy> {
-    let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
-        min_receiver_count,
-        max_active_consumers_per_router,
-        max_fanout_per_source,
-        activation_window,
-        ..LocalSpilloverPolicyParts::conservative()
-    })
-    .map_err(|error| anyhow!("test spillover policy should be valid: {error}"))?;
-    Ok(RoomWorkerPolicy::load_triggered_local_spillover(
-        max_local_routers,
-        policy,
-    ))
+pub fn spillover_policy(max_local_routers: usize) -> Result<RoomWorkerPolicy> {
+    let max_local_routers = NonZeroUsize::new(max_local_routers)
+        .ok_or_else(|| anyhow!("test router cap should be positive"))?;
+    let delay_threshold = NonZeroU64::new(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS)
+        .ok_or_else(|| anyhow!("default delay threshold should be positive"))?;
+    Ok(RoomWorkerPolicy::new(max_local_routers, delay_threshold))
 }
 
 pub async fn serve_room(manager: &RoomManager, issuer: &str) -> Arc<Room> {
@@ -248,14 +215,6 @@ pub async fn join_ready_users(user_ids: &[i64]) -> Result<ReadyRoom> {
     })
 }
 
-pub async fn user_connection_id(room: &Room, user_id: &UserId) -> Result<ConnectionId> {
-    room.test_api()
-        .inspect()
-        .user_connection_id(user_id)
-        .await
-        .ok_or_else(|| anyhow!("test user should have a live connection"))
-}
-
 pub async fn home_worker(room: &Room, raw_user_id: i64) -> Option<usize> {
     room.test_api()
         .inspect()
@@ -318,29 +277,4 @@ pub async fn publish_audio_and_camera(
     )
     .await?;
     Ok(())
-}
-
-pub async fn seed_source_fanout_pressure(
-    manager: &RoomManager,
-    room: &Arc<Room>,
-    media_transport: &MediaTransport,
-) -> Result<UserStreamId> {
-    join_user(manager, room, 1, media_transport).await?;
-    join_user(manager, room, 2, media_transport).await?;
-    room.test_api()
-        .lifecycle()
-        .make_session_ready(&UserId::Integer(1), media_transport)
-        .await?;
-    room.test_api()
-        .lifecycle()
-        .make_session_ready(&UserId::Integer(2), media_transport)
-        .await?;
-    publish_track(
-        room,
-        &UserId::Integer(1),
-        TestSourceKind::AudioDetector,
-        test_audio_rtp_parameters(),
-        media_transport,
-    )
-    .await
 }

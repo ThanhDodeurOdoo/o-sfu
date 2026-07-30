@@ -402,47 +402,15 @@ impl TransportRidActivity {
     }
 }
 
-/// Transport-observed pressure used by room-local placement policy.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TransportPlacementPressureSnapshot {
-    pub egress_bitrate: Bitrate,
-    pub packet_loop_lag_ms: u64,
-    pub command_backlog_depth: usize,
-    pub relay_mailbox_depth: usize,
-    pub worker_pressure_score: u8,
-}
-
-impl TransportPlacementPressureSnapshot {
-    #[must_use]
-    pub fn merged_with(self, other: Self) -> Self {
-        Self {
-            egress_bitrate: self.egress_bitrate.saturating_add(other.egress_bitrate),
-            packet_loop_lag_ms: self.packet_loop_lag_ms.max(other.packet_loop_lag_ms),
-            command_backlog_depth: self.command_backlog_depth.max(other.command_backlog_depth),
-            relay_mailbox_depth: self.relay_mailbox_depth.max(other.relay_mailbox_depth),
-            worker_pressure_score: self.worker_pressure_score.max(other.worker_pressure_score),
-        }
-    }
-}
-
 /// Transport-observed pressure for one local media worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportWorkerPressureSnapshot {
     pub media_worker_id: MediaWorkerId,
-    pub pressure: TransportPlacementPressureSnapshot,
-}
-
-impl TransportWorkerPressureSnapshot {
-    #[must_use]
-    pub const fn new(
-        media_worker_id: MediaWorkerId,
-        pressure: TransportPlacementPressureSnapshot,
-    ) -> Self {
-        Self {
-            media_worker_id,
-            pressure,
-        }
-    }
+    pub egress_bitrate: Bitrate,
+    pub packet_loop_delay_ms: Option<u64>,
+    pub command_backlog_depth: usize,
+    pub relay_mailbox_depth: usize,
+    pub worker_pressure_score: u8,
 }
 
 /// Opaque identifier for a media line allocated by the media transport.

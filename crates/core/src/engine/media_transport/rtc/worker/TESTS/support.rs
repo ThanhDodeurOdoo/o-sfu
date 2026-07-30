@@ -83,6 +83,13 @@ impl RtcWorker {
         Some((release_tx, probe))
     }
 
+    pub(in crate::engine::media_transport) fn debug_set_packet_loop_delay_ms(
+        &self,
+        delay_ms: Option<u64>,
+    ) {
+        self.handle.packet_loop_delay.set_for_test(delay_ms);
+    }
+
     #[cfg(test)]
     #[must_use]
     pub(crate) fn test_builder() -> RtcWorkerTestBuilder {
