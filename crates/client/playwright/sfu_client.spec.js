@@ -20,7 +20,7 @@ const WELCOME_FRAME = JSON.stringify([
         }
     }
 ]);
-const SOURCE = {
+const LEGACY_SOURCE = {
     active: true,
     encodings: [{ encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" }],
     mid: "0",
@@ -28,10 +28,10 @@ const SOURCE = {
     sourceId: "source-1",
     type: "camera"
 };
-const SOURCE_FRAME = JSON.stringify([
+const LEGACY_SOURCES_FRAME = JSON.stringify([
     {
         t: "sources",
-        p: [SOURCE]
+        p: [LEGACY_SOURCE]
     }
 ]);
 
@@ -184,7 +184,7 @@ test("default browser runtime negotiates and emits remote track updates", async 
     await page.evaluate((frame) => {
         globalThis.__browserHarness.state.sockets[0].emitMessage(frame);
     }, WELCOME_FRAME);
-    await page.evaluate(() => {
+    await page.evaluate((source) => {
         globalThis.__browserHarness.state.sockets[0].emitMessage(
             JSON.stringify([
                 {
@@ -200,26 +200,14 @@ test("default browser runtime negotiates and emits remote track updates", async 
                 },
                 {
                     t: "sources",
-                    p: [
-                        {
-                            active: true,
-                            encodings: [
-                                { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
-                                { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
-                            ],
-                            mid: "0",
-                            sessionId: 42,
-                            sourceId: "source-1",
-                            type: "camera"
-                        }
-                    ]
+                    p: [source]
                 }
             ])
         );
         globalThis.__browserHarness.state.sockets[0].emitMessage(
             JSON.stringify([{ t: "offer", q: "7", p: { sdp: "offer-sdp" } }])
         );
-    });
+    }, LEGACY_SOURCE);
 
     await expect
         .poll(async () =>
@@ -291,24 +279,6 @@ test("default browser runtime negotiates and emits remote track updates", async 
         .poll(async () => page.evaluate(() => globalThis.__browserHarness.events))
         .toEqual([
             {
-                name: "source",
-                payload: {
-                    sources: [
-                        {
-                            active: true,
-                            encodings: [
-                                { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
-                                { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
-                            ],
-                            mid: "0",
-                            sessionId: 42,
-                            sourceId: "source-1",
-                            type: "camera"
-                        }
-                    ]
-                }
-            },
-            {
                 name: "track",
                 payload: {
                     active: true,
@@ -340,7 +310,7 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
             if (CLIENT_UPDATE.TRACK !== "track") {
                 throw new Error("unexpected client update export");
             }
-            if (CLIENT_UPDATE.SOURCE !== "source") {
+            if ("SOURCE" in CLIENT_UPDATE) {
                 throw new Error("unexpected source update export");
             }
             if (SFU_CLIENT_STATE.CONNECTED !== "connected") {
@@ -370,31 +340,27 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
         }, WELCOME_FRAME);
         await page.evaluate((frame) => {
             globalThis.__browserHarness.state.sockets[0].emitMessage(frame);
-        }, SOURCE_FRAME);
+        }, LEGACY_SOURCES_FRAME);
 
         await expect
             .poll(async () =>
                 page.evaluate(() => ({
                     events: globalThis.__browserHarness.events,
+                    errors: globalThis.__browserHarness.client.errors.length,
                     fetchCalls: globalThis.__browserHarness.fetchCalls,
+                    hasSourceDescriptors: "sourceDescriptors" in globalThis.__browserHarness.client,
                     peerConnections: globalThis.__browserHarness.state.peerConnections.length,
                     sent: globalThis.__browserHarness.state.sockets[0].sent.map((payload) =>
                         JSON.parse(payload)
                     ),
-                    sourceDescriptors: globalThis.__browserHarness.client.sourceDescriptors,
                     states: globalThis.__browserHarness.stateChanges
                 }))
             )
             .toEqual({
-                events: [
-                    {
-                        name: "source",
-                        payload: {
-                            sources: [SOURCE]
-                        }
-                    }
-                ],
+                events: [],
+                errors: 0,
                 fetchCalls: [],
+                hasSourceDescriptors: false,
                 peerConnections: 1,
                 sent: [
                     [
@@ -412,8 +378,7 @@ test("odoo bundle embeds wasm and drives the browser runtime", async ({ page }) 
                     { cause: undefined, state: "connecting" },
                     { cause: undefined, state: "authenticated" },
                     { cause: undefined, state: "connected" }
-                ],
-                sourceDescriptors: [SOURCE]
+                ]
             });
     } finally {
         await page.evaluate(() => {

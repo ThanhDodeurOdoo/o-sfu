@@ -16,7 +16,7 @@ async fn initial_answer_sets_up_pending_consumers_once() {
             .await
     );
 
-    assert_remote_source_snapshot_for_stream(
+    assert_remote_track_snapshot_for_stream(
         &drain_outbound(&mut subscriber_rx),
         TestSourceKind::ScalableVideo,
     );
@@ -46,7 +46,7 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
     )
     .await;
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
-    assert_remote_source_snapshot_for_stream(
+    assert_remote_track_snapshot_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
         TestSourceKind::ScalableVideo,
     );
@@ -86,7 +86,7 @@ async fn refresh_retry_sets_up_only_missing_consumers_on_real_rtc() {
     );
 
     assert_eq!(scenario.room.test_api().inspect().consumer_count().await, 2);
-    assert_remote_source_snapshot_for_stream(
+    assert_remote_track_snapshot_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
         TestSourceKind::ReadableVideo,
     );
@@ -224,7 +224,7 @@ async fn negotiated_publish_commit_sets_up_consumers_on_real_rtc() {
             .is_some()
     );
     assert!(drain_outbound(&mut scenario.publisher_rx).is_empty());
-    assert_remote_source_snapshot_for_stream(
+    assert_remote_track_snapshot_for_stream(
         &drain_outbound(&mut scenario.subscriber_rx),
         TestSourceKind::ScalableVideo,
     );

@@ -86,13 +86,12 @@ async fn staged_negotiated_publish_commit_moves_through_room_owned_transaction()
     let subscriber_output = scenario.drain_subscriber();
     assert!(
         !subscriber_output.iter().any(|message| {
-            remote_source_snapshot(message).is_some_and(|snapshot| {
-                snapshot.requires_negotiation && snapshot.sources.is_empty()
-            })
+            remote_track_snapshot(message)
+                .is_some_and(|snapshot| snapshot.requires_negotiation && snapshot.tracks.is_empty())
         }),
-        "pending consumer routes must not emit empty remote source snapshots"
+        "pending consumer routes must not emit empty remote track snapshots"
     );
-    assert_remote_source_snapshot_for_stream(&subscriber_output, TestSourceKind::ScalableVideo);
+    assert_remote_track_snapshot_for_stream(&subscriber_output, TestSourceKind::ScalableVideo);
 }
 
 #[tokio::test]

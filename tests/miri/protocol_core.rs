@@ -6,8 +6,8 @@ use o_sfu_protocol::{
     wire::{
         AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates,
         RecordingOptions, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
-        SessionDescriptionPayload, SourceDescriptor, StreamIntentPayload, StreamType,
-        SubscribePayload, TrackBinding, UserId, UserInfo, WebSocketCloseCode,
+        SessionDescriptionPayload, StreamIntentPayload, StreamType, SubscribePayload, TrackBinding,
+        UserId, UserInfo, WebSocketCloseCode,
     },
 };
 use o_sfu_tests::miri_support::{
@@ -289,26 +289,6 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
         }]
     );
 
-    let source = SourceDescriptor {
-        source_id: "source-1".to_owned(),
-        user_id: UserId::String("peer-1".to_owned()),
-        stream_type: StreamType::Audio,
-        active: true,
-        mid: Some("0".to_owned()),
-        encodings: Vec::new(),
-    };
-    let source_frame = encode_server_batch(ServerEnvelope::Message(ServerMessage::Sources(vec![
-        source.clone(),
-    ])));
-    assert_eq!(
-        core.on_ws_message(&source_frame).as_slice(),
-        &[Command::EmitEvent {
-            event: ProtocolEvent::SourceSnapshot {
-                sources: vec![source],
-            },
-        }]
-    );
-
     let request_result = core.start_recording(RecordingOptions {
         audio: Some(true),
         video: None,
@@ -335,11 +315,6 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
             Command::EmitEvent {
                 event: ProtocolEvent::TrackSnapshot {
                     bindings: Vec::new(),
-                },
-            },
-            Command::EmitEvent {
-                event: ProtocolEvent::SourceSnapshot {
-                    sources: Vec::new(),
                 },
             },
             Command::CloseWebSocket { code: 1000 },

@@ -8,7 +8,7 @@ use o_sfu_router::rtp::{MediaCapabilities, MediaCapabilities as RouterRtpCapabil
 use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
     media_graph::{ConsumerRouteView, RoomTopology},
-    outbound::{OutboundSender, RemoteSourceProjection, RemoteSourceSnapshot},
+    outbound::{OutboundSender, RemoteTrackProjection, RemoteTrackSnapshot},
     transition::StagedPublishes,
 };
 use crate::{
@@ -209,45 +209,44 @@ impl RoomState {
         Some((user_id.clone(), user.project_info()))
     }
 
-    pub(in crate::engine::room) fn remote_source_snapshot_for_user(
+    pub(in crate::engine::room) fn remote_track_snapshot_for_user(
         &self,
         user_id: &UserId,
         requires_negotiation: bool,
-    ) -> RemoteSourceSnapshot {
+    ) -> RemoteTrackSnapshot {
         let connection_id = self.user_connection_id(user_id);
-        RemoteSourceSnapshot {
-            sources: self
+        RemoteTrackSnapshot {
+            tracks: self
                 .topology
                 .committed_consumer_routes_for_user(user_id)
                 .filter(|route| {
                     connection_id == Some(route.route.consumer_session_key().connection_id())
                 })
-                .filter_map(|route| {
+                .map(|route| {
                     let source = &route.source.descriptor;
-                    let owner = self.users.get(source.owner().user_id())?;
-                    Some(RemoteSourceProjection {
+                    RemoteTrackProjection {
                         consumer_mid: route.mid.to_owned(),
-                        source: source.clone(),
-                        owner_info: owner.info.clone().with_featured(owner.server_featured),
+                        user_id: source.owner().user_id().clone(),
+                        stream_id: source.stream_id().clone(),
                         producer_active: route.source.active,
-                    })
+                    }
                 })
                 .collect(),
             requires_negotiation,
         }
     }
 
-    pub(in crate::engine::room) fn remote_source_snapshots_for_users(
+    pub(in crate::engine::room) fn remote_track_snapshots_for_users(
         &self,
         user_ids: BTreeSet<UserId>,
         requires_negotiation: bool,
-    ) -> Vec<(OutboundSender, RemoteSourceSnapshot)> {
+    ) -> Vec<(OutboundSender, RemoteTrackSnapshot)> {
         user_ids
             .into_iter()
             .filter_map(|user_id| {
                 Some((
                     self.users.get(&user_id)?.sender.clone(),
-                    self.remote_source_snapshot_for_user(&user_id, requires_negotiation),
+                    self.remote_track_snapshot_for_user(&user_id, requires_negotiation),
                 ))
             })
             .collect()

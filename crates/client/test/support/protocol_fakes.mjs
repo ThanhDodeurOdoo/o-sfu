@@ -24,14 +24,6 @@ const initialOfferCommand = (requestId) => ({
     uploadSlots: [audioUploadSlot("0"), videoUploadSlot("1")]
 });
 
-const sourceUpdate = (sources) => ({
-    kind: "emitUpdate",
-    update: {
-        name: CLIENT_UPDATE.SOURCE,
-        payload: { sources }
-    }
-});
-
 const remoteMediaUpdate = (bindings) => ({
     kind: "emitUpdate",
     update: { name: "remote_media", payload: { bindings } }
@@ -48,7 +40,6 @@ export class FakeProtocolCore {
         this.subscriptionUpdates = [];
         this.submittedAnswers = [];
         this.publicationUpdates = [];
-        this.sourceDescriptors = new Map();
         this.trackBindings = new Map();
         this.transportReadyCalls = 0;
         this.transportFailureState = null;
@@ -71,9 +62,8 @@ export class FakeProtocolCore {
         this.state = "disconnected";
         this.features = { ...EMPTY_FEATURES };
         this.recordingState = {};
-        this.sourceDescriptors.clear();
         this.trackBindings.clear();
-        return [sourceUpdate([]), { kind: "emitStateChange", state: "disconnected" }];
+        return [{ kind: "emitStateChange", state: "disconnected" }];
     }
 
     onTimer() {
@@ -115,19 +105,6 @@ export class FakeProtocolCore {
                     initialOfferCommand("7"),
                     ...this._remoteMediaSnapshot()
                 ]);
-            case "source-descriptors":
-                this.sourceDescriptors.set("source-1", {
-                    active: true,
-                    encodings: [
-                        { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
-                        { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
-                    ],
-                    mid: "0",
-                    sessionId: 42,
-                    sourceId: "source-1",
-                    type: "camera"
-                });
-                return [sourceUpdate([...this.sourceDescriptors.values()])];
             case "inactive-track-binding":
                 this.trackBindings.set("0", {
                     active: false,

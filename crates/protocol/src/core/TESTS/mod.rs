@@ -13,7 +13,7 @@ pub(super) use crate::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, ClientRequest,
         ClientResponse, Envelope, EnvelopeBatch, PeerInfoPayload, PeerLeftPayload, PeerSnapshot,
         RecordingActionResult, RecordingOptions, RequestId, ServerBroadcastPayload, ServerEnvelope,
-        ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload, SourceDescriptor,
+        ServerMessage, ServerRequest, ServerResponse, SessionDescriptionPayload,
         StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode, WelcomePayload,
     },
 };

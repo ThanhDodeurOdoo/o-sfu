@@ -58,8 +58,8 @@ use crate::{
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
         MAX_ENVELOPE_BATCH_LEN, NegotiationUploadSlot, PeerSnapshot, RecordingOptions, RequestId,
-        ServerEnvelope, SourceDescriptor, StreamIntentPayload, SubscribePayload, TrackBinding,
-        WelcomePayload, decode_envelope_batch,
+        ServerEnvelope, StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
+        decode_envelope_batch,
     },
 };
 
@@ -136,9 +136,6 @@ pub enum ProtocolEvent {
     },
     TrackSnapshot {
         bindings: Vec<TrackBinding>,
-    },
-    SourceSnapshot {
-        sources: Vec<SourceDescriptor>,
     },
     PeerInfo {
         user_id: UserId,
@@ -334,8 +331,6 @@ pub struct ProtocolCore {
     /// The map is replaced by track snapshots and trimmed when peers leave. It
     /// is runtime state only and is cleared on disconnect or socket loss.
     track_bindings: BTreeMap<String, TrackBinding>,
-    /// Whether the host has a non-empty source descriptor snapshot to clear.
-    has_source_descriptors: bool,
     /// Latest client intent that must be replayed after a recovered socket is
     /// authenticated.
     ///
@@ -390,7 +385,6 @@ impl ProtocolCore {
             features: empty_features(),
             recording_state: RecordingState::default(),
             track_bindings: BTreeMap::new(),
-            has_source_descriptors: false,
             sticky_replay: StickyReplayState::new(),
             connect_context: None,
             recovery_delay_ms: INITIAL_RECOVERY_DELAY_MS,
@@ -668,7 +662,6 @@ impl ProtocolCore {
 
     fn clear_runtime_state(&mut self) {
         self.track_bindings.clear();
-        self.has_source_descriptors = false;
         self.outbound_batch.clear();
         self.request_tracker.clear();
     }
@@ -686,14 +679,6 @@ impl ProtocolCore {
             commands.push(Command::EmitEvent {
                 event: ProtocolEvent::TrackSnapshot {
                     bindings: Vec::new(),
-                },
-            });
-        }
-        if self.has_source_descriptors {
-            self.has_source_descriptors = false;
-            commands.push(Command::EmitEvent {
-                event: ProtocolEvent::SourceSnapshot {
-                    sources: Vec::new(),
                 },
             });
         }

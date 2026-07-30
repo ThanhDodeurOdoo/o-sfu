@@ -130,13 +130,11 @@ fn protocol_core_connected_disconnect_suppresses_recovery() {
 fn assert_disconnect_suppresses_recovery(stage: u8) {
     let mut core = lifecycle_at_stage(stage);
     core.seed_sticky_replay();
-    core.seed_source_snapshot();
 
     let disconnect_commands = core.disconnect();
     assert_eq!(core.state(), ConnectionState::Disconnected);
     assert!(!core.has_connect_context());
     assert!(!core.has_sticky_replay());
-    assert!(!core.has_source_snapshot());
     assert_eq!(disconnect_commands.close_peer_connection_count(), 1);
     assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty());
     assert!(core.on_ws_close(NON_TERMINAL_CLOSE_CODE).is_empty());

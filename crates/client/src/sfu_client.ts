@@ -12,7 +12,6 @@ import {
     type RecordingState,
     type SessionId,
     type SessionInfo,
-    type SourceDescriptor,
     type SfuStats,
     type StreamType,
     type UpdateInfoOptions
@@ -37,7 +36,6 @@ export class SfuClient extends EventTarget {
     public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
     public errors: Error[] = [];
     public recordingState: RecordingState = {};
-    public sourceDescriptors: readonly SourceDescriptor[] = [];
     public readonly _consumers: ReadonlyMap<SessionId, ConsumersCompat>;
 
     private readonly _runtime: BrowserRuntime;
@@ -50,11 +48,10 @@ export class SfuClient extends EventTarget {
             {
                 onLog: (detail) => this._emitRuntimeLog(detail),
                 onRuntimeError: (error) => this._handleRuntimeError(error),
-                onPublicState: ({ state, features, recordingState, sourceDescriptors }) => {
+                onPublicState: ({ state, features, recordingState }) => {
                     this._state = state;
                     this.availableFeatures = features;
                     this.recordingState = recordingState;
-                    this.sourceDescriptors = sourceDescriptors;
                 },
                 onStateChange: (state, cause) => this._emitStateChange(state, cause),
                 onUpdate: (update) => this._emitUpdate(update)
@@ -191,12 +188,6 @@ export class SfuClient extends EventTarget {
                 this._emitLog(
                     CLIENT_LOG_LEVEL.DEBUG,
                     `remote ${update.payload.type} track update for session ${update.payload.sessionId}: active=${update.payload.active}, muted=${update.payload.track.muted}, readyState=${update.payload.track.readyState}`
-                );
-                break;
-            case CLIENT_UPDATE.SOURCE:
-                this._emitLog(
-                    CLIENT_LOG_LEVEL.DEBUG,
-                    `received ${update.payload.sources.length} remote source descriptors`
                 );
                 break;
             case CLIENT_UPDATE.DISCONNECT:

@@ -526,22 +526,6 @@ export async function localSenderEncodings(page, streamType) {
     }, streamType);
 }
 
-export async function sourceDescriptor(page, sessionId, streamType) {
-    assertStreamType(streamType);
-    return page.evaluate(
-        ({ sessionId: targetSessionId, streamType: targetStreamType }) => {
-            const sources = globalThis.__liveHarness.client?.sourceDescriptors ?? [];
-            const source = sources.find(
-                (candidate) =>
-                    String(candidate.sessionId) === String(targetSessionId) &&
-                    candidate.type === targetStreamType
-            );
-            return source ? structuredClone(source) : null;
-        },
-        { sessionId, streamType }
-    );
-}
-
 export async function streamDiagnostics({
     consumerSessionId,
     httpBaseUrl = TEST_SFU_HTTP_BASE_URL,

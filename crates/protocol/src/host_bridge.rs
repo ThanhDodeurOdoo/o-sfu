@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::{
     bundle_api::{
         BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate,
-        BundleRemoteMediaUpdate, BundleSessionInfoSnapshotById, BundleSourceUpdate, BundleUpdate,
+        BundleRemoteMediaUpdate, BundleSessionInfoSnapshotById, BundleUpdate,
         bundle_session_info_key,
     },
     core::{
@@ -63,9 +63,6 @@ fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: Pro
     let update = match event {
         ProtocolEvent::TrackSnapshot { bindings } => {
             BundleUpdate::RemoteMedia(BundleRemoteMediaUpdate { bindings })
-        }
-        ProtocolEvent::SourceSnapshot { sources } => {
-            BundleUpdate::Source(BundleSourceUpdate { sources })
         }
         ProtocolEvent::PeerSnapshot { peers } => BundleUpdate::SessionInfoChange(
             peers

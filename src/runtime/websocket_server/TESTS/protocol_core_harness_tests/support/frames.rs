@@ -17,58 +17,21 @@ pub(crate) async fn no_server_frame(peer: &mut ProtocolHarnessPeer, wait: Durati
 pub(crate) async fn read_track_snapshot(
     peer: &mut ProtocolHarnessPeer,
 ) -> Option<Vec<TrackBinding>> {
-    read_track_snapshot_until_pending_negotiations(peer, 0).await
-}
-
-pub(crate) async fn read_track_snapshot_until_pending_negotiations(
-    peer: &mut ProtocolHarnessPeer,
-    pending_negotiations: usize,
-) -> Option<Vec<TrackBinding>> {
-    read_media_snapshot_until_pending_negotiations(peer, pending_negotiations)
-        .await
-        .map(|(tracks, _sources)| tracks)
-}
-
-pub(crate) async fn read_media_snapshot(
-    peer: &mut ProtocolHarnessPeer,
-) -> Option<(Vec<TrackBinding>, Vec<SourceDescriptor>)> {
-    read_media_snapshot_until_pending_negotiations(peer, 0).await
-}
-
-pub(crate) async fn read_media_snapshot_until_pending_negotiations(
-    peer: &mut ProtocolHarnessPeer,
-    pending_negotiations: usize,
-) -> Option<(Vec<TrackBinding>, Vec<SourceDescriptor>)> {
-    let mut track_snapshot = None;
-    let mut source_snapshot = None;
     for _ in 0..4 {
-        if track_snapshot.is_some()
-            && source_snapshot.is_some()
-            && peer.pending_negotiations.len() >= pending_negotiations
-        {
-            return track_snapshot.zip(source_snapshot);
-        }
         let websocket = peer.websocket.as_mut()?;
         let payload = read_next_server_payload(websocket).await?;
         let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-        if let Some(messages) = protocol_server_messages(&batch) {
-            for message in messages {
-                match message {
-                    ServerMessage::Tracks(track_bindings) if track_snapshot.is_none() => {
-                        track_snapshot = Some(track_bindings);
-                    }
-                    ServerMessage::Sources(sources) if source_snapshot.is_none() => {
-                        source_snapshot = Some(sources);
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let tracks = protocol_server_messages(&batch).and_then(|messages| {
+            messages.into_iter().find_map(|message| match message {
+                ServerMessage::Tracks(bindings) => Some(bindings),
+                _ => None,
+            })
+        });
         let commands = peer.core.on_ws_message(&payload);
         peer.run_commands(commands).await?;
-    }
-    if peer.pending_negotiations.len() >= pending_negotiations {
-        return track_snapshot.zip(source_snapshot);
+        if let Some(tracks) = tracks {
+            return Some(tracks);
+        }
     }
     None
 }

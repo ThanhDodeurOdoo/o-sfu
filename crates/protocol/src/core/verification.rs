@@ -106,10 +106,6 @@ impl VerificationConnectionLifecycle {
             .set_publish_active(StreamType::Camera, true);
     }
 
-    pub fn seed_source_snapshot(&mut self) {
-        self.core.has_source_descriptors = true;
-    }
-
     #[must_use]
     pub fn state(&self) -> ConnectionState {
         self.core.state()
@@ -123,11 +119,6 @@ impl VerificationConnectionLifecycle {
     #[must_use]
     pub fn has_sticky_replay(&self) -> bool {
         !self.core.sticky_replay.is_empty()
-    }
-
-    #[must_use]
-    pub fn has_source_snapshot(&self) -> bool {
-        self.core.has_source_descriptors
     }
 }
 

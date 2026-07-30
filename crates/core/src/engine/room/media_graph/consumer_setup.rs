@@ -9,7 +9,7 @@ use tracing::warn;
 use super::{
     super::{
         RoomMediaCounts,
-        outbound::{OutboundSender, RemoteSourceSnapshot},
+        outbound::{OutboundSender, RemoteTrackSnapshot},
         state::RoomState,
     },
     ConsumerId, ConsumerRouteTarget, PublishedSource, SubscriptionKey,
@@ -70,7 +70,7 @@ pub enum ConsumerSetupOutcome {
         target: ConsumerSetupTarget,
         route: TransportConsumerRoute,
         sender: OutboundSender,
-        snapshot: RemoteSourceSnapshot,
+        track_snapshot: RemoteTrackSnapshot,
         remote_source_activity: Option<TransportSourceActivityEffect>,
         transport_activity_update: Option<bool>,
         readiness_keyframe: Option<ConsumerRouteTarget>,
@@ -131,8 +131,8 @@ impl RoomState {
                                 source_activity_revision,
                             ),
                         });
-                    let snapshot =
-                        self.remote_source_snapshot_for_user(commit.target.session.user_id(), true);
+                    let track_snapshot =
+                        self.remote_track_snapshot_for_user(commit.target.session.user_id(), true);
                     let readiness_keyframe = match origin {
                         ConsumerSetupOrigin::Readiness
                             if delivery_active
@@ -149,7 +149,7 @@ impl RoomState {
                         target: commit.target,
                         route: commit.route,
                         sender: commit.sender,
-                        snapshot,
+                        track_snapshot,
                         remote_source_activity,
                         transport_activity_update: commit.transport_activity_update,
                         readiness_keyframe,

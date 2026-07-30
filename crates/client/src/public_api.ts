@@ -15,10 +15,6 @@ export const STREAM_TYPES = ["audio", "camera", "screen"] as const;
 
 export type StreamType = (typeof STREAM_TYPES)[number];
 
-export type PublishedSourceId = string;
-
-export type SourceEncodingId = string;
-
 export const VIDEO_LAYOUT_INTENTS = [
     "featured",
     "pinned",
@@ -40,28 +36,6 @@ export interface DownloadStates {
     screen?: boolean;
     cameraLayout?: VideoLayoutIntent;
     screenLayout?: VideoLayoutIntent;
-}
-
-export const SOURCE_ENCODING_POLICY_ROLES = ["featured", "thumbnail", "degradedThumbnail"] as const;
-
-export type SourceEncodingPolicyRole = (typeof SOURCE_ENCODING_POLICY_ROLES)[number];
-
-export interface SourceEncodingDescriptor {
-    encodingId: SourceEncodingId;
-    rid?: string;
-    maxBitrate?: number;
-    resolutionScale?: number;
-    maxFramerate?: number;
-    policyRole?: SourceEncodingPolicyRole;
-}
-
-export interface SourceDescriptor {
-    sourceId: PublishedSourceId;
-    sessionId: SessionId;
-    type: StreamType;
-    active: boolean;
-    mid?: string;
-    encodings: SourceEncodingDescriptor[];
 }
 
 export interface SessionInfo {
@@ -137,7 +111,6 @@ export type RecordingStopCode = (typeof RECORDING_STOP_CODES)[number];
 
 export const CLIENT_UPDATE = {
     TRACK: "track",
-    SOURCE: "source",
     DISCONNECT: "disconnect",
     INFO_CHANGE: "info_change",
     BROADCAST: "broadcast",
@@ -153,10 +126,6 @@ export interface TrackUpdateDetail {
     type: StreamType;
     track: MediaStreamTrack;
     active: boolean;
-}
-
-export interface SourceUpdateDetail {
-    sources: SourceDescriptor[];
 }
 
 export interface DisconnectUpdateDetail {
@@ -177,7 +146,6 @@ export interface ChannelInfoChangeDetail {
 
 export type ClientUpdateDetail =
     | { name: typeof CLIENT_UPDATE.TRACK; payload: TrackUpdateDetail }
-    | { name: typeof CLIENT_UPDATE.SOURCE; payload: SourceUpdateDetail }
     | { name: typeof CLIENT_UPDATE.DISCONNECT; payload: DisconnectUpdateDetail }
     | { name: typeof CLIENT_UPDATE.INFO_CHANGE; payload: InfoChangeUpdateDetail }
     | { name: typeof CLIENT_UPDATE.BROADCAST; payload: BroadcastUpdateDetail }

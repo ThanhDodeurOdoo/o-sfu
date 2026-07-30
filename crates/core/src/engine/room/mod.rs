@@ -35,8 +35,8 @@ pub use media_graph::ConsumerRouteState;
 pub use membership::{JoinUserRequest, RoomUserPermissions, UserCloseReason};
 pub use outbound::{
     BroadcastPayload, BroadcastPayloadError, DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
-    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, MAX_BROADCAST_PAYLOAD_BYTES, RemoteSourceProjection,
-    RemoteSourceSnapshot, RoomEventMessage, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
+    DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, MAX_BROADCAST_PAYLOAD_BYTES, RemoteTrackProjection,
+    RemoteTrackSnapshot, RoomEventMessage, UserOutbound, UserOutboundEvent, UserOutboundOverflow,
     UserOutboundOverflowKind, UserOutboundQueueLimits, UserOutboundReceiver, UserOutboundSendError,
     UserOutboundSender,
 };

@@ -844,49 +844,6 @@ test("same-turn recovery retains queued sticky inputs", async () => {
     assert.deepEqual(core.broadcasts, []);
 });
 
-test("source descriptor updates are exposed as additive client state", async () => {
-    const { client, emitMessage, updates, connect } = createSfuClientHarness();
-    const sourceSnapshots = [];
-    client.addEventListener("update", (event) => {
-        if (event.detail.name === CLIENT_UPDATE.SOURCE) {
-            sourceSnapshots.push(client.sourceDescriptors);
-        }
-    });
-
-    await connect();
-    await emitMessage("source-descriptors");
-
-    const expectedSources = [
-        {
-            active: true,
-            encodings: [
-                { encodingId: "encoding-1", maxBitrate: 150000, rid: "lo" },
-                { encodingId: "encoding-2", maxBitrate: 900000, rid: "hi" }
-            ],
-            mid: "0",
-            sessionId: 42,
-            sourceId: "source-1",
-            type: "camera"
-        }
-    ];
-    assert.deepEqual(updates, [
-        {
-            name: CLIENT_UPDATE.SOURCE,
-            payload: {
-                sources: expectedSources
-            }
-        }
-    ]);
-    assert.deepEqual(client.sourceDescriptors, expectedSources);
-    assert.deepEqual(sourceSnapshots, [expectedSources]);
-
-    client.disconnect();
-    await tick();
-
-    assert.deepEqual(client.sourceDescriptors, []);
-    assert.deepEqual(sourceSnapshots.at(-1), []);
-});
-
 test("renegotiation attaches pending audio only to upload-eligible mids", async () => {
     const harness = createRecoveryHarness();
     const { client, emitMessage, peerConnections, sockets } = harness;
@@ -1495,19 +1452,15 @@ test("track rebinding waits for a fresh track event before re-emitting state", a
 test("peer departure clears remote-track state before disconnect update", async () => {
     const { client, core, emitMessage, peerConnections, updates, connectWithWelcome } =
         createSfuClientHarness();
-    const consumerStateAtDisconnect = [];
+    const consumerPresenceAtDisconnect = [];
     client.addEventListener("update", (event) => {
         if (event.detail.name === CLIENT_UPDATE.DISCONNECT) {
-            consumerStateAtDisconnect.push({
-                hasConsumer: client._consumers.has(42),
-                sourceDescriptors: client.sourceDescriptors
-            });
+            consumerPresenceAtDisconnect.push(client._consumers.has(42));
         }
     });
 
     await connectWithWelcome();
 
-    await emitMessage("source-descriptors");
     await emitOfferWithBinding({ core, emitMessage });
 
     const track = createCameraTrack("track-1");
@@ -1516,7 +1469,7 @@ test("peer departure clears remote-track state before disconnect update", async 
 
     await emitMessage("peer-left");
 
-    assert.deepEqual(consumerStateAtDisconnect, [{ hasConsumer: false, sourceDescriptors: [] }]);
+    assert.deepEqual(consumerPresenceAtDisconnect, [false]);
     assert.deepEqual(updates.at(-1), {
         name: CLIENT_UPDATE.DISCONNECT,
         payload: {
@@ -2392,24 +2345,11 @@ test("fatal teardown clears the active peer before logging", async () => {
 });
 
 test("fatal runtime errors reset the public client surface", async () => {
-    const {
-        client,
-        core,
-        emitMessage,
-        handledErrors,
-        open,
-        peerConnections,
-        sockets,
-        updates,
-        connect
-    } = createSfuClientHarness();
+    const { client, core, emitMessage, handledErrors, open, peerConnections, sockets, connect } =
+        createSfuClientHarness();
     const stateChanges = [];
-    const sourcesAtError = [];
     client.addEventListener("stateChange", (event) => {
         stateChanges.push(event.detail);
-    });
-    client.addEventListener("handledError", () => {
-        sourcesAtError.push(client.sourceDescriptors);
     });
 
     await connect();
@@ -2418,7 +2358,6 @@ test("fatal runtime errors reset the public client surface", async () => {
 
     await emitOfferWithBinding({ core, emitMessage });
     peerConnections[0].emitTrack(createCameraTrack("track-1"), "0");
-    await emitMessage("source-descriptors");
 
     await emitMessage("explode");
 
@@ -2426,20 +2365,11 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.equal(client.state, "disconnected");
     assert.deepEqual(client.availableFeatures, EMPTY_FEATURES);
     assert.deepEqual(client.recordingState, {});
-    assert.deepEqual(client.sourceDescriptors, []);
     assert.equal(client._consumers.size, 0);
-    const sourceUpdates = updates.filter((update) => update.name === CLIENT_UPDATE.SOURCE);
-    assert.deepEqual(sourceUpdates.at(-1), {
-        name: CLIENT_UPDATE.SOURCE,
-        payload: {
-            sources: []
-        }
-    });
     assert.equal(stateChanges.at(-1).state, "disconnected");
     assert.equal(client.errors.length, 1);
     assert.equal(client.errors[0] instanceof Error, true);
     assert.equal(handledErrors[0], client.errors[0]);
-    assert.deepEqual(sourcesAtError, [[]]);
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
     assert.deepEqual(core.wsCloseCodes, []);
@@ -2504,16 +2434,12 @@ test("fatal runtime errors keep the original error when protocol disconnect fail
         disconnect();
         throw new Error("disconnect failure");
     };
-    const { client, connect, emitMessage, handledErrors, open, sockets, updates } =
-        createSfuClientHarness({
-            protocolCore: core
-        });
+    const { client, connect, emitMessage, handledErrors, open, sockets } = createSfuClientHarness({
+        protocolCore: core
+    });
 
     await connect();
     await open();
-    await emitMessage("source-descriptors");
-
-    assert.notDeepEqual(client.sourceDescriptors, []);
 
     await emitMessage("explode");
 
@@ -2521,19 +2447,12 @@ test("fatal runtime errors keep the original error when protocol disconnect fail
     assert.equal(client.errors[0].message, "boom");
     assert.equal(handledErrors[0], client.errors[0]);
     assert.equal(core.disconnectCalls, 1);
-    assert.deepEqual(client.sourceDescriptors, []);
-    assert.equal(
-        updates.some(
-            (update) => update.name === CLIENT_UPDATE.SOURCE && update.payload.sources.length === 0
-        ),
-        false
-    );
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
 });
 
 test("fatal runtime errors drop already queued browser commands", async () => {
-    const { client, connect, handledErrors, open, peerConnections, sockets } =
+    const { connect, handledErrors, open, peerConnections, sockets, updates } =
         createSfuClientHarness({
             createPeerConnection(config) {
                 const peerConnection = new FakePeerConnection(config);
@@ -2548,12 +2467,12 @@ test("fatal runtime errors drop already queued browser commands", async () => {
     await open();
 
     sockets[0].emitMessage("offer");
-    sockets[0].emitMessage("source-descriptors");
+    sockets[0].emitMessage("peer-left");
     await tick();
 
     assert.equal(handledErrors.length, 1);
     assert.equal(peerConnections[0].closed, true);
-    assert.deepEqual(client.sourceDescriptors, []);
+    assert.deepEqual(updates, []);
 });
 
 test("publish rejects stream-kind mismatches", () => {

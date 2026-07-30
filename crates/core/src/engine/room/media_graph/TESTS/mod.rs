@@ -531,7 +531,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
     assert!(change.setups.is_empty());
 
     let ConsumerSetupOutcome::Committed {
-        snapshot,
+        track_snapshot: snapshot,
         remote_source_activity,
         transport_activity_update,
         ..
@@ -539,12 +539,7 @@ fn consumer_setup_commit_uses_latest_room_state() {
     else {
         panic!("current room state should still accept the setup");
     };
-    assert!(
-        snapshot
-            .sources
-            .iter()
-            .any(|source| !source.producer_active)
-    );
+    assert!(snapshot.tracks.iter().any(|track| !track.producer_active));
     let transport_activity_update =
         transport_activity_update.expect("transport declaration should be corrected");
     assert!(!transport_activity_update);

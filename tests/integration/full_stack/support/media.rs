@@ -1,8 +1,4 @@
-use super::{
-    protocol::{PublicationSnapshot, assert_publication_snapshot, assert_track_snapshot},
-    setup::assert_video_subscription_enabled,
-    *,
-};
+use super::{protocol::assert_track_snapshot, setup::assert_video_subscription_enabled, *};
 
 pub(crate) async fn publish_source_and_ready_route(
     server: &TestServer,
@@ -12,29 +8,9 @@ pub(crate) async fn publish_source_and_ready_route(
     publisher_user_id: &UserId,
     source: &FakeMediaSource,
 ) -> TrackBinding {
-    publish_source_and_ready_publication(
-        server,
-        room,
-        publisher,
-        subscriber,
-        publisher_user_id,
-        source,
-    )
-    .await
-    .track
-}
-
-pub(crate) async fn publish_source_and_ready_publication(
-    server: &TestServer,
-    room: &str,
-    publisher: &mut ProtocolFakePeer,
-    subscriber: &mut ProtocolFakePeer,
-    publisher_user_id: &UserId,
-    source: &FakeMediaSource,
-) -> PublicationSnapshot {
     assert!(publisher.publish_track(source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
-    let snapshot = assert_publication_snapshot(
+    let track = assert_track_snapshot(
         subscriber,
         publisher_user_id.clone(),
         source.stream_type(),
@@ -47,11 +23,11 @@ pub(crate) async fn publish_source_and_ready_publication(
         room,
         subscriber,
         publisher_user_id,
-        snapshot.track.stream_type,
+        track.stream_type,
         RouteState::Active,
     )
     .await;
-    snapshot
+    track
 }
 
 pub(crate) async fn consume_video_source_and_ready_route(

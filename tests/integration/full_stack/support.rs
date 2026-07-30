@@ -22,8 +22,8 @@ pub(super) use o_sfu::{
     http::IncomingBitRateStatsResponse,
 };
 pub(super) use o_sfu_protocol::wire::{
-    DownloadStates, ServerMessage, ServerRequest, SourceDescriptor, StreamType, TrackBinding,
-    UserId, UserInfo, VideoLayoutIntent,
+    DownloadStates, ServerMessage, ServerRequest, StreamType, TrackBinding, UserId, UserInfo,
+    VideoLayoutIntent,
 };
 pub(super) use o_sfu_telemetry::diagnostics::{
     DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,

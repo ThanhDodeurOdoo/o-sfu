@@ -1,11 +1,11 @@
 use super::{Command, Commands, ProtocolCore, ProtocolEvent};
-use crate::signaling::{ServerMessage, SourceDescriptor, TrackBinding};
+use crate::signaling::{ServerMessage, TrackBinding};
 
 pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMessage) -> Commands {
     match message {
         ServerMessage::Welcome(payload) => core.accept_welcome(payload),
         ServerMessage::Tracks(bindings) => replace_track_snapshot(core, bindings),
-        ServerMessage::Sources(sources) => replace_source_snapshot(core, sources),
+        ServerMessage::Sources(_) => Vec::new(),
         ServerMessage::PeerInfo(payload) | ServerMessage::PeerJoined(payload) => {
             vec![Command::EmitEvent {
                 event: ProtocolEvent::PeerInfo {
@@ -46,12 +46,5 @@ fn replace_track_snapshot(core: &mut ProtocolCore, bindings: Vec<TrackBinding>) 
         .collect();
     vec![Command::EmitEvent {
         event: ProtocolEvent::TrackSnapshot { bindings },
-    }]
-}
-
-fn replace_source_snapshot(core: &mut ProtocolCore, sources: Vec<SourceDescriptor>) -> Commands {
-    core.has_source_descriptors = !sources.is_empty();
-    vec![Command::EmitEvent {
-        event: ProtocolEvent::SourceSnapshot { sources },
     }]
 }

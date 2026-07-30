@@ -4,7 +4,6 @@ import {
     type ClientUpdateDetail,
     type DownloadStates,
     type SessionId,
-    type SourceDescriptor,
     type StreamType
 } from "../public_api.js";
 import {
@@ -23,19 +22,12 @@ type RemoteMediaSlot = { binding?: SlotBinding; track?: MediaTrack; unbindTrack?
 export class RemoteMedia {
     public readonly consumers = new Map<SessionId, ConsumersCompat>();
 
-    private _sources: readonly SourceDescriptor[] = [];
-
     private _slots = new Map<string, RemoteMediaSlot>();
     private _subscriptionStates = new Map<SessionId, DownloadStates>();
-
-    get sources(): readonly SourceDescriptor[] {
-        return this._sources;
-    }
 
     resetAll(): void {
         this.clearPeerConnectionState();
         this._subscriptionStates.clear();
-        this._sources = [];
     }
 
     clearPeerConnectionState(): void {
@@ -44,10 +36,6 @@ export class RemoteMedia {
             this.clearSlotTrack(slot);
         }
         this._slots.clear();
-    }
-
-    replaceSources(sources: readonly SourceDescriptor[]): void {
-        this._sources = sources;
     }
 
     replaceTrackBindings(bindings: TrackBinding[], emitUpdate: TrackUpdateEmitter): void {
@@ -68,7 +56,6 @@ export class RemoteMedia {
     }
 
     removeSession(sessionId: SessionId): void {
-        this._sources = this._sources.filter((source) => source.sessionId !== sessionId);
         this.consumers.delete(sessionId);
         for (const [mid, slot] of this._slots) {
             if (slot.binding?.sessionId === sessionId) {
