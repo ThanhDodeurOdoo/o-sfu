@@ -330,7 +330,7 @@ fn stale_source_or_route_cannot_commit_after_reattach() {
     );
     assert!(
         graph
-            .set_activity(&key, SOURCE_TWO, ConnectionId::from_raw(20), false,)
+            .set_activity(&key, SOURCE_TWO, ConnectionId::from_raw(20), false, None)
             .is_none()
     );
     assert_eq!(
@@ -344,6 +344,60 @@ fn stale_source_or_route_cannot_commit_after_reattach() {
             selection.set_active(false);
         })
     );
+}
+
+#[test]
+fn policy_pause_stamps_the_selection_but_leaves_the_relay_on_intent() {
+    let mut graph = RouteGraph::default();
+    let key = key(2);
+    let target = target(2, 20, SOURCE_ONE);
+    let reservation = reserve(
+        &mut graph,
+        &key,
+        SOURCE_ONE,
+        ConsumerSourceSelection::open(false),
+    );
+    let worker = MediaWorkerId::from_raw(1);
+    assert_eq!(
+        actions(graph.reserve_relay(&reservation, &target, worker, false)),
+        [TransportRelayRouteAction::Install]
+    );
+    let _ = commit_route(
+        &mut graph,
+        reservation,
+        &target,
+        101,
+        ConsumerSourceSelection::open(false),
+    );
+
+    // Reactivating while the receiver is deaf stamps the pause so the consumer
+    // destination stays closed, and still raises the relay: source policy resumes
+    // the destination only, so a relay left inactive here could never come back.
+    assert_eq!(
+        actions(
+            graph
+                .set_activity(
+                    &key,
+                    SOURCE_ONE,
+                    ConnectionId::from_raw(20),
+                    true,
+                    Some(PolicyPauseReason::ReceiverDeafened),
+                )
+                .expect("activity update should apply to the committed route")
+        ),
+        [TransportRelayRouteAction::SetActivity(
+            RelayRouteActivity::Active
+        )]
+    );
+    let selection = graph
+        .selection(&key, SOURCE_ONE)
+        .expect("committed route should expose its selection");
+    assert!(selection.active());
+    assert_eq!(
+        selection.policy_pause_reason(),
+        Some(PolicyPauseReason::ReceiverDeafened)
+    );
+    assert!(!selection.delivery_active());
 }
 
 #[test]

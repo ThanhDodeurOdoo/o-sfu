@@ -9,7 +9,7 @@ pub(super) use o_sfu_telemetry::diagnostics::{
     DiagnosticsSourceSelector, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
     DiagnosticsVideoRoutePriority,
 };
-pub(super) use str0m::{Candidate, Rtc, change::SdpOffer};
+pub(super) use str0m::{Candidate, Rtc, change::SdpOffer, media::Mid};
 
 pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
@@ -241,12 +241,39 @@ pub(super) async fn assert_subscription_policy_pause_reason(
     );
 }
 
-pub(super) async fn active_destination_count_for_receiver(
+/// Transport identity of one receiver's destination on a source route.
+///
+/// A policy pause keeps this pair stable, so comparing it across a pause and a
+/// resume proves delivery came back on the already negotiated route instead of
+/// through a fresh SDP exchange.
+pub(super) async fn consumer_destination_identity(
+    adapter: &MediaTransport,
+    source_media_id: TransportMediaId,
+    receiver_user_id: &UserId,
+) -> (TransportMediaId, Mid) {
+    let entry = adapter
+        .test_api()
+        .route_entry_by_media_id(source_media_id)
+        .await
+        .expect("source route should exist");
+    let destination = entry
+        .destinations
+        .iter()
+        .find(|destination| destination.dest_session.user_id() == receiver_user_id)
+        .expect("receiver should keep its consumer destination");
+    (destination.dest_transport_media_id, destination.dest_mid)
+}
+
+/// Every receiver that currently has an active transport destination for the
+/// given sources, sorted and one entry per destination.
+///
+/// Assertions name the exact delivery set with this, so a route that stops or
+/// starts being forwarded fails loudly instead of being proven by an absence.
+pub(super) async fn active_destination_receivers(
     adapter: &MediaTransport,
     source_media_ids: impl IntoIterator<Item = TransportMediaId>,
-    receiver_user_id: &UserId,
-) -> usize {
-    let mut count = 0;
+) -> Vec<UserId> {
+    let mut receivers = Vec::new();
     for source_media_id in source_media_ids {
         let Some(entry) = adapter
             .test_api()
@@ -255,15 +282,16 @@ pub(super) async fn active_destination_count_for_receiver(
         else {
             continue;
         };
-        count += entry
-            .destinations
-            .iter()
-            .filter(|destination| {
-                destination.active && destination.dest_session.user_id() == receiver_user_id
-            })
-            .count();
+        receivers.extend(
+            entry
+                .destinations
+                .iter()
+                .filter(|destination| destination.active)
+                .map(|destination| destination.dest_session.user_id().clone()),
+        );
     }
-    count
+    receivers.sort();
+    receivers
 }
 
 pub(super) async fn assert_receiver_bwe_target(

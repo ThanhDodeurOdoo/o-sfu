@@ -792,6 +792,7 @@ impl From<PolicyPauseReason> for DiagnosticsPolicyPauseReason {
             PolicyPauseReason::OverflowTile => Self::OverflowTile,
             PolicyPauseReason::MissingUsableLayer => Self::MissingUsableLayer,
             PolicyPauseReason::AudioSpeakerLimit => Self::AudioSpeakerLimit,
+            PolicyPauseReason::ReceiverDeafened => Self::ReceiverDeafened,
             PolicyPauseReason::VideoDownloadLimit => Self::VideoDownloadLimit,
             PolicyPauseReason::SourceBitrateLimit => Self::SourceBitrateLimit,
         }

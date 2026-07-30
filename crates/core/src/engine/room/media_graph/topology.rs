@@ -4,7 +4,7 @@ use std::{
 };
 
 use o_sfu_router::{
-    ProducerId, Router, RouterError,
+    MediaKind, ProducerId, Router, RouterError,
     rtp::{MediaCapabilities, MediaStream as RouterRtpParameters},
 };
 use tracing::{error, warn};
@@ -30,8 +30,8 @@ use crate::engine::{
         placement::WorkerLoadIndex,
     },
     source_model::{
-        ActiveSpeakerSourceRole, ConsumerSourceSelection, PublishedSourceDescriptor,
-        PublishedSourceId, SourceSubscriptionIntent, UserStreamId,
+        ActiveSpeakerSourceRole, ConsumerSourceSelection, PolicyPauseReason,
+        PublishedSourceDescriptor, PublishedSourceId, SourceSubscriptionIntent, UserStreamId,
     },
 };
 
@@ -787,7 +787,7 @@ impl RoomTopology {
         rtp: RouterRtpParameters,
     ) -> Option<PendingConsumerSetup> {
         let key = target.subscription_key();
-        let active = selection.delivery_active();
+        let relay_active = selection.active();
         let reservation =
             self.route_graph
                 .reserve_consumer_setup(key, target.source_id, selection)?;
@@ -798,7 +798,7 @@ impl RoomTopology {
         } else {
             let relays =
                 self.route_graph
-                    .reserve_relay(&reservation, &target, target_worker, active);
+                    .reserve_relay(&reservation, &target, target_worker, relay_active);
             self.resolve_relay_effects(relays)
         };
         Some(PendingConsumerSetup {
@@ -826,17 +826,29 @@ impl RoomTopology {
         target_user_id: &UserId,
         stream_id: &UserStreamId,
         active: bool,
+        receiver_deafened: bool,
     ) -> Option<ConsumerActivityCommit> {
         let key = SubscriptionKey::new(user_id, target_user_id, stream_id);
         let source_id = self.source_id_for_owner_stream(target_user_id, stream_id)?;
-        let relay_effects =
-            self.route_graph
-                .set_activity(&key, source_id, connection_id, active)?;
+        let policy_pause_reason = (receiver_deafened
+            && self
+                .source_descriptor(source_id)
+                .is_some_and(|source| source.media_kind() == MediaKind::Audio))
+        .then_some(PolicyPauseReason::ReceiverDeafened);
+        let relay_effects = self.route_graph.set_activity(
+            &key,
+            source_id,
+            connection_id,
+            active,
+            policy_pause_reason,
+        )?;
         let relay_effects = self.resolve_relay_effects(relay_effects);
         let update = self
             .committed_consumer_route_for_key(&key)
             .filter(|route| route.route.consumer_session_key().connection_id() == connection_id)
-            .map(|route| ReceiverRouteActivity::new(route.target(), active));
+            .map(|route| {
+                ReceiverRouteActivity::new(route.target(), route.selection.delivery_active())
+            });
         Some(ConsumerActivityCommit {
             update,
             relay_effects,

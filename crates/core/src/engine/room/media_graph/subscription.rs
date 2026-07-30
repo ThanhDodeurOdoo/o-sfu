@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::{MediaKind as RouterMediaKind, negotiation::negotiate_consumer_rtp_parameters};
 
 use super::{
-    super::{effects::RoomGaugeDelta, state::RoomState},
+    super::{
+        effects::RoomGaugeDelta,
+        state::{ActiveUser, RoomState},
+    },
     ConsumerId, ConsumerRouteTarget, SubscriptionKey,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
 };
@@ -219,6 +222,9 @@ impl RoomState {
     ) -> (Vec<ReceiverRouteActivity>, Vec<TransportRelayRouteEffect>) {
         let mut updates = Vec::new();
         let mut relays = Vec::new();
+        let receiver_deafened = self
+            .user_for_connection(user_id, connection_id)
+            .is_some_and(ActiveUser::is_deaf);
         for (stream_id, intent) in intents {
             let Some(active) = intent.active() else {
                 continue;
@@ -229,6 +235,7 @@ impl RoomState {
                 target_user_id,
                 stream_id,
                 active,
+                active && receiver_deafened,
             ) else {
                 continue;
             };
@@ -304,7 +311,24 @@ impl RoomState {
                         .unwrap_or(true),
                 )
             });
-        self.apply_initial_video_download_cap(target, source_active, selection)
+        let selection = self.apply_initial_video_download_cap(target, source_active, selection);
+        self.apply_initial_receiver_deafened(target, selection)
+    }
+
+    fn apply_initial_receiver_deafened(
+        &self,
+        target: &ConsumerSetupTarget,
+        mut selection: ConsumerSourceSelection,
+    ) -> ConsumerSourceSelection {
+        if target.kind == RouterMediaKind::Audio
+            && selection.delivery_active()
+            && self
+                .user_for_connection(target.session.user_id(), target.session.connection_id())
+                .is_some_and(ActiveUser::is_deaf)
+        {
+            selection.set_policy_pause_reason(Some(PolicyPauseReason::ReceiverDeafened));
+        }
+        selection
     }
 
     fn apply_initial_video_download_cap(
