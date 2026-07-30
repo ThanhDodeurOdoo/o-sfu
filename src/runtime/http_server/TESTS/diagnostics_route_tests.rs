@@ -328,8 +328,12 @@ async fn diagnostics_routes_return_current_room_and_user_details() -> TestResult
     assert_eq!(alice_summary.incoming_bitrate_bps, 1_000);
     assert_eq!(alice_summary.camera_incoming_bitrate_bps, 1_000);
 
-    let worker_summaries: Vec<DiagnosticsWorkerSummary> =
+    transport_test.set_packet_loop_delays_ms(vec![Some(7)]);
+    let worker_json: Value =
         diagnostics_json(&test_state.state, route::diagnostics::WORKERS).await?;
+    assert_eq!(worker_json[0]["pressure"]["packetLoopDelayMs"], 7);
+    assert!(worker_json[0]["pressure"].get("packetLoopLagMs").is_none());
+    let worker_summaries: Vec<DiagnosticsWorkerSummary> = serde_json::from_value(worker_json)?;
     assert_eq!(worker_summaries.len(), 1);
     let worker_summary = &worker_summaries[0];
     assert_eq!(worker_summary.media_worker_id, 0);
@@ -341,9 +345,14 @@ async fn diagnostics_routes_return_current_room_and_user_details() -> TestResult
     assert_eq!(worker_summary.disconnected_user_count, 1);
     assert_eq!(worker_summary.unknown_user_count, 1);
     assert_eq!(worker_summary.pressure.egress_bitrate_bps, 0);
+    assert_eq!(worker_summary.pressure.packet_loop_delay_ms, Some(7));
     assert_eq!(worker_summary.pressure.command_backlog_depth, 0);
     assert_eq!(worker_summary.pressure.relay_mailbox_depth, 0);
     assert_eq!(worker_summary.pressure.worker_pressure_score, 0);
+    transport_test.set_packet_loop_delays_ms(vec![None]);
+    let unavailable_worker_json: Value =
+        diagnostics_json(&test_state.state, route::diagnostics::WORKERS).await?;
+    assert!(unavailable_worker_json[0]["pressure"]["packetLoopDelayMs"].is_null());
 
     let summary: DiagnosticsSummaryResponse =
         diagnostics_json(&test_state.state, route::diagnostics::SUMMARY).await?;

@@ -93,6 +93,22 @@ impl MediaTransportTestApi<'_> {
         Some(release)
     }
 
+    /// Overrides packet-loop delay snapshots at the worker boundary.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `delays_ms` does not contain one value per worker.
+    pub fn set_packet_loop_delays_ms(self, delays_ms: Vec<Option<u64>>) {
+        assert_eq!(
+            delays_ms.len(),
+            self.transport.all_workers().count(),
+            "packet-loop delay overrides must cover every worker"
+        );
+        for (worker, delay_ms) in self.transport.all_workers().zip(delays_ms) {
+            worker.debug_set_packet_loop_delay_ms(delay_ms);
+        }
+    }
+
     /// Returns the number of worker source-diagnostics commands issued.
     #[must_use]
     pub fn source_diagnostics_request_count(self) -> usize {

@@ -205,6 +205,7 @@ impl BitrateRegistry {
         snapshot
     }
 
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub fn egress_bitrate_snapshot_at(
         &self,
         session_keys: &[TransportSessionKey],

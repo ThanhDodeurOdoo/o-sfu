@@ -75,7 +75,7 @@ impl RoomEffects {
         let mut batch = Self::default();
         batch.gauges.push(counts);
         batch.transport.extend(transport_plan);
-        batch.source_policy.route_graph_changed();
+        batch.source_policy.request();
         batch.output.push_lifecycle(effects);
         batch
     }
@@ -93,7 +93,7 @@ impl RoomEffects {
                 batch.gauges.push(counts);
                 batch.transport.extend(transport_plan);
                 batch.output.push_lifecycle(effects);
-                batch.source_policy.route_graph_changed();
+                batch.source_policy.request();
                 batch.transport.extend_teardown(session_teardown);
             }
             ConnectionCloseCommit::StalePlacement {
@@ -111,7 +111,7 @@ impl RoomEffects {
         let mut batch = Self::default();
         batch.gauges.push(commit.counts);
         batch.transport.extend(commit.transport_plan);
-        batch.source_policy.route_graph_changed();
+        batch.source_policy.request();
         batch.output.push_lifecycle(commit.effects);
         batch.transport.extend_teardown(commit.session_teardowns);
         batch
@@ -120,7 +120,7 @@ impl RoomEffects {
     pub(in crate::engine::room) fn from_presence(commit: PresenceCommit) -> Self {
         let mut batch = Self::default();
         batch.output.push_user_info(commit.fanout);
-        batch.source_policy.receiver_intent_changed();
+        batch.source_policy.request();
         batch
     }
 
@@ -138,7 +138,7 @@ impl RoomEffects {
             .transport
             .push_receiver_work(commit.receiver_route_work, ConsumerSetupOrigin::Publish);
         batch.push_presence_before_policy(commit.presence);
-        batch.source_policy.route_graph_changed();
+        batch.source_policy.request();
         batch
     }
 
@@ -163,31 +163,26 @@ impl RoomEffects {
         batch.transport.push_producer(source, stream_id, update);
         batch.output.push_source_snapshots(source_snapshots);
         batch.push_presence_before_policy(presence);
-        batch.source_policy.route_graph_changed();
+        batch.source_policy.request();
         batch
     }
 
     pub(in crate::engine::room) fn from_receiver_intent(commit: ReceiverRouteCommit) -> Self {
-        let changed = commit.work.route_graph_changed();
         let mut batch = Self::from_receiver_route(commit, ConsumerSetupOrigin::Subscribe);
-        if changed {
-            batch.source_policy.route_graph_changed();
-        } else {
-            batch.source_policy.receiver_intent_changed();
-        }
+        batch.source_policy.request();
         batch
     }
 
     pub(in crate::engine::room) fn from_consumer_readiness(commit: ReceiverRouteCommit) -> Self {
         let mut batch = Self::from_receiver_route(commit, ConsumerSetupOrigin::Readiness);
-        batch.source_policy.route_graph_changed();
+        batch.source_policy.request();
         batch
     }
 
     fn push_presence_before_policy(&mut self, presence: Option<PresenceCommit>) {
         if let Some(presence) = presence {
             self.output.push_user_info_before_policy(presence.fanout);
-            self.source_policy.receiver_intent_changed();
+            self.source_policy.request();
         }
     }
 

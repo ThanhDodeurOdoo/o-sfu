@@ -26,7 +26,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::{sync::mpsc, time::timeout};
+use tokio::{
+    sync::mpsc,
+    time::{sleep_until, timeout},
+};
 use tracing::warn;
 
 use super::{
@@ -40,11 +43,11 @@ use super::{
         worker::{WorkerCommandContext, drain_due_rid_kf_refreshes},
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
+    delay::{PacketLoopDelayPublisher, PacketLoopDelaySnapshot},
     forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
     ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at},
     input::{PacketLoopControlInput, PacketLoopInputReceivers, PacketLoopMailboxInput},
     keyframe_requests::{drain_due_kf_retries, flush_pending_kf_reqs},
-    lag::{PacketLoopLagPublisher, PacketLoopLagSnapshot},
     session_drain::{SessionDrainContext, drain_ready_sessions},
     udp::{RtcUdpSocket, UdpDatagram, UdpIngress},
 };
@@ -67,21 +70,19 @@ pub struct PacketLoopConfig {
     pub metrics: Arc<RuntimeMetrics>,
     pub rtp_metrics: Arc<RtpMetricsRecorder>,
     pub rtc_metrics: Arc<RtcMetricsRecorder>,
-    pub packet_loop_lag: Arc<PacketLoopLagSnapshot>,
+    pub packet_loop_delay: Arc<PacketLoopDelaySnapshot>,
 }
 
 /// packet-loop info allowed to cross into the async wait phase
 ///
 /// `PacketLoopTurn::pump` builds this after mutable `PacketLoopState` access is
 /// finished
-/// the driver can then await with only the next internal wakeup deadline and the
-/// turn start time used for lag accounting
+/// the driver can then await with only the next internal wakeup deadline
 ///
 /// keeping this type narrow makes it visible when a future change tries to
 /// carry session state or demux recovery state across `.await`
 pub(super) struct WaitPhaseSnapshot {
     pub next_timeout: Option<Instant>,
-    pub turn_started_at: Instant,
 }
 
 pub(super) enum PacketLoopTurnInput {
@@ -101,7 +102,7 @@ pub(super) struct PacketLoopTurn {
     buffers: PacketLoopBuffers,
     packet_sink_cache: PacketSinkRouteCache,
     staged_relay_packet: Option<ForwardedPacket>,
-    lag_publisher: PacketLoopLagPublisher,
+    delay_publisher: PacketLoopDelayPublisher,
     ready_now_budget: usize,
     udp_burst_budget: usize,
 }
@@ -127,7 +128,7 @@ impl PacketLoopTurn {
             buffers: PacketLoopBuffers::new(),
             packet_sink_cache: PacketSinkRouteCache::default(),
             staged_relay_packet: None,
-            lag_publisher: PacketLoopLagPublisher::new(started_at),
+            delay_publisher: PacketLoopDelayPublisher::new(started_at),
             ready_now_budget: MAX_READY_NOW_INPUTS_BEFORE_YIELD,
             udp_burst_budget: MAX_UDP_DATAGRAMS_PER_TURN,
         }
@@ -145,14 +146,13 @@ impl PacketLoopTurn {
         config: &PacketLoopConfig,
         relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     ) -> WaitPhaseSnapshot {
-        let turn_started_at = Instant::now();
+        let now = Instant::now();
         self.buffers.clear();
         if let Some(packet) = self.staged_relay_packet.take() {
             // the packet that woke the wait phase enters the same batch as packets
             // drained from the relay mailbox below
             self.buffers.pending_packets.push(packet);
         }
-        let now = turn_started_at;
         let session_drain_context = SessionDrainContext {
             snapshot_state,
             metrics: &config.metrics,
@@ -206,23 +206,15 @@ impl PacketLoopTurn {
         );
         WaitPhaseSnapshot {
             next_timeout: next_timeout_deadline_at(state, now),
-            turn_started_at,
         }
     }
 
     /// flushes the async outputs produced by the pump phase
     ///
-    /// UDP transmits and lag publication run after mutable worker-state access
+    /// UDP transmits and delay publication run after mutable worker-state access
     /// ends
-    async fn flush_outputs(
-        &mut self,
-        snapshot: &WaitPhaseSnapshot,
-        socket: &RtcUdpSocket,
-        packet_loop_lag: &PacketLoopLagSnapshot,
-    ) {
+    pub(super) async fn flush_outputs(&mut self, socket: &RtcUdpSocket) {
         self.flush_staged_transmits(socket).await;
-        self.lag_publisher
-            .observe(packet_loop_lag, snapshot.turn_started_at, Instant::now());
     }
 
     /// waits for the next event that should resume the worker loop
@@ -233,34 +225,45 @@ impl PacketLoopTurn {
         snapshot: WaitPhaseSnapshot,
         ingress: &mut UdpIngress,
         inputs: &mut PacketLoopInputReceivers,
+        packet_loop_delay: &PacketLoopDelaySnapshot,
     ) -> Option<PacketLoopTurnInput> {
-        if inputs.shutdown_cancelled() {
-            return None;
-        }
-        if let Some(input) = inputs.try_recv_control() {
-            return Some(PacketLoopTurnInput::Control(input));
-        }
+        loop {
+            if inputs.shutdown_cancelled() {
+                return None;
+            }
+            if let Some(input) = inputs.try_recv_control() {
+                return Some(PacketLoopTurnInput::Control(input));
+            }
 
-        if let Some(next_timeout) = snapshot.next_timeout
-            && next_timeout <= Instant::now()
-            && self.ready_now_budget > 0
-        {
-            // timeout wakes keep due internal work moving but the budget prevents an
-            // expired deadline from starving mailbox or ingress input forever
-            self.ready_now_budget = self.ready_now_budget.saturating_sub(1);
-            return Some(PacketLoopTurnInput::Timeout);
-        }
-        // after one awaited datagram wakes the loop, consume a bounded number of
-        // already completed datagrams so bursts do not pay one ingress await per packet
-        if let Some(next_input) = self.try_recv_queued_datagram(ingress) {
-            return Some(next_input);
-        }
-        // mailbox input is biased so shutdown and lifecycle commands stay
-        // responsive even while media traffic is heavy
-        tokio::select! {
-            biased;
-            next_input = inputs.recv_control_or_relay() => next_input.map(mailbox_to_input),
-            next_input = self.wait_for_ingress_input(&snapshot, ingress) => Some(next_input),
+            if let Some(next_timeout) = snapshot.next_timeout
+                && next_timeout <= Instant::now()
+                && self.ready_now_budget > 0
+            {
+                // timeout wakes keep due internal work moving but the budget prevents an
+                // expired deadline from starving mailbox or ingress input forever
+                self.ready_now_budget = self.ready_now_budget.saturating_sub(1);
+                return Some(PacketLoopTurnInput::Timeout);
+            }
+            // after one awaited datagram wakes the loop, consume a bounded number of
+            // already completed datagrams so bursts do not pay one ingress await per packet
+            if let Some(next_input) = self.try_recv_queued_datagram(ingress) {
+                return Some(next_input);
+            }
+            // heartbeat publication is the lowest-priority wait item. A continuously
+            // ready mailbox or ingress queue therefore expires the health snapshot.
+            let heartbeat_deadline = self.delay_publisher.deadline();
+            tokio::select! {
+                biased;
+                next_input = inputs.recv_control_or_relay() => {
+                    return next_input.map(mailbox_to_input);
+                }
+                next_input = self.wait_for_ingress_input(&snapshot, ingress) => {
+                    return Some(next_input);
+                }
+                () = sleep_until(heartbeat_deadline.into()) => {
+                    self.delay_publisher.observe(packet_loop_delay, Instant::now());
+                }
+            }
         }
     }
 
@@ -453,11 +456,15 @@ pub async fn run_packet_loop(
             inputs.relay_rx(),
         );
 
-        turn.flush_outputs(&snapshot, &shared_socket.socket, &config.packet_loop_lag)
-            .await;
+        turn.flush_outputs(&shared_socket.socket).await;
 
         let input = turn
-            .wait_for_next_input(snapshot, &mut shared_socket.ingress, &mut inputs)
+            .wait_for_next_input(
+                snapshot,
+                &mut shared_socket.ingress,
+                &mut inputs,
+                &config.packet_loop_delay,
+            )
             .await;
         let Some(input) = input else {
             // shutdown fired or the command receiver closed

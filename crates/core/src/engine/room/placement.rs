@@ -9,15 +9,11 @@ use super::{
     Room, RoomJoinError,
     factory::RoomFactory,
     membership::JoinUserRequest,
-    state::{JoinCommit, RoomState, UserJoinedFanout},
+    state::{JoinCommit, UserJoinedFanout},
 };
 use crate::{
-    LocalSpilloverPolicy, RoomSpilloverMode, RoomWorkerPolicy,
-    engine::{
-        MediaWorkerId, RoomInstanceId,
-        media_transport::{TransportPlacementPressureSnapshot, TransportWorkerPressureSnapshot},
-        sync::lock_unpoisoned,
-    },
+    RoomWorkerPolicy,
+    engine::{MediaWorkerId, RoomInstanceId, media_transport::MediaTransport},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,92 +77,46 @@ impl RoomRuntimeContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoomPlacementDecision {
-    AssignPrimary { media_worker_id: MediaWorkerId },
-    UseExisting(RouterPlacement),
-    AllocateSpillover { media_worker_id: MediaWorkerId },
+#[cfg(any(test, feature = "testing-transport"))]
+impl Room {
+    pub(super) async fn placement_usage_snapshot(&self) -> PlacementSnapshot {
+        self.state.read().await.placement_usage_snapshot()
+    }
 }
 
-pub(super) struct JoinAdmissionTurn<A = fn() -> RouterId> {
+enum PacketLoopDelaySource<'a> {
+    Transport(&'a MediaTransport),
+    #[cfg(any(test, feature = "testing-transport"))]
+    Fixed(Vec<Option<u64>>),
+}
+
+impl PacketLoopDelaySource<'_> {
+    fn snapshot(self) -> Vec<Option<u64>> {
+        match self {
+            Self::Transport(transport) => transport.packet_loop_delays_ms(),
+            #[cfg(any(test, feature = "testing-transport"))]
+            Self::Fixed(delays_ms) => delays_ms,
+        }
+    }
+}
+
+pub(super) struct JoinAdmissionTurn<'a, A = fn() -> RouterId> {
     request: JoinUserRequest,
-    loads: WorkerLoadIndex,
+    packet_loop_delays: PacketLoopDelaySource<'a>,
     allocate_spillover_router: A,
     #[cfg(any(test, feature = "testing-transport"))]
     gate: Option<Arc<JoinPlacementTestGate>>,
 }
 
-struct JoinPlacementPlan {
-    decision: RoomPlacementDecision,
-    loads: WorkerLoadIndex,
-    policy: RoomWorkerPolicy,
-}
-
-#[derive(Debug, Default)]
-pub struct LoadTriggeredPlacementState {
-    activation_streak: usize,
-    source_fanout_pressure: bool,
-}
-
-impl LoadTriggeredPlacementState {
-    pub fn set_source_fanout_pressure(&mut self, pressured: bool) {
-        self.source_fanout_pressure = pressured;
-    }
-
-    fn reset_activation(&mut self) {
-        self.activation_streak = 0;
-    }
-
-    fn record_pressure(&mut self, policy: LocalSpilloverPolicy) -> bool {
-        self.activation_streak = self.activation_streak.saturating_add(1);
-        self.activation_streak >= policy.parts().activation_window
-    }
-}
-
-impl Room {
-    pub(super) async fn placement_usage_snapshot(&self) -> PlacementSnapshot {
-        self.state.read().await.placement_usage_snapshot()
-    }
-
-    pub(super) async fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
-        self.state.read().await.record_worker_load(loads);
-    }
-
-    pub(super) async fn observe_source_fanout_pressure(&self) {
-        let RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) =
-            self.room_worker_policy().spillover()
-        else {
-            return;
-        };
-        let policy = policy.parts();
-        let pressured = {
-            let state = self.state.read().await;
-            state.source_fanout_pressure(policy.max_fanout_per_source)
-        };
-        lock_unpoisoned(&self.load_triggered_placement).set_source_fanout_pressure(pressured);
-    }
-}
-
-impl RoomState {
-    fn record_worker_load(&self, loads: &mut WorkerLoadIndex) {
-        let router = self.topology.router();
-        for user in self.users.values() {
-            loads.record_session(router.media_worker_id_for_connection(user.connection_id));
-        }
-        self.topology
-            .record_consumer_loads(loads, |user_id| self.user_connection_id(user_id));
-    }
-}
-
-impl JoinAdmissionTurn {
-    pub(super) fn from_factory(
+impl JoinAdmissionTurn<'_> {
+    pub(super) fn from_factory<'a>(
         request: JoinUserRequest,
-        loads: WorkerLoadIndex,
-        factory: &RoomFactory,
-    ) -> JoinAdmissionTurn<impl FnOnce() -> RouterId + '_> {
+        media_transport: &'a MediaTransport,
+        factory: &'a RoomFactory,
+    ) -> JoinAdmissionTurn<'a, impl FnOnce() -> RouterId + 'a> {
         JoinAdmissionTurn {
             request,
-            loads,
+            packet_loop_delays: PacketLoopDelaySource::Transport(media_transport),
             allocate_spillover_router: move || factory.allocate_spillover_router(),
             #[cfg(any(test, feature = "testing-transport"))]
             gate: None,
@@ -176,20 +126,19 @@ impl JoinAdmissionTurn {
     #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn for_test(
         request: JoinUserRequest,
-        loads: WorkerLoadIndex,
+        delays_ms: Vec<Option<u64>>,
         spillover_router_id: RouterId,
-    ) -> JoinAdmissionTurn<impl FnOnce() -> RouterId> {
+    ) -> JoinAdmissionTurn<'static, impl FnOnce() -> RouterId> {
         JoinAdmissionTurn {
             request,
-            loads,
+            packet_loop_delays: PacketLoopDelaySource::Fixed(delays_ms),
             allocate_spillover_router: move || spillover_router_id,
-            #[cfg(any(test, feature = "testing-transport"))]
             gate: None,
         }
     }
 }
 
-impl<A: FnOnce() -> RouterId> JoinAdmissionTurn<A> {
+impl<A: FnOnce() -> RouterId> JoinAdmissionTurn<'_, A> {
     #[cfg(any(test, feature = "testing-transport"))]
     pub(super) fn with_gate(mut self, gate: Option<Arc<JoinPlacementTestGate>>) -> Self {
         self.gate = gate;
@@ -201,107 +150,124 @@ impl<A: FnOnce() -> RouterId> JoinAdmissionTurn<A> {
         room: &Room,
         joined_fanout: UserJoinedFanout,
     ) -> Result<JoinCommit, RoomJoinError> {
-        let plan = JoinPlacementPlan::plan(room, self.loads).await;
         #[cfg(any(test, feature = "testing-transport"))]
-        if let Some(gate) = self.gate {
-            gate.wait_after_planning().await;
+        if let Some(gate) = &self.gate {
+            gate.wait_before_commit().await;
         }
-        let request = self.request;
         let mut state = room.state.write().await;
-        let placement = plan.resolve(
+        let delays_ms = self.packet_loop_delays.snapshot();
+        let worker_count = delays_ms.len().max(1);
+        let start_worker = room_worker_start(room.instance_id(), worker_count);
+        let placement = choose_placement(
             &state.placement_usage_snapshot(),
+            room.room_worker_policy(),
+            &delays_ms,
+            start_worker,
             self.allocate_spillover_router,
         );
         state.apply_join_on_placement(
-            &request.user_id,
-            request.permissions,
-            request.sender,
+            &self.request.user_id,
+            self.request.permissions,
+            self.request.sender,
             joined_fanout,
             placement,
         )
     }
 }
 
-impl JoinPlacementPlan {
-    async fn plan(room: &Room, loads: WorkerLoadIndex) -> Self {
-        let snapshot = room.placement_usage_snapshot().await;
-        let policy = room.room_worker_policy();
-        let planner = RoomPlacementPlanner::new(policy);
-        let decision = match policy.spillover() {
-            RoomSpilloverMode::LoadTriggeredLocalSpillover(_) => {
-                room.observe_source_fanout_pressure().await;
-                let mut state = lock_unpoisoned(&room.load_triggered_placement);
-                planner.choose_with_load_state(&snapshot, &loads, &mut state)
-            }
-            RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
-                planner.choose(&snapshot, &loads)
-            }
+fn choose_placement(
+    room: &PlacementSnapshot,
+    policy: RoomWorkerPolicy,
+    delays_ms: &[Option<u64>],
+    start_worker: usize,
+    allocate_spillover_router: impl FnOnce() -> RouterId,
+) -> RouterPlacement {
+    let worker_count = delays_ms.len().max(1);
+    let threshold_ms = policy.packet_loop_delay_threshold_ms();
+    let assigned = room.assigned_placements();
+    let Some(primary) = assigned.first().copied() else {
+        return RouterPlacement {
+            router: room.primary(),
+            media_worker: choose_primary_worker(
+                delays_ms,
+                threshold_ms,
+                start_worker % worker_count,
+            ),
         };
-        Self {
-            decision,
-            loads,
-            policy,
-        }
+    };
+    if policy.max_local_routers() == 1 {
+        return primary;
     }
-
-    fn resolve(
-        self,
-        placement_usage: &PlacementSnapshot,
-        allocate_spillover_router: impl FnOnce() -> RouterId,
-    ) -> RouterPlacement {
-        let Self {
-            decision,
-            loads,
-            policy,
-        } = self;
-        let assigned_placements = placement_usage.assigned_placements();
-        let score_policy = score_policy(policy);
-        let Some(first_assigned) = assigned_placements.first().copied() else {
-            let media_worker = match decision {
-                RoomPlacementDecision::AssignPrimary { media_worker_id }
-                | RoomPlacementDecision::AllocateSpillover { media_worker_id } => media_worker_id,
-                RoomPlacementDecision::UseExisting(placement) => placement.media_worker,
-            };
-            return RouterPlacement {
-                router: placement_usage.primary(),
-                media_worker,
-            };
-        };
-        match decision {
-            RoomPlacementDecision::AssignPrimary { .. } => {
-                loads.least_loaded_placement(assigned_placements, first_assigned, score_policy)
-            }
-            RoomPlacementDecision::UseExisting(placement) => {
-                if let Some(assigned) = assigned_placements
+    if let Some(placement) = assigned
+        .iter()
+        .filter(|placement| worker_is_healthy(delays_ms, placement.media_worker, threshold_ms))
+        .min_by_key(|placement| worker_delay(delays_ms, placement.media_worker))
+    {
+        return *placement;
+    }
+    let placement_cap = policy.max_local_routers().min(worker_count);
+    if assigned.len() < placement_cap
+        && let Some(media_worker) = cyclic_workers(start_worker, worker_count).find(|worker| {
+            worker_is_healthy(delays_ms, *worker, threshold_ms)
+                && assigned
                     .iter()
-                    .find(|assigned| assigned.router == placement.router)
-                {
-                    return *assigned;
-                }
-                loads.least_loaded_placement(assigned_placements, first_assigned, score_policy)
-            }
-            RoomPlacementDecision::AllocateSpillover { .. } => {
-                let placement_cap = policy.max_local_routers().min(loads.worker_count()).max(1);
-                if assigned_placements.len() >= placement_cap {
-                    return loads.least_loaded_placement(
-                        assigned_placements,
-                        first_assigned,
-                        score_policy,
-                    );
-                }
-                RouterPlacement {
-                    router: allocate_spillover_router(),
-                    media_worker: loads.least_loaded_worker(assigned_placements, score_policy),
-                }
-            }
-        }
+                    .all(|placement| placement.media_worker != *worker)
+        })
+    {
+        return RouterPlacement {
+            router: allocate_spillover_router(),
+            media_worker,
+        };
     }
+    assigned
+        .iter()
+        .copied()
+        .min_by_key(|placement| worker_delay(delays_ms, placement.media_worker))
+        .unwrap_or(primary)
+}
+
+fn choose_primary_worker(
+    delays_ms: &[Option<u64>],
+    threshold_ms: u64,
+    start_worker: usize,
+) -> MediaWorkerId {
+    let worker_count = delays_ms.len().max(1);
+    cyclic_workers(start_worker, worker_count)
+        .find(|worker| worker_is_healthy(delays_ms, *worker, threshold_ms))
+        .or_else(|| {
+            cyclic_workers(start_worker, worker_count)
+                .min_by_key(|worker| worker_delay(delays_ms, *worker))
+        })
+        .unwrap_or_else(|| MediaWorkerId::from_raw(0))
+}
+
+fn cyclic_workers(start_worker: usize, worker_count: usize) -> impl Iterator<Item = MediaWorkerId> {
+    (0..worker_count).map(move |offset| {
+        MediaWorkerId::from_raw(start_worker.wrapping_add(offset) % worker_count)
+    })
+}
+
+fn worker_is_healthy(delays_ms: &[Option<u64>], worker: MediaWorkerId, threshold_ms: u64) -> bool {
+    worker_delay(delays_ms, worker) < threshold_ms
+}
+
+fn worker_delay(delays_ms: &[Option<u64>], worker: MediaWorkerId) -> u64 {
+    delays_ms
+        .get(worker.as_usize())
+        .copied()
+        .flatten()
+        .unwrap_or(u64::MAX)
+}
+
+fn room_worker_start(room_instance_id: RoomInstanceId, worker_count: usize) -> usize {
+    let worker_count = u64::try_from(worker_count.max(1)).unwrap_or(u64::MAX);
+    usize::try_from(room_instance_id.as_u64() % worker_count).unwrap_or_default()
 }
 
 #[cfg(any(test, feature = "testing-transport"))]
 #[derive(Debug)]
 pub struct JoinPlacementTestGate {
-    planned: Barrier,
+    ready: Barrier,
     release: Barrier,
 }
 
@@ -310,298 +276,22 @@ impl JoinPlacementTestGate {
     #[must_use]
     pub fn new(expected: usize) -> Self {
         Self {
-            planned: Barrier::new(expected + 1),
+            ready: Barrier::new(expected + 1),
             release: Barrier::new(expected + 1),
         }
     }
 
-    async fn wait_after_planning(&self) {
-        self.planned.wait().await;
+    async fn wait_before_commit(&self) {
+        self.ready.wait().await;
         self.release.wait().await;
     }
 
-    pub async fn hold_all_planned(&self) {
-        self.planned.wait().await;
+    pub async fn hold_all_ready(&self) {
+        self.ready.wait().await;
     }
 
     pub async fn release_all(&self) {
         self.release.wait().await;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WorkerPlacementLoad {
-    media_worker_id: MediaWorkerId,
-    session_count: usize,
-    consumer_count: usize,
-    pressure: TransportPlacementPressureSnapshot,
-}
-
-impl WorkerPlacementLoad {
-    #[must_use]
-    const fn new(
-        media_worker_id: MediaWorkerId,
-        pressure: TransportPlacementPressureSnapshot,
-    ) -> Self {
-        Self {
-            media_worker_id,
-            session_count: 0,
-            consumer_count: 0,
-            pressure,
-        }
-    }
-
-    fn record_session(&mut self) {
-        self.session_count = self.session_count.saturating_add(1);
-    }
-
-    fn record_consumer(&mut self) {
-        self.consumer_count = self.consumer_count.saturating_add(1);
-    }
-
-    fn score(self, policy: LocalSpilloverPolicy) -> WorkerPlacementScore {
-        WorkerPlacementScore {
-            overloaded: self.is_overloaded(policy),
-            consumer_count: self.consumer_count,
-            session_count: self.session_count,
-            worker_pressure_score: self.pressure.worker_pressure_score,
-            packet_loop_lag_ms: self.pressure.packet_loop_lag_ms,
-            command_backlog_depth: self.pressure.command_backlog_depth,
-            relay_mailbox_depth: self.pressure.relay_mailbox_depth,
-            egress_bitrate: self.pressure.egress_bitrate.as_bps(),
-            media_worker_id: self.media_worker_id,
-        }
-    }
-
-    fn is_overloaded(self, policy: LocalSpilloverPolicy) -> bool {
-        let policy = policy.parts();
-        self.session_count.saturating_add(1) >= policy.min_receiver_count
-            || self.consumer_count >= policy.max_active_consumers_per_router
-            || policy.egress_bitrate_threshold > crate::Bitrate::zero()
-                && self.pressure.egress_bitrate >= policy.egress_bitrate_threshold
-            || policy.packet_loop_lag_threshold_ms > 0
-                && self.pressure.packet_loop_lag_ms >= policy.packet_loop_lag_threshold_ms
-            || policy.command_backlog_threshold > 0
-                && self.pressure.command_backlog_depth >= policy.command_backlog_threshold
-            || policy.relay_mailbox_depth_threshold > 0
-                && self.pressure.relay_mailbox_depth >= policy.relay_mailbox_depth_threshold
-            || policy.worker_pressure_threshold > 0
-                && self.pressure.worker_pressure_score >= policy.worker_pressure_threshold
-    }
-}
-
-/// ordered worker score where field order defines the tie-break policy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct WorkerPlacementScore {
-    overloaded: bool,
-    consumer_count: usize,
-    session_count: usize,
-    worker_pressure_score: u8,
-    packet_loop_lag_ms: u64,
-    command_backlog_depth: usize,
-    relay_mailbox_depth: usize,
-    egress_bitrate: u64,
-    media_worker_id: MediaWorkerId,
-}
-
-#[derive(Debug)]
-pub struct WorkerLoadIndex {
-    loads: Vec<WorkerPlacementLoad>,
-}
-
-impl WorkerLoadIndex {
-    #[must_use]
-    pub(super) fn new(
-        media_worker_count: usize,
-        pressure_snapshots: Vec<TransportWorkerPressureSnapshot>,
-    ) -> Self {
-        let media_worker_count = media_worker_count.max(1);
-        let mut loads = (0..media_worker_count)
-            .map(|media_worker_id| {
-                WorkerPlacementLoad::new(
-                    MediaWorkerId::from_raw(media_worker_id),
-                    TransportPlacementPressureSnapshot::default(),
-                )
-            })
-            .collect::<Vec<_>>();
-        for snapshot in pressure_snapshots {
-            let media_worker_id =
-                MediaWorkerId::from_raw(snapshot.media_worker_id.as_usize() % media_worker_count);
-            if let Some(load) = loads.get_mut(media_worker_id.as_usize()) {
-                *load = WorkerPlacementLoad::new(media_worker_id, snapshot.pressure);
-            }
-        }
-        Self { loads }
-    }
-
-    pub(super) fn record_session(&mut self, media_worker_id: MediaWorkerId) {
-        if let Some(load) = self.load_mut_for_worker(media_worker_id) {
-            load.record_session();
-        }
-    }
-
-    pub(super) fn record_consumer(&mut self, media_worker_id: MediaWorkerId) {
-        if let Some(load) = self.load_mut_for_worker(media_worker_id) {
-            load.record_consumer();
-        }
-    }
-
-    fn load_mut_for_worker(
-        &mut self,
-        media_worker_id: MediaWorkerId,
-    ) -> Option<&mut WorkerPlacementLoad> {
-        let worker_count = self.worker_count();
-        self.loads
-            .get_mut(media_worker_id.as_usize() % worker_count)
-    }
-
-    fn load_for_worker(&self, media_worker_id: MediaWorkerId) -> WorkerPlacementLoad {
-        let media_worker_id =
-            MediaWorkerId::from_raw(media_worker_id.as_usize() % self.worker_count());
-        self.loads
-            .get(media_worker_id.as_usize())
-            .copied()
-            .unwrap_or_else(|| {
-                WorkerPlacementLoad::new(
-                    media_worker_id,
-                    TransportPlacementPressureSnapshot::default(),
-                )
-            })
-    }
-
-    #[expect(
-        clippy::unreachable,
-        reason = "WorkerLoadIndex::new normalizes the worker count to at least one load"
-    )]
-    fn least_loaded_worker(
-        &self,
-        excluded_placements: &[RouterPlacement],
-        policy: LocalSpilloverPolicy,
-    ) -> MediaWorkerId {
-        let Some(load) = self
-            .loads
-            .iter()
-            .filter(|load| {
-                !excluded_placements
-                    .iter()
-                    .any(|placement| placement.media_worker == load.media_worker_id)
-            })
-            .min_by_key(|load| load.score(policy))
-            .or_else(|| self.loads.iter().min_by_key(|load| load.score(policy)))
-        else {
-            unreachable!("worker load index is built with at least one worker");
-        };
-        load.media_worker_id
-    }
-
-    fn least_loaded_placement(
-        &self,
-        placements: &[RouterPlacement],
-        fallback: RouterPlacement,
-        policy: LocalSpilloverPolicy,
-    ) -> RouterPlacement {
-        placements
-            .iter()
-            .copied()
-            .min_by_key(|placement| self.load_for_worker(placement.media_worker).score(policy))
-            .unwrap_or(fallback)
-    }
-
-    fn worker_count(&self) -> usize {
-        self.loads.len().max(1)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct RoomPlacementPlanner {
-    policy: RoomWorkerPolicy,
-}
-
-impl RoomPlacementPlanner {
-    #[must_use]
-    pub(super) const fn new(policy: RoomWorkerPolicy) -> Self {
-        Self { policy }
-    }
-
-    #[must_use]
-    pub(super) fn choose(
-        &self,
-        room: &PlacementSnapshot,
-        load_index: &WorkerLoadIndex,
-    ) -> RoomPlacementDecision {
-        let mut load_state = LoadTriggeredPlacementState::default();
-        self.choose_with_load_state(room, load_index, &mut load_state)
-    }
-
-    pub(super) fn choose_with_load_state(
-        &self,
-        room: &PlacementSnapshot,
-        load_index: &WorkerLoadIndex,
-        load_state: &mut LoadTriggeredPlacementState,
-    ) -> RoomPlacementDecision {
-        let placement_cap = self
-            .policy
-            .max_local_routers()
-            .min(load_index.worker_count())
-            .max(1);
-        let score_policy = score_policy(self.policy);
-        let assigned_placements = room.assigned_placements();
-        let Some(first_assigned) = assigned_placements.first().copied() else {
-            load_state.reset_activation();
-            return RoomPlacementDecision::AssignPrimary {
-                media_worker_id: load_index.least_loaded_worker(&[], score_policy),
-            };
-        };
-        match self.policy.spillover() {
-            RoomSpilloverMode::StrictSingleRouter => {
-                load_state.reset_activation();
-                RoomPlacementDecision::UseExisting(first_assigned)
-            }
-            RoomSpilloverMode::BoundedLocalSpillover => {
-                if assigned_placements.len() < placement_cap {
-                    load_state.reset_activation();
-                    return RoomPlacementDecision::AllocateSpillover {
-                        media_worker_id: load_index
-                            .least_loaded_worker(assigned_placements, score_policy),
-                    };
-                }
-                load_state.reset_activation();
-                RoomPlacementDecision::UseExisting(load_index.least_loaded_placement(
-                    assigned_placements,
-                    first_assigned,
-                    score_policy,
-                ))
-            }
-            RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => {
-                let placement =
-                    load_index.least_loaded_placement(assigned_placements, first_assigned, policy);
-                let load = load_index.load_for_worker(placement.media_worker);
-                if !load.is_overloaded(policy) && !load_state.source_fanout_pressure {
-                    load_state.reset_activation();
-                    return RoomPlacementDecision::UseExisting(placement);
-                }
-                if !load_state.record_pressure(policy) {
-                    return RoomPlacementDecision::UseExisting(placement);
-                }
-                if assigned_placements.len() < placement_cap {
-                    load_state.reset_activation();
-                    return RoomPlacementDecision::AllocateSpillover {
-                        media_worker_id: load_index
-                            .least_loaded_worker(assigned_placements, policy),
-                    };
-                }
-                RoomPlacementDecision::UseExisting(placement)
-            }
-        }
-    }
-}
-
-fn score_policy(policy: RoomWorkerPolicy) -> LocalSpilloverPolicy {
-    match policy.spillover() {
-        RoomSpilloverMode::LoadTriggeredLocalSpillover(policy) => policy,
-        RoomSpilloverMode::StrictSingleRouter | RoomSpilloverMode::BoundedLocalSpillover => {
-            LocalSpilloverPolicy::conservative()
-        }
     }
 }
 

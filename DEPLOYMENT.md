@@ -498,21 +498,17 @@ RTC transport:
 | `MAX_BITRATE_OUT` | `10000000` | receiver-side BWE ceiling in bps per user |
 | `MAX_VIDEO_BITRATE` | `4000000` | maximum bitrate in bps for the highest default simulcast video layer metadata |
 
-local room spillover:
+room worker placement:
 
 | variable | default | description |
 | --- | --- | --- |
-| `ROOM_MAX_LOCAL_ROUTERS` | `1` | maximum local routers one room may reserve |
-| `ROOM_SPILLOVER_MODE` | `load` when router cap is above `1` | `strict`, `load`, `load-triggered` or `bounded` |
-| `ROOM_SPILLOVER_MIN_RECEIVERS` | `16` | minimum active receiver count that can activate load-triggered spillover |
-| `ROOM_SPILLOVER_MAX_CONSUMERS_PER_ROUTER` | `64` | active plus pending consumer-route pressure per active local router |
-| `ROOM_SPILLOVER_MAX_FANOUT_PER_SOURCE` | `48` | active plus pending receiver fan-out per source and receiver worker |
-| `ROOM_SPILLOVER_EGRESS_BITRATE_BPS` | `750000000` | room egress bitrate pressure threshold, with `0` disabling this signal |
-| `ROOM_SPILLOVER_PACKET_LOOP_LAG_MS` | `20` | packet-loop lag pressure threshold, with `0` disabling this signal |
-| `ROOM_SPILLOVER_COMMAND_BACKLOG` | `128` | command backlog pressure threshold, with `0` disabling this signal |
-| `ROOM_SPILLOVER_RELAY_MAILBOX_DEPTH` | `128` | relay mailbox pressure threshold, with `0` disabling this signal |
-| `ROOM_SPILLOVER_WORKER_PRESSURE` | `80` | worker pressure threshold from `0` to `100`, with `0` disabling this signal |
-| `ROOM_SPILLOVER_ACTIVATION_WINDOW` | `2` | consecutive pressure observations required before attaching another local router |
+| `ROOM_MAX_LOCAL_ROUTERS` | `1` | maximum workers a room may use, with `1` disabling spillover |
+| `ROOM_SPILLOVER_PACKET_LOOP_DELAY_MS` | `20` | packet-loop service delay that marks an assigned worker unhealthy after two consecutive observations |
+
+Rooms remain on an assigned healthy worker. A join attaches an unused healthy
+worker only when every assigned worker is unhealthy and the router cap permits
+it. A missed heartbeat is unhealthy after one full interval. The `300 ms`
+grace applies only before the first heartbeat.
 
 media policy and codecs:
 

@@ -99,7 +99,6 @@ impl ReceiverSetupTurn {
                     transport_media_id: route.consumer_transport_media_id(),
                 }];
                 execute_relays_and_teardown(media_transport, relays, teardown).await;
-                outcome.source_policy.fanout_pressure_changed();
             }
         }
     }
@@ -116,6 +115,5 @@ impl ReceiverSetupTurn {
         };
         execute_relays_and_teardown(media_transport, relays, []).await;
         outcome.gauges.push(RoomGaugeDelta::media(before, after));
-        outcome.source_policy.fanout_pressure_changed();
     }
 }

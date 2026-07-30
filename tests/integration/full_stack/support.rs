@@ -12,10 +12,13 @@ pub(crate) mod setup;
 pub(crate) mod spillover;
 
 pub(super) use std::time::{Duration, Instant};
+use std::{
+    cmp::Ordering,
+    num::{NonZeroU64, NonZeroUsize},
+};
 
 pub(super) use o_sfu::{
     config::{Config, MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy},
-    core::prelude::{LocalSpilloverPolicy, LocalSpilloverPolicyParts},
     http::IncomingBitRateStatsResponse,
 };
 pub(super) use o_sfu_protocol::wire::{
@@ -44,3 +47,28 @@ pub(super) use tokio::{
     time::{sleep, timeout},
 };
 pub(super) use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+pub(super) fn spillover_policy(max_local_routers: usize) -> RoomWorkerPolicy {
+    let Some(max_local_routers) = NonZeroUsize::new(max_local_routers) else {
+        panic!("test router cap should be positive");
+    };
+    let Some(delay_threshold) =
+        NonZeroU64::new(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS)
+    else {
+        panic!("default delay threshold should be positive");
+    };
+    RoomWorkerPolicy::new(max_local_routers, delay_threshold)
+}
+
+pub(super) fn placement_delays_for_worker(
+    worker_count: usize,
+    target_worker: usize,
+) -> Vec<Option<u64>> {
+    (0..worker_count)
+        .map(|worker| match worker.cmp(&target_worker) {
+            Ordering::Less => Some(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS),
+            Ordering::Equal => Some(0),
+            Ordering::Greater => None,
+        })
+        .collect()
+}

@@ -4,7 +4,7 @@ use o_sfu_telemetry::diagnostics::{DiagnosticsRoomDetail, DiagnosticsRouteState}
 use super::support::{self as s, media as m, setup as st, spillover as sp};
 
 #[tokio::test]
-async fn large_room_load_triggered_spillover_preserves_caps_and_cleanup() -> s::TestResult {
+async fn large_room_overload_spillover_preserves_caps_and_cleanup() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
     let publisher_user_ids = [
         s::UserId::Integer(200),

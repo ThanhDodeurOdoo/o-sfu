@@ -94,12 +94,12 @@
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 mod buffers;
+mod delay;
 mod event_observation;
 mod forward_flush;
 mod ingress_routing;
 mod input;
 mod keyframe_requests;
-mod lag;
 mod loop_driver;
 mod session_drain;
 mod udp;
@@ -121,8 +121,8 @@ pub use self::{
     udp::UdpIngressBenchHarness,
 };
 pub use self::{
+    delay::PacketLoopDelaySnapshot,
     input::PacketLoopInputReceivers,
-    lag::PacketLoopLagSnapshot,
     loop_driver::{PacketLoopConfig, run_packet_loop},
     udp::{RtcUdpSocket, UdpIngress},
 };

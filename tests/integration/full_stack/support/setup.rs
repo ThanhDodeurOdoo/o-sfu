@@ -85,18 +85,44 @@ pub(crate) async fn ready_room_fake_peers_with_config(
     publisher_user_id: UserId,
     subscriber_user_id: UserId,
 ) -> TestResult<ReadyRoomFakePeers> {
+    let worker_count = config.transport.rtc_media_worker_count;
+    let force_spillover = config.transport.room_worker_policy.max_local_routers() > 1;
     let (server, room) = room_parts_with_config(config, issuer).await?;
-    let (publisher, subscriber) = require_some(
-        Box::pin(connect_two_rtc_ready_fake_peers(
-            &server,
-            &room,
-            publisher_user_id,
-            subscriber_user_id,
-            Duration::from_secs(5),
-        ))
-        .await,
-        "fake RTC peers should reach ready state",
-    )?;
+    let (publisher, subscriber) = if force_spillover {
+        server.set_packet_loop_delays_ms(placement_delays_for_worker(worker_count, 0));
+        let mut publisher = require_some(
+            connect_fake_peer(&server, &room, publisher_user_id, TEST_ROOM_KEY).await,
+            "publisher should connect",
+        )?;
+        require_some(
+            publisher.wait_until_connected(Duration::from_secs(5)).await,
+            "publisher should reach ready state",
+        )?;
+        server.set_packet_loop_delays_ms(placement_delays_for_worker(worker_count, 1));
+        let mut subscriber = require_some(
+            connect_fake_peer(&server, &room, subscriber_user_id, TEST_ROOM_KEY).await,
+            "subscriber should connect",
+        )?;
+        require_some(
+            subscriber
+                .wait_until_connected(Duration::from_secs(5))
+                .await,
+            "subscriber should reach ready state",
+        )?;
+        (publisher, subscriber)
+    } else {
+        require_some(
+            Box::pin(connect_two_rtc_ready_fake_peers(
+                &server,
+                &room,
+                publisher_user_id,
+                subscriber_user_id,
+                Duration::from_secs(5),
+            ))
+            .await,
+            "fake RTC peers should reach ready state",
+        )?
+    };
     Ok(ReadyRoomFakePeers {
         server,
         room,
@@ -122,7 +148,7 @@ pub(crate) async fn room_parts_with_config(
 pub(crate) fn cross_worker_test_config() -> Config {
     let mut config = test_config(1_000, 10);
     set_rtc_media_worker_count(&mut config, 2);
-    config.transport.room_worker_policy = RoomWorkerPolicy::bounded_local_spillover(2);
+    config.transport.room_worker_policy = spillover_policy(2);
     config
 }
 

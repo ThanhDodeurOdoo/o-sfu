@@ -7,8 +7,10 @@
 )]
 
 use std::{
+    cmp::Ordering,
     collections::BTreeMap,
     net::{IpAddr, Ipv4Addr},
+    num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -24,8 +26,8 @@ use o_sfu_core::{
         metrics::RuntimeMetrics,
         packet_sinks::RoomPacketSinkRegistry,
         room::{
-            JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomManagerConfig,
-            RoomRuntimePolicy, UserOutboundReceiver, UserOutboundSender,
+            JoinUserRequest, Room, RoomAdmissionPolicy, RoomConfig, RoomManager, RoomRuntimePolicy,
+            UserOutboundReceiver, UserOutboundSender,
             test_support::{
                 TestSourceKind, TestSubscriptionStates, stream_id_for_source,
                 subscription_intents_from_test_states,
@@ -303,6 +305,19 @@ impl GeneralCallScenario {
     }
 
     async fn join_ready(&mut self, raw_user_id: RawUserId) -> Result<()> {
+        let target_worker =
+            usize::try_from(raw_user_id.saturating_sub(1) / 3)?.min(WORKER_COUNT.saturating_sub(1));
+        self.media_transport.test_api().set_packet_loop_delays_ms(
+            (0..WORKER_COUNT)
+                .map(|worker| match worker.cmp(&target_worker) {
+                    Ordering::Less => {
+                        Some(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS)
+                    }
+                    Ordering::Equal => Some(0),
+                    Ordering::Greater => None,
+                })
+                .collect(),
+        );
         let (sender, receiver) = UserOutboundSender::channel(
             OUTBOUND_QUEUE_CAPACITY,
             Arc::clone(&self.outbound_metrics),
@@ -644,17 +659,18 @@ fn media_transport() -> Result<MediaTransport> {
 
 fn room_manager(media_transport: &MediaTransport) -> Result<Arc<RoomManager>> {
     let media_limits = RoomMediaLimits::try_new(4, 3)?;
-    Ok(Arc::new(RoomManager::for_test_with_config(
-        RoomManagerConfig::new(
-            WORKER_COUNT,
-            RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(12),
-                RuntimeFeatureFlags::default(),
-                media_transport.router_rtp_capabilities(),
-            )
-            .with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(WORKER_COUNT))
-            .with_media_limits(media_limits),
-        ),
+    let max_local_routers = NonZeroUsize::new(WORKER_COUNT)
+        .ok_or_else(|| anyhow!("benchmark worker count should be positive"))?;
+    let delay_threshold = NonZeroU64::new(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS)
+        .ok_or_else(|| anyhow!("default delay threshold should be positive"))?;
+    Ok(Arc::new(RoomManager::for_test_with_runtime_policy(
+        RoomRuntimePolicy::new(
+            RoomAdmissionPolicy::new(12),
+            RuntimeFeatureFlags::default(),
+            media_transport.router_rtp_capabilities(),
+        )
+        .with_room_worker_policy(RoomWorkerPolicy::new(max_local_routers, delay_threshold))
+        .with_media_limits(media_limits),
     )))
 }
 

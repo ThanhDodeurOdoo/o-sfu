@@ -135,7 +135,6 @@ impl RuntimeTestBuilder {
             Err(error) => panic!("runtime test RTC transport config should be valid: {error}"),
         };
         let room_manager = build_room_manager(
-            &self.config,
             build_room_runtime_policy(&self.config, &media_transport),
             &services,
         );

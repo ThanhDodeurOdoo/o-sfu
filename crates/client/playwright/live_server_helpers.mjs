@@ -8,8 +8,6 @@ const TEST_ROOM_KEY = "6me1UEeLIMqcygWGz1icMuVMVcPbZyVOF2LlZZPCCOw=";
 const TEST_SFU_HTTP_BASE_URL = "http://127.0.0.1:18080";
 export const TEST_SFU_WS_URL = "ws://127.0.0.1:18080/";
 const DIAGNOSTICS_ROOM_PATH = "/internal/diagnostics/rooms";
-const DIAGNOSTICS_POLL_INTERVAL_MS = 100;
-const DIAGNOSTICS_POLL_TIMEOUT_MS = 5_000;
 const AUDIO_OPERATION_TIMEOUT_MS = 250;
 const RECOVERABLE_BROWSER_CLOSE_CODE = 4000;
 const HARNESS_URL = "/playwright/fixtures/harness.html";
@@ -576,46 +574,6 @@ export async function streamDiagnostics({
     };
 }
 
-export async function waitForUserMediaWorker({
-    expectedMediaWorkerId,
-    httpBaseUrl = TEST_SFU_HTTP_BASE_URL,
-    roomId,
-    userId
-}) {
-    return waitForDiagnosticsMatch(
-        httpBaseUrl,
-        roomId,
-        (room) => {
-            const user = room.users.find((candidate) => userIdsMatch(candidate.userId, userId));
-            return user?.transport?.mediaWorkerId === expectedMediaWorkerId ? room : null;
-        },
-        `expected user ${String(userId)} on media worker ${expectedMediaWorkerId}`
-    );
-}
-
-export async function waitForCameraSubscriptionSelectedRid({
-    consumerSessionId,
-    expectedRid,
-    httpBaseUrl = TEST_SFU_HTTP_BASE_URL,
-    producerSessionId,
-    roomId
-}) {
-    return waitForDiagnosticsMatch(
-        httpBaseUrl,
-        roomId,
-        (room) => {
-            const subscription = cameraSubscription(room, consumerSessionId, producerSessionId);
-            if (!subscription || subscription.state !== "active") {
-                return null;
-            }
-            return cameraSubscriptionSelectedRid(room, subscription) === expectedRid ? room : null;
-        },
-        `expected camera subscription for ${String(consumerSessionId)} from ${String(
-            producerSessionId
-        )} to select RID ${expectedRid}`
-    );
-}
-
 export async function waitForDecodedRemoteVideoFrame(
     page,
     targetSessionId,
@@ -787,8 +745,7 @@ export async function spawnLiveServer({
     announcedIp = host,
     rtcMaxPort,
     rtcMinPort,
-    codecFlags = {},
-    spillover = {}
+    codecFlags = {}
 }) {
     const env = {
         ...process.env,
@@ -798,8 +755,7 @@ export async function spawnLiveServer({
         RTC_MAX_PORT: String(rtcMaxPort),
         RTC_MIN_PORT: String(rtcMinPort),
         CODEC_H264: String(Boolean(codecFlags.h264)),
-        CODEC_VP9: String(Boolean(codecFlags.vp9)),
-        ...spilloverEnv(spillover)
+        CODEC_VP9: String(Boolean(codecFlags.vp9))
     };
     if (Object.hasOwn(codecFlags, "vp8")) {
         env.CODEC_VP8 = String(Boolean(codecFlags.vp8));
@@ -837,20 +793,6 @@ export async function spawnLiveServer({
     child.kill("SIGTERM");
     await onceExit(child);
     throw new Error(`o-sfu test server on port ${bindPort} did not become ready`);
-}
-
-async function waitForDiagnosticsMatch(httpBaseUrl, roomId, matches, failureMessage) {
-    const deadline = Date.now() + DIAGNOSTICS_POLL_TIMEOUT_MS;
-    let lastRoom = null;
-    while (Date.now() < deadline) {
-        lastRoom = await fetchRoomDiagnostics(httpBaseUrl, roomId);
-        const matched = lastRoom ? matches(lastRoom) : null;
-        if (matched) {
-            return matched;
-        }
-        await delay(DIAGNOSTICS_POLL_INTERVAL_MS);
-    }
-    throw new Error(`${failureMessage}; last diagnostics: ${JSON.stringify(lastRoom)}`);
 }
 
 async function fetchRoomDiagnostics(httpBaseUrl, roomId) {
@@ -902,32 +844,6 @@ function policyRoleForLayoutRole(layoutRole) {
 
 function userIdsMatch(actual, expected) {
     return String(actual) === String(expected);
-}
-
-function spilloverEnv({
-    activationWindow,
-    minReceivers,
-    mode,
-    roomMaxLocalRouters,
-    rtcMediaWorkerCount
-}) {
-    const env = {};
-    if (rtcMediaWorkerCount !== undefined) {
-        env.RTC_MEDIA_WORKER_COUNT = String(rtcMediaWorkerCount);
-    }
-    if (roomMaxLocalRouters !== undefined) {
-        env.ROOM_MAX_LOCAL_ROUTERS = String(roomMaxLocalRouters);
-    }
-    if (mode !== undefined) {
-        env.ROOM_SPILLOVER_MODE = mode;
-    }
-    if (minReceivers !== undefined) {
-        env.ROOM_SPILLOVER_MIN_RECEIVERS = String(minReceivers);
-    }
-    if (activationWindow !== undefined) {
-        env.ROOM_SPILLOVER_ACTIVATION_WINDOW = String(activationWindow);
-    }
-    return env;
 }
 
 function signJwt(payload, keyB64) {

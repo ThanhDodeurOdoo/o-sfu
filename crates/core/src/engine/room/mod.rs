@@ -28,8 +28,7 @@ pub use instance::{Room, RoomJoinError, RoomManagerJoinError, RoomMediaCounts};
 #[cfg(any(test, feature = "testing-transport"))]
 pub use manager::JoinPlacementTestGate;
 pub use manager::{
-    RoomManager, RoomManagerConfig, RoomUserAdmission, RuntimeRoomDirectorySnapshot,
-    RuntimeRoomStatsSnapshot,
+    RoomManager, RoomUserAdmission, RuntimeRoomDirectorySnapshot, RuntimeRoomStatsSnapshot,
 };
 #[cfg(any(test, feature = "testing-transport"))]
 pub use media_graph::ConsumerRouteState;

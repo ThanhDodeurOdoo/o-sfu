@@ -369,13 +369,12 @@ fn stale_replaced_connection_cannot_update_download_state() {
     join_test_user(&mut state, &consumer_user_id);
 
     let intents = subscription_intents_from_test_states(&scalable_video_states(false));
-    let change = state.plan_receiver_route_work(
+    state.plan_receiver_route_work(
         &consumer_user_id,
         stale_connection_id,
         &producer_user_id,
         &intents,
     );
-    assert!(!change.route_graph_changed());
     assert!(
         state
             .topology
@@ -447,30 +446,6 @@ fn stored_intent_attaches_before_readiness_then_reserves_setup() {
         .refresh_consumer_readiness(&receiver, receiver_connection)
         .expect("receiver should remain current");
     assert_eq!(readiness.work.setups.len(), 1);
-}
-
-#[test]
-fn policy_paused_route_does_not_create_fanout_pressure() {
-    let mut state = test_state();
-    let publisher = UserId::Integer(1);
-    let receiver = UserId::Integer(2);
-    let (key, _) = install_test_consumer_route(&mut state, &publisher, &receiver);
-    assert!(state.source_fanout_pressure(1));
-    let route = state
-        .topology
-        .committed_consumer_route_for_key(&key)
-        .expect("consumer route should be committed");
-    let source_id = route.source.descriptor.source_id();
-    let transport_route = route.route.clone();
-    assert!(state.topology.update_consumer_source_selection(
-        &key,
-        source_id,
-        &transport_route,
-        |selection| {
-            selection.set_policy_pause_reason(Some(PolicyPauseReason::VideoDownloadLimit));
-        }
-    ));
-    assert!(!state.source_fanout_pressure(1));
 }
 
 #[test]

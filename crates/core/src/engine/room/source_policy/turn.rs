@@ -19,59 +19,23 @@ use crate::engine::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SourcePolicyTrigger {
-    RouteGraph,
-    PacketSelection,
-    FanoutPressure,
-}
-
-impl SourcePolicyTrigger {
-    const fn merge(self, next: Self) -> Self {
-        use SourcePolicyTrigger::{FanoutPressure, PacketSelection, RouteGraph};
-
-        match (self, next) {
-            (RouteGraph, _)
-            | (_, RouteGraph)
-            | (PacketSelection, FanoutPressure)
-            | (FanoutPressure, PacketSelection) => RouteGraph,
-            (PacketSelection, PacketSelection) => PacketSelection,
-            (FanoutPressure, FanoutPressure) => FanoutPressure,
-        }
-    }
-}
-
 /// deferred source-policy turn executed after route effects and pre-policy output
-///
-/// multiple triggers collapse to one strongest trigger
 #[derive(Debug, Default)]
 pub struct SourcePolicyTurn {
-    trigger: Option<SourcePolicyTrigger>,
+    requested: bool,
 }
 
 impl SourcePolicyTurn {
     pub const fn packet_selection() -> Self {
-        Self {
-            trigger: Some(SourcePolicyTrigger::PacketSelection),
-        }
+        Self { requested: true }
     }
 
-    pub fn route_graph_changed(&mut self) {
-        self.push(SourcePolicyTrigger::RouteGraph);
-    }
-
-    pub fn receiver_intent_changed(&mut self) {
-        self.push(SourcePolicyTrigger::PacketSelection);
-    }
-
-    pub fn fanout_pressure_changed(&mut self) {
-        self.push(SourcePolicyTrigger::FanoutPressure);
+    pub fn request(&mut self) {
+        self.requested = true;
     }
 
     pub fn extend(&mut self, other: &Self) {
-        if let Some(trigger) = other.trigger {
-            self.push(trigger);
-        }
+        self.requested |= other.requested;
     }
 
     pub async fn execute(
@@ -80,7 +44,7 @@ impl SourcePolicyTurn {
         media_transport: Option<&MediaTransport>,
         active_speaker_sources: Option<&[ActiveSpeakerSource]>,
     ) {
-        if self.trigger.is_none() {
+        if !self.requested {
             return;
         }
         let _guard = room.source_policy_turn.lock().await;
@@ -94,16 +58,8 @@ impl SourcePolicyTurn {
         media_transport: Option<&MediaTransport>,
         active_speaker_sources: Option<&[ActiveSpeakerSource]>,
     ) {
-        let Some(trigger) = self.trigger else {
+        if !self.requested {
             return;
-        };
-        match trigger {
-            SourcePolicyTrigger::RouteGraph => room.observe_source_fanout_pressure().await,
-            SourcePolicyTrigger::FanoutPressure => {
-                room.observe_source_fanout_pressure().await;
-                return;
-            }
-            SourcePolicyTrigger::PacketSelection => {}
         }
         let Some(media_transport) = media_transport else {
             return;
@@ -117,13 +73,6 @@ impl SourcePolicyTurn {
         if let Some(transaction) = transaction {
             transaction.commit(room, media_transport).await;
         }
-    }
-
-    fn push(&mut self, trigger: SourcePolicyTrigger) {
-        self.trigger = Some(
-            self.trigger
-                .map_or(trigger, |current| current.merge(trigger)),
-        );
     }
 }
 

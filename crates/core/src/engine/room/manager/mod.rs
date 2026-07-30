@@ -1,6 +1,6 @@
 //! [`RoomManager`] is the live-room registry used by HTTP, websocket and
-//! background runtime tasks. it manage room publication, current-room
-//! lifecycle leases, worker-load snapshots and room removal
+//! background runtime tasks. It manages room publication, current-room
+//! lifecycle leases, worker responsiveness and room removal
 //!
 //! ```text
 //! /v1/channel -> serve_room -> directory
@@ -29,7 +29,7 @@ use super::{
     effects::batch::RoomEffectContext,
     factory::RoomFactory,
     membership::JoinUserRequest,
-    placement::{JoinAdmissionTurn, WorkerLoadIndex},
+    placement::JoinAdmissionTurn,
     source_policy::SourcePolicyTurn,
 };
 use crate::engine::{
@@ -41,28 +41,6 @@ use crate::engine::{
 #[cfg(any(test, feature = "testing-transport"))]
 #[path = "TESTS/support.rs"]
 mod test_support;
-
-/// runtime configuration shared by one room manager
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoomManagerConfig {
-    /// upper bound used when building worker-load snapshots
-    ///
-    /// values below one are normalized by [`RoomManager::new`]
-    pub media_worker_count: usize,
-    /// room policy cloned into each newly published room
-    pub runtime_policy: RoomRuntimePolicy,
-}
-
-impl RoomManagerConfig {
-    /// builds manager configuration from validated runtime policy
-    #[must_use]
-    pub fn new(media_worker_count: usize, runtime_policy: RoomRuntimePolicy) -> Self {
-        Self {
-            media_worker_count,
-            runtime_policy,
-        }
-    }
-}
 
 /// operator-facing room stats assembled from directory and transport snapshots
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,24 +91,20 @@ pub struct RoomManager {
     factory: RoomFactory,
     #[cfg(any(test, feature = "testing-transport"))]
     join_placement_gate: Mutex<Option<Arc<JoinPlacementTestGate>>>,
-    media_worker_count: usize,
     metrics: Arc<RuntimeMetrics>,
 }
 
 impl RoomManager {
     /// builds a room manager with an empty directory
     ///
-    /// `media_worker_count` is normalized to at least one so diagnostics and
-    /// placement snapshots always have a worker range to inspect
     #[must_use]
-    pub fn new(config: RoomManagerConfig, metrics: Arc<RuntimeMetrics>) -> Self {
-        let factory = RoomFactory::new(config.runtime_policy, Arc::clone(&metrics));
+    pub fn new(runtime_policy: RoomRuntimePolicy, metrics: Arc<RuntimeMetrics>) -> Self {
+        let factory = RoomFactory::new(runtime_policy, Arc::clone(&metrics));
         Self {
             directory: RwLock::new(RoomDirectory::default()),
             factory,
             #[cfg(any(test, feature = "testing-transport"))]
             join_placement_gate: Mutex::new(None),
-            media_worker_count: config.media_worker_count.max(1),
             metrics,
         }
     }
@@ -246,9 +220,10 @@ impl RoomManager {
 
     /// admits one websocket connection into a current room
     ///
-    /// placement uses worker pressure plus existing room load at call time. a
-    /// successful admission has already executed join-side room effects before
-    /// the returned transport key reaches [`crate::prelude::SfuCore`]
+    /// placement keeps the room local while its assigned packet loops meet the
+    /// configured delay threshold. a successful admission has already executed
+    /// join-side room effects before the returned transport key reaches
+    /// [`crate::prelude::SfuCore`]
     ///
     /// # Errors
     ///
@@ -267,9 +242,8 @@ impl RoomManager {
             .run_current_room_mutation(
                 room_id,
                 |room| async move {
-                    let worker_loads = self.worker_load_index(media_transport).await;
                     let admission =
-                        JoinAdmissionTurn::from_factory(request, worker_loads, &self.factory);
+                        JoinAdmissionTurn::from_factory(request, media_transport, &self.factory);
                     #[cfg(any(test, feature = "testing-transport"))]
                     let admission = admission.with_gate(self.join_placement_gate_for_test());
                     room.admit_session(admission, RoomEffectContext::runtime(media_transport))
@@ -290,17 +264,6 @@ impl RoomManager {
             connection_id: receipt.connection_id,
             transport_session_key: receipt.transport_session_key,
         })
-    }
-
-    async fn worker_load_index(&self, media_transport: &MediaTransport) -> WorkerLoadIndex {
-        let mut load_index = WorkerLoadIndex::new(
-            self.media_worker_count,
-            media_transport.worker_pressure_snapshots(),
-        );
-        for entry in self.directory_entries().await {
-            entry.room.record_worker_load(&mut load_index).await;
-        }
-        load_index
     }
 
     /// closes one room connection and then re-checks empty-room removal

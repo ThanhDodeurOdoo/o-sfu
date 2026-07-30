@@ -1,4 +1,9 @@
-use std::{slice, sync::Arc, time::Duration};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    slice,
+    sync::Arc,
+    time::Duration,
+};
 
 use o_sfu_telemetry::schema::event as telemetry_event;
 use serde_json::Value;
@@ -10,10 +15,7 @@ use super::{
     fixtures::*,
     tracing::{assert_exact, assert_user_exact, capture},
 };
-use crate::{
-    LocalSpilloverPolicy, RoomWorkerPolicy, RuntimeFeatureFlags, engine::metrics::RuntimeMetrics,
-    prelude::LocalSpilloverPolicyParts,
-};
+use crate::{RoomWorkerPolicy, RuntimeFeatureFlags, engine::metrics::RuntimeMetrics};
 
 type TestRoom = super::super::Room;
 
@@ -41,22 +43,14 @@ async fn manager_join_user(
 }
 
 fn manager_with_room_worker_policy(room_worker_policy: RoomWorkerPolicy) -> RoomManager {
-    manager_with_room_worker_policy_and_worker_count(room_worker_policy, 2)
-}
-
-fn manager_with_room_worker_policy_and_worker_count(
-    room_worker_policy: RoomWorkerPolicy,
-    media_worker_count: usize,
-) -> RoomManager {
-    RoomManager::for_test_with_config(super::super::RoomManagerConfig::new(
-        media_worker_count,
+    RoomManager::for_test_with_runtime_policy(
         super::super::RoomRuntimePolicy::new(
             RoomAdmissionPolicy::new(100),
             RuntimeFeatureFlags::default(),
             test_client_rtp_capabilities(),
         )
         .with_room_worker_policy(room_worker_policy),
-    ))
+    )
 }
 
 async fn serve_test_room(manager: &RoomManager, issuer: &str) -> Arc<TestRoom> {
@@ -65,22 +59,12 @@ async fn serve_test_room(manager: &RoomManager, issuer: &str) -> Arc<TestRoom> {
         .await
 }
 
-fn load_triggered_policy_with_cap(
-    max_local_routers: usize,
-    min_receiver_count: usize,
-    max_active_consumers_per_router: usize,
-    activation_window: usize,
-    max_fanout_per_source: usize,
-) -> RoomWorkerPolicy {
-    let policy = LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
-        min_receiver_count,
-        max_active_consumers_per_router,
-        max_fanout_per_source,
-        activation_window,
-        ..LocalSpilloverPolicyParts::conservative()
-    })
-    .expect("test spillover policy should be valid");
-    RoomWorkerPolicy::load_triggered_local_spillover(max_local_routers, policy)
+fn spillover_policy(max_local_routers: usize) -> RoomWorkerPolicy {
+    RoomWorkerPolicy::new(
+        NonZeroUsize::new(max_local_routers).expect("test router cap should be positive"),
+        NonZeroU64::new(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS)
+            .expect("default delay threshold should be positive"),
+    )
 }
 
 async fn assert_home_worker(room: &Arc<TestRoom>, raw_user_id: i64, media_worker: usize) {
@@ -178,13 +162,10 @@ async fn room_and_user_lifecycle_events_preserve_contract_fields() {
 async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
     let metrics = Arc::new(RuntimeMetrics::default());
     let manager = Arc::new(RoomManager::new(
-        super::super::RoomManagerConfig::new(
-            1,
-            super::super::RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(2),
-                RuntimeFeatureFlags::default(),
-                test_client_rtp_capabilities(),
-            ),
+        super::super::RoomRuntimePolicy::new(
+            RoomAdmissionPolicy::new(2),
+            RuntimeFeatureFlags::default(),
+            test_client_rtp_capabilities(),
         ),
         Arc::clone(&metrics),
     ));
@@ -203,13 +184,10 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
 async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
     let metrics = Arc::new(RuntimeMetrics::default());
     let manager = Arc::new(RoomManager::new(
-        super::super::RoomManagerConfig::new(
-            1,
-            super::super::RoomRuntimePolicy::new(
-                RoomAdmissionPolicy::new(1),
-                RuntimeFeatureFlags::default(),
-                test_client_rtp_capabilities(),
-            ),
+        super::super::RoomRuntimePolicy::new(
+            RoomAdmissionPolicy::new(1),
+            RuntimeFeatureFlags::default(),
+            test_client_rtp_capabilities(),
         ),
         Arc::clone(&metrics),
     ));
@@ -319,18 +297,23 @@ async fn manager_lifecycle_future_does_not_block_empty_cleanup() {
 }
 
 #[tokio::test]
-async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_commit() {
+async fn manager_concurrent_overload_joins_revalidate_local_router_cap_at_commit() {
     const LOCAL_ROUTER_CAP: usize = 2;
     const WORKER_COUNT: usize = 4;
     const CONCURRENT_JOINS: usize = 12;
 
-    let manager = Arc::new(manager_with_room_worker_policy_and_worker_count(
-        load_triggered_policy_with_cap(LOCAL_ROUTER_CAP, 1, 1, 1, 48),
-        WORKER_COUNT,
-    ));
+    let manager = Arc::new(manager_with_room_worker_policy(spillover_policy(
+        LOCAL_ROUTER_CAP,
+    )));
     let media_transport = real_adapter();
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0); WORKER_COUNT]);
     let room = serve_test_room(&manager, "issuer-concurrent-large-room-cap").await;
     manager_join_user(&manager, &room, 1, &media_transport).await;
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(20), Some(0), Some(0), Some(0)]);
     let placement_gate = Arc::new(JoinPlacementTestGate::new(CONCURRENT_JOINS));
     manager.set_join_placement_gate_for_test(Arc::clone(&placement_gate));
 
@@ -357,9 +340,9 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
         }));
     }
 
-    timeout(Duration::from_secs(5), placement_gate.hold_all_planned())
+    timeout(Duration::from_secs(5), placement_gate.hold_all_ready())
         .await
-        .expect("all concurrent joins should reach placement planning");
+        .expect("all concurrent joins should reach placement commit");
     assert_router_count(&room, 1).await;
     placement_gate.release_all().await;
 
@@ -375,12 +358,66 @@ async fn manager_concurrent_load_triggered_joins_revalidate_local_router_cap_at_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn placement_reads_worker_health_after_the_commit_gate() {
+    const WORKER_COUNT: usize = 4;
+
+    let manager = Arc::new(manager_with_room_worker_policy(spillover_policy(2)));
+    let media_transport = real_adapter();
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0); WORKER_COUNT]);
+    let room = serve_test_room(&manager, "issuer-fresh-placement-health").await;
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+    let primary_worker = room
+        .test_api()
+        .inspect()
+        .home_media_worker_id(&UserId::Integer(1))
+        .await
+        .expect("first user should have a worker");
+    let mut overloaded = vec![Some(0); WORKER_COUNT];
+    *overloaded
+        .get_mut(primary_worker)
+        .expect("primary worker should exist") = Some(20);
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(overloaded);
+    let gate = Arc::new(JoinPlacementTestGate::new(1));
+    manager.set_join_placement_gate_for_test(Arc::clone(&gate));
+    let pending_join = {
+        let manager = Arc::clone(&manager);
+        let room = Arc::clone(&room);
+        let media_transport = media_transport.clone();
+        tokio::spawn(async move {
+            manager_join_user(&manager, &room, 2, &media_transport).await;
+        })
+    };
+
+    timeout(Duration::from_secs(5), gate.hold_all_ready())
+        .await
+        .expect("join should reach the placement gate");
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0); WORKER_COUNT]);
+    gate.release_all().await;
+    pending_join.await.expect("join task should not panic");
+
+    assert_home_worker(&room, 2, primary_worker).await;
+    assert_router_count(&room, 1).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn spillover_media_diagnostics_use_connection_worker() {
     let _guard = capture().await;
-    let manager = manager_with_room_worker_policy(RoomWorkerPolicy::bounded_local_spillover(2));
+    let manager = manager_with_room_worker_policy(spillover_policy(2));
     let media_transport = real_adapter();
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0), Some(0), None, None]);
     let room = serve_test_room(&manager, "issuer-spillover-diagnostics").await;
     manager_join_user(&manager, &room, 1, &media_transport).await;
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(20), Some(0), None, None]);
     let publisher_connection_id = manager_join_user(&manager, &room, 2, &media_transport).await;
     let publisher_id = UserId::Integer(2);
     let media_worker_id = 1;

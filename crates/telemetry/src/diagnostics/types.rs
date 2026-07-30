@@ -353,7 +353,7 @@ pub struct DiagnosticsUserSummary {
 pub struct DiagnosticsWorkerPressure {
     pub command_backlog_depth: usize,
     pub egress_bitrate_bps: u64,
-    pub packet_loop_lag_ms: u64,
+    pub packet_loop_delay_ms: Option<u64>,
     pub relay_mailbox_depth: usize,
     pub worker_pressure_score: u8,
 }

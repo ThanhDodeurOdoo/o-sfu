@@ -116,7 +116,7 @@ async fn shutdown_waits_for_in_flight_mutations_and_retires_sessions_once() -> T
         authenticate_with_jwt(&server, &joining_token).await,
         "joining user should authenticate",
     )?;
-    timeout(Duration::from_secs(1), gate.hold_all_planned()).await?;
+    timeout(Duration::from_secs(1), gate.hold_all_ready()).await?;
 
     let worker_release = require_some(
         server.media_transport.test_api().pause_first_worker().await,
@@ -138,7 +138,7 @@ async fn shutdown_waits_for_in_flight_mutations_and_retires_sessions_once() -> T
                 .media_transport
                 .worker_pressure_snapshots()
                 .first()
-                .is_some_and(|worker| worker.pressure.command_backlog_depth > 0)
+                .is_some_and(|worker| worker.command_backlog_depth > 0)
         })
         .await,
         "answer should reach the transport worker",

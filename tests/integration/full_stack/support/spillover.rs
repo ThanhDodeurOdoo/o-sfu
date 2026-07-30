@@ -4,20 +4,14 @@ use super::{
         assert_synthetic_video_packet_forwarded, consume_video_source_and_ready_route,
         publish_source_and_ready_route,
     },
-    protocol::{
-        assert_departure_message_protocol, assert_peer_joined_message_protocol,
-        assert_track_snapshot,
-    },
+    protocol::{assert_peer_joined_message_protocol, assert_track_snapshot},
     setup::room_parts_with_config,
     *,
 };
 
 const LARGE_ROOM_SIZE: usize = 64;
 const LARGE_ROOM_LOCAL_ROUTER_CAP: usize = 4;
-const LARGE_ROOM_MIN_RECEIVER_COUNT: usize = 3;
-const LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER: usize = 2;
-const LARGE_ROOM_MAX_FANOUT_PER_SOURCE: usize = 2;
-const LARGE_ROOM_ACTIVATION_WINDOW: usize = 1;
+const LARGE_ROOM_USERS_PER_WORKER: usize = 2;
 const LARGE_ROOM_MEDIA_LIMIT: usize = 2;
 
 pub(crate) struct SpilloverRoomFakePeers {
@@ -41,10 +35,10 @@ pub(crate) async fn spillover_room_fake_peers(
     local_subscriber_user_id: UserId,
     spillover_subscriber_user_id: UserId,
 ) -> TestResult<SpilloverRoomFakePeers> {
-    let (server, room) =
-        room_parts_with_config(load_triggered_spillover_test_config(), issuer).await?;
+    let (server, room) = room_parts_with_config(overload_spillover_test_config(), issuer).await?;
+    server.set_packet_loop_delays_ms(vec![Some(0), None]);
     let (publisher, local_subscriber, spillover_subscriber) = require_some(
-        Box::pin(connect_load_triggered_spillover_rtc_peers(
+        Box::pin(connect_overload_spillover_rtc_peers(
             &server,
             &room,
             publisher_user_id,
@@ -52,7 +46,7 @@ pub(crate) async fn spillover_room_fake_peers(
             spillover_subscriber_user_id,
         ))
         .await,
-        "load-triggered spillover peers should connect",
+        "overload spillover peers should connect",
     )?;
     Ok(SpilloverRoomFakePeers {
         server,
@@ -75,6 +69,12 @@ pub(crate) async fn large_room_spillover_fake_peers(
         .chain(receiver_user_ids)
         .enumerate()
     {
+        let target_worker =
+            (peer_index / LARGE_ROOM_USERS_PER_WORKER).min(LARGE_ROOM_LOCAL_ROUTER_CAP - 1);
+        server.set_packet_loop_delays_ms(placement_delays_for_worker(
+            LARGE_ROOM_LOCAL_ROUTER_CAP,
+            target_worker,
+        ));
         let peer = require_some(
             Box::pin(connect_large_room_spillover_peer(
                 &server, &room, user_id, peer_index,
@@ -93,37 +93,17 @@ pub(crate) async fn large_room_spillover_fake_peers(
     })
 }
 
-fn load_triggered_spillover_test_config() -> Config {
+fn overload_spillover_test_config() -> Config {
     let mut config = super::test_config(1_000, 10);
-    let policy = match LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
-        min_receiver_count: 3,
-        activation_window: 1,
-        ..LocalSpilloverPolicyParts::conservative()
-    }) {
-        Ok(policy) => policy,
-        Err(error) => panic!("load-triggered spillover test policy should be valid: {error}"),
-    };
     set_rtc_media_worker_count(&mut config, 2);
-    config.transport.room_worker_policy =
-        RoomWorkerPolicy::load_triggered_local_spillover(2, policy);
+    config.transport.room_worker_policy = spillover_policy(2);
     config
 }
 
 fn large_room_spillover_test_config() -> Config {
     let mut config = super::test_config(1_000, LARGE_ROOM_SIZE);
-    let policy = match LocalSpilloverPolicy::try_new(LocalSpilloverPolicyParts {
-        min_receiver_count: LARGE_ROOM_MIN_RECEIVER_COUNT,
-        max_active_consumers_per_router: LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
-        max_fanout_per_source: LARGE_ROOM_MAX_FANOUT_PER_SOURCE,
-        activation_window: LARGE_ROOM_ACTIVATION_WINDOW,
-        ..LocalSpilloverPolicyParts::conservative()
-    }) {
-        Ok(policy) => policy,
-        Err(error) => panic!("large-room spillover test policy should be valid: {error}"),
-    };
     set_rtc_media_worker_count(&mut config, LARGE_ROOM_LOCAL_ROUTER_CAP);
-    config.transport.room_worker_policy =
-        RoomWorkerPolicy::load_triggered_local_spillover(LARGE_ROOM_LOCAL_ROUTER_CAP, policy);
+    config.transport.room_worker_policy = spillover_policy(LARGE_ROOM_LOCAL_ROUTER_CAP);
     config.transport.room_media_limits =
         match RoomMediaLimits::try_new(LARGE_ROOM_MEDIA_LIMIT, LARGE_ROOM_MEDIA_LIMIT) {
             Ok(limits) => limits,
@@ -142,15 +122,14 @@ pub(crate) async fn assert_cross_worker_placement(
     assert_user_media_worker(server, room, subscriber_user_id, 1).await;
 }
 
-async fn connect_load_triggered_spillover_rtc_peers(
+async fn connect_overload_spillover_rtc_peers(
     server: &TestServer,
     room: &str,
     publisher_user_id: UserId,
     local_subscriber_user_id: UserId,
     spillover_subscriber_user_id: UserId,
 ) -> Option<(ProtocolFakePeer, ProtocolFakePeer, ProtocolFakePeer)> {
-    let activation_user_id = load_triggered_activation_user_id(&spillover_subscriber_user_id);
-    let mut publisher = Box::pin(connect_load_triggered_peer_on_worker(
+    let mut publisher = Box::pin(connect_peer_on_worker(
         server,
         room,
         &publisher_user_id,
@@ -158,7 +137,7 @@ async fn connect_load_triggered_spillover_rtc_peers(
         [],
     ))
     .await?;
-    let mut local_subscriber = Box::pin(connect_load_triggered_peer_on_worker(
+    let mut local_subscriber = Box::pin(connect_peer_on_worker(
         server,
         room,
         &local_subscriber_user_id,
@@ -166,14 +145,11 @@ async fn connect_load_triggered_spillover_rtc_peers(
         [&mut publisher],
     ))
     .await?;
-    let mut activation_peer =
-        connect_fake_peer(server, room, activation_user_id.clone(), TEST_ROOM_KEY).await?;
-    activation_peer
-        .wait_until_connected(super::Duration::from_secs(5))
-        .await?;
-    assert_peer_joined_message_protocol(&mut publisher, activation_user_id.clone()).await;
-    assert_peer_joined_message_protocol(&mut local_subscriber, activation_user_id.clone()).await;
-    let mut spillover_subscriber = Box::pin(connect_load_triggered_peer_on_worker(
+    server.set_packet_loop_delays_ms(vec![
+        Some(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS),
+        Some(0),
+    ]);
+    let spillover_subscriber = Box::pin(connect_peer_on_worker(
         server,
         room,
         &spillover_subscriber_user_id,
@@ -189,11 +165,6 @@ async fn connect_load_triggered_spillover_rtc_peers(
         assert_user_media_worker(server, room, user_id, worker_id).await;
     }
 
-    activation_peer.close().await?;
-    assert_departure_message_protocol(&mut publisher, activation_user_id.clone()).await;
-    assert_departure_message_protocol(&mut local_subscriber, activation_user_id.clone()).await;
-    assert_departure_message_protocol(&mut spillover_subscriber, activation_user_id).await;
-
     Some((publisher, local_subscriber, spillover_subscriber))
 }
 
@@ -206,21 +177,20 @@ async fn connect_large_room_spillover_peer(
     let mut peer = connect_fake_peer(server, room, user_id.clone(), TEST_ROOM_KEY).await?;
     peer.wait_until_connected(super::Duration::from_secs(5))
         .await?;
-    let asserted_peer_count =
-        LARGE_ROOM_LOCAL_ROUTER_CAP * LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER;
+    let asserted_peer_count = LARGE_ROOM_LOCAL_ROUTER_CAP * LARGE_ROOM_USERS_PER_WORKER;
     if peer_index < asserted_peer_count {
         assert_user_media_worker(
             server,
             room,
             user_id,
-            peer_index / LARGE_ROOM_MAX_ACTIVE_CONSUMERS_PER_ROUTER,
+            peer_index / LARGE_ROOM_USERS_PER_WORKER,
         )
         .await;
     }
     Some(peer)
 }
 
-async fn connect_load_triggered_peer_on_worker<const N: usize>(
+async fn connect_peer_on_worker<const N: usize>(
     server: &TestServer,
     room: &str,
     user_id: &UserId,
@@ -250,7 +220,7 @@ async fn assert_user_media_worker(
     );
 }
 
-async fn connect_load_triggered_spillover_replacement(
+async fn connect_spillover_replacement(
     server: &TestServer,
     room: &str,
     previous_peer: &mut ProtocolFakePeer,
@@ -269,14 +239,7 @@ async fn connect_load_triggered_spillover_replacement(
     Some(replacement)
 }
 
-fn load_triggered_activation_user_id(spillover_subscriber_user_id: &UserId) -> UserId {
-    match spillover_subscriber_user_id {
-        UserId::Integer(value) => UserId::Integer(value.saturating_add(10_000)),
-        UserId::String(value) => UserId::String(format!("{value}-activation")),
-    }
-}
-
-pub(crate) async fn assert_load_triggered_spillover_release_route_flow(
+pub(crate) async fn assert_spillover_release_route_flow(
     server: &TestServer,
     room: &str,
     publisher: &mut ProtocolFakePeer,
@@ -341,7 +304,7 @@ pub(crate) async fn assert_load_triggered_spillover_release_route_flow(
     Ok(())
 }
 
-pub(crate) async fn assert_load_triggered_spillover_replacement_mute_flow(
+pub(crate) async fn assert_spillover_replacement_mute_flow(
     server: &TestServer,
     room: &str,
     publisher: &mut ProtocolFakePeer,
@@ -386,7 +349,7 @@ pub(crate) async fn assert_load_triggered_spillover_replacement_mute_flow(
     assert_packet_dropped(publisher, spillover_subscriber, &mut source, &mut clock).await;
 
     let mut replacement = require_some(
-        Box::pin(connect_load_triggered_spillover_replacement(
+        Box::pin(connect_spillover_replacement(
             server,
             room,
             spillover_subscriber,
