@@ -116,46 +116,48 @@ fn protocol_core_peer_left_preserves_other_track_cleanup() {
 }
 
 #[test]
-fn protocol_core_peer_left_does_not_rewrite_source_snapshots() {
+fn protocol_core_ignores_legacy_sources_with_or_without_tracks() -> serde_json::Result<()> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.accept_welcome(sample_welcome_payload());
 
-    let source = SourceDescriptor {
-        source_id: String::from("source-7"),
+    let binding = TrackBinding {
+        mid: String::from("cam-0"),
         user_id: String::from("peer-1").into(),
         stream_type: StreamType::Camera,
         active: true,
-        mid: Some(String::from("cam-0")),
-        encodings: Vec::new(),
     };
-    let sources = encode_server_batch(ServerEnvelope::Message(ServerMessage::Sources(vec![
-        source.clone(),
-    ])));
+    let legacy_sources_payload = json!([{
+        "sourceId": "source-7",
+        "sessionId": "peer-1",
+        "type": "camera",
+        "active": true,
+        "mid": "cam-0",
+        "encodings": [{
+            "encodingId": "encoding-1",
+            "rid": "hi",
+            "maxBitrate": 900_000,
+            "resolutionScale": 1,
+            "policyRole": "featured",
+        }],
+    }]);
+    let tracks_message =
+        ServerEnvelope::Message(ServerMessage::Tracks(vec![binding.clone()])).into_envelope()?;
+    let legacy_sources_message = Envelope::message("sources", Some(legacy_sources_payload));
+    let batch = serde_json::to_string(&[&tracks_message, &legacy_sources_message])?;
 
     assert_eq!(
-        core.on_ws_message(&sources).as_slice(),
+        core.on_ws_message(&batch).as_slice(),
         &[Command::EmitEvent {
-            event: ProtocolEvent::SourceSnapshot {
-                sources: vec![source],
-            },
+            event: ProtocolEvent::TrackSnapshot {
+                bindings: vec![binding],
+            }
         }]
     );
 
-    let peer_left = encode_server_batch(ServerEnvelope::Message(ServerMessage::PeerLeft(
-        PeerLeftPayload {
-            user_id: String::from("peer-1").into(),
-        },
-    )));
-
-    assert_eq!(
-        core.on_ws_message(&peer_left).as_slice(),
-        &[Command::EmitEvent {
-            event: ProtocolEvent::PeerLeft {
-                user_id: String::from("peer-1").into(),
-            },
-        }]
-    );
+    let sources_only_batch = serde_json::to_string(&[legacy_sources_message])?;
+    assert!(core.on_ws_message(&sources_only_batch).is_empty());
+    Ok(())
 }
 
 #[test]

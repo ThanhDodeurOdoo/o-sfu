@@ -16,15 +16,14 @@ use tokio::sync::{
 use super::UserCloseReason;
 use crate::engine::{
     JsonPayload, RecordingStateUpdate, UserId, UserInfo, metrics::RuntimeMetrics,
-    source_model::PublishedSourceDescriptor,
+    source_model::UserStreamId,
 };
 
 pub const MAX_BROADCAST_PAYLOAD_BYTES: usize = 16 * 1024;
 
 const ROOM_EVENT_QUEUE_BYTES: usize = 1024;
 const BROADCAST_QUEUE_OVERHEAD_BYTES: usize = 256;
-const SOURCE_PROJECTION_QUEUE_BYTES: usize = 256;
-const SOURCE_ENCODING_QUEUE_BYTES: usize = 128;
+const TRACK_PROJECTION_QUEUE_OVERHEAD_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BroadcastPayload {
@@ -132,28 +131,33 @@ pub const DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY: usize =
 pub(super) type OutboundSender = UserOutboundSender;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteSourceProjection {
+pub struct RemoteTrackProjection {
     pub consumer_mid: String,
-    pub source: PublishedSourceDescriptor,
-    pub owner_info: UserInfo,
+    pub user_id: UserId,
+    pub stream_id: UserStreamId,
     pub producer_active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteSourceSnapshot {
-    pub sources: Vec<RemoteSourceProjection>,
+pub struct RemoteTrackSnapshot {
+    pub tracks: Vec<RemoteTrackProjection>,
     pub requires_negotiation: bool,
 }
 
-impl RemoteSourceSnapshot {
+impl RemoteTrackSnapshot {
     fn queued_bytes(&self) -> usize {
-        self.sources
+        self.tracks
             .iter()
-            .fold(ROOM_EVENT_QUEUE_BYTES, |bytes, projection| {
-                let encodings = projection.source.encodings().count();
+            .fold(ROOM_EVENT_QUEUE_BYTES, |bytes, track| {
+                let user_id_bytes = match &track.user_id {
+                    UserId::Integer(_) => 0,
+                    UserId::String(value) => value.len(),
+                };
                 bytes
-                    .saturating_add(SOURCE_PROJECTION_QUEUE_BYTES)
-                    .saturating_add(encodings.saturating_mul(SOURCE_ENCODING_QUEUE_BYTES))
+                    .saturating_add(TRACK_PROJECTION_QUEUE_OVERHEAD_BYTES)
+                    .saturating_add(track.consumer_mid.len())
+                    .saturating_add(user_id_bytes)
+                    .saturating_add(track.stream_id.as_str().len())
             })
     }
 }
@@ -162,7 +166,7 @@ impl RemoteSourceSnapshot {
 #[derive(Debug, Clone)]
 pub enum UserOutbound {
     Message(RoomEventMessage),
-    RemoteSources(RemoteSourceSnapshot),
+    RemoteTracks(RemoteTrackSnapshot),
     Close(UserCloseReason),
 }
 
@@ -171,7 +175,7 @@ impl UserOutbound {
     pub(super) fn queued_bytes(&self) -> usize {
         match self {
             Self::Message(message) => message.queued_bytes(),
-            Self::RemoteSources(snapshot) => snapshot.queued_bytes(),
+            Self::RemoteTracks(snapshot) => snapshot.queued_bytes(),
             Self::Close(_) => ROOM_EVENT_QUEUE_BYTES,
         }
     }

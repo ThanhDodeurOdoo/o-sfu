@@ -114,7 +114,7 @@ async fn join_negotiated_user_with_sender(
 fn drain_setup_track(rx: &mut UserOutboundReceiver) -> bool {
     let mut found = false;
     while let Ok(message) = rx.try_recv() {
-        found |= matches!(message, UserOutbound::RemoteSources(_));
+        found |= matches!(message, UserOutbound::RemoteTracks(_));
     }
     found
 }

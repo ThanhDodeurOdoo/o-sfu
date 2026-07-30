@@ -1,11 +1,11 @@
 use super::{
     media::{
         RouteState, assert_consumer_route, assert_packet_dropped, assert_packet_forwarded,
-        publish_source_and_ready_publication, publish_source_and_ready_route,
+        publish_source_and_ready_route,
     },
     protocol::{
         assert_departure_message_protocol, assert_peer_joined_message_protocol,
-        assert_publication_snapshot, assert_retained_publication, assert_track_snapshot,
+        assert_retained_publication, assert_track_snapshot,
     },
     *,
 };
@@ -173,10 +173,9 @@ pub(crate) async fn assert_audio_publication_pause_and_resume(
     let mut source = FakeMediaSource::audio();
     let mut clock = FakeClock::default();
     let user_id = UserId::Integer(70);
-    let initial = publish_source_and_ready_publication(
-        server, room, publisher, subscriber, &user_id, &source,
-    )
-    .await;
+    let initial =
+        publish_source_and_ready_route(server, room, publisher, subscriber, &user_id, &source)
+            .await;
     assert_packet_forwarded(publisher, subscriber, &mut source, &mut clock).await;
 
     assert!(
@@ -185,8 +184,7 @@ pub(crate) async fn assert_audio_publication_pause_and_resume(
             .await
             .is_some()
     );
-    let paused =
-        assert_publication_snapshot(subscriber, user_id.clone(), StreamType::Audio, false).await;
+    let paused = assert_track_snapshot(subscriber, user_id.clone(), StreamType::Audio, false).await;
     assert_retained_publication(&initial, &paused, false);
     assert_consumer_route(
         server,
@@ -205,8 +203,7 @@ pub(crate) async fn assert_audio_publication_pause_and_resume(
             .await
             .is_some()
     );
-    let resumed =
-        assert_publication_snapshot(subscriber, user_id.clone(), StreamType::Audio, true).await;
+    let resumed = assert_track_snapshot(subscriber, user_id.clone(), StreamType::Audio, true).await;
     assert_retained_publication(&initial, &resumed, true);
     assert_consumer_route(
         server,

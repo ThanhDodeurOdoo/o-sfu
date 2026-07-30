@@ -13,7 +13,7 @@ use crate::{
         test_support::command_batch,
     },
     shared::{StreamType, UserId},
-    signaling::{RequestId, SourceDescriptor, TrackBinding},
+    signaling::{RequestId, TrackBinding},
 };
 
 #[test]
@@ -102,44 +102,6 @@ fn host_command_bridge_serializes_pending_request_start() {
                 "kind": "startRecording",
                 "timeoutTimerId": 10_000,
                 "timeoutMs": 5_000
-            }
-        }])
-    );
-}
-
-#[test]
-fn host_command_bridge_emits_source_update_for_source_snapshot() {
-    let host_commands = project_commands(
-        command_batch(vec![Command::EmitEvent {
-            event: ProtocolEvent::SourceSnapshot {
-                sources: vec![SourceDescriptor {
-                    source_id: String::from("source-7"),
-                    user_id: UserId::Integer(7),
-                    stream_type: StreamType::Camera,
-                    active: true,
-                    mid: None,
-                    encodings: Vec::new(),
-                }],
-            },
-        }])
-        .expect("valid test command batch"),
-    );
-
-    assert_eq!(
-        serde_json::to_value(host_commands).unwrap_or_default(),
-        json!([{
-            "kind": "emitUpdate",
-            "update": {
-                "name": "source",
-                "payload": {
-                    "sources": [{
-                        "sourceId": "source-7",
-                        "sessionId": 7,
-                        "type": "camera",
-                        "active": true,
-                        "encodings": []
-                    }]
-                }
             }
         }])
     );

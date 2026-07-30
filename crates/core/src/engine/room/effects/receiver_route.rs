@@ -58,7 +58,7 @@ impl ReceiverSetupTurn {
                 target,
                 route,
                 sender,
-                snapshot,
+                track_snapshot,
                 remote_source_activity,
                 transport_activity_update,
                 readiness_keyframe,
@@ -91,7 +91,7 @@ impl ReceiverSetupTurn {
                 if !route_effects.is_empty() {
                     route_effects.execute(room.uuid(), media_transport).await;
                 }
-                let _ = sender.send(UserOutbound::RemoteSources(snapshot));
+                let _ = sender.send(UserOutbound::RemoteTracks(track_snapshot));
             }
             ConsumerSetupOutcome::Released(route, relays) => {
                 let teardown = [TransportTeardown::RemoveMedia {

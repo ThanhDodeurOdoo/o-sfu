@@ -9,7 +9,6 @@ import {
     type RecordingOptions,
     type SessionId,
     type SessionInfo,
-    type SourceDescriptor,
     type SfuStats,
     type StreamType
 } from "../public_api.js";
@@ -41,9 +40,7 @@ type BrowserRuntimeContext = {
     onUpdate: (update: ClientUpdateDetail) => void;
 };
 
-type PublicState = Pick<ProtocolCoreBindings, "state" | "features" | "recordingState"> & {
-    sourceDescriptors: readonly SourceDescriptor[];
-};
+type PublicState = Pick<ProtocolCoreBindings, "state" | "features" | "recordingState">;
 
 const TURN_POLICY = {
     DROP_ON_RECOVERY: "dropOnRecovery",
@@ -324,9 +321,7 @@ export class BrowserRuntime {
                     );
                     return [];
                 }
-                if (command.update.name === CLIENT_UPDATE.SOURCE) {
-                    this._media.replaceSources(command.update.payload.sources);
-                } else if (command.update.name === CLIENT_UPDATE.DISCONNECT) {
+                if (command.update.name === CLIENT_UPDATE.DISCONNECT) {
                     this._media.removeSession(command.update.payload.sessionId);
                 }
                 this.syncPublicState();
@@ -395,7 +390,6 @@ export class BrowserRuntime {
         this._context.onPublicState({
             features: this._core.features,
             recordingState: this._core.recordingState,
-            sourceDescriptors: this._media.sources,
             state: this._core.state
         });
     }

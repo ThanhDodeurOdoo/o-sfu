@@ -441,10 +441,6 @@ sfu.addEventListener("update", ({ detail }) => {
             const { sessionId, type, track, active } = detail.payload;
             break;
         }
-        case CLIENT_UPDATE.SOURCE: {
-            const { sources } = detail.payload;
-            break;
-        }
         case CLIENT_UPDATE.DISCONNECT: {
             const { sessionId } = detail.payload;
             break;
@@ -470,7 +466,6 @@ sfu.addEventListener("update", ({ detail }) => {
 ```ts
 const CLIENT_UPDATE = {
     TRACK: "track",
-    SOURCE: "source",
     DISCONNECT: "disconnect",
     INFO_CHANGE: "info_change",
     BROADCAST: "broadcast",
@@ -488,30 +483,6 @@ interface TrackUpdateDetail {
     active: boolean;
 }
 ```
-
-Source descriptor payload:
-
-```ts
-interface SourceDescriptor {
-    sourceId: string;
-    sessionId: SessionId;
-    type: StreamType;
-    active: boolean;
-    mid?: string;
-    encodings: SourceEncodingDescriptor[];
-}
-
-interface SourceEncodingDescriptor {
-    encodingId: string;
-    rid?: string;
-    maxBitrate?: number;
-    resolutionScale?: number;
-    maxFramerate?: number;
-    policyRole?: "featured" | "thumbnail" | "degradedThumbnail";
-}
-```
-
-The latest source descriptors are also available as `sfu.sourceDescriptors`.
 
 ### handledError
 
@@ -535,8 +506,8 @@ sfu.addEventListener("log", ({ detail }) => {
 
 ## Public Properties
 
-`SfuClient` exposes `state`, `errors`, `availableFeatures`, `recordingState` and
-`sourceDescriptors` as public properties.
+`SfuClient` exposes `state`, `errors`, `availableFeatures` and `recordingState`
+as public properties.
 
 `availableFeatures` has this shape:
 
@@ -556,5 +527,4 @@ interface AvailableFeatures {
 - `updateDownload()` therefore supports `cameraLayout` and `screenLayout` exactly
   like `subscribe()`.
 - `_consumers` remains available as a compatibility/debug view for Odoo Discuss
-  diagnostics. New integrations should consume `"update"` events and
-  `sourceDescriptors` instead.
+  diagnostics. New integrations should consume `"update"` events instead.

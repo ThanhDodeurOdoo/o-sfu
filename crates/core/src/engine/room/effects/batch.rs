@@ -150,7 +150,7 @@ impl RoomEffects {
             stream_id,
             update,
             remote_activity_effects,
-            source_snapshots,
+            track_snapshots,
             presence,
         } = commit;
         let mut batch = Self {
@@ -161,7 +161,7 @@ impl RoomEffects {
             .transport
             .extend_remote_source_activity(remote_activity_effects);
         batch.transport.push_producer(source, stream_id, update);
-        batch.output.push_source_snapshots(source_snapshots);
+        batch.output.push_track_snapshots(track_snapshots);
         batch.push_presence_before_policy(presence);
         batch.source_policy.route_graph_changed();
         batch

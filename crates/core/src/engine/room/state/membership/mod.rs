@@ -15,7 +15,7 @@ use super::{
         media_graph::{
             CommittedTransportReceipt, SessionPlacementCommit, SessionPlacementRejection,
         },
-        outbound::{MessageFanout, OutboundSender, RemoteSourceSnapshot, fanout_all},
+        outbound::{MessageFanout, OutboundSender, RemoteTrackSnapshot, fanout_all},
     },
     UserJoinedFanout,
     shared::{ActiveUser, RoomState},
@@ -32,7 +32,7 @@ mod TESTS;
 pub struct LifecycleEffects {
     pub close_requests: Vec<UserCloseRequest>,
     pub fanouts: Vec<MessageFanout>,
-    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
+    pub track_snapshots: Vec<(OutboundSender, RemoteTrackSnapshot)>,
 }
 
 impl LifecycleEffects {
@@ -273,8 +273,8 @@ impl RoomState {
             reason: UserCloseReason::Replaced,
         }));
         effects
-            .source_snapshots
-            .extend(self.remote_source_snapshots_for_users(source_recipients, true));
+            .track_snapshots
+            .extend(self.remote_track_snapshots_for_users(source_recipients, true));
         effects.push_fanout(had_previous_sender.then(|| {
             self.fanout_all_except(
                 &RoomEventMessage::UserDeparted {
@@ -356,7 +356,7 @@ impl RoomState {
                 fanouts: vec![self.fanout_all(&RoomEventMessage::UserDeparted {
                     user_id: user_id.clone(),
                 })],
-                source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
+                track_snapshots: self.remote_track_snapshots_for_users(source_recipients, true),
             },
             transport_plan,
         })
@@ -459,7 +459,7 @@ impl RoomState {
             effects: LifecycleEffects {
                 close_requests,
                 fanouts,
-                source_snapshots: self.remote_source_snapshots_for_users(source_recipients, true),
+                track_snapshots: self.remote_track_snapshots_for_users(source_recipients, true),
             },
             transport_plan,
         }

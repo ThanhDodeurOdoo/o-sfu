@@ -23,7 +23,7 @@ async fn publication_activity_pauses_and_resumes_committed_source() {
     )
     .await;
 
-    assert_remote_source_snapshot_for_stream(
+    assert_remote_track_snapshot_for_stream(
         &drain_outbound(&mut rx2),
         TestSourceKind::ScalableVideo,
     );
@@ -62,10 +62,10 @@ async fn publication_activity_pauses_and_resumes_committed_source() {
     let msgs2 = drain_outbound(&mut rx2);
     assert!(
         msgs1.is_empty(),
-        "publisher should not get a remote source snapshot"
+        "publisher should not get a remote track snapshot"
     );
-    assert_eq!(msgs2.len(), 1, "subscriber should get a source snapshot");
-    assert_remote_source_activity_snapshot(
+    assert_eq!(msgs2.len(), 1, "subscriber should get a track snapshot");
+    assert_remote_track_activity_snapshot(
         &msgs2[0],
         &UserId::Integer(1),
         TestSourceKind::ScalableVideo,
@@ -93,7 +93,7 @@ async fn publication_activity_pauses_and_resumes_committed_source() {
     ));
 
     let msgs2 = drain_outbound(&mut rx2);
-    assert_remote_source_activity_snapshot(
+    assert_remote_track_activity_snapshot(
         &msgs2[0],
         &UserId::Integer(1),
         TestSourceKind::ScalableVideo,
@@ -168,22 +168,19 @@ async fn duplicate_camera_publish_intent_updates_presence_and_remote_activity() 
         Ok(PublishIntentOutcome::Activated)
     ));
 
-    let source_snapshots = drain_remote_source_snapshots(&mut rx2);
-    assert_eq!(
-        source_snapshots.len(),
-        1,
-        "duplicate publish should emit one final source snapshot"
-    );
-    let [projection] = source_snapshots[0].sources.as_slice() else {
-        panic!("subscriber should receive the camera source");
+    let track_snapshots = drain_remote_track_snapshots(&mut rx2);
+    let [track_snapshot] = track_snapshots.as_slice() else {
+        panic!("duplicate publish should emit one final track snapshot");
     };
-    assert_eq!(projection.source.stream_id(), &camera_stream);
-    assert_eq!(projection.owner_info.is_camera_on, Some(true));
+    let [projection] = track_snapshot.tracks.as_slice() else {
+        panic!("subscriber should receive the camera track");
+    };
+    assert_eq!(projection.stream_id, camera_stream);
     assert!(projection.producer_active);
 }
 
 #[tokio::test]
-async fn late_join_receives_remote_source_snapshot_from_route_state() {
+async fn late_join_receives_remote_track_snapshot_from_route_state() {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
@@ -210,21 +207,21 @@ async fn late_join_receives_remote_source_snapshot_from_route_state() {
     join_user_with_sender(&room, subscriber_id, subscriber_tx).await;
     make_session_ready_with_transport(&room, &UserId::Integer(2), &adapter).await;
 
-    let snapshot = drain_remote_source_snapshots(&mut subscriber_rx)
+    let snapshot = drain_remote_track_snapshots(&mut subscriber_rx)
         .into_iter()
         .next()
-        .expect("late subscriber should receive a source snapshot");
+        .expect("late subscriber should receive a track snapshot");
     assert!(snapshot.requires_negotiation);
-    assert_eq!(snapshot.sources.len(), 1);
-    assert_eq!(snapshot.sources[0].source.owner().user_id(), &publisher_id);
+    assert_eq!(snapshot.tracks.len(), 1);
+    assert_eq!(snapshot.tracks[0].user_id, publisher_id);
     assert_eq!(
-        snapshot.sources[0].source.stream_id(),
-        &stream_id_for_source(TestSourceKind::ScalableVideo)
+        snapshot.tracks[0].stream_id,
+        stream_id_for_source(TestSourceKind::ScalableVideo)
     );
 }
 
 #[tokio::test]
-async fn publish_track_emits_remote_source_snapshot_with_committed_mid() {
+async fn publish_track_emits_remote_track_snapshot_with_committed_mid() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -238,17 +235,17 @@ async fn publish_track_emits_remote_source_snapshot_with_committed_mid() {
     .await;
 
     assert!(drain_outbound(&mut rx1).is_empty());
-    let snapshot = drain_remote_source_snapshots(&mut rx2)
+    let snapshot = drain_remote_track_snapshots(&mut rx2)
         .into_iter()
         .next()
-        .expect("subscriber should receive a remote source snapshot");
-    let [projection] = snapshot.sources.as_slice() else {
-        panic!("subscriber should receive one remote source");
+        .expect("subscriber should receive a remote track snapshot");
+    let [projection] = snapshot.tracks.as_slice() else {
+        panic!("subscriber should receive one remote track");
     };
     assert!(!projection.consumer_mid.is_empty());
     assert_eq!(
-        projection.source.stream_id(),
-        &stream_id_for_source(TestSourceKind::ScalableVideo)
+        projection.stream_id,
+        stream_id_for_source(TestSourceKind::ScalableVideo)
     );
 }
 
@@ -295,7 +292,7 @@ async fn generic_camera_info_cannot_override_publication_presence() {
     )
     .await;
 
-    assert!(drain_remote_source_snapshots(&mut rx2).is_empty());
+    assert!(drain_remote_track_snapshots(&mut rx2).is_empty());
     let Some((_, info)) = room
         .test_api()
         .inspect()
@@ -333,7 +330,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
     assert_eq!(
         drain_outbound(&mut subscriber_rx)
             .into_iter()
-            .filter(|message| remote_source_snapshot(message).is_some())
+            .filter(|message| remote_track_snapshot(message).is_some())
             .count(),
         2,
         "subscriber should receive one setup request per published stream"
@@ -414,7 +411,7 @@ async fn user_replacement_purges_all_published_stream_mappings() {
 }
 
 #[tokio::test]
-async fn screen_deactivation_updates_remote_source_activity() {
+async fn screen_deactivation_updates_remote_track_activity() {
     let (room, adapter, mut rx1, mut rx2) = setup_two_ready_users().await;
 
     publish_track(
@@ -443,7 +440,7 @@ async fn screen_deactivation_updates_remote_source_activity() {
     );
 
     let msgs = drain_outbound(&mut rx2);
-    assert_remote_source_activity_snapshot(
+    assert_remote_track_activity_snapshot(
         &msgs[0],
         &UserId::Integer(1),
         TestSourceKind::ReadableVideo,

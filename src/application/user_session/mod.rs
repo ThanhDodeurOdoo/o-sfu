@@ -5,7 +5,6 @@ use o_sfu_protocol::wire::ServerEnvelope;
 mod client_input;
 mod lifecycle;
 mod media;
-mod remote_sources;
 mod room_events;
 
 use media::ServerMediaNegotiation;

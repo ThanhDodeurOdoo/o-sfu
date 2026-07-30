@@ -255,7 +255,7 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
     assert!(
         drain_outbound(&mut subscriber_rx)
             .iter()
-            .any(|message| matches!(message, UserOutbound::RemoteSources(_)))
+            .any(|message| matches!(message, UserOutbound::RemoteTracks(_)))
     );
     let connection_id = user_connection_id(&room, &UserId::Integer(1)).await;
     let transport_media_id = room
@@ -290,8 +290,8 @@ async fn removing_publisher_clears_media_state_and_transport_routes() {
     let subscriber_messages = drain_outbound(&mut subscriber_rx);
     assert!(subscriber_messages.iter().any(|message| matches!(
         message,
-        UserOutbound::RemoteSources(snapshot)
-            if snapshot.requires_negotiation && snapshot.sources.is_empty()
+        UserOutbound::RemoteTracks(snapshot)
+            if snapshot.requires_negotiation && snapshot.tracks.is_empty()
     )));
 
     assert_eq!(room.test_api().inspect().producer_count().await, 0);

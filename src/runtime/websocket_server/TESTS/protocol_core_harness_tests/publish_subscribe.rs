@@ -29,28 +29,19 @@ async fn protocol_core_projects_camera_publish_without_presence_as_active() -> T
         "protocol publisher should be ready",
     )?;
 
-    let (track_bindings, sources) = require_some(
-        read_media_snapshot(&mut bob).await,
-        "subscriber should receive the translated track snapshot",
-    )?;
-    let track_binding = require_some(
-        track_bindings.iter().find(|binding| {
-            binding.user_id == ProtocolSessionId::Integer(53)
-                && binding.stream_type == ProtocolStreamType::Camera
-        }),
-        "subscriber should keep the camera track binding",
-    )?;
-    let source = require_some(
-        sources.iter().find(|source| {
-            source.user_id == ProtocolSessionId::Integer(53)
-                && source.stream_type == ProtocolStreamType::Camera
-        }),
-        "subscriber should receive the camera source descriptor",
-    )?;
-
+    let ServerMessage::Tracks(track_bindings) = require_some(
+        read_single_protocol_server_message(&mut bob).await,
+        "subscriber should receive one translated track snapshot",
+    )?
+    else {
+        return Err(anyhow!("subscriber should receive only a tracks message"));
+    };
+    let [track_binding] = track_bindings.as_slice() else {
+        return Err(anyhow!("subscriber should keep one camera track binding"));
+    };
+    assert_eq!(track_binding.user_id, ProtocolSessionId::Integer(53));
+    assert_eq!(track_binding.stream_type, ProtocolStreamType::Camera);
     assert!(track_binding.active);
-    assert!(source.active);
-    assert_eq!(source.mid.as_deref(), Some(track_binding.mid.as_str()));
     Ok(())
 }
 
@@ -77,27 +68,16 @@ async fn protocol_core_publish_round_trips_through_real_rtc_server_user_protocol
         "publisher should consume the rtc-backed renegotiation request and answer it",
     )?;
 
-    let (track_bindings, sources) = require_some(
-        read_media_snapshot(&mut bob).await,
+    let track_bindings = require_some(
+        read_track_snapshot(&mut bob).await,
         "subscriber should receive the rtc-backed translated track snapshot",
     )?;
-    assert_eq!(track_bindings.len(), 1);
-    let published_track = require_some(
-        track_bindings.first(),
-        "subscriber should keep one published track",
-    )?;
+    let [published_track] = track_bindings.as_slice() else {
+        return Err(anyhow!("subscriber should keep one published track"));
+    };
     assert_eq!(published_track.user_id, ProtocolSessionId::Integer(71));
     assert_eq!(published_track.stream_type, ProtocolStreamType::Camera);
     assert!(published_track.active);
-    let source = require_some(
-        sources.iter().find(|source| {
-            source.user_id == ProtocolSessionId::Integer(71)
-                && source.stream_type == ProtocolStreamType::Camera
-        }),
-        "subscriber should receive the rtc-backed source descriptor",
-    )?;
-    assert_eq!(source.mid.as_deref(), Some(published_track.mid.as_str()));
-
     require_some(
         bob.read_server_frame().await,
         "subscriber should receive the rtc-backed follow-up renegotiation request",

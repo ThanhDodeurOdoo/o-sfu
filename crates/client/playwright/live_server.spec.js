@@ -27,7 +27,6 @@ import {
     publishSyntheticScreen,
     roomUserInfo,
     setStreamDownload,
-    sourceDescriptor,
     spawnLiveServer,
     streamDiagnostics,
     updateInfo,
@@ -721,7 +720,6 @@ async function expectCommittedPauseResume({
     subscriber
 }) {
     const firstTrack = await publishSyntheticStream(publisher, streamType, firstLabel);
-    await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, streamType, true, "video");
     const activeDiagnostics = await expectStreamActivity(
         subscriber,
         channelUuid,
@@ -783,19 +781,17 @@ async function expectStreamActivity(subscriber, roomId, streamType, active, http
         .poll(() => streamState(roomId, streamType, httpBaseUrl))
         .toMatchObject({
             publication: { active },
-            source: { active },
+            source: {
+                active,
+                encodings: expect.arrayContaining([
+                    expect.objectContaining({ encodingId: expect.any(Number) })
+                ]),
+                mid: expect.any(String),
+                sourceId: expect.any(Number)
+            },
             subscription: { state }
         });
-    await expect
-        .poll(() => sourceDescriptor(subscriber, PUBLISHER_SESSION_ID, streamType))
-        .toMatchObject({
-            active,
-            encodings: expect.any(Array),
-            mid: expect.any(String),
-            sessionId: PUBLISHER_SESSION_ID,
-            sourceId: expect.any(String),
-            type: streamType
-        });
+    await expectTrackUpdate(subscriber, PUBLISHER_SESSION_ID, streamType, active, "video");
 
     const presenceField = streamType === "camera" ? "isCameraOn" : "isScreenSharingOn";
     await expect

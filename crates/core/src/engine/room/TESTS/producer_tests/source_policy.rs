@@ -24,7 +24,7 @@ async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
     publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
 
     assert!(drain_outbound(&mut publisher_rx).is_empty());
-    assert_remote_source_snapshot_for_stream(
+    assert_remote_track_snapshot_for_stream(
         &drain_outbound(&mut subscriber_rx),
         TestSourceKind::ScalableVideo,
     );
@@ -1374,7 +1374,7 @@ fn assert_camera_feature_fanout(rx: &mut UserOutboundReceiver, user: &UserId, ex
             UserOutbound::Message(RoomEventMessage::UserInfoChanged(mut snapshot)) => {
                 snapshot.remove(user)
             }
-            UserOutbound::Message(_) | UserOutbound::RemoteSources(_) | UserOutbound::Close(_) => {
+            UserOutbound::Message(_) | UserOutbound::RemoteTracks(_) | UserOutbound::Close(_) => {
                 None
             }
         })

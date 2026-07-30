@@ -3,9 +3,8 @@ pub(super) use super::{
     EnvelopeBatchDecodeError, NegotiationUploadEncoding, NegotiationUploadSlot, PeerInfoPayload,
     PeerLeftPayload, PeerSnapshot, RecordingActionResult, RecordingOptions, RequestId,
     ServerBroadcastPayload, ServerEnvelope, ServerMessage, ServerRequest, ServerResponse,
-    SessionDescriptionPayload, SourceDescriptor, SourceEncodingDescriptor, StreamIntentPayload,
-    SubscribePayload, TrackBinding, UploadLayerPolicyRole, WebSocketCloseCode, WelcomePayload,
-    decode_envelope_batch,
+    SessionDescriptionPayload, StreamIntentPayload, SubscribePayload, TrackBinding,
+    WebSocketCloseCode, WelcomePayload, decode_envelope_batch,
 };
 pub(super) use crate::shared::{
     AvailableFeatures, DownloadStates, RecordingState, RecordingStateUpdate, StopCode, StreamType,

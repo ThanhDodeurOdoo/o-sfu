@@ -8,7 +8,7 @@ use tracing::{error, warn};
 use super::{
     super::{
         RoomMediaCounts,
-        outbound::{OutboundSender, RemoteSourceSnapshot},
+        outbound::{OutboundSender, RemoteTrackSnapshot},
         state::{PresenceCommit, RoomState},
     },
     ReceiverRouteWork,
@@ -65,7 +65,7 @@ pub struct ProducerActivityCommit {
     pub stream_id: UserStreamId,
     pub update: SourceActivityUpdate,
     pub remote_activity_effects: Vec<TransportSourceActivityEffect>,
-    pub source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
+    pub track_snapshots: Vec<(OutboundSender, RemoteTrackSnapshot)>,
     pub presence: Option<PresenceCommit>,
 }
 
@@ -328,13 +328,12 @@ impl RoomState {
         let remote_activity_effects = self.topology.source_activity_effects(&source, update);
         let presence =
             presence.and_then(|info| self.apply_presence_update(user_id, connection_id, info));
-        let source_snapshots = self.remote_source_snapshots_for_users(source_recipients, false);
         Ok(ProducerActivityCommit {
             source,
             stream_id: stream_id.clone(),
             update,
             remote_activity_effects,
-            source_snapshots,
+            track_snapshots: self.remote_track_snapshots_for_users(source_recipients, false),
             presence,
         })
     }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     shared::{JsonPayload, RecordingStateUpdate, UserId, UserInfo},
-    signaling::{SourceDescriptor, TrackBinding},
+    signaling::TrackBinding,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,11 +54,6 @@ pub struct BundleDisconnectUpdate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundleSourceUpdate {
-    pub sources: Vec<SourceDescriptor>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleRemoteMediaUpdate {
     pub bindings: Vec<TrackBinding>,
 }
@@ -66,8 +61,6 @@ pub struct BundleRemoteMediaUpdate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "name", content = "payload")]
 pub enum BundleUpdate {
-    #[serde(rename = "source")]
-    Source(BundleSourceUpdate),
     #[serde(rename = "remote_media")]
     RemoteMedia(BundleRemoteMediaUpdate),
     #[serde(rename = "broadcast")]

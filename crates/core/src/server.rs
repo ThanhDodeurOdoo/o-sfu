@@ -65,7 +65,7 @@ pub mod room {
         engine::room::{
             BroadcastPayload, BroadcastPayloadError, DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
             DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY, IncomingBitrateSnapshot, JoinUserRequest,
-            MAX_BROADCAST_PAYLOAD_BYTES, RemoteSourceProjection, RemoteSourceSnapshot, Room,
+            MAX_BROADCAST_PAYLOAD_BYTES, RemoteTrackProjection, RemoteTrackSnapshot, Room,
             RoomAdmissionPolicy, RoomConfig, RoomDetailCapture, RoomEventMessage, RoomJoinError,
             RoomManager, RoomManagerConfig, RoomManagerJoinError, RoomMediaCounts,
             RoomOverviewCapture, RoomRuntimeContext, RoomRuntimePolicy, RoomUserAdmission,

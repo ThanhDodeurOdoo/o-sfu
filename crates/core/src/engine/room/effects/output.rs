@@ -1,23 +1,23 @@
 use crate::engine::room::{
     UserOutbound,
-    outbound::{MessageFanout, OutboundSender, RemoteSourceSnapshot},
+    outbound::{MessageFanout, OutboundSender, RemoteTrackSnapshot},
     state::LifecycleEffects,
 };
 
 #[derive(Debug, Default)]
 pub(super) struct RoomOutputPlan {
-    source_snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
+    track_snapshots: Vec<(OutboundSender, RemoteTrackSnapshot)>,
     user_info_before_policy: Vec<MessageFanout>,
     user_info: Vec<MessageFanout>,
     lifecycle: Vec<LifecycleEffects>,
 }
 
 impl RoomOutputPlan {
-    pub(super) fn push_source_snapshots(
+    pub(super) fn push_track_snapshots(
         &mut self,
-        snapshots: Vec<(OutboundSender, RemoteSourceSnapshot)>,
+        snapshots: Vec<(OutboundSender, RemoteTrackSnapshot)>,
     ) {
-        self.source_snapshots.extend(snapshots);
+        self.track_snapshots.extend(snapshots);
     }
 
     pub(super) fn push_user_info(&mut self, fanout: MessageFanout) {
@@ -33,8 +33,8 @@ impl RoomOutputPlan {
     }
 
     pub(super) fn emit_before_policy(&mut self) {
-        for (recipient, snapshot) in self.source_snapshots.drain(..) {
-            let _ = recipient.send(UserOutbound::RemoteSources(snapshot));
+        for (recipient, snapshot) in self.track_snapshots.drain(..) {
+            let _ = recipient.send(UserOutbound::RemoteTracks(snapshot));
         }
         self.emit_user_info_before_policy();
     }
@@ -55,8 +55,8 @@ impl RoomOutputPlan {
                     .sender
                     .send(UserOutbound::Close(close_request.reason));
             }
-            for (recipient, snapshot) in effects.source_snapshots {
-                let _ = recipient.send(UserOutbound::RemoteSources(snapshot));
+            for (recipient, snapshot) in effects.track_snapshots {
+                let _ = recipient.send(UserOutbound::RemoteTracks(snapshot));
             }
             for fanout in effects.fanouts {
                 fanout.emit();
