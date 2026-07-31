@@ -218,11 +218,6 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
     }
 
     snapshot_gauge_accessors! {
-        active_rooms => RoomsActive &[],
-        active_users => UsersActive &[],
-        active_publications => PublicationsActive &[],
-        active_subscriptions => SubscriptionsActive &[],
-        active_recording_rooms => RecordingRoomsActive &[],
         active_transport_users => TransportUsersActive &[],
         ws_outbound_queued_messages => WsOutboundQueuedMessages &[],
     }

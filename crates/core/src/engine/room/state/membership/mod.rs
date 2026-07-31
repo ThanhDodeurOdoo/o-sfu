@@ -9,9 +9,9 @@ use tracing::{debug, error, warn};
 
 use super::{
     super::{
-        BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError, RoomMediaCounts,
+        BroadcastPayload, BroadcastPayloadError, RoomEventMessage, RoomJoinError,
         RoomUserPermissions, RouterPlacement, UserCloseReason,
-        effects::{RoomGaugeDelta, transport::RoomTransportPlan},
+        effects::transport::RoomTransportPlan,
         media_graph::{
             CommittedTransportReceipt, SessionPlacementCommit, SessionPlacementRejection,
         },
@@ -64,7 +64,6 @@ pub struct PresenceCommit {
 
 #[derive(Debug)]
 pub struct JoinCommit {
-    pub counts: RoomGaugeDelta,
     pub effects: LifecycleEffects,
     pub receipt: CommittedTransportReceipt,
     pub transport_plan: RoomTransportPlan,
@@ -77,7 +76,6 @@ pub struct JoinCommit {
 #[derive(Debug)]
 pub enum ConnectionCloseCommit {
     Current {
-        counts: RoomGaugeDelta,
         user_id: UserId,
         connection_id: ConnectionId,
         session_teardown: Option<TransportTeardown>,
@@ -85,14 +83,12 @@ pub enum ConnectionCloseCommit {
         transport_plan: RoomTransportPlan,
     },
     StalePlacement {
-        counts: RoomGaugeDelta,
         session_teardown: TransportTeardown,
     },
 }
 
 #[derive(Debug)]
 pub struct DisconnectCommit {
-    pub counts: RoomGaugeDelta,
     pub session_teardowns: Vec<TransportTeardown>,
     pub effects: LifecycleEffects,
     pub transport_plan: RoomTransportPlan,
@@ -101,19 +97,6 @@ pub struct DisconnectCommit {
 impl RoomState {
     pub fn fanout_all(&self, message: &RoomEventMessage) -> MessageFanout {
         fanout_all(self.users.values().map(|user| user.sender.clone()), message)
-    }
-
-    fn membership_delta(
-        &self,
-        users_before: usize,
-        media_before: RoomMediaCounts,
-    ) -> RoomGaugeDelta {
-        RoomGaugeDelta::membership(
-            users_before,
-            self.users.len(),
-            media_before,
-            self.media_counts(),
-        )
     }
 
     pub fn fanout_all_except(
@@ -243,8 +226,6 @@ impl RoomState {
         if is_new && self.users.len() >= self.admission_policy.max_sessions {
             return Err(RoomJoinError::RoomFull);
         }
-        let users_before = self.users.len();
-        let media_before = self.media_counts();
         let connection_id = ConnectionId::allocate(&mut self.next_connection_id);
         let mut source_recipients = if previous_connection.is_some() {
             self.topology
@@ -298,7 +279,6 @@ impl RoomState {
             None
         });
         Ok(JoinCommit {
-            counts: self.membership_delta(users_before, media_before),
             effects,
             receipt,
             transport_plan,
@@ -320,8 +300,6 @@ impl RoomState {
         user_id: &UserId,
         connection_id: ConnectionId,
     ) -> Option<ConnectionCloseCommit> {
-        let users_before = self.users.len();
-        let media_before = self.media_counts();
         if self
             .users
             .get(user_id)
@@ -331,7 +309,6 @@ impl RoomState {
                 .topology
                 .retire_committed_placement(user_id, connection_id)?;
             return Some(ConnectionCloseCommit::StalePlacement {
-                counts: self.membership_delta(users_before, media_before),
                 session_teardown: TransportTeardown::CloseSession { session_key },
             });
         }
@@ -344,7 +321,6 @@ impl RoomState {
         source_recipients.remove(user_id);
         let (user, transport_plan) = self.remove_runtime_user(user_id)?;
         Some(ConnectionCloseCommit::Current {
-            counts: self.membership_delta(users_before, media_before),
             user_id: user_id.clone(),
             connection_id,
             session_teardown,
@@ -417,8 +393,6 @@ impl RoomState {
     }
 
     pub fn apply_disconnect_users(&mut self, user_ids: &[UserId]) -> DisconnectCommit {
-        let users_before = self.users.len();
-        let media_before = self.media_counts();
         let mut source_recipients = BTreeSet::new();
         for user_id in user_ids {
             source_recipients.extend(
@@ -454,7 +428,6 @@ impl RoomState {
             }));
         }
         DisconnectCommit {
-            counts: self.membership_delta(users_before, media_before),
             session_teardowns,
             effects: LifecycleEffects {
                 close_requests,

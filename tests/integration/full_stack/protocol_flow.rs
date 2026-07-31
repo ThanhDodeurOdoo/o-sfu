@@ -1,4 +1,4 @@
-use super::support::{self as s, protocol as p, setup as st};
+use super::support::{self as s, metrics as mt, protocol as p, setup as st};
 
 #[tokio::test]
 async fn fake_peers_publish_and_receive_track_snapshot_over_real_server_entries() -> s::TestResult {
@@ -60,6 +60,19 @@ async fn fake_peers_keep_room_topology_isolation_with_same_user_ids() -> s::Test
     )
     .await;
     p::assert_no_server_message_protocol(&mut subscriber_b).await;
+    assert!(
+        mt::wait_for_room_gauges(
+            &server,
+            mt::RoomGaugeValues {
+                rooms: 2,
+                users: 4,
+                publications: 1,
+                subscriptions: 1,
+                recording_rooms: 0,
+            },
+        )
+        .await
+    );
 
     s::require_some(
         publisher_b.publish_track(&source).await,

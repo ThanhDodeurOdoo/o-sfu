@@ -2,7 +2,7 @@ use o_sfu_router::MediaKind;
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::{info, warn};
 
-use super::{RoomGaugeDelta, receiver_route::ReceiverSetupTurn};
+use super::receiver_route::ReceiverSetupTurn;
 use crate::engine::{
     media_transport::{
         ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, MediaControlPlan,
@@ -15,7 +15,7 @@ use crate::engine::{
         media_graph::{
             ConsumerRouteTarget, ConsumerSetupOrigin, ReceiverRouteActivity, ReceiverRouteWork,
         },
-        source_policy::{ConsumerPacketSelectionUpdate, SourcePolicyTurn},
+        source_policy::ConsumerPacketSelectionUpdate,
     },
     source_model::UserStreamId,
 };
@@ -92,15 +92,10 @@ impl RoomTransportPlan {
         }
     }
 
-    pub(super) async fn execute(
-        self,
-        room: &Room,
-        media_transport: Option<&MediaTransport>,
-    ) -> RoomTransportOutcome {
+    pub(super) async fn execute(self, room: &Room, media_transport: Option<&MediaTransport>) {
         let Some(media_transport) = media_transport else {
-            return RoomTransportOutcome::default();
+            return;
         };
-        let mut outcome = RoomTransportOutcome::default();
         execute_relay_route_effects(media_transport, self.relays).await;
         execute_remote_source_activity_effects(media_transport, self.remote_source_activity).await;
         self.route_control
@@ -108,9 +103,8 @@ impl RoomTransportPlan {
             .await;
         media_transport.teardown(self.teardown).await;
         for turn in self.setup_turns {
-            turn.execute(room, media_transport, &mut outcome).await;
+            turn.execute(room, media_transport).await;
         }
-        outcome
     }
 
     #[cfg(test)]
@@ -119,12 +113,6 @@ impl RoomTransportPlan {
     ) -> (&[TransportRelayRouteEffect], &[TransportTeardown]) {
         (&self.relays, &self.teardown)
     }
-}
-
-#[derive(Debug, Default)]
-pub(super) struct RoomTransportOutcome {
-    pub(super) gauges: Vec<RoomGaugeDelta>,
-    pub(super) source_policy: SourcePolicyTurn,
 }
 
 #[derive(Debug, Default)]

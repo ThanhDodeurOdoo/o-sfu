@@ -35,7 +35,7 @@ use super::{
 use crate::engine::{
     ConnectionId, RoomInstanceId, UserId,
     media_transport::{MediaTransport, TransportSessionKey},
-    metrics::RuntimeMetrics,
+    metrics::{RoomGaugeValues, RuntimeMetrics},
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -91,7 +91,6 @@ pub struct RoomManager {
     factory: RoomFactory,
     #[cfg(any(test, feature = "testing-transport"))]
     join_placement_gate: Mutex<Option<Arc<JoinPlacementTestGate>>>,
-    metrics: Arc<RuntimeMetrics>,
 }
 
 impl RoomManager {
@@ -99,13 +98,12 @@ impl RoomManager {
     ///
     #[must_use]
     pub fn new(runtime_policy: RoomRuntimePolicy, metrics: Arc<RuntimeMetrics>) -> Self {
-        let factory = RoomFactory::new(runtime_policy, Arc::clone(&metrics));
+        let factory = RoomFactory::new(runtime_policy, metrics);
         Self {
             directory: RwLock::new(RoomDirectory::default()),
             factory,
             #[cfg(any(test, feature = "testing-transport"))]
             join_placement_gate: Mutex::new(None),
-            metrics,
         }
     }
 
@@ -113,7 +111,7 @@ impl RoomManager {
     ///
     /// only the first create request publishes `key`, `config` and
     /// `remote_address` into the room. concurrent calls for the same issuer
-    /// return the same current room and do not emit duplicate creation metrics
+    /// return the same current room and do not emit duplicate creation events
     pub async fn serve_room(
         &self,
         issuer: &str,
@@ -134,7 +132,6 @@ impl RoomManager {
         let room = self.factory.create(issuer, key, config);
         directory.insert(Arc::clone(&room), remote_address);
         drop(directory);
-        self.metrics.add_active_rooms(1);
         info!(
             event = telemetry_event::ROOM_CREATED,
             room_id = room.uuid(),
@@ -179,6 +176,29 @@ impl RoomManager {
                 remote_address: entry.remote_address,
             })
             .collect()
+    }
+
+    /// Returns counts from rooms in one directory snapshot.
+    ///
+    /// Room states are read sequentially after the directory lock is released.
+    /// Removed rooms may contribute once. New rooms appear on the next call.
+    pub async fn room_gauges(&self) -> RoomGaugeValues {
+        let rooms = self.directory.read().await.rooms();
+        let mut gauges = RoomGaugeValues {
+            rooms: rooms.len(),
+            ..RoomGaugeValues::default()
+        };
+        for room in rooms {
+            let state = room.state.read().await;
+            let media = state.media_counts();
+            gauges.users = gauges.users.saturating_add(state.user_count());
+            gauges.publications = gauges.publications.saturating_add(media.publications);
+            gauges.subscriptions = gauges.subscriptions.saturating_add(media.subscriptions);
+            gauges.recording_rooms = gauges
+                .recording_rooms
+                .saturating_add(usize::from(state.recording_state().recording == Some(true)));
+        }
+        gauges
     }
 
     /// returns one current directory row for room diagnostics
@@ -358,7 +378,10 @@ impl RoomManager {
     ) {
         let CurrentRoomMutation { room, lease } = mutation;
         if lease.finish(remove_if_empty, room.is_empty().await) {
-            self.remove_entry_if_current(room_id, &room).await;
+            self.directory
+                .write()
+                .await
+                .remove_if_current(room_id, &room);
         }
     }
 
@@ -419,16 +442,6 @@ impl RoomManager {
     async fn is_current_entry(&self, room_id: &str, room: &Arc<Room>) -> bool {
         let directory = self.directory.read().await;
         directory.contains_current(room_id, room)
-    }
-
-    /// forgets a directory row only if it still points at the same room
-    async fn remove_entry_if_current(&self, room_id: &str, room: &Arc<Room>) {
-        let mut directory = self.directory.write().await;
-        let removed = directory.remove_if_current(room_id, room);
-        drop(directory);
-        if removed {
-            self.metrics.add_active_rooms(-1);
-        }
     }
 }
 

@@ -25,7 +25,7 @@ pub use snapshot::RuntimeMetricsSnapshot;
 
 pub use self::{
     catalog::RuntimeMetrics,
-    descriptor::MetricName,
+    descriptor::{MetricName, RoomGaugeValues},
     labels::{
         BudgetSolverOutcome, HttpRoute, MediaQualityLossDirection, MediaQualitySample,
         RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome,

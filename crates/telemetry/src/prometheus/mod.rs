@@ -5,13 +5,13 @@
 //!
 //! ```
 //! use o_sfu_telemetry::{
-//!     metrics::{HttpRoute, RuntimeMetrics},
+//!     metrics::{HttpRoute, RoomGaugeValues, RuntimeMetrics},
 //!     prometheus::render_prometheus,
 //! };
 //!
 //! let metrics = RuntimeMetrics::default();
 //! let request = metrics.track_http_request(HttpRoute::Noop);
-//! let rendered = render_prometheus(&metrics);
+//! let rendered = render_prometheus(&metrics, RoomGaugeValues::default());
 //! drop(request);
 //!
 //! let expected_lines = [
@@ -28,12 +28,12 @@
 //! }
 //! ```
 
-use crate::metrics::{RuntimeMetrics, render_prometheus_text};
+use crate::metrics::{RoomGaugeValues, RuntimeMetrics, render_prometheus_text};
 
 pub const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
-pub fn render_prometheus(metrics: &RuntimeMetrics) -> String {
-    render_prometheus_text(metrics)
+pub fn render_prometheus(metrics: &RuntimeMetrics, room_gauges: RoomGaugeValues) -> String {
+    render_prometheus_text(metrics, room_gauges)
 }
 
 #[cfg(test)]

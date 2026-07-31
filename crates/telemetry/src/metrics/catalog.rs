@@ -46,11 +46,6 @@ pub struct RuntimeMetrics {
     pub(super) ws_handshake_duration: Histogram<ControlPlaneDurationBucket>,
     pub(super) ws_auth_duration: Histogram<ControlPlaneDurationBucket>,
     pub(super) ws_user_initialize_duration: Histogram<ControlPlaneDurationBucket>,
-    pub(super) active_rooms: UpDownCounter,
-    pub(super) active_users: UpDownCounter,
-    pub(super) active_publications: UpDownCounter,
-    pub(super) active_subscriptions: UpDownCounter,
-    pub(super) active_recording_rooms: UpDownCounter,
     pub(super) active_transport_users: UpDownCounter,
     pub(super) transport_health_users: UpDownCounterFamily<TransportHealthState>,
     pub(super) recording_actions: CounterFamily<RecordingActionOutcome>,
@@ -269,26 +264,6 @@ impl RuntimeMetrics {
             started_at: Instant::now(),
             finish,
         }
-    }
-
-    pub fn add_active_rooms(&self, delta: i64) {
-        self.active_rooms.add(delta);
-    }
-
-    pub fn add_active_users(&self, delta: i64) {
-        self.active_users.add(delta);
-    }
-
-    pub fn add_active_publications(&self, delta: i64) {
-        self.active_publications.add(delta);
-    }
-
-    pub fn add_active_subscriptions(&self, delta: i64) {
-        self.active_subscriptions.add(delta);
-    }
-
-    pub fn add_active_recording_rooms(&self, delta: i64) {
-        self.active_recording_rooms.add(delta);
     }
 
     pub fn add_active_transport_users(&self, delta: i64) {

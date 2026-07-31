@@ -12,17 +12,6 @@ use super::{
     test_support::{RuntimeMetricsSnapshotLookup, RuntimeMetricsSnapshotTestExt},
 };
 
-fn assert_live_gauges(snapshot: &RuntimeMetricsSnapshot) {
-    assert_eq!(snapshot.active_rooms(), 1);
-    assert_eq!(snapshot.active_users(), 2);
-    assert_eq!(snapshot.active_publications(), 3);
-    assert_eq!(snapshot.active_subscriptions(), 4);
-    assert_eq!(snapshot.active_recording_rooms(), 1);
-    assert_eq!(snapshot.active_transport_users(), 1);
-    assert_eq!(snapshot.connected_transport_users(), 1);
-    assert_eq!(snapshot.disconnected_transport_users(), 0);
-}
-
 fn assert_recording_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_eq!(snapshot.recording_start_accepted(), 1);
     assert_eq!(snapshot.recording_captured_packets(), 1);
@@ -307,11 +296,6 @@ fn metrics_snapshot_tracks_websocket_outbound_queue_pressure() {
 #[test]
 fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     let metrics = RuntimeMetrics::default();
-    metrics.add_active_rooms(1);
-    metrics.add_active_users(2);
-    metrics.add_active_publications(3);
-    metrics.add_active_subscriptions(4);
-    metrics.add_active_recording_rooms(1);
     metrics.add_active_transport_users(1);
     metrics.record_transport_health_transition(None, Some(TransportHealthState::Connected));
     metrics.record_recording_start_accepted();
@@ -367,7 +351,9 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
 
     let snapshot = metrics.snapshot();
 
-    assert_live_gauges(&snapshot);
+    assert_eq!(snapshot.active_transport_users(), 1);
+    assert_eq!(snapshot.connected_transport_users(), 1);
+    assert_eq!(snapshot.disconnected_transport_users(), 0);
     assert_recording_metrics(&snapshot);
     assert_transport_lifecycle_metrics(&snapshot);
     assert_rtp_metrics(&snapshot);

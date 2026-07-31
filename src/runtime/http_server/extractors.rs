@@ -29,6 +29,12 @@ pub(super) struct DiagnosticsServices {
 }
 
 #[derive(Debug, Clone)]
+pub(super) struct MetricsServices {
+    pub(super) room_manager: Arc<RoomManager>,
+    pub(super) metrics: Arc<RuntimeMetrics>,
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct VerifiedRoomRequest {
     pub(super) issuer: String,
     pub(super) room_key: String,
@@ -46,12 +52,6 @@ pub(super) struct VerifiedDisconnectClaims(pub(super) HttpDisconnectClaims);
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DiagnosticsAccess;
 
-impl FromRef<RuntimeState> for Arc<RuntimeMetrics> {
-    fn from_ref(state: &RuntimeState) -> Self {
-        Self::clone(&state.metrics)
-    }
-}
-
 impl FromRef<RuntimeState> for RoomServices {
     fn from_ref(state: &RuntimeState) -> Self {
         Self {
@@ -67,6 +67,15 @@ impl FromRef<RuntimeState> for DiagnosticsServices {
         Self {
             room_manager: Arc::clone(&state.room_manager),
             media_transport: state.media_transport.clone(),
+        }
+    }
+}
+
+impl FromRef<RuntimeState> for MetricsServices {
+    fn from_ref(state: &RuntimeState) -> Self {
+        Self {
+            room_manager: Arc::clone(&state.room_manager),
+            metrics: Arc::clone(&state.metrics),
         }
     }
 }

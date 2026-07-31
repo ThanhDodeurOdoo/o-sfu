@@ -3,10 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use o_sfu_router::{MediaKind as RouterMediaKind, negotiation::negotiate_consumer_rtp_parameters};
 
 use super::{
-    super::{
-        effects::RoomGaugeDelta,
-        state::{ActiveUser, RoomState},
-    },
+    super::state::{ActiveUser, RoomState},
     ConsumerId, ConsumerRouteTarget, SubscriptionKey,
     consumer_setup::{ConsumerSetupTarget, PendingConsumerSetup},
 };
@@ -58,7 +55,6 @@ pub struct ReceiverRouteWork {
 
 #[derive(Debug)]
 pub struct ReceiverRouteCommit {
-    pub(in crate::engine::room) counts: RoomGaugeDelta,
     pub(in crate::engine::room) work: ReceiverRouteWork,
 }
 
@@ -78,13 +74,9 @@ impl RoomState {
         intents: &BTreeMap<UserStreamId, SourceSubscriptionIntent>,
     ) -> Option<ReceiverRouteCommit> {
         self.user_for_connection(user_id, connection_id)?;
-        let before = self.media_counts();
         let work =
             self.plan_receiver_intent_change(user_id, connection_id, target_user_id, intents);
-        Some(ReceiverRouteCommit {
-            counts: RoomGaugeDelta::media(before, self.media_counts()),
-            work,
-        })
+        Some(ReceiverRouteCommit { work })
     }
 
     #[cfg(test)]
@@ -133,13 +125,9 @@ impl RoomState {
     ) -> Option<ReceiverRouteCommit> {
         let user = self.user_for_connection(user_id, connection_id)?;
         user.parsed_client_rtp_capabilities.as_ref()?;
-        let before = self.media_counts();
         let work =
             self.plan_missing_receiver_routes(ReceiverRouteScope::Receiver(user_id, connection_id));
-        Some(ReceiverRouteCommit {
-            counts: RoomGaugeDelta::media(before, self.media_counts()),
-            work,
-        })
+        Some(ReceiverRouteCommit { work })
     }
 
     #[cfg(test)]

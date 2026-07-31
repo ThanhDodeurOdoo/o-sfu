@@ -15,7 +15,7 @@ use super::{
     fixtures::*,
     tracing::{assert_exact, assert_user_exact, capture},
 };
-use crate::{RoomWorkerPolicy, RuntimeFeatureFlags, engine::metrics::RuntimeMetrics};
+use crate::{RoomWorkerPolicy, RuntimeFeatureFlags};
 
 type TestRoom = super::super::Room;
 
@@ -159,16 +159,8 @@ async fn room_and_user_lifecycle_events_preserve_contract_fields() {
 }
 
 #[tokio::test]
-async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
-    let metrics = Arc::new(RuntimeMetrics::default());
-    let manager = Arc::new(RoomManager::new(
-        super::super::RoomRuntimePolicy::new(
-            RoomAdmissionPolicy::new(2),
-            RuntimeFeatureFlags::default(),
-            test_client_rtp_capabilities(),
-        ),
-        Arc::clone(&metrics),
-    ));
+async fn room_manager_concurrent_create_and_cleanup_are_idempotent() {
+    let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(2));
     let config = RoomConfig::default();
 
     let (first, second) = tokio::join!(
@@ -177,48 +169,17 @@ async fn room_manager_concurrent_create_attempts_publish_one_live_room() {
     );
 
     assert_eq!(first.uuid(), second.uuid());
-    assert_eq!(metrics.snapshot().active_rooms(), 1);
-}
-
-#[tokio::test]
-async fn manager_concurrent_empty_room_cleanup_decrements_metrics_once() {
-    let metrics = Arc::new(RuntimeMetrics::default());
-    let manager = Arc::new(RoomManager::new(
-        super::super::RoomRuntimePolicy::new(
-            RoomAdmissionPolicy::new(1),
-            RuntimeFeatureFlags::default(),
-            test_client_rtp_capabilities(),
-        ),
-        Arc::clone(&metrics),
-    ));
     let media_transport = real_adapter();
-    let room = manager
-        .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
-    let room_id = room.uuid().to_owned();
-    manager_join_user(&manager, &room, 1, &media_transport).await;
+    manager_join_user(&manager, &first, 1, &media_transport).await;
+    let room_id = first.uuid().to_owned();
+    let user_ids = [UserId::Integer(1)];
 
-    let first_user_ids = [UserId::Integer(1)];
-    let second_user_ids = [UserId::Integer(1)];
-    let first_manager = Arc::clone(&manager);
-    let first_room_id = room_id.clone();
-    let first_transport = media_transport.clone();
-    let first_cleanup = async {
-        first_manager
-            .disconnect_users(&first_room_id, &first_user_ids, &first_transport)
-            .await;
-    };
-    let second_cleanup = async {
-        manager
-            .disconnect_users(&room_id, &second_user_ids, &media_transport)
-            .await;
-    };
+    tokio::join!(
+        manager.disconnect_users(&room_id, &user_ids, &media_transport),
+        manager.disconnect_users(&room_id, &user_ids, &media_transport),
+    );
 
-    tokio::join!(first_cleanup, second_cleanup);
-
-    let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.active_rooms(), 0);
-    assert_eq!(snapshot.active_users(), 0);
+    assert!(manager.get_by_uuid(&room_id).await.is_none());
 }
 
 #[tokio::test]

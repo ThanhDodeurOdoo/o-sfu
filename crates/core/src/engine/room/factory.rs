@@ -1,7 +1,7 @@
 //! Room construction for rooms that are new to the runtime directory.
 //!
-//! `RoomManager` owns idempotent lookup, directory publication, metrics and
-//! creation diagnostics. This module contains the cold-path allocation step used
+//! `RoomManager` owns idempotent lookup, directory publication and creation
+//! diagnostics. This module contains the cold-path allocation step used
 //! after lookup misses, before the new room is visible to other runtime
 //! entrypoints.
 //!
@@ -197,12 +197,10 @@ impl RoomFactory {
         }
     }
 
-    /// Creates an unpublished room from one manager lookup miss.
+    /// Creates an unpublished room from one manager lookup miss
     ///
-    /// The returned `Arc` is not registered in the process directory, does not
-    /// increment active-room metrics and does not emit creation diagnostics.
-    /// `RoomManager` performs those steps after the directory write, which
-    /// keeps publication and observability in one place.
+    /// The room emits no creation diagnostics. `RoomManager` publishes it
+    /// before emitting its creation event
     #[must_use]
     pub(crate) fn create(&self, issuer: &str, key: &str, config: &RoomConfig) -> Arc<Room> {
         Arc::new(Room::new(RoomInit {

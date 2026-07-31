@@ -7,13 +7,13 @@
 //!
 //! ```
 //! use o_sfu_telemetry::{
-//!     metrics::{HttpRoute, RuntimeMetrics},
+//!     metrics::{HttpRoute, RoomGaugeValues, RuntimeMetrics},
 //!     prometheus::render_prometheus,
 //! };
 //!
 //! let metrics = RuntimeMetrics::default();
 //! let request = metrics.track_http_request(HttpRoute::Noop);
-//! let body = render_prometheus(&metrics);
+//! let body = render_prometheus(&metrics, RoomGaugeValues::default());
 //! drop(request);
 //! assert!(body.contains("osfu_http_noop_requests_total"));
 //! ```

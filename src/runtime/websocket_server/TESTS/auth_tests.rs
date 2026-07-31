@@ -363,8 +363,8 @@ async fn websocket_startup_send_timeout_releases_room_membership() {
         assert!(joined.is_some(), "large startup snapshot peer should join");
     }
     assert_eq!(
-        server.state.metrics.snapshot().active_users(),
-        i64::try_from(SLOW_READER_PEER_COUNT).unwrap_or_default(),
+        server.state.room_manager.room_gauges().await.users,
+        SLOW_READER_PEER_COUNT,
     );
     let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(999));
     assert!(token.is_some());
@@ -390,12 +390,13 @@ async fn websocket_startup_send_timeout_releases_room_membership() {
     assert!(sent.is_ok());
 
     let cleaned = timeout(Duration::from_secs(8), async {
-        let expected_active_users = i64::try_from(SLOW_READER_PEER_COUNT).unwrap_or_default();
         let mut saw_slow_user_join = false;
         loop {
             let metrics = server.state.metrics.snapshot();
             saw_slow_user_join |= metrics.ws_users_joined() == 1;
-            if saw_slow_user_join && metrics.active_users() == expected_active_users {
+            if saw_slow_user_join
+                && server.state.room_manager.room_gauges().await.users == SLOW_READER_PEER_COUNT
+            {
                 return true;
             }
             sleep(Duration::from_millis(20)).await;

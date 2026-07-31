@@ -195,6 +195,14 @@ impl RoomDirectory {
         self.by_uuid.values().cloned().collect()
     }
 
+    #[must_use]
+    pub(crate) fn rooms(&self) -> Vec<Arc<Room>> {
+        self.by_uuid
+            .values()
+            .map(|entry| Arc::clone(&entry.room))
+            .collect()
+    }
+
     pub(crate) fn insert(&mut self, room: Arc<Room>, remote_address: Option<&str>) {
         let room_id = room.uuid().to_owned();
         self.uuid_by_issuer
@@ -212,16 +220,11 @@ impl RoomDirectory {
             .is_some_and(|entry| Arc::ptr_eq(&entry.room, room))
     }
 
-    pub(crate) fn remove_if_current(&mut self, uuid: &str, room: &Arc<Room>) -> bool {
-        let Some(entry) = self.by_uuid.get(uuid) else {
-            return false;
-        };
-        if !Arc::ptr_eq(&entry.room, room) {
-            return false;
+    pub(crate) fn remove_if_current(&mut self, uuid: &str, room: &Arc<Room>) {
+        if self.contains_current(uuid, room) {
+            self.by_uuid.remove(uuid);
+            self.uuid_by_issuer.remove(room.issuer());
+            self.uuid_by_instance.remove(&room.instance_id());
         }
-        self.by_uuid.remove(uuid);
-        self.uuid_by_issuer.remove(room.issuer());
-        self.uuid_by_instance.remove(&room.instance_id());
-        true
     }
 }

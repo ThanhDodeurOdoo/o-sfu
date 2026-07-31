@@ -312,9 +312,7 @@ fn commit_setup_with_media(
     mid: Option<String>,
 ) -> ConsumerSetupOutcome {
     let setup = setup.declared(media, mid);
-    let (_, _, outcome) =
-        state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
-    outcome
+    state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe)
 }
 
 fn commit_setup(state: &mut RoomState, setup: PendingConsumerSetup) -> ConsumerSetupOutcome {
