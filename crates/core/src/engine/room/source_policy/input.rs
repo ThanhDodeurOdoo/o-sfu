@@ -14,7 +14,10 @@ use crate::{
             ActiveSpeakerSource, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
             TransportMediaId,
         },
-        room::{media_graph::ConsumerRouteView, state::RoomState},
+        room::{
+            media_graph::ConsumerRouteView,
+            state::{ActiveUser, RoomState},
+        },
     },
 };
 
@@ -47,8 +50,11 @@ impl<'a> SourcePolicySnapshot<'a> {
         let media_limits = room.media_limits;
         let tuning = room.video_adaptation_tuning;
         let active_speakers = active_speaker_media_ids(&ranked_sources);
-        let admitted_audio_speakers =
-            admitted_audio_media_ids(&ranked_sources, media_limits.max_active_audio_speakers());
+        let admitted_audio_speakers = admitted_audio_media_ids(
+            room,
+            &ranked_sources,
+            media_limits.max_active_audio_speakers(),
+        );
         let deaf_receiver_connection_ids = deaf_receiver_connection_ids(room);
         let featured_source_user_ids = featured_source_user_ids(room, &ranked_sources);
         let active_speaker_rank_by_user = active_speaker_rank_by_user(room, &ranked_sources);
@@ -187,15 +193,41 @@ fn active_speaker_media_ids(sources: &[ActiveSpeakerSource]) -> BTreeSet<Transpo
         .collect()
 }
 
+fn user_for_source<'a>(
+    room: &'a RoomState,
+    source: &ActiveSpeakerSource,
+) -> Option<&'a ActiveUser> {
+    room.topology
+        .source_for_transport_media(source.transport_media_id())
+        .and_then(|published_source| {
+            room.users
+                .get(published_source.descriptor.owner().user_id())
+        })
+}
+
+/// Takes audio media IDs from `sources` up to the provided `limit`,
+/// prioritizing participants who are currently screen sharing.
 fn admitted_audio_media_ids(
+    room: &RoomState,
     sources: &[ActiveSpeakerSource],
     limit: usize,
 ) -> BTreeSet<TransportMediaId> {
-    sources
-        .iter()
-        .take(limit)
-        .map(|source| source.transport_media_id())
-        .collect()
+    let mut admitted = BTreeSet::new();
+    let mut deferred = Vec::with_capacity(limit);
+    for source in sources {
+        if admitted.len() == limit {
+            break;
+        }
+        let media_id = source.transport_media_id();
+        // prioritize participants who are currently screen sharing
+        if user_for_source(room, source).is_some_and(ActiveUser::is_screensharing) {
+            admitted.insert(media_id);
+        } else if deferred.len() < limit - admitted.len() {
+            deferred.push(media_id);
+        }
+    }
+    admitted.extend(deferred.into_iter().take(limit - admitted.len()));
+    admitted
 }
 
 fn deaf_receiver_connection_ids(room: &RoomState) -> BTreeSet<ConnectionId> {

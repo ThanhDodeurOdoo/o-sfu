@@ -63,6 +63,10 @@ impl ActiveUser {
         matches!(self.info.is_deaf, Some(true))
     }
 
+    pub(in crate::engine::room) const fn is_screensharing(&self) -> bool {
+        matches!(self.info.is_screen_sharing_on, Some(true))
+    }
+
     pub(in crate::engine::room) fn set_featured(&mut self, featured: Option<bool>) {
         self.server_featured = featured;
     }
