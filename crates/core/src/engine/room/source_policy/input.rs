@@ -39,24 +39,24 @@ pub(super) struct SourcePolicySnapshot<'a> {
 
 impl<'a> SourcePolicySnapshot<'a> {
     pub(super) fn from_state(
-        state: &'a RoomState,
+        room: &'a RoomState,
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
     ) -> Self {
-        let ranked_sources = rank_room_active_speakers(state, active_speaker_sources);
-        let media_limits = state.media_limits;
-        let tuning = state.video_adaptation_tuning;
+        let ranked_sources = rank_room_active_speakers(room, active_speaker_sources);
+        let media_limits = room.media_limits;
+        let tuning = room.video_adaptation_tuning;
         let active_speakers = active_speaker_media_ids(&ranked_sources);
         let admitted_audio_speakers =
             admitted_audio_media_ids(&ranked_sources, media_limits.max_active_audio_speakers());
-        let deaf_receiver_connection_ids = deaf_receiver_connection_ids(state);
-        let featured_source_user_ids = featured_source_user_ids(state, &ranked_sources);
-        let active_speaker_rank_by_user = active_speaker_rank_by_user(state, &ranked_sources);
+        let deaf_receiver_connection_ids = deaf_receiver_connection_ids(room);
+        let featured_source_user_ids = featured_source_user_ids(room, &ranked_sources);
+        let active_speaker_rank_by_user = active_speaker_rank_by_user(room, &ranked_sources);
         let desired_featured_user_id = ranked_sources.iter().find_map(|source| {
-            featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
+            featured_source_owner_for_active_speaker_source(room, source.transport_media_id())
         });
-        let featured_user_updates = featured_user_updates(state, desired_featured_user_id.as_ref());
-        let routes = state
+        let featured_user_updates = featured_user_updates(room, desired_featured_user_id.as_ref());
+        let routes = room
             .committed_consumer_routes()
             .filter(|route| route.source.active && route.selection.active())
             .collect::<Vec<_>>();
@@ -68,7 +68,7 @@ impl<'a> SourcePolicySnapshot<'a> {
         );
         Self {
             routes,
-            receiver_bwe_targets: receiver_bwe_targets(state, &audio_reserve_by_connection),
+            receiver_bwe_targets: receiver_bwe_targets(room, &audio_reserve_by_connection),
             receiver_bandwidth_by_connection: receiver_bandwidth_by_connection(
                 receiver_bandwidth_snapshot,
             ),
@@ -78,7 +78,7 @@ impl<'a> SourcePolicySnapshot<'a> {
             featured_source_user_ids,
             active_speaker_rank_by_user,
             featured_user_updates,
-            user_count: state.user_count(),
+            user_count: room.user_count(),
             media_limits,
             video_adaptation_tuning: tuning,
             audio_reserve_by_connection,
@@ -124,13 +124,12 @@ fn audio_reserve_by_connection(
 }
 
 fn receiver_bwe_targets(
-    state: &RoomState,
+    room: &RoomState,
     audio_reserve_by_connection: &BTreeMap<ConnectionId, Bitrate>,
 ) -> BTreeMap<UserId, ReceiverBweTargetUpdate> {
-    state
-        .transport_user_entries()
+    room.transport_user_entries()
         .map(|(user_id, connection_id)| {
-            let session = state.transport_user_key(user_id, connection_id);
+            let session = room.transport_user_key(user_id, connection_id);
             let audio_reserve = audio_reserve_by_connection
                 .get(&connection_id)
                 .copied()
@@ -162,13 +161,12 @@ fn receiver_bandwidth_by_connection(
 ///
 /// Only retains sources that are active and present in the current room topology.
 fn rank_room_active_speakers(
-    state: &RoomState,
+    room: &RoomState,
     sources: &[ActiveSpeakerSource],
 ) -> Vec<ActiveSpeakerSource> {
     let mut sources = sources.to_vec();
     sources.retain(|source| {
-        state
-            .topology
+        room.topology
             .source_for_transport_media(source.transport_media_id())
             .is_some_and(|source| source.active)
     });
@@ -200,36 +198,32 @@ fn admitted_audio_media_ids(
         .collect()
 }
 
-fn deaf_receiver_connection_ids(state: &RoomState) -> BTreeSet<ConnectionId> {
-    state
-        .users
+fn deaf_receiver_connection_ids(room: &RoomState) -> BTreeSet<ConnectionId> {
+    room.users
         .values()
         .filter(|user| user.is_deaf())
         .map(|user| user.connection_id)
         .collect()
 }
 
-fn featured_source_user_ids(
-    state: &RoomState,
-    sources: &[ActiveSpeakerSource],
-) -> BTreeSet<UserId> {
+fn featured_source_user_ids(room: &RoomState, sources: &[ActiveSpeakerSource]) -> BTreeSet<UserId> {
     sources
         .iter()
         .filter_map(|source| {
-            featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
+            featured_source_owner_for_active_speaker_source(room, source.transport_media_id())
         })
         .take(ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT)
         .collect()
 }
 
 fn active_speaker_rank_by_user(
-    state: &RoomState,
+    room: &RoomState,
     sources: &[ActiveSpeakerSource],
 ) -> BTreeMap<UserId, usize> {
     let mut ranks = BTreeMap::new();
     for source in sources {
         let Some(user_id) =
-            featured_source_owner_for_active_speaker_source(state, source.transport_media_id())
+            featured_source_owner_for_active_speaker_source(room, source.transport_media_id())
         else {
             continue;
         };
@@ -240,25 +234,23 @@ fn active_speaker_rank_by_user(
 }
 
 fn featured_source_owner_for_active_speaker_source(
-    state: &RoomState,
+    room: &RoomState,
     transport_media_id: TransportMediaId,
 ) -> Option<UserId> {
-    state
-        .topology
+    room.topology
         .active_speaker_detector_owner(transport_media_id)
 }
 
 fn featured_user_updates(
-    state: &RoomState,
+    room: &RoomState,
     desired_featured_user_id: Option<&UserId>,
 ) -> Vec<FeaturedUserUpdate> {
     if desired_featured_user_id.is_none()
-        && !state.users.values().any(|user| user.featured().is_some())
+        && !room.users.values().any(|user| user.featured().is_some())
     {
         return Vec::new();
     }
-    state
-        .users
+    room.users
         .iter()
         .filter_map(|(user_id, user)| {
             let current_featured = user.featured();
