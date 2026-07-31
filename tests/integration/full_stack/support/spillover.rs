@@ -95,14 +95,14 @@ pub(crate) async fn large_room_spillover_fake_peers(
 
 fn overload_spillover_test_config() -> Config {
     let mut config = super::test_config(1_000, 10);
-    set_rtc_media_worker_count(&mut config, 2);
+    config.transport.rtc_media_worker_count = 2;
     config.transport.room_worker_policy = spillover_policy(2);
     config
 }
 
 fn large_room_spillover_test_config() -> Config {
     let mut config = super::test_config(1_000, LARGE_ROOM_SIZE);
-    set_rtc_media_worker_count(&mut config, LARGE_ROOM_LOCAL_ROUTER_CAP);
+    config.transport.rtc_media_worker_count = LARGE_ROOM_LOCAL_ROUTER_CAP;
     config.transport.room_worker_policy = spillover_policy(LARGE_ROOM_LOCAL_ROUTER_CAP);
     config.transport.room_media_limits =
         match RoomMediaLimits::try_new(LARGE_ROOM_MEDIA_LIMIT, LARGE_ROOM_MEDIA_LIMIT) {

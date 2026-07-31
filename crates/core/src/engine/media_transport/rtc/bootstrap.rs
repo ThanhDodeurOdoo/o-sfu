@@ -9,6 +9,7 @@
 //! contracts
 
 use std::{
+    io::ErrorKind,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket as StdUdpSocket},
     sync::Arc,
     time::{Duration, Instant},
@@ -16,7 +17,7 @@ use std::{
 
 use o_sfu_rfc::webrtc;
 use str0m::{Candidate, bwe::Bitrate as Str0mBitrate};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{
     RtpProfile,
@@ -41,15 +42,13 @@ use crate::{CodecPreferences, MediaCodecFlags};
 /// the advertised candidate keeps the configured public IP with the
 /// bound port because that is what browsers must see in SDP
 ///
-/// ports are tried in configured order
-/// a port that cannot be bound, switched to
-/// nonblocking mode or converted into an RTC UDP socket is skipped so startup can
-/// continue with the next candidate
+/// tries configured ports in order and skips only [`ErrorKind::AddrInUse`]
+/// any other bind, nonblocking or backend initialization error aborts startup
 ///
 /// # errors
 ///
-/// returns `TransportUnavailable` when no port in the configured range produces
-/// a usable shared socket
+/// returns [`TransportAdapterError::TransportUnavailable`] when every port is
+/// occupied or another socket operation fails
 pub(super) fn bind_shared_rtc_socket(
     announced_ip: IpAddr,
     rtc_port_range: RtcPortRange,
@@ -58,15 +57,27 @@ pub(super) fn bind_shared_rtc_socket(
     let bind_ip = bind_ip_for_announced_ip(announced_ip);
     for port in rtc_port_range.ports() {
         let bind_addr = SocketAddr::new(bind_ip, port);
-        let Ok(socket) = StdUdpSocket::bind(bind_addr) else {
-            continue;
+        let socket = match StdUdpSocket::bind(bind_addr) {
+            Ok(socket) => socket,
+            Err(error) if error.kind() == ErrorKind::AddrInUse => continue,
+            Err(error) => {
+                warn!(%bind_addr, ?error, "failed to bind shared rtc UDP socket");
+                return Err(TransportAdapterError::TransportUnavailable);
+            }
         };
-        if socket.set_nonblocking(true).is_err() {
-            continue;
-        }
-        let Ok(socket) = RtcUdpSocket::from_std(socket, rtc_udp_io_backend) else {
-            continue;
-        };
+        socket.set_nonblocking(true).map_err(|error| {
+            warn!(%bind_addr, ?error, "failed to configure shared rtc UDP socket");
+            TransportAdapterError::TransportUnavailable
+        })?;
+        let socket = RtcUdpSocket::from_std(socket, rtc_udp_io_backend).map_err(|error| {
+            warn!(
+                %bind_addr,
+                backend = rtc_udp_io_backend.wire_name(),
+                ?error,
+                "failed to initialize shared rtc UDP socket"
+            );
+            TransportAdapterError::TransportUnavailable
+        })?;
         let candidate_addr = SocketAddr::new(announced_ip, port);
         let ingress = UdpIngress::new(socket.clone(), bind_addr, candidate_addr);
         info!(
@@ -80,6 +91,12 @@ pub(super) fn bind_shared_rtc_socket(
             candidate_addr,
         });
     }
+    warn!(
+        %bind_ip,
+        port_min = rtc_port_range.min(),
+        port_max = rtc_port_range.max(),
+        "rtc UDP port range is unavailable"
+    );
     Err(TransportAdapterError::TransportUnavailable)
 }
 

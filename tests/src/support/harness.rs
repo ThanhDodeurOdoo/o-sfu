@@ -19,9 +19,8 @@ use o_sfu::{
     },
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
-        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning,
-        VideoBitrateLimits,
+        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
+        TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning, VideoBitrateLimits,
     },
     core::server::room::{
         DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY, DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
@@ -428,7 +427,7 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
         },
         transport: TransportConfig {
             announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            rtc_port_range: unique_rtc_port_range(1),
+            rtc_port_range: test_rtc_port_range(),
             max_bitrate_in: Bitrate::from_mbps(8),
             max_bitrate_out: Bitrate::from_mbps(10),
             video_bitrate_limits: VideoBitrateLimits::default(),
@@ -446,21 +445,6 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
         telemetry: TelemetryConfig::default(),
         diagnostics: DiagnosticsConfig::default(),
     }
-}
-
-pub fn set_rtc_media_worker_count(config: &mut Config, worker_count: usize) {
-    config.transport.rtc_media_worker_count = worker_count;
-    config.transport.rtc_port_range = unique_rtc_port_range(worker_count);
-}
-
-fn unique_rtc_port_range(worker_count: usize) -> RtcPortRange {
-    #![allow(
-        clippy::panic,
-        reason = "test configs cannot return Result and must fail loudly when no RTC ports are available"
-    )]
-
-    test_rtc_port_range(worker_count)
-        .unwrap_or_else(|| panic!("test RTC port allocator could not reserve a contiguous range"))
 }
 
 #[must_use]

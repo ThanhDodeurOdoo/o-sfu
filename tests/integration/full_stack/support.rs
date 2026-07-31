@@ -38,8 +38,7 @@ pub(super) use o_sfu_tests::support::{
         ProtocolFakePeer, connect_fake_peer, connect_two_fake_peers,
         connect_two_rtc_ready_fake_peers,
     },
-    require_some, set_rtc_media_worker_count, spawn_room_server_with_config, spawn_test_server,
-    stats, test_config,
+    require_some, spawn_room_server_with_config, spawn_test_server, stats, test_config,
 };
 pub(super) use tokio::{
     sync::{Mutex, MutexGuard},

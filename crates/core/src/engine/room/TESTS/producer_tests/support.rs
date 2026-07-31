@@ -13,11 +13,13 @@ pub(super) use str0m::{Candidate, Rtc, change::SdpOffer, media::Mid};
 
 pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
-    Bitrate, RoomMediaLimits, RtcPortRange,
+    Bitrate, RoomMediaLimits,
     engine::{
         media_transport::{
             SessionOffer, TransportMediaId, TransportSessionKey,
-            test_support::{test_media_transport_config, test_media_transport_deps},
+            test_support::{
+                test_media_transport_config, test_media_transport_deps, test_rtc_port_range,
+            },
         },
         room::{PublishIntentOutcome, RemoteSourceSnapshot, Room},
     },
@@ -441,18 +443,15 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
 
 #[allow(
     clippy::panic,
-    reason = "the RTC room test fixture uses a fixed valid configuration and should fail loudly if it stops being valid"
+    reason = "the RTC room test fixture uses a valid test configuration and should fail loudly if it stops being valid"
 )]
 fn build_real_rtc_media_transport_with_metrics(metrics: Arc<RuntimeMetrics>) -> MediaTransport {
     let mut deps = test_media_transport_deps();
     deps.metrics = metrics;
-    match MediaTransport::build(
-        test_media_transport_config(1, RtcPortRange::new(46_200, 46_299)),
-        deps,
-    ) {
-        Ok(transport) => transport,
-        Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
-    }
+    MediaTransport::build(test_media_transport_config(1, test_rtc_port_range()), deps)
+        .unwrap_or_else(|error| {
+            panic!("constant RTC room test transport config should be valid: {error}")
+        })
 }
 
 pub(super) async fn bootstrap_real_rtc_user(
