@@ -537,6 +537,88 @@ async fn audio_speaker_limit_ignores_foreign_and_inactive_sources() {
 }
 
 #[tokio::test]
+async fn audio_speaker_limit_prioritizes_screen_sharers() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3],
+        // Restrict to 1 active speaker so that all sources are dropped except the highest-priority one.
+        RoomMediaLimits::try_new(1, 10).unwrap(),
+    )
+    .await;
+    let screen_sharer_id = UserId::Integer(1);
+    let receiver_id = UserId::Integer(2);
+    let non_screen_sharer_id = UserId::Integer(3);
+    for user_id in [&screen_sharer_id, &non_screen_sharer_id] {
+        publish_track(
+            &scenario.room,
+            user_id,
+            TestSourceKind::AudioDetector,
+            MediaKind::Audio,
+            test_audio_rtp_parameters(),
+            &scenario.adapter,
+        )
+        .await;
+    }
+    let screen_sharing_intent = source_publish_intent_for_source(TestSourceKind::ReadableVideo)
+        .with_presence(Some(UserInfo {
+            is_screen_sharing_on: Some(true),
+            ..UserInfo::default()
+        }));
+    scenario
+        .room
+        .test_api()
+        .media()
+        .publish_intent(
+            &screen_sharer_id,
+            &screen_sharing_intent,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            &scenario.adapter,
+        )
+        .await
+        .expect("screen share publication should succeed");
+    let screen_sharer_audio = source_media_id(
+        &scenario.room,
+        &screen_sharer_id,
+        TestSourceKind::AudioDetector,
+    )
+    .await;
+    let non_screen_sharer_audio = source_media_id(
+        &scenario.room,
+        &non_screen_sharer_id,
+        TestSourceKind::AudioDetector,
+    )
+    .await;
+    // Make the non-screen sharer louder so they rank higher.
+    // This verifies that the screen sharer's audio is preserved despite having a lower volume ranking.
+    scenario
+        .mark_active_speakers_with_levels([
+            (non_screen_sharer_audio, -10), // loudest
+            (screen_sharer_audio, -30),     // quietest
+        ])
+        .await;
+    scenario.refresh_policy().await;
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_id,
+        &screen_sharer_id,
+        TestSourceKind::AudioDetector,
+        // No pause reason means the subscription remains active and the screen sharer's source is preserved.
+        None,
+    )
+    .await;
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver_id,
+        &non_screen_sharer_id,
+        TestSourceKind::AudioDetector,
+        Some(DiagnosticsPolicyPauseReason::AudioSpeakerLimit),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn deafening_a_receiver_pauses_its_audio_and_keeps_video() {
     let scenario = SourcePolicyScenario::three_ready_users().await;
     scenario
