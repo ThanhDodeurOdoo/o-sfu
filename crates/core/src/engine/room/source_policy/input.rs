@@ -153,6 +153,14 @@ fn receiver_bandwidth_by_connection(
         .collect()
 }
 
+/// Filters and ranks a list of active speaker sources for a room.
+///
+/// **Ranking Criteria:**
+/// 1. **Recency:** Most recently active first (highest `observed_at`).
+/// 2. **Loudness:** Highest audio level first (`last_audio_level_dbov`).
+/// 3. **Tie-breaker:** Transport media ID.
+///
+/// Only retains sources that are active and present in the current room topology.
 fn rank_room_active_speakers(
     state: &RoomState,
     sources: &[ActiveSpeakerSource],
