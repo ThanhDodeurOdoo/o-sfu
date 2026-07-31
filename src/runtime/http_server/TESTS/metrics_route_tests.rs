@@ -1,6 +1,14 @@
+use std::{sync::Arc, time::Duration};
+
+use tokio::{sync::Barrier, task::yield_now, time::timeout};
+
 use super::fixtures::*;
-use crate::runtime::metrics::{
-    MetricName, RuntimeMetricsSnapshot, test_support::RuntimeMetricsSnapshotLookup,
+use crate::{
+    core::server::session::UserPermissions,
+    runtime::metrics::{
+        MetricName, RoomGaugeValues, RuntimeMetricsSnapshot,
+        test_support::RuntimeMetricsSnapshotLookup,
+    },
 };
 
 fn assert_metrics_payload(payload: &str) {
@@ -25,11 +33,6 @@ fn assert_http_metrics_payload(payload: &str) {
     assert!(payload.contains("osfu_http_request_duration_seconds_count{route=\"disconnect\"} 1"));
     assert!(payload.contains("# TYPE osfu_ws_handshake_duration_seconds histogram"));
     assert!(payload.contains("osfu_ws_handshake_duration_seconds_count 0"));
-    assert!(payload.contains("osfu_rooms_active 0"));
-    assert!(payload.contains("osfu_users_active 0"));
-    assert!(payload.contains("osfu_publications_active 0"));
-    assert!(payload.contains("osfu_subscriptions_active 0"));
-    assert!(payload.contains("osfu_recording_rooms_active 0"));
 }
 
 fn assert_transport_metrics_payload(payload: &str) {
@@ -78,11 +81,6 @@ fn assert_metrics_snapshot(snapshot: &RuntimeMetricsSnapshot) {
         1
     );
     assert_eq!(snapshot.ws_handshake_duration().count, 0);
-    assert_eq!(snapshot.active_rooms(), 0);
-    assert_eq!(snapshot.active_users(), 0);
-    assert_eq!(snapshot.active_publications(), 0);
-    assert_eq!(snapshot.active_subscriptions(), 0);
-    assert_eq!(snapshot.active_recording_rooms(), 0);
     assert_eq!(snapshot.active_transport_users(), 0);
     assert_eq!(snapshot.connected_transport_users(), 0);
     assert_eq!(
@@ -146,5 +144,75 @@ async fn metrics_route_exports_prometheus_text_for_runtime_counters() -> TestRes
 
     let snapshot = state.metrics.snapshot();
     assert_metrics_snapshot(&snapshot);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn metrics_route_completes_during_room_mutations() -> TestResult {
+    let test_state = test_state_with_handles();
+    let start = Arc::new(Barrier::new(9));
+    let populated_room_scrape = Arc::new(Barrier::new(2));
+    let mut scrapers = Vec::new();
+    for scraper_index in 0..8 {
+        let state = test_state.state.clone();
+        let start = Arc::clone(&start);
+        let populated_room_scrape = Arc::clone(&populated_room_scrape);
+        scrapers.push(tokio::spawn(async move {
+            start.wait().await;
+            if scraper_index == 0 {
+                populated_room_scrape.wait().await;
+            }
+            for request_index in 0..32 {
+                route_status(
+                    &state,
+                    Request::get(route::METRICS),
+                    Body::empty(),
+                    StatusCode::OK,
+                    "concurrent scrape should complete",
+                )
+                .await?;
+                if scraper_index == 0 && request_index == 0 {
+                    populated_room_scrape.wait().await;
+                }
+                yield_now().await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }));
+    }
+
+    timeout(Duration::from_secs(10), async {
+        start.wait().await;
+        for raw_user_id in 0..32 {
+            let room = test_state
+                .room_manager
+                .serve_room("metrics", TEST_ROOM_KEY, &RoomConfig::default(), None)
+                .await;
+            let user_id = UserId::Integer(raw_user_id);
+            let (sender, _receiver) = test_outbound_sender(&test_state.state);
+            assert!(
+                room.test_api()
+                    .lifecycle()
+                    .join_user(user_id.clone(), None, UserPermissions::default(), sender)
+                    .await
+                    .is_ok()
+            );
+            if raw_user_id == 0 {
+                populated_room_scrape.wait().await;
+                populated_room_scrape.wait().await;
+            }
+            test_state
+                .room_manager
+                .disconnect_users(room.uuid(), &[user_id], &test_state.media_transport)
+                .await;
+        }
+        for scraper in scrapers {
+            scraper.await??;
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+
+    let gauges = test_state.room_manager.room_gauges().await;
+    assert_eq!(gauges, RoomGaugeValues::default());
     Ok(())
 }

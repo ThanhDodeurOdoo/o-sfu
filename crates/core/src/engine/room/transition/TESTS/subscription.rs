@@ -652,8 +652,7 @@ async fn relay_setup_failure_releases_pending_setup_for_retry() {
             .setups;
         let setup = setups.pop().expect("retry setup should be planned");
         assert!(setups.is_empty());
-        let (_, _, relays) = state.release_pending_consumer_setup(setup);
-        relays
+        state.release_pending_consumer_setup(setup)
     };
     assert_eq!(release_relays.len(), 1);
     assert_eq!(

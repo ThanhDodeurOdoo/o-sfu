@@ -149,8 +149,7 @@ fn install_relayed_source(state: &mut RoomState) -> RelayedSource {
         .expect("relay consumer setup should be planned");
     assert!(setups.is_empty());
     let setup = setup.declared(consumer_media, None);
-    let (_, _, setup_outcome) =
-        state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
+    let setup_outcome = state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
     let ConsumerSetupOutcome::Committed { route, .. } = setup_outcome else {
         panic!("relay consumer setup should commit");
     };
@@ -265,8 +264,7 @@ fn leave_removes_consumer_routes_for_departed_session() {
     assert_eq!(setups.len(), 1);
     let setup = setups.pop().expect("consumer setup should be planned");
     let setup = setup.declared(TransportMediaId::new(21), Some(String::from("camera-down")));
-    let (_, _, setup_outcome) =
-        state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
+    let setup_outcome = state.commit_declared_consumer_setup(setup, ConsumerSetupOrigin::Subscribe);
     assert!(matches!(
         setup_outcome,
         ConsumerSetupOutcome::Committed { .. }

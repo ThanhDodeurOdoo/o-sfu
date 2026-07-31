@@ -177,7 +177,6 @@ async fn shutdown_waits_for_in_flight_mutations_and_retires_sessions_once() -> T
     assert!(!room.test_api().inspect().has_session(&admitted_id).await);
     assert!(!room.test_api().inspect().has_session(&joining_id).await);
     let metrics = server.state.metrics.snapshot();
-    assert_eq!(metrics.active_users(), 0);
     assert_eq!(metrics.active_transport_users(), 0);
     assert_eq!(metrics.ws_user_loop_exits_runtime_shutdown(), 1);
     assert_eq!(metrics.ws_handshake_rejected_timeout(), 0);

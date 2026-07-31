@@ -7,9 +7,9 @@ use std::{collections::VecDeque, future::Future, pin::Pin, time::Duration};
 
 use futures_util::SinkExt;
 use o_sfu_protocol::wire::{
-    AuthPayload, ClientEnvelope, ClientMessage, DownloadStates, RequestId, ServerEnvelope,
-    ServerMessage, ServerRequest, StreamIntentPayload, StreamType, SubscribePayload, UserId,
-    UserInfo, WelcomePayload,
+    AuthPayload, ClientEnvelope, ClientMessage, ClientRequest, DownloadStates, RequestId,
+    ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, StreamIntentPayload, StreamType,
+    SubscribePayload, UserId, UserInfo, WelcomePayload,
 };
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -148,6 +148,41 @@ impl ProtocolFakePeer {
         self.send_message(ClientMessage::Info(info)).await
     }
 
+    pub async fn request_recording(&mut self, recording_request: ClientRequest) -> Option<bool> {
+        let recording_request_id = RequestId::new("recording");
+        self.send_envelope(ClientEnvelope::Request {
+            request_id: recording_request_id.clone(),
+            request: recording_request,
+        })
+        .await?;
+        loop {
+            for envelope in read_protocol_batch(&mut self.websocket).await? {
+                match ServerEnvelope::decode(envelope).ok()? {
+                    ServerEnvelope::Message(message) => {
+                        self.pending_server_messages.push_back(message);
+                    }
+                    ServerEnvelope::Request {
+                        request_id: server_request_id,
+                        request: server_request,
+                    } => {
+                        self.respond_to_server_request(server_request_id, server_request)
+                            .await?;
+                    }
+                    ServerEnvelope::Response {
+                        response_to,
+                        response,
+                    } if response_to == recording_request_id => {
+                        return match response {
+                            ServerResponse::StartRecording(result)
+                            | ServerResponse::StopRecording(result) => Some(result.ok),
+                        };
+                    }
+                    ServerEnvelope::Response { .. } => {}
+                }
+            }
+        }
+    }
+
     pub async fn read_next_server_message(&mut self) -> Option<ServerMessage> {
         loop {
             if let Some(message) = self.pending_server_messages.pop_front() {
@@ -240,9 +275,13 @@ impl ProtocolFakePeer {
     }
 
     async fn send_message(&mut self, message: ClientMessage) -> Option<()> {
+        self.send_envelope(ClientEnvelope::Message(message)).await
+    }
+
+    async fn send_envelope(&mut self, envelope: ClientEnvelope) -> Option<()> {
         self.websocket
             .send(tungstenite::Message::Text(
-                encode_client_batch(vec![ClientEnvelope::Message(message)])?.into(),
+                encode_client_batch(vec![envelope])?.into(),
             ))
             .await
             .ok()?;

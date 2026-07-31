@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+pub(crate) use o_sfu_telemetry::metrics::RoomGaugeValues;
+
 use super::*;
 
 pub(crate) async fn stream_until_audio_bitrate_is_observable(
@@ -29,6 +31,28 @@ pub(crate) struct TransportUserLifetimeMetrics {
     pub(crate) le_300_seconds: u64,
     pub(crate) count: u64,
     pub(crate) sum_seconds: f64,
+}
+
+pub(crate) async fn wait_for_room_gauges(server: &TestServer, expected: RoomGaugeValues) -> bool {
+    timeout(super::Duration::from_secs(3), async {
+        loop {
+            let actual = metrics_text(server).await.and_then(|text| {
+                Some(RoomGaugeValues {
+                    rooms: parse_prometheus(&text, "osfu_rooms_active")?,
+                    users: parse_prometheus(&text, "osfu_users_active")?,
+                    publications: parse_prometheus(&text, "osfu_publications_active")?,
+                    subscriptions: parse_prometheus(&text, "osfu_subscriptions_active")?,
+                    recording_rooms: parse_prometheus(&text, "osfu_recording_rooms_active")?,
+                })
+            });
+            if actual == Some(expected) {
+                return;
+            }
+            yield_now().await;
+        }
+    })
+    .await
+    .is_ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

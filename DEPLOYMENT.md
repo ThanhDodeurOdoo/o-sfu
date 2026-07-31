@@ -307,9 +307,9 @@ the formatter is in `crates/telemetry/src/setup.rs`
 
 ### systemd deployment
 
-when `o-sfu` runs without Docker, bind HTTP according to the reverse proxy
-layout and make sure the configured UDP range is allowed by both cloud and host
-firewalls
+when NGINX and Prometheus run on the same host, set
+`BIND_ADDRESS=127.0.0.1:8070`. Remote Prometheus requires a private interface
+and a source-restricted firewall. Port `8070` must reject public access
 
 ## NGINX public edge
 
@@ -400,9 +400,9 @@ expected:
 /internal/diagnostics/summary -> 404
 ```
 
-then validate a real browser join from Odoo
-
-HTTP health does not validate the UDP media path
+confirm direct port `8070` is unreachable from untrusted networks and the
+permitted private scrape returns `200`. Then validate a real browser join from
+Odoo because HTTP health does not validate the UDP media path
 
 ## deployment checklist
 

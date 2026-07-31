@@ -1,7 +1,4 @@
-use super::{
-    RoomGaugeDelta, observability::record_gauges, output::RoomOutputPlan,
-    transport::RoomTransportPlan,
-};
+use super::{output::RoomOutputPlan, transport::RoomTransportPlan};
 use crate::engine::{
     media_transport::MediaTransport,
     room::{
@@ -57,7 +54,6 @@ impl<'a> RoomEffectContext<'a> {
 #[derive(Debug, Default)]
 #[must_use = "room effect batches must be executed after the state transition commits"]
 pub struct RoomEffects {
-    gauges: Vec<RoomGaugeDelta>,
     policy_before_transport: bool,
     transport: RoomTransportPlan,
     output: RoomOutputPlan,
@@ -67,13 +63,11 @@ pub struct RoomEffects {
 impl RoomEffects {
     pub(in crate::engine::room) fn from_join(commit: JoinCommit) -> Self {
         let JoinCommit {
-            counts,
             effects,
             transport_plan,
             ..
         } = commit;
         let mut batch = Self::default();
-        batch.gauges.push(counts);
         batch.transport.extend(transport_plan);
         batch.source_policy.request();
         batch.output.push_lifecycle(effects);
@@ -84,23 +78,17 @@ impl RoomEffects {
         let mut batch = Self::default();
         match commit {
             ConnectionCloseCommit::Current {
-                counts,
                 session_teardown,
                 effects,
                 transport_plan,
                 ..
             } => {
-                batch.gauges.push(counts);
                 batch.transport.extend(transport_plan);
                 batch.output.push_lifecycle(effects);
                 batch.source_policy.request();
                 batch.transport.extend_teardown(session_teardown);
             }
-            ConnectionCloseCommit::StalePlacement {
-                counts,
-                session_teardown,
-            } => {
-                batch.gauges.push(counts);
+            ConnectionCloseCommit::StalePlacement { session_teardown } => {
                 batch.transport.extend_teardown([session_teardown]);
             }
         }
@@ -109,7 +97,6 @@ impl RoomEffects {
 
     pub(in crate::engine::room) fn from_disconnect(commit: DisconnectCommit) -> Self {
         let mut batch = Self::default();
-        batch.gauges.push(commit.counts);
         batch.transport.extend(commit.transport_plan);
         batch.source_policy.request();
         batch.output.push_lifecycle(commit.effects);
@@ -126,14 +113,6 @@ impl RoomEffects {
 
     pub(in crate::engine::room) fn from_publish(commit: PublishCommit) -> Self {
         let mut batch = Self::default();
-        batch.gauges.push(RoomGaugeDelta::media(
-            commit.publish_before,
-            commit.publish_after,
-        ));
-        batch.gauges.push(RoomGaugeDelta::media(
-            commit.setup_before,
-            commit.setup_after,
-        ));
         batch
             .transport
             .push_receiver_work(commit.receiver_route_work, ConsumerSetupOrigin::Publish);
@@ -188,7 +167,6 @@ impl RoomEffects {
 
     fn from_receiver_route(commit: ReceiverRouteCommit, origin: ConsumerSetupOrigin) -> Self {
         let mut batch = Self::default();
-        batch.gauges.push(commit.counts);
         batch.transport.push_receiver_work(commit.work, origin);
         batch
     }
@@ -217,10 +195,8 @@ impl RoomEffects {
         context: RoomEffectContext<'_>,
         source_policy_guarded: bool,
     ) {
-        let mut gauges = self.gauges;
         let mut output = self.output;
         let mut source_policy = self.source_policy;
-        record_gauges(&mut gauges, room);
         if self.policy_before_transport {
             output.emit_user_info_before_policy();
             source_policy
@@ -228,13 +204,9 @@ impl RoomEffects {
                 .await;
             source_policy = SourcePolicyTurn::default();
         }
-        let transport_outcome = self
-            .transport
+        self.transport
             .execute(room, context.route_transport())
             .await;
-        gauges.extend(transport_outcome.gauges);
-        source_policy.extend(&transport_outcome.source_policy);
-        record_gauges(&mut gauges, room);
         output.emit_before_policy();
         if source_policy_guarded {
             source_policy

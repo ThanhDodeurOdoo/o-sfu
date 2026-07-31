@@ -7,7 +7,6 @@ use tracing::{error, warn};
 
 use super::{
     super::{
-        RoomMediaCounts,
         outbound::{OutboundSender, RemoteTrackSnapshot},
         state::{PresenceCommit, RoomState},
     },
@@ -43,10 +42,6 @@ pub struct ValidatedPublish {
 
 #[derive(Debug)]
 pub struct PublishCommit {
-    pub publish_before: RoomMediaCounts,
-    pub publish_after: RoomMediaCounts,
-    pub setup_before: RoomMediaCounts,
-    pub setup_after: RoomMediaCounts,
     pub receiver_route_work: ReceiverRouteWork,
     pub presence: Option<PresenceCommit>,
 }
@@ -186,7 +181,6 @@ impl RoomState {
         let owner_connection_id = publish.session_key.connection_id();
         let stream_id = publish.stream_id.clone();
         let presence = publish.presence.clone();
-        let publish_before = self.media_counts();
         let source_id = match self.topology.commit_publication(
             publish,
             consumable_rtp_parameters,
@@ -206,19 +200,12 @@ impl RoomState {
                 return None;
             }
         };
-        let publish_after = self.media_counts();
-        let setup_before = publish_after;
         let receiver_route_work =
             self.plan_missing_receiver_routes(ReceiverRouteScope::Source(source_id));
-        let setup_after = self.media_counts();
         let presence = presence.and_then(|info| {
             self.apply_presence_update(&owner_user_id, owner_connection_id, &info)
         });
         Some(PublishCommit {
-            publish_before,
-            publish_after,
-            setup_before,
-            setup_after,
             receiver_route_work,
             presence,
         })

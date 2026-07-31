@@ -1,12 +1,8 @@
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tracing::info;
 
-use super::{
-    RoomGaugeDelta,
-    transport::{
-        RoomRouteEffects, RoomTransportOutcome, execute_relays_and_teardown,
-        execute_remote_source_activity_effects,
-    },
+use super::transport::{
+    RoomRouteEffects, execute_relays_and_teardown, execute_remote_source_activity_effects,
 };
 use crate::engine::{
     media_transport::{MediaTransport, TransportTeardown},
@@ -27,32 +23,26 @@ impl ReceiverSetupTurn {
         Self { setup, origin }
     }
 
-    pub(super) async fn execute(
-        self,
-        room: &Room,
-        media_transport: &MediaTransport,
-        outcome: &mut RoomTransportOutcome,
-    ) {
+    pub(super) async fn execute(self, room: &Room, media_transport: &MediaTransport) {
         let Self {
             setup: mut pending,
             origin,
         } = self;
         if !execute_relays_and_teardown(media_transport, pending.take_relays(), []).await {
-            Self::release_pending_setup(room, pending, media_transport, outcome).await;
+            Self::release_pending_setup(room, pending, media_transport).await;
             return;
         }
         let setup = match pending.declare(media_transport, origin).await {
             Ok(setup) => setup,
             Err(pending) => {
-                Self::release_pending_setup(room, pending, media_transport, outcome).await;
+                Self::release_pending_setup(room, pending, media_transport).await;
                 return;
             }
         };
-        let (before, after, setup_outcome) = {
+        let setup_outcome = {
             let mut state = room.state.write().await;
             state.commit_declared_consumer_setup(setup, origin)
         };
-        outcome.gauges.push(RoomGaugeDelta::media(before, after));
         match setup_outcome {
             ConsumerSetupOutcome::Committed {
                 target,
@@ -107,13 +97,11 @@ impl ReceiverSetupTurn {
         room: &Room,
         setup: PendingConsumerSetup,
         media_transport: &MediaTransport,
-        outcome: &mut RoomTransportOutcome,
     ) {
-        let (before, after, relays) = {
+        let relays = {
             let mut state = room.state.write().await;
             state.release_pending_consumer_setup(setup)
         };
         execute_relays_and_teardown(media_transport, relays, []).await;
-        outcome.gauges.push(RoomGaugeDelta::media(before, after));
     }
 }

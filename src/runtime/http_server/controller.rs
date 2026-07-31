@@ -23,8 +23,8 @@ use crate::{
                 UsersStatsResponse, route,
             },
             extractors::{
-                DiagnosticsAccess, DiagnosticsServices, RoomServices, VerifiedDisconnectClaims,
-                VerifiedRoomRequest,
+                DiagnosticsAccess, DiagnosticsServices, MetricsServices, RoomServices,
+                VerifiedDisconnectClaims, VerifiedRoomRequest,
             },
         },
         metrics::{HttpRoute, RuntimeMetrics},
@@ -148,12 +148,13 @@ async fn stats(State(services): State<RoomServices>) -> impl IntoResponse {
     .await
 }
 
-/// prometheus scrape endpoint for process, HTTP and media-transport metrics
-async fn metrics(State(metrics): State<Arc<RuntimeMetrics>>) -> impl IntoResponse {
+/// prometheus scrape endpoint for process, room, HTTP and media-transport metrics
+async fn metrics(State(services): State<MetricsServices>) -> impl IntoResponse {
     async {
+        let room_gauges = services.room_manager.room_gauges().await;
         (
             [(header::CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
-            render_prometheus(&metrics),
+            render_prometheus(&services.metrics, room_gauges),
         )
     }
     .instrument(telemetry::http_request_span("metrics"))

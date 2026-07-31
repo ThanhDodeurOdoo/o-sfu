@@ -45,8 +45,13 @@ macro_rules! metric_catalog {
             + "# TYPE ".len() + $name.len() + 1 + MetricKind::$kind.name().len() + 1
         )+;
 
-        fn export(metrics: &RuntimeMetrics, output: &mut MetricOutput) {
+        fn export(
+            metrics: &RuntimeMetrics,
+            room_gauges: RoomGaugeValues,
+            output: &mut MetricOutput,
+        ) {
             let capture = MetricCapture {
+                room_gauges,
                 rtp: metrics.rtp_metrics.snapshot(),
                 rtc: metrics.rtc_metrics.snapshot(),
             };
@@ -97,8 +102,19 @@ struct MetricDescriptor {
 }
 
 struct MetricCapture {
+    room_gauges: RoomGaugeValues,
     rtp: RtpMetricsSnapshot,
     rtc: RtcMetricsSnapshot,
+}
+
+/// Room counts supplied to one export and saturated during gauge encoding.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RoomGaugeValues {
+    pub rooms: usize,
+    pub users: usize,
+    pub publications: usize,
+    pub subscriptions: usize,
+    pub recording_rooms: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,17 +290,21 @@ impl MetricOutput {
     }
 }
 
-pub(crate) fn render_prometheus_text(metrics: &RuntimeMetrics) -> String {
+pub(crate) fn render_prometheus_text(metrics: &RuntimeMetrics, gauges: RoomGaugeValues) -> String {
     let mut output = MetricOutput::prometheus();
-    export(metrics, &mut output);
+    export(metrics, gauges, &mut output);
     output.finish_prometheus()
 }
 
 #[cfg(any(test, feature = "test-support"))]
 pub(super) fn build_snapshot(metrics: &RuntimeMetrics) -> RuntimeMetricsSnapshot {
     let mut output = MetricOutput::snapshot();
-    export(metrics, &mut output);
+    export(metrics, RoomGaugeValues::default(), &mut output);
     output.finish_snapshot()
+}
+
+fn gauge_count(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 metric_catalog! {
@@ -454,25 +474,25 @@ metric_catalog! {
         name: "osfu_rooms_active",
         help: "Current number of active rooms owned by this runtime.",
         kind: Gauge,
-        samples: |metrics, capture, output| output.gauge(&[], metrics.active_rooms.load())
+        samples: |metrics, capture, output| output.gauge(&[], gauge_count(capture.room_gauges.rooms))
     },
     UsersActive {
         name: "osfu_users_active",
         help: "Current number of active room users owned by this runtime.",
         kind: Gauge,
-        samples: |metrics, capture, output| output.gauge(&[], metrics.active_users.load())
+        samples: |metrics, capture, output| output.gauge(&[], gauge_count(capture.room_gauges.users))
     },
     PublicationsActive {
         name: "osfu_publications_active",
         help: "Current number of committed or pending published media entries owned by this runtime.",
         kind: Gauge,
-        samples: |metrics, capture, output| output.gauge(&[], metrics.active_publications.load())
+        samples: |metrics, capture, output| output.gauge(&[], gauge_count(capture.room_gauges.publications))
     },
     SubscriptionsActive {
         name: "osfu_subscriptions_active",
         help: "Current number of committed or pending consumer subscriptions owned by this runtime.",
         kind: Gauge,
-        samples: |metrics, capture, output| output.gauge(&[], metrics.active_subscriptions.load())
+        samples: |metrics, capture, output| output.gauge(&[], gauge_count(capture.room_gauges.subscriptions))
     },
     TransportUsersActive {
         name: "osfu_transport_users_active",
@@ -490,7 +510,7 @@ metric_catalog! {
         name: "osfu_recording_rooms_active",
         help: "Current number of rooms with an active recording user.",
         kind: Gauge,
-        samples: |metrics, capture, output| output.gauge(&[], metrics.active_recording_rooms.load())
+        samples: |metrics, capture, output| output.gauge(&[], gauge_count(capture.room_gauges.recording_rooms))
     },
     RecordingCapturedPacketsTotal {
         name: "osfu_recording_captured_packets_total",

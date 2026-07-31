@@ -8,7 +8,6 @@ use tracing::warn;
 
 use super::{
     super::{
-        RoomMediaCounts,
         outbound::{OutboundSender, RemoteTrackSnapshot},
         state::RoomState,
     },
@@ -100,11 +99,10 @@ impl RoomState {
         &mut self,
         setup: DeclaredConsumerSetup,
         origin: ConsumerSetupOrigin,
-    ) -> (RoomMediaCounts, RoomMediaCounts, ConsumerSetupOutcome) {
-        let before = self.media_counts();
+    ) -> ConsumerSetupOutcome {
         let target = &setup.pending.target;
         let session = &target.session;
-        let outcome = if self
+        if self
             .user_for_connection(session.user_id(), session.connection_id())
             .is_some_and(|user| user.parsed_client_rtp_capabilities.is_some())
             && let Some((source_active, source_activity_revision)) = self
@@ -160,23 +158,14 @@ impl RoomState {
         } else {
             let DeclaredConsumerSetup { pending, route, .. } = setup;
             ConsumerSetupOutcome::Released(route, self.topology.release_consumer_setup(pending))
-        };
-        let after = self.media_counts();
-        (before, after, outcome)
+        }
     }
 
     pub fn release_pending_consumer_setup(
         &mut self,
         setup: PendingConsumerSetup,
-    ) -> (
-        RoomMediaCounts,
-        RoomMediaCounts,
-        Vec<TransportRelayRouteEffect>,
-    ) {
-        let before = self.media_counts();
-        let relays = self.topology.release_consumer_setup(setup);
-        let after = self.media_counts();
-        (before, after, relays)
+    ) -> Vec<TransportRelayRouteEffect> {
+        self.topology.release_consumer_setup(setup)
     }
 }
 

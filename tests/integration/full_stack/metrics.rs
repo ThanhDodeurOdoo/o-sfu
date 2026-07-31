@@ -1,14 +1,32 @@
 use super::support::{self as s, media as m, metrics as mt, setup as st};
 
 #[tokio::test]
-async fn fake_rtc_peer_media_updates_room_stats_deterministically() -> s::TestResult {
+async fn fake_rtc_peer_room_stats_and_gauges_follow_lifecycle() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
-    let st::ReadyRoomFakePeers {
-        server,
-        room,
-        mut publisher,
-        mut subscriber,
-    } = st::ready_room_fake_integer_peers("issuer-d", 60, 61).await?;
+    let (server, room) = st::room_parts("issuer-room-gauges").await?;
+    let mut expected = mt::RoomGaugeValues {
+        rooms: 1,
+        ..mt::RoomGaugeValues::default()
+    };
+    assert!(mt::wait_for_room_gauges(&server, expected).await);
+    let (mut publisher, mut subscriber) = s::require_some(
+        s::connect_two_fake_peers(
+            &server,
+            &room,
+            s::UserId::Integer(60),
+            s::UserId::Integer(61),
+        )
+        .await,
+        "peers should connect",
+    )?;
+    expected.users = 2;
+    assert!(mt::wait_for_room_gauges(&server, expected).await);
+    for peer in [&mut publisher, &mut subscriber] {
+        s::require_some(
+            peer.wait_until_connected(s::Duration::from_secs(5)).await,
+            "peer should reach ready state",
+        )?;
+    }
 
     let mut source = s::FakeMediaSource::audio();
     m::publish_source_and_ready_route(
@@ -20,6 +38,26 @@ async fn fake_rtc_peer_media_updates_room_stats_deterministically() -> s::TestRe
         &source,
     )
     .await;
+    expected.publications = 1;
+    expected.subscriptions = 1;
+    assert!(mt::wait_for_room_gauges(&server, expected).await);
+    let recording = s::RecordingOptions {
+        audio: Some(true),
+        ..s::RecordingOptions::default()
+    };
+    assert_eq!(
+        publisher
+            .request_recording(s::ClientRequest::StartRecording(recording))
+            .await,
+        Some(false)
+    );
+    assert_eq!(
+        publisher
+            .request_recording(s::ClientRequest::StopRecording)
+            .await,
+        Some(false)
+    );
+    assert!(mt::wait_for_room_gauges(&server, expected).await);
 
     let mut clock = s::FakeClock::default();
     let stats = mt::stream_until_audio_bitrate_is_observable(
@@ -33,6 +71,12 @@ async fn fake_rtc_peer_media_updates_room_stats_deterministically() -> s::TestRe
     let stats = s::require_some(stats, "audio bitrate should become observable")?;
     assert!(stats.audio > 0);
     assert!(stats.total >= stats.audio);
+    s::require_some(subscriber.close().await, "subscriber should close")?;
+    expected.users = 1;
+    expected.subscriptions = 0;
+    assert!(mt::wait_for_room_gauges(&server, expected).await);
+    s::require_some(publisher.close().await, "publisher should close")?;
+    assert!(mt::wait_for_room_gauges(&server, mt::RoomGaugeValues::default()).await);
     Ok(())
 }
 

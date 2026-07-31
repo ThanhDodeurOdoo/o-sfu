@@ -34,10 +34,6 @@ impl SourcePolicyTurn {
         self.requested = true;
     }
 
-    pub fn extend(&mut self, other: &Self) {
-        self.requested |= other.requested;
-    }
-
     pub async fn execute(
         self,
         room: &Room,
