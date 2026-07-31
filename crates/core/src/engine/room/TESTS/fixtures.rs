@@ -67,7 +67,7 @@ pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
 
 #[allow(
     clippy::panic,
-    reason = "the room test fixture uses a fixed-valid RTC config and should fail loudly if it stops being valid"
+    reason = "the room test fixture uses a valid RTC config and should fail loudly if it stops being valid"
 )]
 pub(super) fn real_adapter() -> MediaTransport {
     real_adapter_with_metrics(Arc::new(RuntimeMetrics::default()))
@@ -76,12 +76,10 @@ pub(super) fn real_adapter() -> MediaTransport {
 fn real_adapter_with_metrics(metrics: Arc<RuntimeMetrics>) -> MediaTransport {
     let mut deps = test_media_transport_deps();
     deps.metrics = metrics;
-    let rtc_port_range =
-        test_rtc_port_range(4).unwrap_or_else(|| panic!("RTC room test ports should be available"));
-    match MediaTransport::build(test_media_transport_config(4, rtc_port_range), deps) {
-        Ok(transport) => transport,
-        Err(error) => panic!("constant RTC room test transport config should be valid: {error}"),
-    }
+    MediaTransport::build(test_media_transport_config(4, test_rtc_port_range()), deps)
+        .unwrap_or_else(|error| {
+            panic!("constant RTC room test transport config should be valid: {error}")
+        })
 }
 
 pub(super) fn test_connection_id(raw: u64) -> ConnectionId {

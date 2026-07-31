@@ -44,19 +44,12 @@ use super::{
     },
     RtcWorker,
 };
-use crate::Bitrate;
-
-#[cfg(test)]
-#[allow(
-    clippy::panic,
-    reason = "test worker defaults cannot return Result and must fail loudly when no RTC ports are available"
-)]
-fn default_test_rtc_port_range() -> RtcPortRange {
-    test_rtc_port_range(1).unwrap_or_else(|| panic!("test RTC port range should be available"))
-}
 #[cfg(any(test, feature = "testing-transport"))]
 use crate::engine::media_transport::{TransportMediaId, TransportQualitySample};
-use crate::engine::{media_transport::TransportSessionKey, metrics};
+use crate::{
+    Bitrate,
+    engine::{media_transport::TransportSessionKey, metrics},
+};
 
 impl RtcWorker {
     #[cfg(test)]
@@ -441,7 +434,7 @@ impl Default for RtcWorkerTestBuilder {
         Self {
             max_bitrate_in: Bitrate::from_mbps(8),
             max_bitrate_out: Bitrate::from_mbps(10),
-            rtc_port_range: default_test_rtc_port_range(),
+            rtc_port_range: test_rtc_port_range(),
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),
         }

@@ -9,9 +9,8 @@ pub(super) use crate::runtime::metrics::test_support::RuntimeMetricsSnapshotTest
 use crate::{
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcPortRange, RtcUdpIoBackend,
-        RuntimeFeatureFlags, TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning,
-        VideoBitrateLimits,
+        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
+        TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning, VideoBitrateLimits,
     },
     runtime::{
         MediaTransport, RuntimeServices, RuntimeState, build_media_transport, build_room_manager,
@@ -40,7 +39,6 @@ pub(super) struct RuntimeTestBuilder {
 
 impl RuntimeTestBuilder {
     pub(super) fn new() -> Self {
-        let rtc_port_range = next_runtime_test_rtc_port_range();
         Self {
             config: Config {
                 auth: AuthConfig {
@@ -63,7 +61,7 @@ impl RuntimeTestBuilder {
                 },
                 transport: TransportConfig {
                     announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-                    rtc_port_range,
+                    rtc_port_range: test_rtc_port_range(),
                     max_bitrate_in: Bitrate::from_mbps(8),
                     max_bitrate_out: Bitrate::from_mbps(10),
                     video_bitrate_limits: VideoBitrateLimits::default(),
@@ -157,14 +155,6 @@ impl RuntimeTestBuilder {
     pub(super) fn build_runtime_state(self) -> RuntimeState {
         self.build_state().state
     }
-}
-
-#[allow(
-    clippy::panic,
-    reason = "runtime test fixtures need a real UDP range and should fail loudly when the host cannot provide one"
-)]
-fn next_runtime_test_rtc_port_range() -> RtcPortRange {
-    test_rtc_port_range(1).unwrap_or_else(|| panic!("runtime test RTC ports should be available"))
 }
 
 pub(super) fn test_outbound_sender(

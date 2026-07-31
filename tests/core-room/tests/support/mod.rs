@@ -50,8 +50,6 @@ pub fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
 }
 
 pub fn media_transport() -> Result<MediaTransport> {
-    let rtc_port_range =
-        test_rtc_port_range(4).ok_or_else(|| anyhow!("RTC test ports should be available"))?;
     MediaTransport::build(
         MediaTransportConfig {
             worker_count: 4,
@@ -61,7 +59,7 @@ pub fn media_transport() -> Result<MediaTransport> {
                 Bitrate::from_mbps(10),
             ),
             video_bitrate_limits: VideoBitrateLimits::default(),
-            rtc_port_range,
+            rtc_port_range: test_rtc_port_range(),
             rtc_udp_io_backend: RtcUdpIoBackend::Tokio,
             codec_flags: MediaCodecFlags::default(),
             codec_preferences: CodecPreferences::default(),

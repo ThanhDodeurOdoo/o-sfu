@@ -233,15 +233,8 @@ async fn assert_remote_route_activity(
 }
 
 fn test_media_transport(worker_count: usize, rtc_port_range: RtcPortRange) -> MediaTransport {
-    match build_test_media_transport(worker_count, rtc_port_range) {
-        Ok(transport) => transport,
-        Err(error) => panic!("fixed RTC transport test config should be valid: {error}"),
-    }
-}
-
-fn test_rtc_range(worker_count: usize) -> RtcPortRange {
-    test_rtc_port_range(worker_count)
-        .unwrap_or_else(|| panic!("test RTC port range should be available"))
+    build_test_media_transport(worker_count, rtc_port_range)
+        .unwrap_or_else(|error| panic!("RTC transport test config should be valid: {error}"))
 }
 
 fn expect_first_candidate_port(offer_sdp: &str) -> u16 {
@@ -336,7 +329,7 @@ async fn assert_media_control_batch_bound(
 #[tokio::test]
 #[allow(clippy::too_many_lines, reason = "one phase-order scenario")]
 async fn media_transport_plan_updates_source_route() {
-    let adapter = test_media_transport(3, test_rtc_range(3));
+    let adapter = test_media_transport(3, test_rtc_port_range());
     let source_session = test_session_key(60, 1, 1, UserId::Integer(1));
     let consumer_session = test_session_key(60, 1, 2, UserId::Integer(2));
     let peer_source_session = test_session_key(60, 2, 3, UserId::Integer(3));
@@ -583,77 +576,59 @@ fn media_transport_build_rejects_invalid_port_split() {
 }
 
 #[test]
-fn media_transport_ready_workers_bind_and_release_ports() {
-    let range = test_rtc_range(2);
-    let mut ports = range.ports();
-    let first_port = ports
-        .next()
-        .unwrap_or_else(|| panic!("test RTC range should contain a first port"));
-    let second_port = ports
-        .next()
-        .unwrap_or_else(|| panic!("test RTC range should contain a second port"));
-    let blocker = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, first_port))
+fn media_transport_build_rejects_occupied_port_range() {
+    let blocker = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
         .unwrap_or_else(|error| panic!("test RTC port should bind: {error}"));
-    let result = MediaTransport::build(
-        test_media_transport_config(1, RtcPortRange::new(first_port, first_port)),
-        test_media_transport_deps(),
-    );
+    let port = blocker
+        .local_addr()
+        .unwrap_or_else(|error| panic!("test RTC port should expose its address: {error}"))
+        .port();
     assert_eq!(
-        result.err(),
+        MediaTransport::build(
+            test_media_transport_config(1, RtcPortRange::new(port, port)),
+            test_media_transport_deps(),
+        )
+        .err(),
         Some(MediaTransportBuildError::WorkerStartup { worker_index: 0 })
     );
-    drop(blocker);
+}
 
-    let adapter = MediaTransport::build(
-        test_media_transport_config(2, range),
-        test_media_transport_deps(),
-    )
-    .unwrap_or_else(|error| panic!("test media transport should start: {error}"));
-
-    assert!(
-        range.ports().all(|port| {
-            UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_err()
-        })
-    );
-    drop(adapter);
-    assert!(
-        range.ports().all(|port| {
-            UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_ok()
-        })
-    );
-
-    let _blocker = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, second_port))
-        .unwrap_or_else(|error| panic!("second test RTC port should bind: {error}"));
-
-    let result = MediaTransport::build(
-        test_media_transport_config(2, range),
-        test_media_transport_deps(),
-    );
-
-    assert_eq!(
-        result.err(),
-        Some(MediaTransportBuildError::WorkerStartup { worker_index: 1 })
-    );
-    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, first_port)).is_ok());
+#[test]
+fn media_transport_overlapping_ranges_skip_bound_ports() {
+    let range = test_rtc_port_range();
+    let _first = test_media_transport(2, range);
+    let _second = test_media_transport(2, range);
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn media_transport_io_uring_worker_binds_before_first_offer() {
-    let range = test_rtc_range(1);
-    let port = range.min();
+    let blocker = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
+        .unwrap_or_else(|error| panic!("test RTC port should bind: {error}"));
+    let blocked_port = blocker
+        .local_addr()
+        .unwrap_or_else(|error| panic!("test RTC port should expose its address: {error}"))
+        .port();
+    let mut blocked_config =
+        test_media_transport_config(1, RtcPortRange::new(blocked_port, blocked_port));
+    blocked_config.rtc_udp_io_backend = RtcUdpIoBackend::IoUring;
+    assert_eq!(
+        MediaTransport::build(blocked_config, test_media_transport_deps()).err(),
+        Some(MediaTransportBuildError::WorkerStartup { worker_index: 0 })
+    );
+    drop(blocker);
+
+    let range = test_rtc_port_range();
     let mut config = test_media_transport_config(1, range);
     config.rtc_udp_io_backend = RtcUdpIoBackend::IoUring;
     let adapter = MediaTransport::build(config, test_media_transport_deps())
         .unwrap_or_else(|error| panic!("io_uring media transport should start: {error}"));
 
-    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_err());
     let session = test_session_key(1, 0, 1, UserId::Integer(1));
     let offer = expect_initial_offer(&adapter, &session).await;
-    assert_eq!(expect_first_candidate_port(&offer.sdp), port);
-
-    drop(adapter);
-    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_ok());
+    let port = expect_first_candidate_port(&offer.sdp);
+    assert!(range.ports().any(|candidate| candidate == port));
+    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).is_err());
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -682,7 +657,7 @@ fn rtc_rejects_answers_without_projectable_client_capabilities() {
 
 #[tokio::test]
 async fn rtc_workers_room_bootstrap_by_explicit_media_worker() {
-    let rtc_port_range = test_rtc_range(2);
+    let rtc_port_range = test_rtc_port_range();
     let adapter = test_media_transport(2, rtc_port_range);
     let first_room_session = test_session_key(10, 0, 1, UserId::Integer(1));
     let second_room_session = test_session_key(11, 1, 1, UserId::Integer(2));
@@ -708,12 +683,14 @@ async fn rtc_workers_room_bootstrap_by_explicit_media_worker() {
         .unwrap_or_else(|| panic!("second worker range should exist"));
     assert!(first_worker_range.ports().any(|port| port == first_port));
     assert!(second_worker_range.ports().any(|port| port == second_port));
+    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, first_port)).is_err());
+    assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, second_port)).is_err());
     assert_eq!(same_worker_port, first_port);
 }
 
 #[tokio::test]
 async fn rtc_rejects_noncanonical_media_worker_id() {
-    let adapter = test_media_transport(2, test_rtc_range(2));
+    let adapter = test_media_transport(2, test_rtc_port_range());
     let session = test_session_key(13, 2, 1, UserId::Integer(4));
 
     let offer = adapter
@@ -728,7 +705,7 @@ async fn rtc_rejects_noncanonical_media_worker_id() {
 
 #[tokio::test]
 async fn rtc_diagnostics_group_workers_and_preserve_media_ids() {
-    let adapter = test_media_transport(2, test_rtc_range(2));
+    let adapter = test_media_transport(2, test_rtc_port_range());
     let first_session = test_session_key(50, 0, 1, UserId::Integer(1));
     let second_session = test_session_key(50, 1, 2, UserId::Integer(2));
     let first_rtp = sample_rtp_parameters("first", 71_000);
@@ -805,7 +782,7 @@ async fn rtc_diagnostics_group_workers_and_preserve_media_ids() {
 
 #[tokio::test]
 async fn rtc_rejects_stale_session_removal_without_dropping_consumer_handle() {
-    let adapter = test_media_transport(1, test_rtc_range(1));
+    let adapter = test_media_transport(1, test_rtc_port_range());
     let source_session = test_session_key(35, 0, 1, UserId::Integer(1));
     let consumer_session = test_session_key(35, 0, 2, UserId::Integer(2));
     let producer_rtp_parameters = sample_rtp_parameters("aud-up", 54_000);
@@ -864,7 +841,7 @@ async fn rtc_rejects_stale_session_removal_without_dropping_consumer_handle() {
 
 #[tokio::test]
 async fn media_transport_terminal_teardown_falls_back_and_continues_batch() {
-    let adapter = test_media_transport(1, test_rtc_range(1));
+    let adapter = test_media_transport(1, test_rtc_port_range());
     let source_session = test_session_key(36, 0, 1, UserId::Integer(1));
     let wrong_owner = test_session_key(36, 0, 2, UserId::Integer(2));
     let later_session = test_session_key(36, 0, 3, UserId::Integer(3));
@@ -910,7 +887,7 @@ async fn media_transport_terminal_teardown_falls_back_and_continues_batch() {
 
 #[tokio::test]
 async fn rtc_gates_remote_relay_mailboxes_without_touching_local_routes() -> TransportResult<()> {
-    let adapter = test_media_transport(2, test_rtc_range(2));
+    let adapter = test_media_transport(2, test_rtc_port_range());
     let source_session = test_session_key(40, 0, 1, UserId::Integer(1));
     let local_consumer_session = test_session_key(40, 0, 2, UserId::Integer(2));
     let remote_consumer_session = test_session_key(40, 1, 3, UserId::Integer(3));
