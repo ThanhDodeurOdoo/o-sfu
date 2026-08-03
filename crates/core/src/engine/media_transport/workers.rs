@@ -173,19 +173,28 @@ impl MediaTransport {
             .collect()
     }
 
-    /// Returns recent active-speaker sources observed by transport workers.
+    /// Returns each media source's newest active-speaker observation in recency
+    /// order, preferring its strongest audio level on timestamp ties.
     pub async fn active_speaker_source_snapshot(&self) -> Vec<ActiveSpeakerSource> {
         let mut snapshot = Vec::new();
         for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_source_snapshot().await);
         }
+        // Group by media ID first so dedup_by_key correctly removes all non-adjacent duplicates
+        snapshot.sort_unstable_by_key(|source| {
+            (
+                source.transport_media_id().as_u64(),
+                Reverse(source.observed_at()),
+                Reverse(source.last_audio_level_dbov().unwrap_or(i8::MIN)),
+            )
+        });
+        snapshot.dedup_by_key(|source| source.transport_media_id());
         snapshot.sort_unstable_by_key(|source| {
             (
                 Reverse(source.observed_at()),
                 source.transport_media_id().as_u64(),
             )
         });
-        snapshot.dedup_by_key(|source| source.transport_media_id());
         snapshot
     }
 
