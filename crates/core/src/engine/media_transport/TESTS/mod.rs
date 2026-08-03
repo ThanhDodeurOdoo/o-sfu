@@ -5,7 +5,7 @@
 
 use std::{
     net::{Ipv4Addr, SocketAddrV4, UdpSocket},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use o_sfu_router::{
@@ -22,11 +22,12 @@ use crate::{
     engine::{
         ConnectionId, RoomInstanceId, UserId,
         media_transport::{
-            ConsumerActivity, ConsumerRouteControl, MediaControlPlan, ProducerActivity,
-            ReceiverBweTargetUpdate, RelayRouteActivity, SessionOffer, SourceActivityRevision,
-            SourceActivityUpdate, SourcePacketGate, TransportAdapterError, TransportConsumerRoute,
-            TransportMediaId, TransportRelayRouteAction, TransportRelayRouteEffect,
-            TransportResult, TransportSessionHealth, TransportSessionKey, TransportSourceKey,
+            ActiveSpeakerSource, ConsumerActivity, ConsumerRouteControl, MediaControlPlan,
+            ProducerActivity, ReceiverBweTargetUpdate, RelayRouteActivity, SessionOffer,
+            SourceActivityRevision, SourceActivityUpdate, SourcePacketGate, TransportAdapterError,
+            TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
+            TransportRelayRouteEffect, TransportResult, TransportSessionHealth,
+            TransportSessionKey, TransportSourceKey,
             rtc::{RtcWorker, WorkerMediaControlBatchOutcome},
             test_support::{
                 DebugPacketGate, test_media_transport as build_test_media_transport,
@@ -686,6 +687,46 @@ async fn rtc_workers_room_bootstrap_by_explicit_media_worker() {
     assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, first_port)).is_err());
     assert!(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, second_port)).is_err());
     assert_eq!(same_worker_port, first_port);
+}
+
+#[tokio::test]
+async fn rtc_active_speaker_source_snapshot_canonicalizes_worker_observations() {
+    let adapter = test_media_transport(2, test_rtc_port_range());
+    let first_session = test_session_key(14, 0, 1, UserId::Integer(1));
+    let second_session = test_session_key(14, 1, 2, UserId::Integer(2));
+    let first_worker = expect_worker_for_user(&adapter, &first_session);
+    let second_worker = expect_worker_for_user(&adapter, &second_session);
+    let unique_media_id = TransportMediaId::new(22);
+    let tied_media_id = TransportMediaId::new(23);
+    let repeated_media_id = TransportMediaId::new(24);
+    let oldest = Instant::now() + Duration::from_mins(1);
+    let middle = oldest + Duration::from_millis(1);
+    let newest = oldest + Duration::from_millis(2);
+
+    first_worker
+        .debug_observe_audio_activity(repeated_media_id, Some(true), Some(-30), newest)
+        .await;
+    first_worker
+        .debug_observe_audio_activity(tied_media_id, Some(true), Some(-40), middle)
+        .await;
+    second_worker
+        .debug_observe_audio_activity(unique_media_id, Some(true), Some(-20), middle)
+        .await;
+    second_worker
+        .debug_observe_audio_activity(tied_media_id, Some(true), Some(-5), middle)
+        .await;
+    second_worker
+        .debug_observe_audio_activity(repeated_media_id, Some(true), Some(-10), oldest)
+        .await;
+
+    assert_eq!(
+        adapter.active_speaker_source_snapshot().await,
+        vec![
+            ActiveSpeakerSource::with_audio_level(repeated_media_id, newest, Some(-30)),
+            ActiveSpeakerSource::with_audio_level(unique_media_id, middle, Some(-20)),
+            ActiveSpeakerSource::with_audio_level(tied_media_id, middle, Some(-5)),
+        ]
+    );
 }
 
 #[tokio::test]
