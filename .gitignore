@@ -26,5 +26,8 @@ test-results
 # vim
 *.swp
 
+# VSCode config
+.vscode/
+
 # macOS
 .DS_Store
