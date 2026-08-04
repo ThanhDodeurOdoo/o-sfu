@@ -21,6 +21,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 - ["Rust for Everyone!" by Will Crichton](https://www.youtube.com/watch?v=R0dP-QR5wQo)
 - ["The Rust Programming Language" by Aaron Turon](https://youtu.be/O5vzLKg7y-k)
 - ["Considering Rust" by Jon Gjengset](https://www.youtube.com/watch?v=DnT-LUQgc7s)
+- ["Crust of Rust async/await" by Jon Gjengset](https://www.youtube.com/watch?v=ThjvMReOXYM)
 - ["Rust makes cents" by No Boilerplate](https://www.youtube.com/watch?v=4dvf6kM70qM)
 
 ### guides
@@ -52,6 +53,18 @@ If you want to make a PR that does substantial changes to the codebase, before w
 - Failing the performance CI isn't necessarily breaking, but the commit message should include a `performance` section that justifies why.
 
 ### Rust
+
+> [!TIP]
+> Use "rust-analyzer" with your IDE,
+>
+> You can also add these to your rust-analyzer settings (VSCode settings example):
+> ```
+> "rust-analyzer.check.command": "clippy",
+> "rust-analyzer.rustfmt.extraArgs": [
+>   "+nightly"
+> ],
+> ```
+> rustfmt nightly is only used to format imports nicely, but it is not enforced in the CI.
 
 - **Formatting**: `cargo +nightly fmt`, Always run it before committing (we use nightly for the import ordering). Our rules can be found at [rustfmt.toml](../rustfmt.toml), more information on the defaults can be found at the [rustfmt documentation](https://rust-lang.github.io/rustfmt/).
 - **Linting**: `cargo clippy --workspace --all-targets --all-features -- -D warnings`, We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](../Cargo.toml), see the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html) for explanations.
