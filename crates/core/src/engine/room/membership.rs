@@ -1,3 +1,36 @@
+//! Membership mutations return commits before running their effects.
+//!
+//! [`JoinCommit`](crate::engine::room::state::JoinCommit),
+//! [`ConnectionCloseCommit`] and
+//! [`DisconnectCommit`](crate::engine::room::state::DisconnectCommit) are produced
+//! while the `room.state` write guard is held. Each carries the transition outcome
+//! plus deferred work derived from the same mutation. The state is authoritative
+//! when the commit returns. [`RoomEffects`] then consumes it outside the guard.
+//!
+//! This split:
+//!
+//! - derives the state mutation and its deferred work under one write guard
+//! - preserves transition-specific connection, sender and route identities
+//! - keeps transport awaits outside the write critical section
+//! - lets effect paths re-enter `room.state` without deadlocking on the write guard
+//!
+//! A close transition follows the same boundary:
+//!
+//! ```text
+//! // 1. Commit authoritative state and capture its effects.
+//! let commit = {
+//!     let mut state = room.state.write().await;
+//!     state.close_connection(user_id, connection_id)
+//! };
+//!
+//! // 2. Execute only after the write guard is dropped.
+//! if let Some(commit) = commit {
+//!     RoomEffects::from_connection_close(commit)
+//!         .execute(room, context)
+//!         .await;
+//! }
+//! ```
+
 #[cfg(any(test, feature = "testing-transport"))]
 use o_sfu_router::rtp::MediaCapabilities;
 use o_sfu_telemetry::schema::event as telemetry_event;
@@ -14,6 +47,7 @@ use crate::engine::{
     ConnectionId, MediaWorkerId, UserId, UserInfo, UserPermissions, media_transport::MediaTransport,
 };
 
+/// Room-state marker that collapses every authenticated [`UserPermissions`] value.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RoomUserPermissions;
 
@@ -29,14 +63,27 @@ pub enum UserCloseReason {
     RemovedByRuntime,
 }
 
+/// Existing users replace their current connection without consuming another admission slot.
 pub struct JoinUserRequest {
     pub user_id: UserId,
+    /// Ignored by room admission.
     pub label: Option<String>,
+    /// Collapsed to [`RoomUserPermissions`] during admission.
     pub permissions: UserPermissions,
     pub sender: UserOutboundSender,
 }
 
 impl Room {
+    /// Executes context-enabled [`RoomEffects`] before returning the committed receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RoomJoinError::RoomFull`] when a new user exceeds capacity.
+    /// Returns [`RoomJoinError::RouterState`] when placement cannot commit.
+    ///
+    /// # Panics
+    ///
+    /// Panics when existing relay state refers to an uncommitted source placement.
     pub(super) async fn admit_session(
         &self,
         admission: JoinAdmissionTurn<'_, impl FnOnce() -> o_sfu_router::RouterId>,
@@ -58,6 +105,11 @@ impl Room {
         Ok(receipt)
     }
 
+    /// Returns `true` only when `connection_id` removed the current room user.
+    ///
+    /// # Panics
+    ///
+    /// Panics when detached relay state refers to an uncommitted source placement.
     pub(crate) async fn remove_user(
         &self,
         user_id: &UserId,
@@ -72,6 +124,12 @@ impl Room {
         .await
     }
 
+    /// Returns `true` only when `connection_id` was current. A stale committed
+    /// placement may still be retired before returning `false`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when detached relay state refers to an uncommitted source placement.
     pub async fn remove_user_with_teardown(
         &self,
         user_id: &UserId,
@@ -116,9 +174,8 @@ impl Room {
         removed_current_user
     }
 
-    /// The sender identity is checked against authoritative room state before
-    /// fan-out is emitted. Stale senders are ignored because websocket code can
-    /// race with replacement or teardown.
+    /// Captures recipients in the state snapshot that validates `connection_id`
+    /// as current for `sender_id`. Missing or stale senders are ignored.
     ///
     /// # Errors
     ///
@@ -148,6 +205,8 @@ impl Room {
         self.state.read().await.user_connection_id(user_id) == Some(connection_id)
     }
 
+    /// Ignores missing or stale connections. Publication transitions remain
+    /// authoritative for camera and screen-sharing presence.
     pub(crate) async fn update_user_info(
         &self,
         user_id: &UserId,
@@ -175,6 +234,12 @@ impl Room {
         }
     }
 
+    /// Missing users are ignored.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a current room user has no committed router placement or detached
+    /// relay state refers to an uncommitted source placement.
     pub(crate) async fn disconnect_users(
         &self,
         user_ids: &[UserId],
@@ -184,6 +249,12 @@ impl Room {
             .await;
     }
 
+    /// Removes current sessions in one state commit and ignores missing users.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a current room user has no committed router placement or detached
+    /// relay state refers to an uncommitted source placement.
     pub async fn disconnect_users_with_teardown(
         &self,
         user_ids: &[UserId],
@@ -214,6 +285,8 @@ impl Room {
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
+    /// Returns `None` for a missing or stale connection. The first accepted
+    /// capabilities commit realizes receiver routes waiting on negotiation.
     pub async fn apply_session_negotiated(
         &self,
         user_id: &UserId,
