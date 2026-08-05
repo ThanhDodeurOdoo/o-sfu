@@ -23,7 +23,7 @@ edition = "2024"
 license = "LGPL-3.0-or-later"
 publish = false
 rust-version = "1.95"
-version = "0.8.0"
+version = "0.9.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
