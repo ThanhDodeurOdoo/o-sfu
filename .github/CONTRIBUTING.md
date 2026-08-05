@@ -2,9 +2,9 @@
 
 If you want to make a PR that does substantial changes to the codebase, before wasting time writing too much code:
 
-**You work at Odoo**: use our internal means of communication to reach me first.
+**You work at Odoo**: use our internal means of communication (/contact the `R&D Discuss` team).
 
-**You are an external contributor**: open an [issue](https://github.com/ThanhDodeurOdoo/o-sfu/issues) to talk about it and to defend your idea first.
+**You are an external contributor**: open an [issue](https://github.com/ThanhDodeurOdoo/o-sfu/issues) to talk about it before (to avoid unnecessary work).
 
 > [!WARNING]
 > AI policy
@@ -18,9 +18,9 @@ If you want to make a PR that does substantial changes to the codebase, before w
 ## Learning Rust
 
 ### videos
+- ["Considering Rust" by Jon Gjengset](https://www.youtube.com/watch?v=DnT-LUQgc7s)
 - ["Rust for Everyone!" by Will Crichton](https://www.youtube.com/watch?v=R0dP-QR5wQo)
 - ["The Rust Programming Language" by Aaron Turon](https://youtu.be/O5vzLKg7y-k)
-- ["Considering Rust" by Jon Gjengset](https://www.youtube.com/watch?v=DnT-LUQgc7s)
 - ["Crust of Rust async/await" by Jon Gjengset](https://www.youtube.com/watch?v=ThjvMReOXYM)
 - ["Rust makes cents" by No Boilerplate](https://www.youtube.com/watch?v=4dvf6kM70qM)
 
