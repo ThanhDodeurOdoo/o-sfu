@@ -75,6 +75,12 @@ impl RtcPortRange {
         self.min..=self.max
     }
 
+    /// Splits a valid caller-provided range into contiguous worker ranges.
+    ///
+    /// Earlier workers receive one extra port when the range does not divide
+    /// evenly. Callers must provide `min <= max` and exclude `0..=u16::MAX`
+    /// because its 65,536-port count is not representable by `u16`. Returns
+    /// `None` for zero workers or more workers than ports.
     #[must_use]
     pub fn split_for_workers(self, worker_count: usize) -> Option<Vec<Self>> {
         if worker_count == 0 || worker_count > usize::from(self.port_count()) {

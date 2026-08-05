@@ -403,6 +403,8 @@ pub mod sdp {
 }
 
 /// Direction tokens used by RFC 8851 RID and RFC 8853 simulcast attributes.
+///
+/// Parsing uses the case-sensitive RFC tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RtpStreamDirection {
     Send,

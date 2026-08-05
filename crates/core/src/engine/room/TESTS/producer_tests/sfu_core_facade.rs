@@ -84,6 +84,44 @@ async fn media_session_keeps_staged_publish_after_invalid_answer() {
 }
 
 #[tokio::test]
+async fn queued_publish_after_initial_offer_creates_a_follow_up_offer() {
+    let mut fixture = build_publisher_fixture(55_229).await;
+    let initial_offer = fixture
+        .session
+        .establish()
+        .await
+        .expect("initial offer should be created")
+        .expect("initial offer should be present");
+    let video = TestSourceKind::ScalableVideo;
+    assert!(
+        fixture
+            .session
+            .publish(source_publish_intent_for_source(video))
+            .await
+            .expect("publish should queue while the initial offer is pending")
+            .is_none()
+    );
+
+    let initial_answer = remote_answer_sdp(&mut fixture.remote, &initial_offer.sdp);
+    let follow_up_offer = fixture
+        .session
+        .answer(&initial_answer)
+        .await
+        .expect("initial answer should apply")
+        .expect("queued publish should create a follow-up offer");
+    let follow_up_answer = remote_answer_sdp(&mut fixture.remote, &follow_up_offer.sdp);
+    assert!(
+        fixture
+            .session
+            .answer(&follow_up_answer)
+            .await
+            .expect("follow-up answer should commit the queued publish")
+            .is_none()
+    );
+    fixture.assert_committed(video, 1).await;
+}
+
+#[tokio::test]
 async fn queued_publish_cancellation_does_not_create_a_follow_up_offer() {
     let mut fixture = build_publisher_fixture(55_226).await;
     establish_session(&mut fixture.session, &mut fixture.remote).await;

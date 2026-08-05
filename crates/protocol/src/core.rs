@@ -408,7 +408,12 @@ impl ProtocolCore {
         &self.recording_state
     }
 
-    /// Starts a fresh connection attempt and replaces any earlier user context.
+    /// Starts a fresh connection attempt when the current state permits one.
+    ///
+    /// Accepts [`ConnectionState::Disconnected`], [`ConnectionState::Closed`] and
+    /// [`ConnectionState::Recovering`]. Calls from [`ConnectionState::Connecting`],
+    /// [`ConnectionState::Authenticated`] and [`ConnectionState::Connected`] return
+    /// an empty [`CommandBatch`] without replacing the saved admission context.
     ///
     /// This is stricter than a reconnect path: it clears sticky
     /// replay and runtime state so a caller switching rooms or credentials cannot

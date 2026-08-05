@@ -11,23 +11,62 @@
 //! - `wire` contains JSON envelope and signaling payload types
 //! - `bundle` preserves the browser bundle compatibility API used by Odoo
 //!
-//! ```no_run
-//! use o_sfu_protocol::host::{Command, ProtocolCore};
+//! Hosts execute every command in each returned batch before reporting the
+//! resulting socket and peer-connection events to the same
+//! [`host::ProtocolCore`]. Initial negotiation creates the peer connection
+//! before applying the offer. While that negotiation is pending, the host
+//! submits its correlated answer then reports readiness after the peer
+//! connection becomes usable.
 //!
-//! let mut core = ProtocolCore::new();
-//! let commands = core.connect(
-//!     "wss://sfu.example.test/ws",
-//!     "signed-admission-token",
-//!     Some("discuss-room".to_owned()),
-//! );
-//!
-//! assert!(commands
-//!     .iter()
-//!     .any(|command| matches!(command, Command::Connect { .. })));
 //! ```
+//! use o_sfu_protocol::host::{Command, ConnectionState, NegotiationKind, ProtocolCore};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut core = ProtocolCore::new();
+//! let connect = core.connect("wss://sfu.test/ws", "signed-token", None);
+//! assert!(matches!(
+//!     connect.as_slice(),
+//!     [
+//!         Command::EmitStateChange { state: ConnectionState::Connecting, .. },
+//!         Command::Connect { .. },
+//!     ]
+//! ));
 //!
-//! hosts should execute every command in order and then feed observed socket,
-//! timer and peer-connection results back into `ProtocolCore`
+//! let auth = core.on_ws_open();
+//! assert!(matches!(auth.as_slice(), [Command::SendWebSocket(_)]));
+//! # let welcome = concat!(
+//! #     r#"[{"t":"welcome","p":{"features":{"rtc":true,"transcription":false,"#,
+//! #     r#""audioRecording":false,"videoRecording":false},"recording":{},"peers":[]}}]"#,
+//! # );
+//! let welcome = core.on_ws_message(welcome);
+//! assert!(matches!(welcome.first(),
+//!     Some(Command::EmitStateChange { state: ConnectionState::Authenticated, .. })
+//! ));
+//!
+//! let offer = r#"[{"t":"offer","q":"offer-1","p":{"sdp":"v=0\r\n","uploadSlots":[]}}]"#;
+//! let negotiation = core.on_ws_message(offer);
+//! let [
+//!     Command::CreatePeerConnection,
+//!     Command::ApplyNegotiation { request_id, kind, .. },
+//! ] = negotiation.as_slice()
+//! else {
+//!     return Err("unexpected negotiation command order".into());
+//! };
+//!
+//! assert!(core.on_transport_ready().is_empty());
+//!
+//! let answer = core.submit_negotiation_answer(request_id, *kind, "v=0\r\ns=answer\r\n");
+//! assert_eq!(*kind, NegotiationKind::Offer);
+//! assert!(matches!(answer.as_slice(), [Command::SendWebSocket(_)]));
+//!
+//! // The host sends `answer` then waits until the peer connection is usable.
+//! let ready = core.on_transport_ready();
+//! assert_eq!(
+//!     ready.as_slice(),
+//!     &[Command::EmitStateChange { state: ConnectionState::Connected, cause: None }]
+//! );
+//! # Ok(())
+//! # }
+//! ```
 
 mod bundle_api;
 mod core;

@@ -153,9 +153,9 @@ impl PublishedSourceDescriptor {
     ///
     /// Encodings without complete RID coverage are excluded because the
     /// packet-gate projection cannot address them. Sources with bitrate hints
-    /// use ascending bitrate order. Sources without bitrate hints use upload
-    /// layer policy role order when available, then keep the publisher-declared
-    /// order.
+    /// use ascending advertised maximum bitrate order. Sources without bitrate
+    /// hints use upload layer policy role order when available, then keep the
+    /// publisher-declared order.
     pub fn selectable_encodings(&self) -> impl Iterator<Item = &SourceEncodingDescriptor> {
         self.selectable_encoding_indices
             .iter()
