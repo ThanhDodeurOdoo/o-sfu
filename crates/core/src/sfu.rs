@@ -1,5 +1,5 @@
 //! `SfuCore` admits room users into [`MediaSession`] handles
-//! each handle represent one admitted user connection in one room
+//! each handle represents one admitted user connection in one room
 //! callers use it to drive the browser offer/answer lifecycle and then express
 //! publish, subscribe, recording and cleanup intent without importing room or
 //! transport internals
@@ -9,50 +9,42 @@
 //!
 //! establish -> send offer -> answer
 //! publish    -> maybe send renegotiation -> answer
-//! deactivate -> retain negotiated publication without sending media
-//! subscribe  -> room state only
-//! close      -> rollback staged media and remove the connection
+//! deactivate -> suppress forwarding while retaining negotiated publication
+//! subscribe  -> remember intent and reconcile eligible consumer routes
+//! close      -> remove the connection only when current
 //! ```
 //!
 //! negotiation is serialized through `&mut MediaSession`
 //! a new offer is not created while another offer is awaiting an answer
-//! publish intent received during that window is queued and replayed after the
-//! accepted answer
+//! a first publish received during that window is queued
+//! the initial answer may yield the follow-up offer that applies it
 //!
 //! # Examples
 //!
 //! ```no_run
-//! use o_sfu_core::{
-//!     prelude::{NegotiationOffer, SfuCore, SourcePublishIntent},
-//!     server::room::JoinUserRequest,
+//! use o_sfu_core::prelude::{
+//!     MediaSession, NegotiationOffer, SessionError, SourcePublishIntent,
 //! };
 //!
-//! # async fn send_offer(_: NegotiationOffer) {}
-//! # async fn example(
-//! #     core: SfuCore,
-//! #     room_id: String,
-//! #     request: JoinUserRequest,
-//! #     publish_intent: SourcePublishIntent,
-//! #     initial_answer_sdp: String,
-//! # ) -> Result<(), o_sfu_core::prelude::SessionError> {
-//! let mut session = core
-//!     .admit_user(&room_id, request)
-//!     .await
-//!     .expect("room admission succeeds");
+//! # async fn exchange(_: NegotiationOffer) -> String { String::new() }
+//! async fn publish_source(
+//!     mut session: MediaSession,
+//!     intent: SourcePublishIntent,
+//! ) -> Result<(), SessionError> {
+//!     let Some(initial_offer) = session.establish().await? else {
+//!         return Ok(());
+//!     };
+//!     let initial_answer = exchange(initial_offer).await;
 //!
-//! if let Some(offer) = session.establish().await? {
-//!     send_offer(offer).await;
-//! }
+//!     let _queued_without_offer = session.publish(intent).await?;
+//!     let Some(follow_up_offer) = session.answer(&initial_answer).await? else {
+//!         return Ok(());
+//!     };
+//!     let follow_up_answer = exchange(follow_up_offer).await;
 //!
-//! if let Some(offer) = session.answer(&initial_answer_sdp).await? {
-//!     send_offer(offer).await;
+//!     let _next_offer = session.answer(&follow_up_answer).await?;
+//!     Ok(())
 //! }
-//!
-//! if let Some(offer) = session.publish(publish_intent).await? {
-//!     send_offer(offer).await;
-//! }
-//! # Ok(())
-//! # }
 //! ```
 //!
 use std::{collections::BTreeMap, mem::replace, sync::Arc};
@@ -82,7 +74,7 @@ use crate::{
 /// media-session negotiation phase
 ///
 /// queued publishes live beside the offer state so a user action that arrives
-/// while a browser answer is pneding cannot interleave with the in-flight SDP
+/// while a browser answer is pending cannot interleave with the in-flight SDP
 /// exchange
 #[derive(Debug, Default)]
 enum SessionPhase {

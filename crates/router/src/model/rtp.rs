@@ -249,6 +249,8 @@ impl MediaCodecCapability {
         self
     }
 
+    /// An invalid RTX `apt` remains in [`Self::parameters`] while
+    /// [`Self::rtx_associated_payload_type`] returns `None`.
     #[must_use]
     pub fn with_parameter(self, name: impl Into<String>, value: impl Into<String>) -> Self {
         let setting = codec_setting_from_wire(&self.codec, name.into(), value.into());

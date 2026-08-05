@@ -36,6 +36,11 @@ impl FromRequestParts<RuntimeState> for RequestOrigin {
     }
 }
 
+/// Resolves proxy headers only when `trust_proxy_headers` is set.
+///
+/// Set `trust_proxy_headers` only when every request reaches this listener
+/// through a proxy that strips or overwrites client-supplied `x-forwarded-*`
+/// values.
 #[must_use]
 pub fn resolve_request_origin(
     headers: &HeaderMap,
@@ -94,7 +99,3 @@ pub(crate) fn request_base_url(
         .unwrap_or_else(|| fallback_bind_address.to_string());
     format!("{scheme}://{host}")
 }
-
-#[cfg(test)]
-#[path = "TESTS/request_origin.rs"]
-mod tests;

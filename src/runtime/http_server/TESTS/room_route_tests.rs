@@ -1,3 +1,7 @@
+use std::net::SocketAddr;
+
+use axum::extract::ConnectInfo;
+
 use super::fixtures::*;
 
 fn room_token(issuer: Option<&str>, key: Option<&str>) -> TestResult<String> {
@@ -143,14 +147,21 @@ async fn room_ignores_forwarded_headers_when_proxy_trust_is_disabled() -> TestRe
     let state = test_state();
     let payload: RoomResponse = route_json(
         &state,
-        room_builder(&token, "Bearer").header("x-forwarded-for", "198.51.100.24, 10.0.0.1"),
+        room_builder(&token, "Bearer")
+            .header("x-forwarded-for", "198.51.100.24, 10.0.0.1")
+            .header(
+                "x-forwarded-host",
+                "proxy.example.com, internal.example.com",
+            )
+            .header("x-forwarded-proto", "https, http")
+            .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8070)))),
         Body::empty(),
         StatusCode::OK,
         "room request should complete",
     )
     .await?;
     assert_eq!(payload.url, "http://sfu.example.com");
-    assert_eq!(stats_first_remote_address(&state).await?, "unknown");
+    assert_eq!(stats_first_remote_address(&state).await?, "127.0.0.1");
     Ok(())
 }
 
@@ -162,8 +173,11 @@ async fn room_uses_forwarded_headers_when_proxy_trust_is_enabled() -> TestResult
     let payload: RoomResponse = route_json(
         &state,
         room_builder(&token, "Bearer")
-            .header("x-forwarded-host", "proxy.example.com")
-            .header("x-forwarded-proto", "https")
+            .header(
+                "x-forwarded-host",
+                "proxy.example.com, internal.example.com",
+            )
+            .header("x-forwarded-proto", "https, http")
             .header("x-forwarded-for", "198.51.100.24, 10.0.0.1"),
         Body::empty(),
         StatusCode::OK,

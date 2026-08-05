@@ -87,6 +87,7 @@ impl SourceLayoutPolicy {
         }
     }
 
+    /// Resolves explicit receiver intent before source defaults or speaker state.
     #[must_use]
     pub fn resolve(
         self,

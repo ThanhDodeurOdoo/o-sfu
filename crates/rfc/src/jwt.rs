@@ -23,7 +23,10 @@ pub const ALGORITHM_HS256: &str = "HS256";
 /// minimum HS256 key length from RFC 7518 section 3.2
 pub const HS256_MIN_KEY_BYTES: usize = 32;
 
-/// RFC 7519 seconds since the Unix epoch with subsecond precision
+/// RFC 7519 seconds since the Unix epoch with subsecond precision.
+///
+/// Both encodings are JSON numbers. Whole seconds serialize through `u64` and
+/// fractional values serialize through `f64`.
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct NumericDate(Duration);
 

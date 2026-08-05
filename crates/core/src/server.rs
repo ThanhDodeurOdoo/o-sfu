@@ -42,6 +42,49 @@ pub mod packet_sinks {
 /// this facade is the server crate's entry point for admitting users, sending
 /// outbound messages and reading room statistics
 /// pure routing and transport details remain behind the room API
+///
+/// # Slow-consumer shutdown
+///
+/// [`room::UserOutboundSender::send`] queues output without waiting for
+/// capacity
+/// when the queue is full it also records an overflow sentinel
+/// [`room::UserOutboundReceiver::recv_event`] returns that sentinel before
+/// output that was already queued
+/// the caller should stop normal draining after
+/// [`room::UserOutboundEvent::Overflow`]
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use o_sfu_core::server::{
+/// #     metrics::RuntimeMetrics,
+/// #     room::{
+/// #         RoomEventMessage, UserOutbound, UserOutboundEvent, UserOutboundSendError,
+/// #         UserOutboundSender,
+/// #     },
+/// #     session::UserId,
+/// # };
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
+/// let (sender, mut receiver) =
+///     UserOutboundSender::channel(1, Arc::new(RuntimeMetrics::default()));
+/// let departed = |id| {
+///     UserOutbound::Message(RoomEventMessage::UserDeparted {
+///         user_id: UserId::Integer(id),
+///     })
+/// };
+/// let queued_output = departed(1);
+/// assert!(sender.send(queued_output).is_ok());
+///
+/// assert!(matches!(
+///     sender.send(departed(2)),
+///     Err(UserOutboundSendError::Full(_))
+/// ));
+/// assert!(matches!(
+///     receiver.recv_event().await,
+///     UserOutboundEvent::Overflow(_)
+/// ));
+/// # }
+/// ```
 pub mod room {
     #[cfg(any(test, feature = "testing-transport"))]
     pub mod test_support {
