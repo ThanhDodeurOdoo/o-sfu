@@ -1,3 +1,5 @@
+//! Room publications and subscriptions share transport-placement authority.
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -38,6 +40,11 @@ use crate::engine::{
 #[path = "TESTS/topology_support.rs"]
 mod topology_support;
 
+/// Keeps source records and route realization beside [`Router`] so transport
+/// effects resolve from the same committed placement.
+///
+/// Transport-facing mutations return resolved work for execution after the room
+/// state lock is released.
 #[derive(Debug)]
 pub struct RoomTopology {
     instance: RoomInstanceId,
@@ -47,15 +54,42 @@ pub struct RoomTopology {
     next_producer_id: u64,
 }
 
+/// Receipt acknowledging that [`RoomTopology`] committed a session placement.
+///
+/// It snapshots the committed connection identity and worker-resolved transport
+/// key across the room-state lock boundary. Placement lifetime remains controlled by
+/// [`RoomTopology::commit_session_placement`], [`RoomTopology::remove_session`]
+/// or [`RoomTopology::retire_committed_placement`].
+///
+/// # Admission handoff
+///
+/// Membership keeps the receipt while
+/// [`RoomEffects`](crate::engine::room::effects::batch::RoomEffects) consumes the
+/// join commit:
+///
+/// ```rust,ignore
+/// let commit = admission.commit(self, joined_fanout).await?;
+/// let receipt = commit.receipt.clone();
+///
+/// RoomEffects::from_join(commit).execute(self, context).await;
+/// Ok(receipt)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommittedTransportReceipt {
+    /// Room-local connection identity used to reject stale operations.
     pub connection_id: ConnectionId,
+    /// Transport identity resolved from the committed media worker placement.
     pub transport_session_key: TransportSessionKey,
 }
 
+/// The new placement is authoritative before displaced-session cleanup is returned.
+///
+/// Bundling the receipt with resolved cleanup lets membership release `room.state`
+/// without looking up the displaced placement again.
 #[derive(Debug)]
 pub struct SessionPlacementCommit {
     pub receipt: CommittedTransportReceipt,
+    /// Empty for a first placement.
     pub replacement_transport_plan: RoomTransportPlan,
 }
 
@@ -95,6 +129,7 @@ impl RoomTopology {
         &self.router
     }
 
+    /// Returns `None` unless the exact user connection remains committed.
     #[must_use]
     pub fn committed_transport_user_key(
         &self,
@@ -108,12 +143,30 @@ impl RoomTopology {
         Some(self.transport_session_key(user_id, connection_id, worker))
     }
 
-    /// requires committed placement for `user_id` and `connection_id`
-    /// use [`Self::committed_transport_user_key`] for stale callbacks or teardown races
+    /// Requires the exact user connection to remain committed.
+    ///
+    /// Use [`Self::committed_transport_user_key`] for stale callbacks or teardown
+    /// races where the placement may already be retired.
+    ///
+    /// # Lookup choice
+    ///
+    /// Receiver work may carry a stale connection while relay effects from
+    /// committed graph state use the strict lookup:
+    ///
+    /// ```rust,ignore
+    /// let Some(consumer_session) =
+    ///     topology.committed_transport_user_key(user_id.clone(), connection_id)
+    /// else {
+    ///     return Vec::new();
+    /// };
+    ///
+    /// let source_session =
+    ///     topology.transport_user_key(route.source_user, route.source_connection);
+    /// ```
     ///
     /// # Panics
     ///
-    /// panics when no committed router placement exists
+    /// Panics when no committed router placement exists.
     #[must_use]
     #[expect(
         clippy::unreachable,
@@ -143,6 +196,7 @@ impl RoomTopology {
         TransportSessionKey::new(self.instance, media_worker_id, connection_id, user_id)
     }
 
+    /// Returns `None` when `connection_id` is not the user's committed placement.
     pub fn retire_committed_placement(
         &mut self,
         user_id: &UserId,
@@ -154,6 +208,7 @@ impl RoomTopology {
         Some(self.transport_session_key(user_id.clone().into(), connection_id, media_worker))
     }
 
+    /// Counts each logical subscription once while pending or committed.
     #[must_use]
     pub fn media_counts(&self) -> RoomMediaCounts {
         RoomMediaCounts {
@@ -212,6 +267,7 @@ impl RoomTopology {
         self.sources.id_for_owner_stream(owner_user_id, stream_id)
     }
 
+    /// Returns the source ID only when owner, connection and stream remain current.
     #[must_use]
     pub(in crate::engine::room) fn published_source_id(
         &self,
@@ -224,12 +280,14 @@ impl RoomTopology {
         (source.transport.session_key().connection_id() == connection).then_some(id)
     }
 
+    /// Iterates committed sources in source-ID order.
     pub(in crate::engine::room) fn published_sources(
         &self,
     ) -> impl Iterator<Item = &PublishedSource> {
         self.sources.iter()
     }
 
+    /// Counts distinct users with active publications for each logical stream.
     pub(in crate::engine::room) fn active_stream_user_counts(&self) -> BTreeMap<UserStreamId, u64> {
         let mut users_by_stream: BTreeMap<UserStreamId, BTreeSet<UserId>> = BTreeMap::new();
         for source in self.sources.iter().filter(|source| source.active) {
@@ -244,6 +302,7 @@ impl RoomTopology {
             .collect()
     }
 
+    /// Returns a detector owner with an active promotable source in the same group.
     #[must_use]
     pub(in crate::engine::room) fn active_speaker_detector_owner(
         &self,
@@ -293,6 +352,7 @@ impl RoomTopology {
             })
     }
 
+    /// Returns `None` when the attached source differs from `source_id`.
     #[must_use]
     pub(in crate::engine::room) fn consumer_source_selection(
         &self,
@@ -302,6 +362,7 @@ impl RoomTopology {
         self.route_graph.selection(key, source_id)
     }
 
+    /// Ignores empty updates and applies `active` to an attached selection.
     pub(in crate::engine::room) fn merge_subscription_intent(
         &mut self,
         key: SubscriptionKey,
@@ -310,6 +371,7 @@ impl RoomTopology {
         self.route_graph.merge_intent(key, intent);
     }
 
+    /// Returns merged receiver intent or the default for a missing subscription.
     #[must_use]
     pub(in crate::engine::room) fn subscription_intent(
         &self,
@@ -359,6 +421,7 @@ impl RoomTopology {
         self.sources.source(source_id)
     }
 
+    /// Attaches `source_id` to each eligible receiver lacking a route realization.
     pub(super) fn missing_consumer_targets_for_source<'a>(
         &mut self,
         source_id: PublishedSourceId,
@@ -381,6 +444,7 @@ impl RoomTopology {
         Self::attach_consumer_target(route_graph, &consumer_session, sources.source(source_id)?)
     }
 
+    /// Skips self-consumption and attaches only an absent realization.
     fn attach_consumer_target(
         route_graph: &mut RouteGraph,
         consumer_session: &TransportSessionKey,
@@ -395,6 +459,9 @@ impl RoomTopology {
             .then_some(target)
     }
 
+    /// Attaches each matching source with no realization to the exact committed receiver.
+    ///
+    /// Returns an empty list when `connection_id` is stale.
     pub(super) fn missing_consumer_targets(
         &mut self,
         user_id: &UserId,
@@ -416,6 +483,9 @@ impl RoomTopology {
             .collect()
     }
 
+    /// Updates selection while subscription, source and exact route still match.
+    ///
+    /// Returns `false` when async transport work refers to a displaced route.
     pub fn update_consumer_source_selection(
         &mut self,
         key: &SubscriptionKey,
@@ -468,6 +538,13 @@ impl RoomTopology {
         })
     }
 
+    /// Commits a negotiated source only after its router producer succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PublicationCommitError::Source`] when descriptor allocation or
+    /// validation fails. Returns [`PublicationCommitError::Router`] when the
+    /// router rejects the producer dependency.
     pub(in crate::engine::room) fn commit_publication(
         &mut self,
         publish: ValidatedPublish,
@@ -512,6 +589,10 @@ impl RoomTopology {
             )
     }
 
+    /// # Panics
+    ///
+    /// Panics if `effects` violates the topology invariant that every relay source
+    /// has a committed router placement.
     fn resolve_relay_effects(
         &self,
         effects: impl IntoIterator<Item = RelayRouteEffect>,
@@ -532,6 +613,12 @@ impl RoomTopology {
             .collect()
     }
 
+    /// Uses `session_key` for displaced-source effects because current lookup
+    /// resolves the replacement.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any non-displaced relay source lacks a committed placement.
     fn resolve_relay_effects_with_displaced(
         &self,
         effects: impl IntoIterator<Item = RelayRouteEffect>,
@@ -558,6 +645,10 @@ impl RoomTopology {
             .collect()
     }
 
+    /// Advances the revision only when the exact source connection changes activity.
+    ///
+    /// Returns `None` when the source is missing, the connection is stale or the
+    /// requested activity already matches.
     pub fn set_published_source_activity(
         &mut self,
         source_id: PublishedSourceId,
@@ -590,9 +681,21 @@ impl RoomTopology {
             .collect()
     }
 
-    /// commits the new connection before returning teardown for displaced placement
+    /// Commits the new placement before returning cleanup for `previous_connection`.
     ///
-    /// `previous_connection` must name the currently committed session for replacement joins
+    /// Replacement joins must pass the currently committed `previous_connection`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionPlacementRejection::MissingPreviousSession`] when the
+    /// expected replacement target is no longer committed. Returns
+    /// [`SessionPlacementRejection::Router`] when the router rejects the new
+    /// connection or placement.
+    ///
+    /// # Panics
+    ///
+    /// Panics when existing relay state refers to another uncommitted source
+    /// placement.
     pub fn commit_session_placement(
         &mut self,
         user_id: &UserId,
@@ -600,6 +703,7 @@ impl RoomTopology {
         previous_connection: Option<ConnectionId>,
         home_placement: RouterPlacement,
     ) -> Result<SessionPlacementCommit, SessionPlacementRejection> {
+        // Preserve the displaced key before the router replaces its user mapping.
         let previous_session_key = if let Some(previous_connection) = previous_connection {
             let Some(key) = self.committed_transport_user_key(user_id.clone(), previous_connection)
             else {
@@ -627,6 +731,8 @@ impl RoomTopology {
                 let close_session = TransportTeardown::CloseSession {
                     session_key: replaced_session_key.clone(),
                 };
+                // Session close removes source media while subscriber routes need
+                // explicit teardown.
                 let (_, removed_sources) = self.detach_user_sources(user_id);
                 let receiver_relays = self.route_graph.reset_receiver_for_replacement(user_id);
                 let RemovedRoutes { routes, mut relays } = removed_sources;
@@ -646,10 +752,16 @@ impl RoomTopology {
         })
     }
 
+    /// Returns the cleanup plan even if router removal fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics when detached relay state refers to an uncommitted source placement.
     pub fn remove_session(&mut self, user_id: &UserId) -> RoomTransportPlan {
         let (sources, mut removed) = self.detach_user_sources(user_id);
         removed.extend(self.route_graph.remove_receiver(user_id));
         let teardown = Self::media_teardowns(sources, removed.routes);
+        // Resolve relay keys before router removal makes source placement unavailable.
         let relay_effects = self.resolve_relay_effects(removed.relays);
         if let Some(error) = self.router.remove_session(user_id).err() {
             error!(?user_id, ?error, "failed to remove user from room router");
@@ -657,6 +769,13 @@ impl RoomTopology {
         RoomTransportPlan::from_relays_and_teardown(relay_effects, teardown)
     }
 
+    /// Selects MID from the transport declaration, negotiated RTP MID then the
+    /// consumer identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the declared route and relay release effects when the reservation
+    /// is stale or the router rejects the consumer dependency.
     pub(super) fn commit_consumer_setup(
         &mut self,
         setup: DeclaredConsumerSetup,
@@ -683,6 +802,7 @@ impl RoomTopology {
                 .map_or_else(|| consumer.to_string(), ToOwned::to_owned)
         });
         let (route_graph, router) = (&mut self.route_graph, &mut self.router);
+        // Remove pending state first so router rejection cannot strand a reservation.
         let result = route_graph.commit(
             reservation,
             route.clone(),
@@ -712,6 +832,9 @@ impl RoomTopology {
         })
     }
 
+    /// Returns `None` unless the route realization remains absent.
+    ///
+    /// A cross-worker reservation also claims relay ownership.
     pub(super) fn reserve_consumer_setup(
         &mut self,
         target: ConsumerSetupTarget,
@@ -745,6 +868,7 @@ impl RoomTopology {
         })
     }
 
+    /// A stale reservation releases no relay ownership.
     pub(super) fn release_consumer_setup(
         &mut self,
         setup: PendingConsumerSetup,
@@ -753,6 +877,8 @@ impl RoomTopology {
         self.resolve_relay_effects(relays)
     }
 
+    /// Returns `None` when the source is missing, its attachment changed or the
+    /// committed consumer belongs to another receiver connection.
     pub(super) fn set_consumer_activity(
         &mut self,
         user_id: &UserId,
@@ -764,6 +890,7 @@ impl RoomTopology {
     ) -> Option<ConsumerActivityCommit> {
         let key = SubscriptionKey::new(user_id, target_user_id, stream_id);
         let source_id = self.source_id_for_owner_stream(target_user_id, stream_id)?;
+        // Deafening pauses audio delivery without replacing explicit receiver intent.
         let policy_pause_reason = (receiver_deafened
             && self
                 .source_descriptor(source_id)
