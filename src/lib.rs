@@ -42,6 +42,14 @@
 //!  UDP Socket IN ----->  RTP fanout ------>  relays / sinks / UDP socket OUT
 //! ```
 //!
+//! The upper half is the control plane. [`core::server::room::Room`] and its
+//! [`o_sfu_router::Router`] commit membership plus routed-media relationships.
+//! [`core::server::transport::MediaTransport`] projects those decisions into
+//! worker-local route tables.
+//!
+//! The lower half is the packet plane. Workers apply the projected routes to
+//! incoming datagrams without reopening room policy for every packet.
+//!
 //! follow the steps through [`Runtime`],
 //! [`core::server::room::RoomManager`], [`core::prelude::MediaSession`],
 //! [`core::server::room::Room`], [`o_sfu_router::Router`]
@@ -70,10 +78,11 @@
 //! `SfuClient` exposes a small and simple API with `connect`, `publish`, `subscribe`,
 //! recording, stats and update events.
 //! signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and returns
-//! ordered [`o_sfu_protocol::host::CommandBatch`] values
-//! `BrowserRuntime` executes the
-//! [`o_sfu_protocol::host::HostCommand`] values against browser `WebSocket`,
-//! `RTCPeerConnection` and timer APIs
+//! ordered [`o_sfu_protocol::host::CommandBatch`] values. The WASM bridge
+//! projects each batch into [`o_sfu_protocol::host::HostCommand`] values.
+//! `BrowserRuntime` executes those commands against browser `WebSocket`,
+//! `RTCPeerConnection` and timer APIs then feeds browser events back into the
+//! next protocol transition.
 //!
 //! ```text
 //! SfuClient public API
@@ -84,10 +93,15 @@
 //!        |
 //!        v
 //! ProtocolCore
-//!   input envelope -> CommandBatch -> HostCommand
+//!   input envelope -> CommandBatch
 //!        |
 //!        v
-//! WebSocket, RTCPeerConnection, timers
+//! WASM projection -> HostCommand
+//!        |
+//!        v
+//! BrowserRuntime -> WebSocket, RTCPeerConnection, timers
+//!        ^                                        |
+//!        +--------------- browser events ---------+
 //! ```
 //!
 //! read `crates/client/API.md` for the public TypeScript surface and
@@ -104,8 +118,7 @@
 //! [`Runtime::serve_listener`] stops listener acceptance when its shutdown
 //! future resolves. It then closes the session tracker, sends close code 1001,
 //! drains every tracked WebSocket and stops background tasks plus RTC workers within
-//! [`config::HttpConfig::shutdown_timeout_ms`]. Dropping the server future
-//! cancels the same runtime tokens.
+//! [`config::HttpConfig::shutdown_timeout_ms`].
 //!
 //! ```text
 //! Runtime::serve_listener
@@ -129,22 +142,20 @@
 //!
 //! # HTTP and WebSocket admission
 //!
-//! applications create rooms through HTTP while clients join through
-//! the WebSocket,
-//! both paths are authenticated before they reach room state
+//! applications create rooms through HTTP while clients join through the
+//! WebSocket. Both paths authenticate before room admission or mutation.
 //!
+//! the HTTP controller parses server-to-server requests using
+//! [`http::CreateRoomQuery`]. The process `AUTH_KEY` verifies
+//! [`auth::HttpRoomClaims`] before the controller returns
+//! [`http::RoomResponse`]. The first verified request for an issuer fixes that
+//! room's signing key and configuration. Later requests reuse the current room.
 //!
-//! the HTTP controller parses server-to-server requests using [`http::CreateRoomQuery`]
-//! and validates authorization via [`auth::HttpRoomClaims`] before returning a [`http::RoomResponse`].
-//!
-//! the WebSocket client connection frame is parsed by [`websocket::decode_auth_payload_text`],
-//! enforcing bounds like [`auth::MAX_JWT_TOKEN_BYTES`] and validating user authorization
-//! via [`auth::WebSocketConnectClaims`] before establishing a session.
-//!
-//! decoded JWT claims are not trusted until the token is verified with the key
-//! selected for that room,
-//! an unsigned room hint may select verification material, but it does not
-//! become authenticated identity or room access
+//! the WebSocket client connection frame is parsed by
+//! [`websocket::decode_auth_payload_text`] under bounds such as
+//! [`auth::MAX_JWT_TOKEN_BYTES`]. An unsigned room hint selects only a candidate
+//! key. After verification with that room key, o-sfu normalizes the claims into
+//! [`auth::WebSocketConnectClaims`] and trusts them for identity and access.
 //!
 //! # room, router and transport ownership
 //!
@@ -170,6 +181,12 @@
 //! [`core::prelude::SfuCore`] owns admitted media-session construction and
 //! [`core::prelude::MediaSession`] owns the bridge from room intent to
 //! transport effects.
+//! [`core::prelude::MediaSession::establish`] lazily creates worker-local RTC
+//! state and the initial offer. Its negotiation phase plus the worker's pending
+//! offer state permit one unanswered offer. Publish intent can wait for one
+//! follow-up offer. Consumer setup can request renegotiation on the same browser
+//! peer connection.
+//!
 //! [`core::prelude::SourcePublishIntent`] starts or reactivates publication
 //! while [`core::prelude::SourceDeactivateIntent`] cancels an uncommitted
 //! publication or makes a committed source inactive without removing its
@@ -190,8 +207,9 @@
 //! `SdpPendingOffer` keep their separate failure boundaries
 //!
 //! [`core::server::transport::MediaTransport`] owns final teardown semantics
-//! missing workers or resources are successful no-ops
-//! ownership and invariant failures are terminal and trigger an awaited
+//! missing worker-local sessions or media are successful no-ops
+//! unavailable workers or mailboxes, ownership mismatches and invariant
+//! failures are terminal. Media or relay failures trigger an awaited
 //! session-close fallback
 //! no room or runtime teardown retry state exists
 //!
@@ -226,6 +244,32 @@
 //!     +-> packet sinks
 //! ```
 //!
+//! str0m handles ICE, DTLS and SRTP then emits authenticated and decrypted RTP.
+//! o-sfu resolves source facts once then plans origin packet sinks before source
+//! and destination gates. The source gate applies aggregate demand plus source
+//! policy. Receiver and relay gates narrow each destination. Same-process relay
+//! passes shared payload data and resolved source facts to another worker for
+//! local delivery.
+//!
+//! Local egress projects receiver-facing sequence, timestamp and MID. It uses
+//! the negotiated payload type when present or preserves the source value. The
+//! destination str0m stream supplies its SSRC. RID extensions are removed. VP8
+//! `PictureID` and `TL0PICIDX` may be patched to preserve continuity across
+//! source switches.
+//!
+//! ```text
+//! worker BWE and audio observations
+//!                |
+//!                v
+//!        room source policy
+//!                |
+//!                v
+//!   route gates for later packets
+//! ```
+//!
+//! RTCP remains in str0m except for selected feedback such as keyframe requests
+//! that o-sfu resolves back to the active producer route.
+//!
 //! packet loops do not own room membership,
 //! they consume stable transport keys and route controls projected from room and router state,
 //! that split keeps hot packet work close to worker-local state while keeping
@@ -244,8 +288,7 @@
 //! - structured event names in [`o_sfu_telemetry::schema`] used by tracing
 //! - current room, user, worker and media diagnostics response types
 //! - structured lifecycle events retained by the configured log sink
-//! - [`o_sfu_telemetry::graph`] payloads used by the diagnostics UI and
-//!   Grafana-style views
+//! - [`o_sfu_telemetry::graph`] payloads used by diagnostics consumers
 //!
 //! provisioned dashboards and Prometheus rules are maintained in the sibling
 //! `o-sfu-telemetry` repository
@@ -255,8 +298,9 @@
 //!
 //! rooms use one [`o_sfu_router::Router`] facade and can opt into additional
 //! same-process local routers through [`config::RoomWorkerPolicy`]. joins stay
-//! on an assigned healthy packet loop and attach an unused healthy worker only
-//! when every assigned loop exceeds the configured delay threshold
+//! on an assigned healthy packet loop and can attach a healthy worker not yet
+//! assigned to the room when no assigned worker has a known delay below the
+//! configured threshold
 //!
 //! note: it is later possible to extend the SFU for cross server scaling, but it's not a priority.
 //!
@@ -274,7 +318,7 @@
 //! - [`run`] and [`Runtime`] own boot, serving, background tasks and shutdown
 //! - [`config`] is the environment-to-runtime boundary
 //!   lower crates receive typed options, not raw environment state
-//! - [`auth`], [`http`] and [`websocket`] are the admision edge
+//! - [`auth`], [`http`] and [`websocket`] are the admission edge
 //!   they bound request shape, frame size and identity before room state is
 //!   touched
 //! - [`crate::core`] turns accepted control-plane intent into room mutations
@@ -289,7 +333,7 @@
 //! then read [`http`] for the HTTP control-plane contract and [`websocket`] for
 //! frame decoding
 //!
-//! for media behavior,read [`core::prelude::SfuCore`],
+//! for media behavior, read [`core::prelude::SfuCore`],
 //! [`core::prelude::MediaSession`], [`core::prelude::SourcePolicy`],
 //! [`core::server::room::RoomManager`] and
 //! [`core::server::transport::MediaTransport`]
@@ -358,7 +402,8 @@ pub mod http {
         /// osfu_worker_rtp_packets_total{media_worker_id="0",direction="ingress"} 1240
         /// ```
         ///
-        /// Grafana then sends `PromQL` to Prometheus, rather than to o-sfu.
+        /// Query clients send `PromQL` to the Prometheus-compatible backend
+        /// rather than to o-sfu.
         /// these examples cover a gauge, counter and histogram.
         ///
         /// ```promql
@@ -523,48 +568,6 @@ pub mod http {
         ///
         /// the response structs below list every field in each payload.
         /// wire names are `camelCase`, unless a field documents an exception.
-        ///
-        /// # Grafana Infinity (plugin)
-        ///
-        /// the Grafana Infinity data source plugin queries these HTTP JSON routes.
-        /// keep the bearer token in the datasource's secure header.
-        ///
-        /// ```yaml
-        /// jsonData:
-        ///   httpHeaderName1: Authorization
-        ///   allowedHosts:
-        ///     - http://o-sfu:8070
-        /// secureJsonData:
-        ///   httpHeaderValue1: "Bearer <diagnostics-token>"
-        /// ```
-        ///
-        /// a panel target percent-encodes both path variables.
-        ///
-        /// ```json
-        /// [
-        ///   {
-        ///     "refId": "A",
-        ///     "type": "json",
-        ///     "source": "url",
-        ///     "format": "node-graph-nodes",
-        ///     "url": "http://o-sfu:8070/internal/diagnostics/node-graph/rooms/${room_uuid:percentencode}/users/${user_key:percentencode}",
-        ///     "url_options": { "method": "GET", "data": "" },
-        ///     "root_selector": "nodes"
-        ///   },
-        ///   {
-        ///     "refId": "B",
-        ///     "type": "json",
-        ///     "source": "url",
-        ///     "format": "node-graph-edges",
-        ///     "url": "http://o-sfu:8070/internal/diagnostics/node-graph/rooms/${room_uuid:percentencode}/users/${user_key:percentencode}",
-        ///     "url_options": { "method": "GET", "data": "" },
-        ///     "root_selector": "edges"
-        ///   }
-        /// ]
-        /// ```
-        ///
-        /// populate `room_uuid` from the rooms response `uuid` field.
-        /// populate `user_key` from the room users response `userKey` field.
         ///
         /// User detail is room-scoped because the same user key can be active
         /// in several rooms.
