@@ -2,7 +2,9 @@ use str0m::media::Rid;
 
 use super::fixtures::*;
 use crate::engine::media_transport::rtc::{
-    bitrate::BitrateRegistry, bootstrap::ensure_session_rtc_state, state::PacketLoopState,
+    bitrate::{BitrateRegistry, IncomingBitrateObservation},
+    bootstrap::ensure_session_rtc_state,
+    state::PacketLoopState,
     test_support::collect_ready_session_keys,
 };
 
@@ -238,11 +240,11 @@ fn packet_loop_state_snapshots_ridless_packet_activity_from_ingress_counter() {
         .observe_producer_packet(transport_media_id, None, true, now);
     assert_eq!(
         state.record_incoming_bitrate(transport_media_id, now, 32),
-        Some(true)
+        Some(IncomingBitrateObservation::IngressStarted)
     );
     assert_eq!(
         state.record_incoming_bitrate(transport_media_id, now + Duration::from_millis(40), 32,),
-        Some(false)
+        Some(IncomingBitrateObservation::default())
     );
     let activity = state.routes.source_activity_snapshot(
         &[transport_media_id],

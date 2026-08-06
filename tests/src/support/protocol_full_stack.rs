@@ -238,9 +238,12 @@ impl ProtocolFakePeer {
         self.respond_to_server_request(request_id, request).await
     }
 
-    pub async fn close(mut self) -> Option<()> {
-        self.websocket.close(None).await.ok()?;
-        Some(())
+    pub fn close(self) -> impl Future<Output = Option<()>> {
+        let mut websocket = self.websocket;
+        async move {
+            websocket.close(None).await.ok()?;
+            Some(())
+        }
     }
 
     pub async fn wait_until_connected(&mut self, timeout_window: Duration) -> Option<()> {

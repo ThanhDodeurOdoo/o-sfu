@@ -3,8 +3,8 @@
 //! source routes bind one producer media id to local consumer destinations
 //! plus the remote-source and decoder-refresh facts attached to that source
 
-use o_sfu_rfc::rtp;
-use o_sfu_router::rtp::{CodecSetting, MediaFormat, MediaStream};
+use o_sfu_rfc::rtp::CodecName;
+use o_sfu_router::rtp::MediaStream;
 use str0m::media::{Mid, Pt, Rid};
 
 use super::{
@@ -37,15 +37,12 @@ pub(super) struct MediaRouteDestination {
     /// source payload types can differ from consumer payload types after router
     /// negotiation, so forwarding must not reuse the publisher value blindly
     pub(super) dest_payload_type: Option<Pt>,
-    /// stable retransmission policy for this consumer media line
-    ///
-    /// this is captured when the route is registered because the consumer
-    /// media kind is already known there
-    /// the packet loop can then write local RTP without asking `str0m` to
-    /// rediscover the media kind for every destination packet
-    pub(super) nackable: bool,
     /// destination-level activity gate controlled by consumer state
     pub(super) active: bool,
+    /// video routes resume only from a decoder refresh packet
+    pub(super) requires_decoder_refresh: bool,
+    /// increments when intentional filtering requires receiver RTP reanchoring
+    pub(super) delivery_generation: u64,
     /// effective transport gate used by the packet loop right now
     pub(super) packet_gate: PacketLayerGate,
     /// selected strict gate that is waiting for a decodable live RID
@@ -107,6 +104,18 @@ impl MediaRouteEntry {
         destination
     }
 
+    pub(super) fn advance_delivery(&mut self) {
+        for destination in &mut self.destinations {
+            destination.advance_delivery();
+        }
+    }
+
+    pub(super) fn pause_delivery(&mut self) {
+        for destination in &mut self.destinations {
+            destination.pause_delivery();
+        }
+    }
+
     /// updates destination activity and reports whether the route changed
     ///
     /// a missing index is treated as unchanged because stale worker commands
@@ -124,6 +133,7 @@ impl MediaRouteEntry {
         } else {
             self.active_destination_count -= 1;
         }
+        destination.pause_delivery();
         destination.active = active;
         true
     }
@@ -135,19 +145,48 @@ pub(super) enum DestinationKeyframeTarget {
 }
 
 impl MediaRouteDestination {
+    pub(super) fn advance_delivery(&mut self) {
+        self.delivery_generation = self.delivery_generation.wrapping_add(1);
+    }
+
+    /// Starts a new delivery generation and blocks routes that require refresh.
+    ///
+    /// The effective gate moves to `pending_gate` so a matching decoder refresh
+    /// can restore the requested selection.
+    pub(super) fn pause_delivery(&mut self) {
+        self.advance_delivery();
+        if !self.requires_decoder_refresh {
+            return;
+        }
+        if self.pending_gate.is_none() {
+            self.pending_gate = Some(self.packet_gate);
+        }
+        self.packet_gate = PacketLayerGate::Block;
+    }
+
+    /// Activates the requested gate and consumes the pending decoder wait.
+    pub(super) fn activate_refresh(&mut self, packet_gate: PacketLayerGate) {
+        self.packet_gate = packet_gate;
+        self.pending_gate = None;
+        self.advance_delivery();
+    }
+
+    /// Admits a decodable fallback without consuming the pending selected gate.
+    ///
+    /// The fallback can render while keyframe retries continue for the selected
+    /// RID.
+    pub(super) fn activate_bootstrap_refresh(&mut self, packet_gate: PacketLayerGate) {
+        self.packet_gate = packet_gate;
+        self.advance_delivery();
+    }
+
     pub(super) fn keyframe_target_rid(&self, open_rid: Option<Rid>) -> DestinationKeyframeTarget {
+        if let Some(pending_gate) = self.pending_gate {
+            return DestinationKeyframeTarget::Current(pending_gate.selected_rid());
+        }
         let target_rid = match self.packet_gate {
             PacketLayerGate::Rid(rid) => Some(rid),
-            PacketLayerGate::Block => {
-                let Some(rid) = self
-                    .pending_gate
-                    .as_ref()
-                    .and_then(PacketLayerGate::selected_rid)
-                else {
-                    return DestinationKeyframeTarget::Stale;
-                };
-                Some(rid)
-            }
+            PacketLayerGate::Block => return DestinationKeyframeTarget::Stale,
             PacketLayerGate::Open => open_rid,
         };
         DestinationKeyframeTarget::Current(target_rid)
@@ -166,43 +205,11 @@ pub(super) struct RemoteSourceRegistration {
     pending_gate: Option<PacketLayerGate>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PacketCodec {
-    H264(rtp::h264::PacketizationMode),
-    Vp8,
-}
-
-pub(super) type PacketCodecs = Vec<(Pt, PacketCodec)>;
-
-impl PacketCodec {
-    pub(super) fn from_parameters(parameters: &MediaStream) -> PacketCodecs {
-        parameters
-            .formats()
-            .filter_map(|format| {
-                let codec = match *format.codec() {
-                    rtp::CodecName::H264 => Self::from_h264_format(format)?,
-                    rtp::CodecName::Vp8 => Self::Vp8,
-                    _ => return None,
-                };
-                Some((Pt::from(format.payload_type()), codec))
-            })
-            .collect()
-    }
-
-    fn from_h264_format(format: &MediaFormat) -> Option<Self> {
-        let mode = format
-            .settings()
-            .find_map(|setting| match setting {
-                CodecSetting::H264PacketizationMode(mode) => Some(*mode),
-                _ => None,
-            })
-            .unwrap_or(rtp::h264::PacketizationMode::SingleNalUnit);
-        match mode {
-            rtp::h264::PacketizationMode::SingleNalUnit
-            | rtp::h264::PacketizationMode::NonInterleaved => Some(Self::H264(mode)),
-            rtp::h264::PacketizationMode::Interleaved => None,
-        }
-    }
+pub(super) fn vp8_payload_types(parameters: &MediaStream) -> impl Iterator<Item = Pt> + '_ {
+    parameters
+        .formats()
+        .filter(|format| *format.codec() == CodecName::Vp8)
+        .map(|format| Pt::from(format.payload_type()))
 }
 
 impl RemoteSourceRegistration {

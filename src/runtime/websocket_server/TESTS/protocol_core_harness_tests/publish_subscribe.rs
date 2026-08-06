@@ -132,7 +132,7 @@ async fn protocol_handshake_uses_answer_derived_client_capabilities_for_user_sta
     assert_eq!(codec_names, vec![String::from("opus"), String::from("VP8")]);
     assert!(
         codec_names.iter().all(|codec| codec != "rtx"),
-        "the production VP8 receive surface should not preserve RTX while RID repair demux is disabled"
+        "the production RTP surface should exclude retransmission codecs"
     );
     assert!(
         codec_names.iter().all(|codec| codec != "H264"),

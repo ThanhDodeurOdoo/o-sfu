@@ -161,6 +161,7 @@ fn sample_forwarded_packet_with_source(
         received_at,
         payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+            sequence_number: 1_u64.into(),
             header: RtpHeader {
                 version: 2,
                 has_padding: false,
@@ -200,6 +201,7 @@ pub fn sample_forwarded_packet_without_mid(
         received_at,
         payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+            sequence_number: 1_u64.into(),
             header: RtpHeader {
                 version: 2,
                 has_padding: false,

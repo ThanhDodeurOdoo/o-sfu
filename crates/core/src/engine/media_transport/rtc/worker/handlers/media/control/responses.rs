@@ -101,7 +101,7 @@ pub fn apply_media_control_batch(
             Ok(())
         })),
         ConsumerGates { source, updates } => Applied(routes::worker_set_consumer_pkt_gates(
-            state, &source, updates, now,
+            state, &source, updates,
         )),
         ConsumerFollowUp(updates) => Consumers(map_updates(updates, |control| {
             if let Some(activity) = control.activity

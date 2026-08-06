@@ -89,10 +89,10 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
             (Codec::H264, 123, None),
             (Codec::H264, 35, None),
             (Codec::H264, 114, None),
-            (Codec::H265, 102, Some(103)),
-            (Codec::Vp9, 98, Some(99)),
-            (Codec::Vp9, 100, Some(101)),
-            (Codec::Av1, 45, Some(46)),
+            (Codec::H265, 102, None),
+            (Codec::Vp9, 98, None),
+            (Codec::Vp9, 100, None),
+            (Codec::Av1, 45, None),
         ]
     );
     let fmtp = payloads
@@ -122,7 +122,7 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
     assert!(payloads.iter().all(|payload| {
         let video = payload.spec().codec.is_video();
         payload.fb_transport_cc()
-            && payload.fb_nack() == video
+            && !payload.fb_nack()
             && payload.fb_pli() == video
             && payload.fb_fir() == video
             && payload.fb_remb() == video
@@ -152,7 +152,6 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
                 .map(|feedback| feedback.kind().clone())
                 .eq([
                     Some(RtcpFeedbackKind::TransportCc),
-                    video.then_some(RtcpFeedbackKind::Nack),
                     video.then_some(RtcpFeedbackKind::NackPli),
                     video.then_some(RtcpFeedbackKind::CcmFir),
                     video.then_some(RtcpFeedbackKind::GoogRemb),
@@ -160,12 +159,6 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
                 .into_iter()
                 .flatten())
         );
-        if let Some(rtx_pt) = payload.resend() {
-            let rtx = codecs.next().expect("RTX router codec should project");
-            assert_eq!(rtx.codec_name(), "rtx");
-            assert_eq!(rtx.payload_type(), Some(*rtx_pt));
-            assert_eq!(rtx.rtx_associated_payload_type(), Some(*payload.pt()));
-        }
     }
     assert!(codecs.next().is_none());
     assert_eq!(
@@ -180,7 +173,6 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
             (3, rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01),
             (4, rtp_header_extension_uri::MID),
             (10, rtp_header_extension_uri::RTP_STREAM_ID),
-            (11, rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID),
             (13, "urn:3gpp:video-orientation"),
         ]
     );
@@ -192,4 +184,17 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
         .iter()
         .map(|(id, extension)| (id, extension.as_uri()));
     assert!(router_exts.eq(rtc_exts));
+}
+
+#[test]
+fn answer_validation_rejects_retransmission_attributes() {
+    for attribute in [
+        "a=rtpmap:97 RTX/90000",
+        "a=fmtp:97 apt=96",
+        "a=extmap:5 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id",
+        "a=ssrc-group:FID 1234 5678",
+    ] {
+        assert!(RtpProfile::validate_answer_sdp(attribute).is_err());
+    }
+    assert!(RtpProfile::validate_answer_sdp("a=rtcp-fb:96 nack").is_ok());
 }

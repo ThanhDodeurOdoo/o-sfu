@@ -40,11 +40,13 @@ use super::{
         forwarding_planner::plan_forwards,
         routing_miss::DemuxRecoveryState,
         state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
-        worker::{WorkerCommandContext, drain_due_rid_kf_refreshes},
+        worker::WorkerCommandContext,
     },
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
     delay::{PacketLoopDelayPublisher, PacketLoopDelaySnapshot},
-    forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
+    forward_flush::{
+        drain_relay_packets, finish_incoming_stats, flush_packet_forwards, record_incoming_packet,
+    },
     ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at},
     input::{PacketLoopControlInput, PacketLoopInputReceivers, PacketLoopMailboxInput},
     keyframe_requests::{drain_due_kf_retries, flush_pending_kf_reqs},
@@ -166,44 +168,51 @@ impl PacketLoopTurn {
             &config.rtc_metrics,
         );
         state.routes.flush_remote_pkt_gates();
-        drain_due_rid_kf_refreshes(state, &config.rtc_metrics, now);
         flush_pending_kf_reqs(state, &config.rtc_metrics, &mut self.buffers);
-        // packet observations must run before fanout planning because layer gates
-        // and first-ingress keyframes depend on facts learned from this batch
-        record_incoming_stats(
+        // sink routes are refreshed once per turn so recording lookups do not take
+        // the shared registry lock per packet
+        self.packet_sink_cache
+            .refresh_from(&config.packet_sink_registry);
+        // `record_incoming_packet` must precede `plan_forwards` for each packet.
+        // Otherwise a later keyframe could admit earlier delta packets in the
+        // same batch.
+        let mut pending_packets = take(&mut self.buffers.pending_packets);
+        for pkt in &mut pending_packets {
+            record_incoming_packet(
+                state,
+                &config.rtc_metrics,
+                &config.rtp_metrics,
+                &mut self.buffers,
+                pkt,
+            );
+            plan_forwards(
+                state,
+                &self.packet_sink_cache,
+                &config.rtc_metrics,
+                pkt,
+                &mut self.buffers.forwards,
+            );
+            flush_packet_forwards(
+                state,
+                &config.metrics,
+                &config.rtp_metrics,
+                &config.rtc_metrics,
+                pkt,
+                &self.buffers.forwards,
+            );
+            self.buffers.forwards.clear();
+        }
+        self.buffers.pending_packets = pending_packets;
+        finish_incoming_stats(
             state,
             &config.source_policy_signal,
             &config.rtc_metrics,
-            &config.rtp_metrics,
             &mut self.buffers,
         );
         config
             .source_policy_signal
             .mark_dirty_rooms(state.take_expired_speaker_rooms(now));
         drain_due_kf_retries(state, &config.rtc_metrics, &mut self.buffers, now);
-        // sink routes are refreshed once per turn so recording lookups do not take
-        // the shared registry lock per packet
-        self.packet_sink_cache
-            .refresh_from(&config.packet_sink_registry);
-        // planning is separated from flushing so all destinations for the batch are
-        // known before any send mutates local session state
-        for (pkt_idx, pkt) in self.buffers.pending_packets.iter_mut().enumerate() {
-            plan_forwards(
-                state,
-                &self.packet_sink_cache,
-                &config.rtc_metrics,
-                pkt_idx,
-                pkt,
-                &mut self.buffers.forwards,
-            );
-        }
-        flush_forward_routes(
-            state,
-            &config.metrics,
-            &config.rtp_metrics,
-            &config.rtc_metrics,
-            &self.buffers,
-        );
         WaitPhaseSnapshot {
             next_timeout: next_timeout_deadline_at(state, now),
         }
@@ -520,8 +529,8 @@ pub fn route_queued_ingress_datagrams_for_benchmark(
 ///
 /// dirty sessions are always due immediately because a previous input or local
 /// send has queued more `str0m` output
-/// otherwise returns the earliest `str0m`, selected-RID refresh, keyframe retry
-/// or active-speaker expiry deadline
+/// otherwise returns the earliest `str0m`, keyframe retry or active-speaker
+/// expiry deadline
 #[cfg(test)]
 pub(super) fn next_timeout_deadline(state: &mut PacketLoopState) -> Option<Instant> {
     next_timeout_deadline_at(state, Instant::now())
@@ -533,7 +542,6 @@ fn next_timeout_deadline_at(state: &mut PacketLoopState, now: Instant) -> Option
     }
     [
         state.next_timeout_deadline(),
-        state.routes.next_rid_refresh_deadline(),
         state.routes.next_kf_deadline(),
         state.routes.next_active_speaker_deadline(now),
     ]

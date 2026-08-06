@@ -149,6 +149,7 @@ pub(super) fn worker_apply_session_answer(
     session_key: &TransportSessionKey,
     answer_sdp: &str,
 ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
+    RtpProfile::validate_answer_sdp(answer_sdp)?;
     let producer_media_snapshot = state.producer_media_snapshot(session_key);
     let producer_mids = producer_media_snapshot
         .iter()

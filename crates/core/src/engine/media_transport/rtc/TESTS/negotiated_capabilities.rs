@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use o_sfu_rfc::rtp as rfc_rtp;
-use o_sfu_router::rtp::{CodecSetting, MediaCodecCapability};
+use o_sfu_router::rtp::CodecSetting;
 
 use super::client_rtp_capabilities_from_answer;
 
@@ -9,7 +9,7 @@ const CHROMIUM_OPTIONAL_CODECS_ANSWER: &str =
     include_str!("testdata/chromium_optional_codecs_answer.sdp");
 
 #[test]
-fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
+fn chromium_answer_projection_keeps_optional_video_profiles_without_rtx() {
     let projected = client_rtp_capabilities_from_answer(CHROMIUM_OPTIONAL_CODECS_ANSWER);
     assert!(
         projected.is_some(),
@@ -68,24 +68,7 @@ fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
         BTreeSet::from([Some(String::from("0")), Some(String::from("2"))])
     );
 
-    let optional_payload_types = projected
-        .codecs()
-        .filter(|codec| matches!(codec.codec_name(), "H264" | "VP9"))
-        .filter_map(MediaCodecCapability::payload_type)
-        .collect::<BTreeSet<_>>();
-    let rtx_associations = projected
-        .codecs()
-        .filter(|codec| codec.codec_name() == "rtx")
-        .filter_map(|codec| {
-            codec.parameters().find_map(|(key, value)| {
-                if key != rfc_rtp::fmtp::RTX_ASSOCIATION {
-                    return None;
-                }
-                value.parse::<u8>().ok()
-            })
-        })
-        .collect::<BTreeSet<_>>();
-    assert!(optional_payload_types.is_subset(&rtx_associations));
+    assert!(projected.codecs().all(|codec| codec.codec_name() != "rtx"));
 }
 
 #[test]

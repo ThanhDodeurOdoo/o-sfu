@@ -4,8 +4,8 @@
 //! publisher identity can change when source selection or simulcast switches
 //!
 //! ```text
-//! publisher SSRC/timestamp/VP8 -> [`ConsumerStreamStore::project_identity`]
-//!                              -> receiver seq/timestamp/VP8
+//! publisher SSRC/seq/timestamp/VP8 -> [`ConsumerStreamStore::project_identity`]
+//!                                  -> receiver seq/timestamp/VP8
 //! ```
 //!
 //! state is scoped to the destination session so every consumer can rewrite the
@@ -22,8 +22,8 @@ use super::slots::{ConsumerStreamHandle, ConsumerStreamSlot, SlotStore};
 /// sequence, timestamp and VP8 counter space
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ConsumerStream {
-    next_seq_no: SeqNo,
-    rtp: RtpTimeline,
+    delivery_generation: u64,
+    rtp: RtpProjection,
     vp8: Vp8Projection,
 }
 
@@ -48,21 +48,32 @@ impl ConsumerStreamStore {
         let _ = self.streams.remove(handle);
     }
 
-    /// rewrites one source packet through `stream_handle`
+    /// Projects one source packet into receiver RTP and VP8 identity.
     ///
-    /// returns `None` when the handle is stale or released
-    /// same-source packets preserve RTP and VP8 deltas
-    /// source switches continue from the last projected receiver identity
+    /// ```text
+    /// source loss or reordering -> preserve the source delta
+    /// new delivery generation   -> compact the SFU-filtered gap
+    /// source SSRC switch        -> continue receiver identity
+    /// ```
+    ///
+    /// Returns `None` for a stale handle, an older delivery generation or a
+    /// source sequence outside the representable projection range.
     pub(super) fn project_identity(
         &mut self,
         stream_handle: ConsumerStreamHandle,
+        delivery_generation: u64,
         source_ssrc: Ssrc,
+        source_seq_no: SeqNo,
         source_timestamp: u32,
         vp8_payload: Vp8PayloadIdentity,
     ) -> Option<ProjectedIdentity> {
-        self.streams
-            .get_mut(stream_handle)
-            .map(|stream| stream.project(source_ssrc, source_timestamp, vp8_payload))
+        self.streams.get_mut(stream_handle)?.project(
+            delivery_generation,
+            source_ssrc,
+            source_seq_no,
+            source_timestamp,
+            vp8_payload,
+        )
     }
 }
 
@@ -74,82 +85,245 @@ impl ConsumerStream {
     /// changes
     fn project(
         &mut self,
+        delivery_generation: u64,
         source_ssrc: Ssrc,
+        source_seq_no: SeqNo,
         source_timestamp: u32,
         vp8_payload: Vp8PayloadIdentity,
-    ) -> ProjectedIdentity {
-        let seq_no = self.next_seq_no.inc();
-        let (rtp_timestamp, vp8_payload, transition) = match &mut self.rtp {
+    ) -> Option<ProjectedIdentity> {
+        if delivery_generation == self.delivery_generation {
+            let RtpProjection {
+                next_seq_no,
+                timeline,
+            } = &mut self.rtp;
+            if let RtpTimeline::Active {
+                ssrc,
+                highest_src_seq,
+                src_timestamp_anchor,
+                dst_timestamp_anchor,
+                highest_timestamp,
+                ..
+            } = timeline
+            {
+                if *ssrc == source_ssrc {
+                    if highest_src_seq.is_next(source_seq_no) {
+                        let seq_no = next_seq_no.inc();
+                        *highest_src_seq = source_seq_no;
+                        let rtp_timestamp = dst_timestamp_anchor
+                            .wrapping_add(source_timestamp.wrapping_sub(*src_timestamp_anchor));
+                        *highest_timestamp = rtp_timestamp;
+                        return Some(ProjectedIdentity {
+                            seq_no,
+                            rtp_timestamp,
+                            vp8_payload: self.vp8.project::<NORMAL_VP8_PROJECTION>(vp8_payload),
+                            transition: SourceTransition::Unchanged,
+                        });
+                    }
+                } else {
+                    let previous_ssrc = *ssrc;
+                    let seq_no = next_seq_no.inc();
+                    let rtp_timestamp = highest_timestamp.wrapping_add(1);
+                    *timeline = RtpTimeline::Active {
+                        ssrc: source_ssrc,
+                        src_seq_anchor: source_seq_no,
+                        dst_seq_anchor: seq_no,
+                        highest_src_seq: source_seq_no,
+                        src_timestamp_anchor: source_timestamp,
+                        dst_timestamp_anchor: rtp_timestamp,
+                        highest_timestamp: rtp_timestamp,
+                    };
+                    return Some(ProjectedIdentity {
+                        seq_no,
+                        rtp_timestamp,
+                        vp8_payload: self.vp8.project::<REANCHOR_VP8_PROJECTION>(vp8_payload),
+                        transition: SourceTransition::Switched { previous_ssrc },
+                    });
+                }
+            }
+        }
+        self.project_discontinuity(
+            delivery_generation,
+            source_ssrc,
+            source_seq_no,
+            source_timestamp,
+            vp8_payload,
+        )
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn project_discontinuity(
+        &mut self,
+        delivery_generation: u64,
+        source_ssrc: Ssrc,
+        source_seq_no: SeqNo,
+        source_timestamp: u32,
+        vp8_payload: Vp8PayloadIdentity,
+    ) -> Option<ProjectedIdentity> {
+        let generation_delta = delivery_generation.wrapping_sub(self.delivery_generation);
+        if generation_delta > u64::MAX / 2 {
+            return None;
+        }
+        let reanchor = generation_delta != 0;
+        let mut rtp = self.rtp;
+        let projected = rtp.project(source_ssrc, source_seq_no, source_timestamp, reanchor)?;
+        let reanchor_vp8 =
+            reanchor || matches!(projected.transition, SourceTransition::Switched { .. });
+        let vp8_payload = if projected.advances_high_water {
+            self.vp8.project_with_reanchor(vp8_payload, reanchor_vp8)
+        } else {
+            let mut projection = self.vp8;
+            projection.project_with_reanchor(vp8_payload, reanchor_vp8)
+        };
+        self.delivery_generation = delivery_generation;
+        self.rtp = rtp;
+        Some(ProjectedIdentity {
+            seq_no: projected.seq_no,
+            rtp_timestamp: projected.rtp_timestamp,
+            vp8_payload,
+            transition: projected.transition,
+        })
+    }
+}
+
+/// receiver RTP mapping for the active publisher source
+///
+/// source gaps remain gaps so receiver loss reflects ingress loss
+/// resetting the source anchor compacts packets deliberately filtered by the SFU
+#[derive(Debug, Clone, Copy, Default)]
+struct RtpProjection {
+    next_seq_no: SeqNo,
+    timeline: RtpTimeline,
+}
+
+impl RtpProjection {
+    #[cfg(test)]
+    const fn new(next_seq_no: SeqNo) -> Self {
+        Self {
+            next_seq_no,
+            timeline: RtpTimeline::Empty,
+        }
+    }
+
+    #[cfg(test)]
+    fn next_source_seq(&self, source_ssrc: Ssrc) -> Option<SeqNo> {
+        match self.timeline {
             RtpTimeline::Active {
                 ssrc,
-                src_anchor,
-                dst_anchor,
-                last,
-            } if *ssrc == source_ssrc => {
-                let rtp_timestamp =
-                    dst_anchor.wrapping_add(source_timestamp.wrapping_sub(*src_anchor));
-                *last = rtp_timestamp;
-                (
+                highest_src_seq,
+                ..
+            } if ssrc == source_ssrc => Some((*highest_src_seq + 1).into()),
+            RtpTimeline::Active { .. } => Some(SeqNo::default()),
+            RtpTimeline::Empty => None,
+        }
+    }
+
+    fn project(
+        &mut self,
+        source_ssrc: Ssrc,
+        source_seq_no: SeqNo,
+        source_timestamp: u32,
+        reanchor: bool,
+    ) -> Option<ProjectedRtp> {
+        match &mut self.timeline {
+            RtpTimeline::Active {
+                ssrc,
+                src_seq_anchor,
+                dst_seq_anchor,
+                highest_src_seq,
+                src_timestamp_anchor,
+                dst_timestamp_anchor,
+                highest_timestamp,
+            } if *ssrc == source_ssrc && !reanchor => {
+                let source_delta = source_seq_no.checked_sub(**src_seq_anchor)?;
+                let seq_no: SeqNo = (**dst_seq_anchor).checked_add(source_delta)?.into();
+                let rtp_timestamp = dst_timestamp_anchor
+                    .wrapping_add(source_timestamp.wrapping_sub(*src_timestamp_anchor));
+                let advances_high_water = source_seq_no > *highest_src_seq;
+                if advances_high_water {
+                    *highest_src_seq = source_seq_no;
+                    *highest_timestamp = rtp_timestamp;
+                    self.next_seq_no = (*seq_no).checked_add(1)?.into();
+                }
+                Some(ProjectedRtp {
+                    seq_no,
                     rtp_timestamp,
-                    self.vp8.project::<NORMAL_VP8_PROJECTION>(vp8_payload),
-                    SourceTransition::Unchanged,
-                )
+                    advances_high_water,
+                    transition: SourceTransition::Unchanged,
+                })
             }
             RtpTimeline::Active {
                 ssrc: previous_ssrc,
-                last,
+                highest_timestamp,
                 ..
             } => {
                 let previous_ssrc = *previous_ssrc;
-                let rtp_timestamp = last.wrapping_add(1);
-                self.rtp = RtpTimeline::Active {
+                let seq_no = self.next_seq_no.inc();
+                let rtp_timestamp = highest_timestamp.wrapping_add(1);
+                self.timeline = RtpTimeline::Active {
                     ssrc: source_ssrc,
-                    src_anchor: source_timestamp,
-                    dst_anchor: rtp_timestamp,
-                    last: rtp_timestamp,
+                    src_seq_anchor: source_seq_no,
+                    dst_seq_anchor: seq_no,
+                    highest_src_seq: source_seq_no,
+                    src_timestamp_anchor: source_timestamp,
+                    dst_timestamp_anchor: rtp_timestamp,
+                    highest_timestamp: rtp_timestamp,
                 };
-                (
+                let transition = if previous_ssrc == source_ssrc {
+                    SourceTransition::Unchanged
+                } else {
+                    SourceTransition::Switched { previous_ssrc }
+                };
+                Some(ProjectedRtp {
+                    seq_no,
                     rtp_timestamp,
-                    self.vp8.project::<REANCHOR_VP8_PROJECTION>(vp8_payload),
-                    SourceTransition::Switched { previous_ssrc },
-                )
+                    advances_high_water: true,
+                    transition,
+                })
             }
             RtpTimeline::Empty => {
-                self.rtp = RtpTimeline::Active {
+                let seq_no = self.next_seq_no.inc();
+                self.timeline = RtpTimeline::Active {
                     ssrc: source_ssrc,
-                    src_anchor: source_timestamp,
-                    dst_anchor: source_timestamp,
-                    last: source_timestamp,
+                    src_seq_anchor: source_seq_no,
+                    dst_seq_anchor: seq_no,
+                    highest_src_seq: source_seq_no,
+                    src_timestamp_anchor: source_timestamp,
+                    dst_timestamp_anchor: source_timestamp,
+                    highest_timestamp: source_timestamp,
                 };
-                (
-                    source_timestamp,
-                    self.vp8.project::<NORMAL_VP8_PROJECTION>(vp8_payload),
-                    SourceTransition::Unchanged,
-                )
+                Some(ProjectedRtp {
+                    seq_no,
+                    rtp_timestamp: source_timestamp,
+                    advances_high_water: true,
+                    transition: SourceTransition::Unchanged,
+                })
             }
-        };
-        ProjectedIdentity {
-            seq_no,
-            rtp_timestamp,
-            vp8_payload,
-            transition,
         }
     }
 }
 
-/// rtp timestamp mapping for the active publisher source
-///
-/// same-source packets use source deltas
-/// source switches start at `last + 1`
+#[derive(Debug, Clone, Copy)]
+struct ProjectedRtp {
+    seq_no: SeqNo,
+    rtp_timestamp: u32,
+    advances_high_water: bool,
+    transition: SourceTransition,
+}
+
+/// source and receiver anchors for one projected RTP line
 #[derive(Debug, Clone, Copy, Default)]
 enum RtpTimeline {
     #[default]
     Empty,
     Active {
         ssrc: Ssrc,
-        src_anchor: u32,
-        dst_anchor: u32,
-        last: u32,
+        src_seq_anchor: SeqNo,
+        dst_seq_anchor: SeqNo,
+        highest_src_seq: SeqNo,
+        src_timestamp_anchor: u32,
+        dst_timestamp_anchor: u32,
+        highest_timestamp: u32,
     },
 }
 
@@ -167,6 +341,18 @@ const NORMAL_VP8_PROJECTION: bool = false;
 const REANCHOR_VP8_PROJECTION: bool = true;
 
 impl Vp8Projection {
+    fn project_with_reanchor(
+        &mut self,
+        vp8_payload: Vp8PayloadIdentity,
+        reanchor: bool,
+    ) -> Vp8PayloadIdentity {
+        if reanchor {
+            self.project::<REANCHOR_VP8_PROJECTION>(vp8_payload)
+        } else {
+            self.project::<NORMAL_VP8_PROJECTION>(vp8_payload)
+        }
+    }
+
     fn project<const REANCHOR: bool>(
         &mut self,
         vp8_payload: Vp8PayloadIdentity,

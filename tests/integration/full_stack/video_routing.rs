@@ -19,7 +19,7 @@ async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() -> s::T
 #[tokio::test]
 async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
-    Box::pin(assert_selected_rid_requires_refresh(
+    Box::pin(assert_selected_rid_delivery(
         None,
         "issuer-vp8-selected-rid-keyframe",
         s::UserId::Integer(82),
@@ -95,9 +95,9 @@ async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() -> s::TestR
 }
 
 #[tokio::test]
-async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() -> s::TestResult {
+async fn fake_rtc_h264_selected_rid_forwards_opaque_payload() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
-    Box::pin(assert_selected_rid_requires_refresh(
+    Box::pin(assert_selected_rid_delivery(
         Some(h264_config()),
         "issuer-h264-selected-rid-idr",
         s::UserId::Integer(78),
@@ -186,7 +186,7 @@ async fn assert_video_source_forwarded(
     Ok(())
 }
 
-async fn assert_selected_rid_requires_refresh(
+async fn assert_selected_rid_delivery(
     config: Option<s::Config>,
     issuer: &str,
     publisher_user_id: s::UserId,
@@ -224,7 +224,9 @@ async fn assert_selected_rid_requires_refresh(
     .await;
 
     let mut clock = s::FakeClock::default();
-    m::assert_packet_dropped(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
+    if source.codec() == s::CodecName::Vp8 {
+        m::assert_packet_dropped(&mut publisher, &mut subscriber, &mut source, &mut clock).await;
+    }
     m::assert_synthetic_video_packet_forwarded(
         &mut publisher,
         &mut subscriber,

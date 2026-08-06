@@ -244,7 +244,6 @@ pub enum BudgetSolverOutcome {
     Degraded,
     Paused,
     Resumed,
-    ProtectedOverBudget,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,7 +527,6 @@ impl_exported_metric_label!(BudgetSolverOutcome {
     Degraded => (0, "degraded"),
     Paused => (1, "paused"),
     Resumed => (2, "resumed"),
-    ProtectedOverBudget => (3, "protected_over_budget"),
 });
 
 impl_exported_metric_label!(TransportIceState {

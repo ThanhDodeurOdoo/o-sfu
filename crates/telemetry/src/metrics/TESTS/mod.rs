@@ -141,7 +141,7 @@ fn assert_source_selection_metrics(snapshot: &RuntimeMetricsSnapshot) {
             expected
         );
     }
-    for outcome in ["degraded", "paused", "resumed", "protected_over_budget"] {
+    for outcome in ["degraded", "paused", "resumed"] {
         assert_eq!(
             snapshot.counter_value(
                 MetricName::BudgetSolverOutcomesTotal,
@@ -347,7 +347,6 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
-    metrics.record_budget_solver_outcome(BudgetSolverOutcome::ProtectedOverBudget);
 
     let snapshot = metrics.snapshot();
 

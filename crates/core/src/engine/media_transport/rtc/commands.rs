@@ -44,6 +44,13 @@ pub struct RemoteSourceControl {
     rtc_metrics: Arc<RtcMetricsRecorder>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RemoteControlSendOutcome {
+    Forwarded,
+    Full,
+    Closed,
+}
+
 impl RemoteSourceControl {
     /// creates a source-control handle for one relay target on a worker mailbox
     pub(super) fn new(
@@ -61,14 +68,13 @@ impl RemoteSourceControl {
     /// asks the source worker to request a keyframe for a remote consumer
     ///
     /// this never waits for the source worker
-    /// if the command cannot be queued, the caller has no stronger recovery
-    /// action than later media or control traffic triggering another request
+    /// `Full` retains caller-side retry authority while `Closed` ends it
     pub(super) fn request_kf(
         &self,
         source: &TransportSourceKey,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
-    ) -> bool {
+    ) -> RemoteControlSendOutcome {
         self.send_command(
             RouteControlRequest::RequestRemoteKeyframe {
                 source: source.clone(),
@@ -93,7 +99,7 @@ impl RemoteSourceControl {
                 packet_gate,
             },
             RtcRemoteControlDropKind::PacketGate,
-        )
+        ) == RemoteControlSendOutcome::Forwarded
     }
 
     pub(super) fn record_pkt_gate_retry(&self) {
@@ -106,19 +112,24 @@ impl RemoteSourceControl {
             .record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Flushed);
     }
 
+    #[inline]
     fn send_command(
         &self,
         request: RouteControlRequest,
         drop_kind: RtcRemoteControlDropKind,
-    ) -> bool {
+    ) -> RemoteControlSendOutcome {
         match self.tx.try_send(RtcWorkerCommand::RouteControl {
             request,
             response: None,
         }) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_) | mpsc::error::TrySendError::Closed(_)) => {
+            Ok(()) => RemoteControlSendOutcome::Forwarded,
+            Err(mpsc::error::TrySendError::Full(_)) => {
                 self.rtc_metrics.record_rtc_remote_control_drop(drop_kind);
-                false
+                RemoteControlSendOutcome::Full
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.rtc_metrics.record_rtc_remote_control_drop(drop_kind);
+                RemoteControlSendOutcome::Closed
             }
         }
     }

@@ -803,9 +803,6 @@ pub mod h264 {
     /// H264 IDR slice NAL unit type.
     pub const NAL_UNIT_TYPE_IDR: u8 = 5;
 
-    /// H264 sequence parameter set NAL unit type.
-    pub const NAL_UNIT_TYPE_SPS: u8 = 7;
-
     /// H264 STAP-A aggregation packet type.
     pub const NAL_UNIT_TYPE_STAP_A: u8 = 24;
 
@@ -962,39 +959,39 @@ pub mod h264 {
         Level5_2,
     }
 
-    /// Detects an H264 RTP packet that starts a decoder-refresh sequence.
+    /// Detects an H264 RTP packet that starts an IDR access unit.
     ///
-    /// RFC 6184 carries sequence parameter sets and IDR slices as single NAL
-    /// units, inside STAP-A packets or as the first fragment of FU-A packets.
+    /// RFC 6184 carries IDR frames either as a single NAL unit, inside a STAP-A
+    /// aggregation packet or as the first fragment of a FU-A packet.
     ///
     /// The input must be the RTP codec payload, not a complete RTP packet.
     /// Truncated aggregation packets and incomplete FU-A packets return
     /// `false`. The helper does not parse a full access unit. It only answers
     /// whether this packet can refresh a decoder if forwarded.
     #[must_use]
-    pub fn payload_starts_keyframe(payload: &[u8], packetization_mode: PacketizationMode) -> bool {
+    pub fn payload_starts_idr(payload: &[u8], packetization_mode: PacketizationMode) -> bool {
         let Some((&nal_header, rest)) = payload.split_first() else {
             return false;
         };
         match nal_header & NAL_UNIT_TYPE_MASK {
-            NAL_UNIT_TYPE_IDR | NAL_UNIT_TYPE_SPS => true,
+            NAL_UNIT_TYPE_IDR => true,
             NAL_UNIT_TYPE_STAP_A if packetization_mode.allows_aggregation_and_fragmentation() => {
-                stap_a_contains_keyframe_nal(rest)
+                stap_a_contains_idr(rest)
             }
             NAL_UNIT_TYPE_FU_A if packetization_mode.allows_aggregation_and_fragmentation() => {
-                fu_a_starts_keyframe(rest)
+                fu_a_starts_idr(rest)
             }
             _ => false,
         }
     }
 
-    /// Scans a STAP-A payload for a sequence parameter set or IDR slice.
+    /// Scans a STAP-A payload for any contained IDR NAL unit.
     ///
     /// each aggregate entry is length-prefixed and must use a single NAL unit type
     /// malformed lengths fail closed because the caller cannot safely trust later
     /// bytes as NAL boundaries
-    fn stap_a_contains_keyframe_nal(mut payload: &[u8]) -> bool {
-        let mut contains_keyframe_nal = false;
+    fn stap_a_contains_idr(mut payload: &[u8]) -> bool {
+        let mut contains_idr = false;
         while !payload.is_empty() {
             let Some((len, rest)) = payload.split_first_chunk::<2>() else {
                 return false;
@@ -1010,23 +1007,20 @@ pub mod h264 {
             if !(1..NAL_UNIT_TYPE_STAP_A).contains(&nal_type) {
                 return false;
             }
-            contains_keyframe_nal |= matches!(nal_type, NAL_UNIT_TYPE_IDR | NAL_UNIT_TYPE_SPS);
+            contains_idr |= nal_type == NAL_UNIT_TYPE_IDR;
             payload = remaining_payload;
         }
-        contains_keyframe_nal
+        contains_idr
     }
 
-    /// Detects the first fragment of a sequence parameter set or IDR slice.
-    fn fu_a_starts_keyframe(payload: &[u8]) -> bool {
+    /// Detects whether a FU-A packet is the first fragment of an IDR NAL unit.
+    fn fu_a_starts_idr(payload: &[u8]) -> bool {
         let Some((&fu_header, _fragment)) = payload.split_first() else {
             return false;
         };
         fu_header & FU_START_BIT != 0
             && fu_header & FU_END_BIT == 0
-            && matches!(
-                fu_header & NAL_UNIT_TYPE_MASK,
-                NAL_UNIT_TYPE_IDR | NAL_UNIT_TYPE_SPS
-            )
+            && fu_header & NAL_UNIT_TYPE_MASK == NAL_UNIT_TYPE_IDR
     }
 
     impl TryFrom<u8> for LevelIdc {

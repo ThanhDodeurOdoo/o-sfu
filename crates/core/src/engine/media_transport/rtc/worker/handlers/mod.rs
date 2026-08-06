@@ -25,6 +25,5 @@ pub use dispatcher::{WorkerCommandContext, handle_worker_command};
 #[cfg(feature = "internal-benchmarks")]
 pub use media::apply_media_control_batch;
 pub use media::{
-    KeyframeRequestMode, KeyframeRequestTarget, apply_src_rid_ready, drain_due_rid_kf_refreshes,
-    request_kf_for_target,
+    KeyframeRequestMode, KeyframeRequestTarget, apply_src_decoder_ready, request_kf_for_target,
 };

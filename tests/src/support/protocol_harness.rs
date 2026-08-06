@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use futures_util::SinkExt;
 use o_sfu_protocol::wire::{
@@ -163,9 +163,12 @@ impl ProtocolWebSocketClient {
         read_close_code(&mut self.websocket).await
     }
 
-    pub async fn close(mut self) -> Option<()> {
-        self.websocket.close(None).await.ok()?;
-        Some(())
+    pub fn close(self) -> impl Future<Output = Option<()>> {
+        let mut websocket = self.websocket;
+        async move {
+            websocket.close(None).await.ok()?;
+            Some(())
+        }
     }
 
     async fn read_server_batch(&mut self) -> Option<EnvelopeBatch> {

@@ -5,6 +5,7 @@
 
 use std::{
     collections::BTreeMap,
+    mem,
     net::SocketAddr,
     time::{Duration, Instant},
 };
@@ -16,7 +17,7 @@ use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,
     change::SdpOffer,
     format::{Codec, PayloadParams},
-    media::{Mid, Pt, Rid},
+    media::{KeyframeRequest, Mid, Pt, Rid},
     net::{Protocol, Receive},
     rtp::{RtpPacket, RtpWrite, Ssrc},
 };
@@ -40,6 +41,7 @@ pub struct FakeRtcPeer {
     socket: UdpSocket,
     local_addr: SocketAddr,
     send_paths: BTreeMap<MediaKind, ProtocolSendPath>,
+    pending_keyframe_requests: Vec<KeyframeRequest>,
     connected: bool,
     start_wallclock: Instant,
     next_synthetic_ssrc: u32,
@@ -70,6 +72,7 @@ impl FakeRtcPeer {
             socket,
             local_addr,
             send_paths: BTreeMap::new(),
+            pending_keyframe_requests: Vec::new(),
             connected: false,
             start_wallclock: Instant::now(),
             next_synthetic_ssrc: 0x0f00_0001,
@@ -113,6 +116,7 @@ impl FakeRtcPeer {
             &self.socket,
             self.local_addr,
             &mut self.connected,
+            &mut self.pending_keyframe_requests,
             Instant::now() + timeout_window,
             true,
         )
@@ -127,6 +131,7 @@ impl FakeRtcPeer {
         frame_count: usize,
     ) -> Option<()> {
         for _ in 0..frame_count {
+            self.apply_keyframe_requests(source);
             let frame = source.next_frame(clock);
             self.write_rtp_packet(frame)?;
             pump_until(
@@ -134,6 +139,7 @@ impl FakeRtcPeer {
                 &self.socket,
                 self.local_addr,
                 &mut self.connected,
+                &mut self.pending_keyframe_requests,
                 Instant::now() + IO_SLICE,
                 false,
             )
@@ -147,6 +153,7 @@ impl FakeRtcPeer {
         source: &mut FakeMediaSource,
         clock: &mut FakeClock,
     ) -> Option<Vec<u8>> {
+        self.apply_keyframe_requests(source);
         let frame = source.next_frame(clock);
         let expected_payload = frame.payload.clone();
         self.write_rtp_packet(frame)?;
@@ -155,6 +162,7 @@ impl FakeRtcPeer {
             &self.socket,
             self.local_addr,
             &mut self.connected,
+            &mut self.pending_keyframe_requests,
             Instant::now() + IO_SLICE,
             false,
         )
@@ -168,9 +176,27 @@ impl FakeRtcPeer {
             &self.socket,
             self.local_addr,
             &mut self.connected,
+            &mut self.pending_keyframe_requests,
             Instant::now() + timeout_window,
         )
         .await
+    }
+
+    fn apply_keyframe_requests(&mut self, source: &mut FakeMediaSource) {
+        let Some(mid) = self
+            .send_paths
+            .get(&source.media_kind())
+            .map(|send_path| send_path.mid)
+        else {
+            return;
+        };
+        for request in mem::take(&mut self.pending_keyframe_requests) {
+            if request.mid == mid {
+                source.request_keyframe(request.rid.as_deref());
+            } else {
+                self.pending_keyframe_requests.push(request);
+            }
+        }
     }
 
     fn write_rtp_packet(&mut self, frame: FakeMediaFrame) -> Option<()> {
@@ -244,6 +270,7 @@ async fn pump_until(
     socket: &UdpSocket,
     local_addr: SocketAddr,
     connected: &mut bool,
+    pending_keyframe_requests: &mut Vec<KeyframeRequest>,
     deadline: Instant,
     stop_on_connected: bool,
 ) -> Option<bool> {
@@ -265,6 +292,9 @@ async fn pump_until(
             }
             Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected)) => {
                 return None;
+            }
+            Output::Event(Event::KeyframeRequest(request)) => {
+                pending_keyframe_requests.push(request);
             }
             Output::Event(_) => {}
             Output::Timeout(timeout_at) => {
@@ -313,6 +343,7 @@ async fn pump_until_rtp(
     socket: &UdpSocket,
     local_addr: SocketAddr,
     connected: &mut bool,
+    pending_keyframe_requests: &mut Vec<KeyframeRequest>,
     deadline: Instant,
 ) -> Option<ReceivedRtpPacket> {
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
@@ -333,6 +364,9 @@ async fn pump_until_rtp(
             }
             Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected)) => {
                 return None;
+            }
+            Output::Event(Event::KeyframeRequest(request)) => {
+                pending_keyframe_requests.push(request);
             }
             Output::Event(_) => {}
             Output::Timeout(timeout_at) => {

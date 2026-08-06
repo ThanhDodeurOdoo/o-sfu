@@ -34,17 +34,23 @@ impl RelayPacketMailbox {
         Self { tx }
     }
 
+    /// Reserves mailbox capacity before sharing the packet across workers.
+    ///
+    /// Already full or closed targets therefore reject without cloning RTP
+    /// metadata, source identity or the shared payload handle.
     pub(super) fn forward_packet(
         &self,
         state: &PacketLoopState,
         packet: &ForwardedPacket,
         src_media: TransportMediaId,
     ) -> Option<RelayEnqueueReport> {
-        let packet = packet.share_for_relay(state, src_media)?;
-        let outcome = match self.tx.try_send(packet) {
-            Ok(()) => RelayEnqueueOutcome::Enqueued,
-            Err(mpsc::error::TrySendError::Full(_packet)) => RelayEnqueueOutcome::Overloaded,
-            Err(mpsc::error::TrySendError::Closed(_packet)) => RelayEnqueueOutcome::Closed,
+        let outcome = match self.tx.try_reserve() {
+            Ok(permit) => {
+                permit.send(packet.share_for_relay(state, src_media)?);
+                RelayEnqueueOutcome::Enqueued
+            }
+            Err(mpsc::error::TrySendError::Full(())) => RelayEnqueueOutcome::Overloaded,
+            Err(mpsc::error::TrySendError::Closed(())) => RelayEnqueueOutcome::Closed,
         };
         Some(RelayEnqueueReport {
             outcome,

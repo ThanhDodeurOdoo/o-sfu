@@ -292,15 +292,15 @@ async fn rtc_consume_media_can_start_route_inactive() {
 }
 
 #[tokio::test]
-async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate() {
+async fn rtc_consumer_routes_keep_the_aggregate_blocked_before_decoder_refresh() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 21, UserId::Integer(21));
     let first_consumer_key = transport_key(1, 22, UserId::Integer(22));
     let second_consumer_key = transport_key(1, 23, UserId::Integer(23));
-    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 71_000);
+    let producer_rtp_parameters = sample_vp8_rtp_parameters("vid-up", 71_000, None);
     let selected_consumer_rtp_parameters =
-        sample_router_rtp_parameters_with_rid("vid-down-1", 72_000, "hi");
-    let open_consumer_rtp_parameters = sample_router_rtp_parameters("vid-down-2", 73_000);
+        sample_vp8_rtp_parameters("vid-down-1", 72_000, Some("hi"));
+    let open_consumer_rtp_parameters = sample_vp8_rtp_parameters("vid-down-2", 73_000, None);
 
     for session_key in [
         &producer_session_key,
@@ -356,7 +356,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
         .debug_route_entry_by_media_id(source_media_id)
         .await
         .expect("route entry should still exist after mixed policy registration");
-    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 }
 
 #[tokio::test]
@@ -364,8 +364,8 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 123, UserId::Integer(123));
     let consumer_key = transport_key(1, 124, UserId::Integer(124));
-    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 81_000);
-    let consumer_rtp_parameters = sample_router_rtp_parameters_with_rid("vid-down", 82_000, "hi");
+    let producer_rtp_parameters = sample_vp8_rtp_parameters("vid-up", 81_000, None);
+    let consumer_rtp_parameters = sample_vp8_rtp_parameters("vid-down", 82_000, Some("hi"));
 
     for session_key in [&producer_session_key, &consumer_key] {
         assert!(
@@ -440,7 +440,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
         .debug_route_entry_by_media_id(source_media_id)
         .await
         .expect("route entry should still exist after opening the consumer gate");
-    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
 }
 
 #[tokio::test]
@@ -460,19 +460,30 @@ async fn rtc_incoming_bitrate_snapshot_counts_recent_media_bytes() {
         .await
         .expect("should declare recv media");
 
-    adapter
-        .debug_record_incoming_media(&session_key, transport_media_id, 120, Instant::now())
-        .await;
-
-    let snapshot = adapter.transport_bitrate_snapshot(slice::from_ref(&session_key));
-    assert_eq!(snapshot.total, Bitrate::from_bps(960));
+    let now = Instant::now();
+    for (elapsed, bytes) in [
+        (Duration::ZERO, 120),
+        (Duration::from_millis(500), 120),
+        (Duration::from_secs(1), 1),
+    ] {
+        adapter
+            .debug_record_incoming_media(&session_key, transport_media_id, bytes, now + elapsed)
+            .await;
+    }
+    let worker_handle = adapter.test_handle();
+    let snapshot = worker_handle
+        .bitrate_registry
+        .lock()
+        .expect("bitrate registry mutex should not be poisoned")
+        .transport_bitrate_snapshot_at(slice::from_ref(&session_key), now + Duration::from_secs(1));
+    assert_eq!(snapshot.total, Bitrate::from_bps(1_920));
     assert_eq!(snapshot.per_media.len(), 1);
     assert_eq!(
         snapshot
             .per_media
             .first()
             .expect("should have media bitrate"),
-        &(transport_media_id, Bitrate::from_bps(960))
+        &(transport_media_id, Bitrate::from_bps(1_920))
     );
 }
 
@@ -528,15 +539,23 @@ async fn rtc_incoming_bitrate_snapshot_ignores_closed_sessions() {
         .await
         .expect("should declare recv media");
 
-    adapter
-        .debug_record_incoming_media(&session_key, transport_media_id, 120, Instant::now())
-        .await;
-    assert_eq!(
+    let now = Instant::now();
+    for (elapsed, bytes) in [
+        (Duration::ZERO, 120),
+        (Duration::from_millis(500), 120),
+        (Duration::from_secs(1), 1),
+    ] {
         adapter
-            .transport_bitrate_snapshot(slice::from_ref(&session_key))
-            .total,
-        Bitrate::from_bps(960)
-    );
+            .debug_record_incoming_media(&session_key, transport_media_id, bytes, now + elapsed)
+            .await;
+    }
+    let worker_handle = adapter.test_handle();
+    let before_close = worker_handle
+        .bitrate_registry
+        .lock()
+        .expect("bitrate registry mutex should not be poisoned")
+        .transport_bitrate_snapshot_at(slice::from_ref(&session_key), now + Duration::from_secs(1));
+    assert_eq!(before_close.total, Bitrate::from_bps(1_920));
 
     assert!(adapter.close_session(&session_key).await.is_ok());
 

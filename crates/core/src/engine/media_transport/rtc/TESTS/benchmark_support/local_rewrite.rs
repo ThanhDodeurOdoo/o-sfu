@@ -1,4 +1,4 @@
-use str0m::rtp::Ssrc;
+use str0m::rtp::{SeqNo, Ssrc};
 
 use super::super::local_send_rewrite::{ConsumerStreamStore, SourceTransition, Vp8PayloadIdentity};
 
@@ -12,6 +12,7 @@ enum RewriteMode {
 
 struct RewriteInput {
     source_ssrc: Ssrc,
+    sequence_number: SeqNo,
     timestamp: u32,
     vp8_payload: Vp8PayloadIdentity,
 }
@@ -54,7 +55,9 @@ impl LocalRewriteBenchFixture {
         for input in &self.inputs {
             if let Some(identity) = self.streams.project_identity(
                 self.stream_handle,
+                0,
                 input.source_ssrc,
+                input.sequence_number,
                 input.timestamp,
                 input.vp8_payload,
             ) {
@@ -86,6 +89,7 @@ fn rewrite_inputs(mode: RewriteMode) -> Vec<RewriteInput> {
         };
         inputs.push(RewriteInput {
             source_ssrc,
+            sequence_number: u64::try_from(pkt_idx).unwrap_or(0).into(),
             timestamp: 90_000_u32.wrapping_add(pkt_idx_u32),
             vp8_payload: Vp8PayloadIdentity {
                 picture_id: Some(pkt_idx_u16),

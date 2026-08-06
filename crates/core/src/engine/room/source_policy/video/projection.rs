@@ -1,7 +1,7 @@
 use o_sfu_router::MediaKind;
 
 use super::{
-    super::action::{BudgetSolverOutcomes, ConsumerPacketSelectionUpdate},
+    super::action::{ConsumerPacketSelectionUpdate, RouteBudgetOutcome},
     solver::{AdaptationCounts, PlannedReceiverRoute, ReceiverRouteSelection, RouteOutcome},
 };
 use crate::engine::{
@@ -48,11 +48,10 @@ pub(super) fn consumer_packet_selection_update(
     let route_activity_changed =
         selection.policy_pause_reason != current_selection.policy_pause_reason();
     let request_keyframe = selection.policy_pause_reason.is_none()
-        && (selection.request_keyframe || !current_selection.policy_allows_delivery());
-    let mut outcomes = route_outcomes(planned_route, selection);
-    if budget.over_budget_exception_reason().is_some() {
-        outcomes = outcomes.with_protected_over_budget();
-    }
+        && (selection.request_keyframe
+            || selection.selector != current_selection.selector()
+            || !current_selection.policy_allows_delivery());
+    let outcome = route_outcome(planned_route, selection);
     Some(ConsumerPacketSelectionUpdate {
         key: input.key.clone(),
         source_id: input.source.source_id(),
@@ -60,7 +59,7 @@ pub(super) fn consumer_packet_selection_update(
         selector: selection.selector,
         policy_pause_reason: selection.policy_pause_reason,
         budget,
-        outcomes,
+        outcome,
         pressure_observations: selection.counts.pressure,
         upgrade_observations: selection.counts.upgrade,
         packet_gate,
@@ -69,22 +68,22 @@ pub(super) fn consumer_packet_selection_update(
     })
 }
 
-fn route_outcomes(
+fn route_outcome(
     route: &PlannedReceiverRoute<'_>,
     selection: ReceiverRouteSelection,
-) -> BudgetSolverOutcomes {
+) -> Option<RouteBudgetOutcome> {
     match (
         selection.policy_pause_reason,
         route.input.current_selection.policy_pause_reason(),
     ) {
-        (None, Some(_reason)) => BudgetSolverOutcomes::resumed(),
+        (None, Some(_reason)) => Some(RouteBudgetOutcome::Resumed),
         (Some(reason), current_reason) if current_reason != Some(reason) => {
-            BudgetSolverOutcomes::paused()
+            Some(RouteBudgetOutcome::Paused)
         }
         _ => match route.outcome {
-            RouteOutcome::Neutral => BudgetSolverOutcomes::default(),
-            RouteOutcome::Degraded => BudgetSolverOutcomes::degraded(),
-            RouteOutcome::Paused => BudgetSolverOutcomes::paused(),
+            RouteOutcome::Neutral => None,
+            RouteOutcome::Degraded => Some(RouteBudgetOutcome::Degraded),
+            RouteOutcome::Paused => Some(RouteBudgetOutcome::Paused),
         },
     }
 }

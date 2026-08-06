@@ -12,9 +12,39 @@ fn projected(
     source_timestamp: u32,
     vp8_payload: Vp8PayloadIdentity,
 ) -> ProjectedIdentity {
-    let Some(identity) =
-        streams.project_identity(stream_handle, source_ssrc, source_timestamp, vp8_payload)
-    else {
+    let source_seq_no = streams
+        .streams
+        .get(stream_handle)
+        .and_then(|stream| stream.rtp.next_source_seq(source_ssrc))
+        .unwrap_or_default();
+    projected_packet(
+        streams,
+        stream_handle,
+        0,
+        source_ssrc,
+        source_seq_no,
+        source_timestamp,
+        vp8_payload,
+    )
+}
+
+fn projected_packet(
+    streams: &mut ConsumerStreamStore,
+    stream_handle: ConsumerStreamHandle,
+    delivery_generation: u64,
+    source_ssrc: Ssrc,
+    source_seq_no: SeqNo,
+    source_timestamp: u32,
+    vp8_payload: Vp8PayloadIdentity,
+) -> ProjectedIdentity {
+    let Some(identity) = streams.project_identity(
+        stream_handle,
+        delivery_generation,
+        source_ssrc,
+        source_seq_no,
+        source_timestamp,
+        vp8_payload,
+    ) else {
         panic!("consumer stream handle should be live");
     };
     identity
@@ -22,7 +52,7 @@ fn projected(
 
 fn allocate_at(streams: &mut ConsumerStreamStore, next_seq_no: u64) -> ConsumerStreamHandle {
     streams.streams.insert(ConsumerStream {
-        next_seq_no: next_seq_no.into(),
+        rtp: RtpProjection::new(next_seq_no.into()),
         ..ConsumerStream::default()
     })
 }
@@ -56,6 +86,94 @@ fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
 
     assert_eq!(first.seq_no.roc(), 0);
     assert!(first.seq_no.is_next(second.seq_no));
+}
+
+#[test]
+fn projected_sequence_numbers_preserve_source_loss_and_reordering() {
+    let mut streams = ConsumerStreamStore::default();
+    let stream_handle = streams.allocate();
+    let source_ssrc = Ssrc::from(111);
+
+    let first = projected_packet(
+        &mut streams,
+        stream_handle,
+        0,
+        source_ssrc,
+        10_u64.into(),
+        10_000,
+        Vp8PayloadIdentity::default(),
+    );
+    let after_loss = projected_packet(
+        &mut streams,
+        stream_handle,
+        0,
+        source_ssrc,
+        13_u64.into(),
+        13_000,
+        Vp8PayloadIdentity::default(),
+    );
+    let reordered = projected_packet(
+        &mut streams,
+        stream_handle,
+        0,
+        source_ssrc,
+        12_u64.into(),
+        12_000,
+        Vp8PayloadIdentity::default(),
+    );
+    let next = projected_packet(
+        &mut streams,
+        stream_handle,
+        0,
+        source_ssrc,
+        14_u64.into(),
+        14_000,
+        Vp8PayloadIdentity::default(),
+    );
+
+    assert_eq!(*after_loss.seq_no - *first.seq_no, 3);
+    assert_eq!(*reordered.seq_no - *first.seq_no, 2);
+    assert!(after_loss.seq_no.is_next(next.seq_no));
+}
+
+#[test]
+fn delivery_generation_compacts_only_intentional_gaps() {
+    let mut streams = ConsumerStreamStore::default();
+    let stream_handle = streams.allocate();
+    let source_ssrc = Ssrc::from(111);
+
+    let before_pause = projected_packet(
+        &mut streams,
+        stream_handle,
+        0,
+        source_ssrc,
+        10_u64.into(),
+        10_000,
+        Vp8PayloadIdentity::default(),
+    );
+    let after_resume = projected_packet(
+        &mut streams,
+        stream_handle,
+        1,
+        source_ssrc,
+        1_000_u64.into(),
+        20_000,
+        Vp8PayloadIdentity::default(),
+    );
+
+    assert!(before_pause.seq_no.is_next(after_resume.seq_no));
+    assert!(
+        streams
+            .project_identity(
+                stream_handle,
+                0,
+                source_ssrc,
+                11_u64.into(),
+                11_000,
+                Vp8PayloadIdentity::default(),
+            )
+            .is_none()
+    );
 }
 
 #[test]
@@ -145,7 +263,9 @@ fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
         streams
             .project_identity(
                 stream_handle,
+                0,
                 Ssrc::from(111),
+                0_u64.into(),
                 1234,
                 Vp8PayloadIdentity::default(),
             )

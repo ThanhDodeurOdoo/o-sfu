@@ -12,8 +12,13 @@ pub(super) use std::{
     time::{Duration, Instant},
 };
 
+use o_sfu_rfc::rtp::CodecName;
 pub(super) use o_sfu_router::rtp::{
     MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding,
+};
+use o_sfu_router::{
+    MediaKind as RouterMediaKind,
+    rtp::{MediaFormat, PayloadType},
 };
 pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 
@@ -76,15 +81,27 @@ pub(super) fn sample_router_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpPar
     .with_mid(mid.to_owned())
 }
 
-pub(super) fn sample_router_rtp_parameters_with_rid(
+pub(super) fn sample_vp8_rtp_parameters(
     mid: &str,
     ssrc: u32,
-    rid: &str,
+    rid: Option<&str>,
 ) -> RouterRtpParameters {
+    let encoding = RouterRtpEncoding::new()
+        .with_ssrc(ssrc)
+        .with_payload_type(PayloadType::new(96));
+    let encoding = match rid {
+        Some(rid) => encoding.with_rid(rid),
+        None => encoding,
+    };
     RouterRtpParameters::new(
+        vec![MediaFormat::new(
+            RouterMediaKind::Video,
+            CodecName::Vp8,
+            PayloadType::new(96),
+            90_000,
+        )],
         vec![],
-        vec![],
-        vec![RouterRtpEncoding::new().with_ssrc(ssrc).with_rid(rid)],
+        vec![encoding],
     )
     .with_mid(mid.to_owned())
 }

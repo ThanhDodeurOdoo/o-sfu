@@ -560,7 +560,7 @@ test("H264-only live publish applies RID simulcast and renders when supported", 
     }
 });
 
-test("live browser negotiation keeps RTX pairs only for eligible optional codecs", async ({
+test("live browser negotiation disables RTX for optional codecs", async ({
     browserName,
     context
 }) => {
@@ -615,12 +615,7 @@ test("live browser negotiation keeps RTX pairs only for eligible optional codecs
         if (codecs.vp9Profiles.size > 0) {
             expect(codecs.vp9Profiles).toEqual(new Set(["0", "2"]));
         }
-        for (const payloadType of codecs.h264PayloadTypes) {
-            expect(codecs.rtxAssociations.has(payloadType)).toBeFalsy();
-        }
-        for (const payloadType of codecs.vp9PayloadTypes) {
-            expect(codecs.rtxAssociations.has(payloadType)).toBeTruthy();
-        }
+        expect(codecs.rtxAssociations.size).toBe(0);
     } finally {
         await server.stop();
     }

@@ -25,6 +25,7 @@ pub(super) use o_sfu_protocol::wire::{
     ClientRequest, DownloadStates, RecordingOptions, ServerMessage, ServerRequest, StreamType,
     TrackBinding, UserId, UserInfo, VideoLayoutIntent,
 };
+pub(super) use o_sfu_rfc::rtp::CodecName;
 pub(super) use o_sfu_telemetry::diagnostics::{
     DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,
 };

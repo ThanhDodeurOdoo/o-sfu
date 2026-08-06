@@ -65,12 +65,6 @@ pub enum DiagnosticsPolicyPauseReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DiagnosticsOverBudgetExceptionReason {
-    ProtectedRoute,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticsVideoLayoutRole {
     Pinned,
@@ -249,8 +243,6 @@ pub struct DiagnosticsSourceSelection {
     pub active_video_route_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_receiver_bandwidth_estimate_bps: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub over_budget_exception_reason: Option<DiagnosticsOverBudgetExceptionReason>,
     pub policy_allows_delivery: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_pause_reason: Option<DiagnosticsPolicyPauseReason>,

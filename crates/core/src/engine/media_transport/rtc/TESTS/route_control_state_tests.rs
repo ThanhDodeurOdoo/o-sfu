@@ -8,7 +8,10 @@ use crate::engine::{
         ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
         TransportMediaId,
         rtc::{
-            keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker},
+            keyframe_tracker::{
+                KEYFRAME_REQUEST_RETRY_ATTEMPTS, KeyframeRequestDecision, KeyframeRequestOrigin,
+                KeyframeRequestTracker,
+            },
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::PacketLayerGate,
             route_table::RouteTable,
@@ -55,12 +58,100 @@ fn assert_single_active_speaker_diagnostic(
     assert_eq!(diagnostic.reason(), reason);
 }
 
+#[test]
+fn video_route_resumes_only_from_its_selected_rid_keyframe() {
+    let mut state = RouteTable::default();
+    let src_media = TransportMediaId::new(10);
+    let consumer_media = TransportMediaId::new(11);
+    let consumer_session = test_transport_session_key(10, 0, 11, UserId::Integer(12));
+    let selected_rid = Rid::from("hi");
+    let dst_idx = state.add_consumer_route(
+        src_media,
+        MediaRouteDestination {
+            dest_session: consumer_session.clone(),
+            dest_transport_media_id: consumer_media,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: Mid::from("cam-down"),
+            dest_payload_type: None,
+            active: true,
+            requires_decoder_refresh: true,
+            delivery_generation: 0,
+            packet_gate: PacketLayerGate::Rid(selected_rid),
+            pending_gate: None,
+        },
+    );
+
+    assert_eq!(
+        state.set_consumer_active(src_media, dst_idx, &consumer_session, consumer_media, false,),
+        Ok(true)
+    );
+    assert_eq!(
+        state.set_consumer_active(src_media, dst_idx, &consumer_session, consumer_media, true,),
+        Ok(true)
+    );
+    let destination = &state.local_route(src_media).unwrap().destinations[dst_idx];
+    assert_eq!(destination.packet_gate, PacketLayerGate::Block);
+    assert_eq!(
+        destination.pending_gate,
+        Some(PacketLayerGate::Rid(selected_rid))
+    );
+
+    let mut stale_rids = Vec::new();
+    let mut pending = Vec::new();
+    state.update_decoder_readiness(
+        src_media,
+        Some(selected_rid),
+        false,
+        &[selected_rid],
+        &mut stale_rids,
+        &mut pending,
+    );
+    assert_eq!(
+        state.local_route(src_media).unwrap().destinations[dst_idx].packet_gate,
+        PacketLayerGate::Block
+    );
+
+    state.update_decoder_readiness(
+        src_media,
+        Some(selected_rid),
+        true,
+        &[selected_rid],
+        &mut stale_rids,
+        &mut pending,
+    );
+    let destination = &state.local_route(src_media).unwrap().destinations[dst_idx];
+    assert_eq!(destination.packet_gate, PacketLayerGate::Rid(selected_rid));
+    assert_eq!(destination.pending_gate, None);
+    assert!(destination.delivery_generation >= 3);
+
+    assert_eq!(
+        state.set_consumer_pkt_gate(
+            src_media,
+            dst_idx,
+            &consumer_session,
+            consumer_media,
+            PacketLayerGate::Open,
+        ),
+        Ok(true)
+    );
+    state.update_decoder_readiness(src_media, None, true, &[], &mut stale_rids, &mut pending);
+    let destination = &state.local_route(src_media).unwrap().destinations[dst_idx];
+    assert_eq!(destination.packet_gate, PacketLayerGate::Open);
+    assert_eq!(destination.pending_gate, None);
+}
+
 fn track_source_wide(
     state: &mut KeyframeRequestTracker,
     src_media: TransportMediaId,
     now: Instant,
 ) -> KeyframeRequestDecision {
-    state.track(src_media, None, KeyframeRequestKind::Pli, now)
+    state.track(
+        src_media,
+        None,
+        KeyframeRequestKind::Pli,
+        KeyframeRequestOrigin::DecoderTransition,
+        now,
+    )
 }
 
 #[test]
@@ -83,7 +174,7 @@ fn keyframe_tracker_absorbs_repeated_requests_and_forgets_source_wakeup() {
 }
 
 #[test]
-fn keyframe_tracker_expires_pending_request_without_duplicate_feedback() {
+fn keyframe_tracker_retries_until_a_refresh_without_duplicate_feedback() {
     let mut state = KeyframeRequestTracker::default();
     let src_media = TransportMediaId::new(18);
     let now = Instant::now();
@@ -95,12 +186,44 @@ fn keyframe_tracker_expires_pending_request_without_duplicate_feedback() {
     );
     state.drain_due(now + Duration::from_secs(1), &mut retries);
 
-    assert!(retries.is_empty());
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0].src_media, src_media);
+    assert_eq!(state.next_deadline(), Some(now + Duration::from_secs(2)));
+
+    retries.clear();
+    state.drain_due(now + Duration::from_secs(2), &mut retries);
+    assert_eq!(retries.len(), 1);
+    assert_eq!(state.observe_refresh(src_media, None), 1);
     assert_eq!(state.next_deadline(), None);
+}
+
+#[test]
+fn opaque_recovery_stops_after_the_retry_budget() {
+    let mut state = KeyframeRequestTracker::default();
+    let src_media = TransportMediaId::new(180);
+    let now = Instant::now();
+    let mut retries = Vec::new();
+
     assert_eq!(
-        track_source_wide(&mut state, src_media, now + Duration::from_secs(1)),
+        state.track(
+            src_media,
+            None,
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::RecoveryHint,
+            now,
+        ),
         KeyframeRequestDecision::Forward
     );
+    for attempt in 1..=KEYFRAME_REQUEST_RETRY_ATTEMPTS {
+        retries.clear();
+        state.drain_due(now + Duration::from_secs(u64::from(attempt)), &mut retries);
+        assert_eq!(retries.len(), 1);
+    }
+
+    assert_eq!(state.next_deadline(), None);
+    retries.clear();
+    state.drain_due(now + Duration::from_mins(1), &mut retries);
+    assert!(retries.is_empty());
 }
 
 #[test]
@@ -119,6 +242,7 @@ fn keyframe_tracker_retries_after_duplicate_feedback() {
             src_media,
             None,
             KeyframeRequestKind::Fir,
+            KeyframeRequestOrigin::ConsumerFeedback,
             now + Duration::from_millis(100)
         ),
         KeyframeRequestDecision::Absorb
@@ -148,6 +272,7 @@ fn keyframe_tracker_tracks_explicit_rids_independently() {
             src_media,
             Some(Rid::from("hi")),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
             now
         ),
         KeyframeRequestDecision::Forward
@@ -157,6 +282,7 @@ fn keyframe_tracker_tracks_explicit_rids_independently() {
             src_media,
             Some(Rid::from("hi")),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
             now
         ),
         KeyframeRequestDecision::Absorb
@@ -166,6 +292,7 @@ fn keyframe_tracker_tracks_explicit_rids_independently() {
             src_media,
             Some(Rid::from("lo")),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
             now
         ),
         KeyframeRequestDecision::Forward
@@ -182,11 +309,23 @@ fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
     let mut retries = Vec::new();
 
     assert_eq!(
-        state.track(src_media, Some(hi), KeyframeRequestKind::Pli, now),
+        state.track(
+            src_media,
+            Some(hi),
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
+            now,
+        ),
         KeyframeRequestDecision::Forward
     );
     assert_eq!(
-        state.track(src_media, Some(lo), KeyframeRequestKind::Pli, now),
+        state.track(
+            src_media,
+            Some(lo),
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
+            now,
+        ),
         KeyframeRequestDecision::Forward
     );
     assert_eq!(
@@ -194,6 +333,7 @@ fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
             src_media,
             Some(hi),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
             now + Duration::from_millis(100)
         ),
         KeyframeRequestDecision::Absorb
@@ -261,8 +401,25 @@ fn route_control_combines_local_and_remote_target_gates() {
 fn route_control_refreshes_source_gate_after_relay_gate_removal() {
     let mut state = RouteTable::default();
     let src_media = TransportMediaId::new(121);
+    let consumer_media = TransportMediaId::new(122);
+    let consumer_session = test_transport_session_key(121, 0, 122, UserId::Integer(123));
     let (relay_mailbox, _relay_rx) = RelayPacketMailbox::channel_for_test();
     let relay_target = RelayTargetId::new(1);
+    let dst_idx = state.add_consumer_route(
+        src_media,
+        MediaRouteDestination {
+            dest_session: consumer_session,
+            dest_transport_media_id: consumer_media,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: Mid::from("cam-down"),
+            dest_payload_type: None,
+            active: true,
+            requires_decoder_refresh: false,
+            delivery_generation: 0,
+            packet_gate: PacketLayerGate::Open,
+            pending_gate: None,
+        },
+    );
     state.set_local_pkt_gate(src_media, Some(PacketLayerGate::Rid("hi".into())));
     state.add_relay_target(src_media, relay_target, relay_mailbox);
     state.set_relay_pkt_gate(src_media, relay_target, PacketLayerGate::Rid("lo".into()));
@@ -277,6 +434,10 @@ fn route_control_refreshes_source_gate_after_relay_gate_removal() {
     assert_eq!(
         state.effective_packet_gate(src_media),
         Some(PacketLayerGate::Rid("hi".into()))
+    );
+    assert_eq!(
+        state.local_route(src_media).unwrap().destinations[dst_idx].delivery_generation,
+        0
     );
 }
 
@@ -322,8 +483,9 @@ fn route_control_removing_last_consumer_route_preserves_producer_packet_state() 
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: Mid::from("cam-down"),
             dest_payload_type: None,
-            nackable: true,
             active: true,
+            requires_decoder_refresh: false,
+            delivery_generation: 0,
             packet_gate: PacketLayerGate::Open,
             pending_gate: None,
         },

@@ -1,20 +1,36 @@
 use std::time::Duration;
 
+use tokio::time::timeout;
+
 use super::support::*;
 use crate::engine::{
     UserInfo,
     media_transport::{
-        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId, TransportTeardown,
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId,
+        TransportTeardown,
     },
     room::{
         DeactivateIntentOutcome, media_graph::ReceiverRouteActivity,
-        source_policy::SourcePolicyTransaction,
+        source_policy::SourcePolicyTransaction, state::RoomState,
     },
     source_model::{
         ConsumerSourceSelection, PublishedSourceId, SourceDeactivateIntent, SourcePolicy,
         SourcePublishIntent,
     },
 };
+
+fn plan_policy(
+    state: &RoomState,
+    speakers: &[ActiveSpeakerSource],
+    bandwidth: &ReceiverBandwidthSnapshot,
+) -> Option<SourcePolicyTransaction> {
+    SourcePolicyTransaction::plan(
+        state,
+        speakers,
+        bandwidth,
+        &TransportBitrateSnapshot::default(),
+    )
+}
 
 #[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
@@ -138,6 +154,57 @@ async fn video_bitrate_cap_admits_video_sources_without_adaptation() {
 }
 
 #[tokio::test]
+async fn observed_ridless_source_above_cap_is_paused() {
+    let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    let intent = SourcePublishIntent::new(
+        stream_id_for_source(TestSourceKind::ReadableVideo),
+        MediaKind::Video,
+        source_publish_intent_for_source(TestSourceKind::ReadableVideo)
+            .policy()
+            .with_video_bitrate_cap(Bitrate::from_kbps(200)),
+    );
+    room.test_api()
+        .media()
+        .publish_intent(
+            &publisher,
+            &intent,
+            MediaKind::Video,
+            test_video_rtp_parameters(),
+            &adapter,
+        )
+        .await
+        .expect("capped readable video publication should succeed");
+    let source_media = source_media_id(&room, &publisher, TestSourceKind::ReadableVideo).await;
+    let source_bitrate = TransportBitrateSnapshot {
+        total: Bitrate::from_kbps(500),
+        per_media: vec![(source_media, Bitrate::from_kbps(500))],
+    };
+    let tx = {
+        let state = room.state.read().await;
+        SourcePolicyTransaction::plan(
+            &state,
+            &[],
+            &ReceiverBandwidthSnapshot::default(),
+            &source_bitrate,
+        )
+        .expect("observed cap violation should produce a policy update")
+    };
+    tx.execute(&room, &adapter).await;
+
+    assert_subscription_policy_pause_reason(
+        &room,
+        &adapter,
+        &receiver,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        Some(DiagnosticsPolicyPauseReason::SourceBitrateLimit),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn source_bitrate_cap_pause_survives_receiver_overload() {
     let scenario = SourcePolicyScenario::with_ready_users(&[1, 2, 3]).await;
     publish_capped_camera(&scenario.room, &scenario.adapter, Bitrate::from_kbps(100)).await;
@@ -155,7 +222,7 @@ async fn source_bitrate_cap_pause_survives_receiver_overload() {
             per_session: vec![(receiver_session_key, Bitrate::from_kbps(100))],
         };
         let state = scenario.room.state.read().await;
-        SourcePolicyTransaction::plan_from_state(
+        plan_policy(
             &state,
             &active_speaker_sources,
             &receiver_bandwidth_snapshot,
@@ -289,7 +356,7 @@ async fn source_policy_ignores_receiver_bandwidth_from_replaced_connection() {
     };
     let tx = {
         let state = scenario.room.state.read().await;
-        SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth_snapshot)
+        plan_policy(&state, &[], &receiver_bandwidth_snapshot)
             .expect("source policy transaction should contain current bandwidth work")
     };
     tx.execute(&scenario.room, &scenario.adapter).await;
@@ -478,12 +545,8 @@ async fn audio_speaker_limit_ignores_foreign_and_inactive_sources() {
     ];
     let tx = {
         let state = scenario.room.state.read().await;
-        SourcePolicyTransaction::plan_from_state(
-            &state,
-            &speakers,
-            &ReceiverBandwidthSnapshot::default(),
-        )
-        .expect("audio speaker limit should update the overflow route")
+        plan_policy(&state, &speakers, &ReceiverBandwidthSnapshot::default())
+            .expect("audio speaker limit should update the overflow route")
     };
     tx.execute(&scenario.room, &scenario.adapter).await;
     scenario
@@ -1085,7 +1148,7 @@ async fn per_receiver_audio_reserve_excludes_own_and_counts_only_consumed_audio(
 
     let tx = {
         let state = scenario.room.state.read().await;
-        SourcePolicyTransaction::plan_from_state(&state, &speakers, &receiver_bandwidth_snapshot)
+        plan_policy(&state, &speakers, &receiver_bandwidth_snapshot)
             .expect("policy pass should produce budget updates")
     };
     tx.execute(&scenario.room, &scenario.adapter).await;
@@ -1143,12 +1206,8 @@ async fn audio_only_receiver_reports_its_audio_reserve_as_bwe_demand() {
 
     let tx = {
         let state = scenario.room.state.read().await;
-        SourcePolicyTransaction::plan_from_state(
-            &state,
-            &speakers,
-            &ReceiverBandwidthSnapshot::default(),
-        )
-        .expect("audio-only receiver should still report BWE demand")
+        plan_policy(&state, &speakers, &ReceiverBandwidthSnapshot::default())
+            .expect("audio-only receiver should still report BWE demand")
     };
     tx.execute(&scenario.room, &scenario.adapter).await;
 
@@ -1188,7 +1247,7 @@ async fn overload_steps_thumbnail_down_one_layer_and_keeps_it_deliverable() {
 
     let tx = {
         let state = scenario.room.state.read().await;
-        SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth_snapshot)
+        plan_policy(&state, &[], &receiver_bandwidth_snapshot)
             .expect("overload should step the thumbnail down")
     };
     tx.execute(&scenario.room, &scenario.adapter).await;
@@ -1211,6 +1270,51 @@ async fn overload_steps_thumbnail_down_one_layer_and_keeps_it_deliverable() {
         &UserId::Integer(1),
         TestSourceKind::ScalableVideo,
         None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn overload_steps_hidden_route_before_visible_thumbnail() {
+    let tuning = VideoAdaptationTuning::try_new(99, 2, 2, 3, 0, Bitrate::zero())
+        .expect("valid tuning should build");
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2, 3], tuning).await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(3), &scenario.adapter).await;
+    scenario
+        .set_scalable_video_layout(2, 1, VideoLayoutIntent::Hidden)
+        .await;
+    let receiver = UserId::Integer(2);
+    let connection_id = user_connection_id(&scenario.room, &receiver).await;
+    let session_key = scenario
+        .room
+        .transport_user_key(&receiver, connection_id)
+        .await;
+    let bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::from_kbps(1_350))],
+    };
+    let tx = {
+        let state = scenario.room.state.read().await;
+        plan_policy(&state, &[], &bandwidth).expect("overload should step the hidden route down")
+    };
+    tx.execute(&scenario.room, &scenario.adapter).await;
+
+    assert_subscription_selected_rid(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        "mid",
+    )
+    .await;
+    assert_subscription_selected_rid(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+        "hi",
     )
     .await;
 }
@@ -1268,6 +1372,94 @@ async fn video_download_limit_pauses_lowest_ranked_receiver_routes() {
         active_destination_receivers(&scenario.adapter, [third_camera_media_id]).await,
         vec![UserId::Integer(1), UserId::Integer(2)]
     );
+}
+
+#[tokio::test]
+async fn constrained_bandwidth_can_pause_a_pinned_route() {
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+    scenario
+        .set_scalable_video_layout(2, 1, VideoLayoutIntent::Pinned)
+        .await;
+    let receiver = UserId::Integer(2);
+    let connection_id = user_connection_id(&scenario.room, &receiver).await;
+    let session_key = scenario
+        .room
+        .transport_user_key(&receiver, connection_id)
+        .await;
+    let receiver_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::zero())],
+    };
+    let policy_updates = scenario.adapter.source_policy_subscription();
+    let _ = policy_updates.take_pending_updates();
+    for observation in 0..VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS {
+        let tx = {
+            let state = scenario.room.state.read().await;
+            plan_policy(&state, &[], &receiver_bandwidth)
+                .expect("constrained receiver should produce a policy update")
+        };
+        tx.execute(&scenario.room, &scenario.adapter).await;
+        if observation == 0 {
+            let follow_up = timeout(Duration::from_secs(1), policy_updates.wait_for_update())
+                .await
+                .expect("unresolved hysteresis should schedule another policy pass");
+            assert!(follow_up.contains(&scenario.room.instance_id()));
+        }
+    }
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::BudgetPressure),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn zero_budget_pauses_observed_ridless_readable_video() {
+    let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    publish_track(
+        &room,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
+    let source_media = source_media_id(&room, &publisher, TestSourceKind::ReadableVideo).await;
+    let connection_id = user_connection_id(&room, &receiver).await;
+    let session_key = room.transport_user_key(&receiver, connection_id).await;
+    let receiver_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::zero())],
+    };
+    let source_bitrate = TransportBitrateSnapshot {
+        total: Bitrate::from_kbps(500),
+        per_media: vec![(source_media, Bitrate::from_kbps(500))],
+    };
+    for _ in 0..VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS {
+        let tx = {
+            let state = room.state.read().await;
+            SourcePolicyTransaction::plan(&state, &[], &receiver_bandwidth, &source_bitrate)
+                .expect("observed source bitrate should produce a budget update")
+        };
+        tx.execute(&room, &adapter).await;
+    }
+
+    assert_subscription_policy_pause_reason(
+        &room,
+        &adapter,
+        &receiver,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        Some(DiagnosticsPolicyPauseReason::BudgetPressure),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1428,7 +1620,7 @@ async fn source_policy_transaction_from_transport_snapshot(
     };
     let receiver_bandwidth_snapshot = scenario.adapter.receiver_bandwidth_snapshot(&session_keys);
     let state = scenario.room.state.read().await;
-    SourcePolicyTransaction::plan_from_state(
+    plan_policy(
         &state,
         &active_speaker_sources,
         &receiver_bandwidth_snapshot,
