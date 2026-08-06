@@ -26,6 +26,8 @@ const AUDIO_PAYLOAD_SEED: u8 = 0x11;
 const VP8_PAYLOAD_SEED: u8 = 0x41;
 const H264_PAYLOAD_SEED: u8 = 0x51;
 const UNSUPPORTED_PAYLOAD_SEED: u8 = 0x71;
+const SYNTHETIC_VP8_KEYFRAME_PREFIX: [u8; rtp::vp8::KEYFRAME_PREFIX_LEN] =
+    [0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FakeClock {
@@ -524,12 +526,18 @@ fn synthetic_vp8_payload_with_long_picture_id(
     payload.push(u8::try_from(picture_id & 0xff).ok()?);
     payload.push(tl0_pic_idx);
     payload.push(temporal_layer_id << 6);
+    let frame_offset = payload.len();
     payload.push(if keyframe {
-        0
+        SYNTHETIC_VP8_KEYFRAME_PREFIX[0]
     } else {
         rtp::vp8::INTERFRAME_BIT
     });
     payload.extend_from_slice(body);
+    if keyframe {
+        payload
+            .get_mut(frame_offset..frame_offset + rtp::vp8::KEYFRAME_PREFIX_LEN)?
+            .copy_from_slice(&SYNTHETIC_VP8_KEYFRAME_PREFIX);
+    }
     Some(payload)
 }
 

@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, StreamBinding};
+use str0m::media::KeyframeRequestKind;
 use tokio::sync::mpsc;
 
 use super::*;
@@ -9,8 +10,11 @@ use crate::engine::{
     media_transport::{
         TransportSourceKey,
         rtc::{
-            commands::RemoteSourceControl, relay_registry::RelayTargetId,
-            test_support::test_transport_session_key,
+            commands::RemoteSourceControl,
+            keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestOrigin},
+            relay_registry::RelayTargetId,
+            route_control::PacketLayerGate,
+            test_support::{MediaWorkerScenario, test_transport_session_key},
         },
     },
     metrics::RuntimeMetrics,
@@ -121,6 +125,69 @@ fn session_media_index_drives_bulk_session_removal() {
 }
 
 #[test]
+fn bulk_session_route_removal_repairs_every_moved_consumer_binding() {
+    let mut state = PacketLoopState::default();
+    let source_session = test_transport_session_key(151, 0, 152, UserId::Integer(153));
+    let removed_session = test_transport_session_key(151, 1, 154, UserId::Integer(155));
+    let first_survivor = test_transport_session_key(151, 1, 156, UserId::Integer(157));
+    let second_survivor = test_transport_session_key(151, 1, 158, UserId::Integer(159));
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let src_media = scenario.source(source_session, Mid::from("cam-up"));
+    scenario.destination_with_gate(
+        src_media,
+        removed_session.clone(),
+        Mid::from("removed-1"),
+        PacketLayerGate::Rid(Rid::from("lo")),
+    );
+    scenario.destination_with_gate(
+        src_media,
+        removed_session.clone(),
+        Mid::from("removed-2"),
+        PacketLayerGate::Rid(Rid::from("lo")),
+    );
+    let first_media = scenario.destination_with_gate(
+        src_media,
+        first_survivor.clone(),
+        Mid::from("survivor-1"),
+        PacketLayerGate::Rid(Rid::from("hi")),
+    );
+    let second_media = scenario.destination_with_gate(
+        src_media,
+        second_survivor.clone(),
+        Mid::from("survivor-2"),
+        PacketLayerGate::Rid(Rid::from("lo")),
+    );
+
+    state.remove_session_media_handles(&removed_session);
+    for (moved_src_media, moved) in state.routes.remove_dsts_for_session(&removed_session) {
+        state.set_consumer_dst_idx(
+            &moved.session_key,
+            moved.mid,
+            moved.media_id,
+            moved_src_media,
+            Some(moved.dst_idx),
+        );
+    }
+
+    assert_eq!(
+        state.active_consumer_kf_target(&first_survivor, Mid::from("survivor-1"), None),
+        Some(ConsumerKeyframeTarget {
+            src_media,
+            rid: Some(Rid::from("hi")),
+        })
+    );
+    assert_eq!(
+        state.active_consumer_kf_target(&second_survivor, Mid::from("survivor-2"), None),
+        Some(ConsumerKeyframeTarget {
+            src_media,
+            rid: Some(Rid::from("lo")),
+        })
+    );
+    assert!(state.media_handle(first_media).is_some());
+    assert!(state.media_handle(second_media).is_some());
+}
+
+#[test]
 fn producer_media_lookup_is_session_scoped_by_mid() {
     let mut state = PacketLoopState::default();
     let first_session = test_transport_session_key(16, 0, 18, UserId::Integer(19));
@@ -213,6 +280,44 @@ fn dynamic_producer_ssrc_rid_lookup_clears_with_media_handle() {
         state.source_rid_for_ssrc(&producer_session, producer_ssrc),
         None
     );
+}
+
+#[test]
+fn producer_media_removal_cancels_pending_keyframe_retries() {
+    let producer_session = test_transport_session_key(26, 0, 27, UserId::Integer(28));
+    let producer_mid = Mid::from("cam-up");
+    let mut state = PacketLoopState::default();
+    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: producer_session,
+        mid: producer_mid,
+    });
+    let now = Instant::now();
+    assert_eq!(
+        state.routes.track_kf_req(
+            transport_media_id,
+            None,
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
+            now,
+        ),
+        KeyframeRequestDecision::Forward
+    );
+    assert_eq!(
+        state.routes.next_kf_deadline(),
+        Some(now + Duration::from_secs(1))
+    );
+
+    assert!(matches!(
+        state.remove_media_handle(transport_media_id),
+        Some(RegisteredMediaHandle::Producer { .. })
+    ));
+    let mut retries = Vec::new();
+    state
+        .routes
+        .drain_due_kf_reqs(now + Duration::from_secs(1), &mut retries);
+
+    assert!(retries.is_empty());
+    assert_eq!(state.routes.next_kf_deadline(), None);
 }
 
 #[test]

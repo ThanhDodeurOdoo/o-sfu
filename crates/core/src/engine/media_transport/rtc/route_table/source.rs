@@ -10,12 +10,12 @@ use str0m::{
 };
 use tracing::debug;
 
-use super::rid_refresh::RidKeyframeRefresh;
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityRevision,
     SourceActivityUpdate, TransportAdapterError, TransportMediaId, TransportRidActivity,
     TransportSessionKey, TransportSourceActivity, TransportSourceKey,
     rtc::{
+        decoder_refresh::DecoderRefreshNeed,
         relay_registry::{
             ActiveRelayTarget, RelayPacketMailbox, RelaySourceRegistration, RelayTargetId,
         },
@@ -24,7 +24,7 @@ use crate::engine::media_transport::{
         },
         source_route::{
             DestinationKeyframeTarget, MediaRouteDestination, MediaRouteEntry, PacketCodecs,
-            RemoteSourceRegistration,
+            RemoteSourceRegistration, SourceFilterGeneration,
         },
     },
 };
@@ -55,7 +55,12 @@ impl RidReadinessRouteUpdate {
     }
 
     fn mark_bootstrap_fallback(&mut self) {
-        self.selected_gate = RidReadinessSelectedGateUpdate::BootstrapFallback;
+        if !matches!(
+            self.selected_gate,
+            RidReadinessSelectedGateUpdate::Activated
+        ) {
+            self.selected_gate = RidReadinessSelectedGateUpdate::BootstrapFallback;
+        }
     }
 }
 
@@ -108,6 +113,7 @@ pub(super) struct RouteSource {
     remote: RemoteSourceState,
     relay: Option<RelaySourceRegistration>,
     packet: SourcePacketState,
+    decoder_refresh: DecoderRefreshDemand,
     pub(super) producer: ProducerSourceState,
 }
 
@@ -120,6 +126,7 @@ impl Default for RouteSource {
             remote: RemoteSourceState::default(),
             relay: None,
             packet: SourcePacketState::default(),
+            decoder_refresh: DecoderRefreshDemand::default(),
             producer: ProducerSourceState::default(),
         }
     }
@@ -140,7 +147,52 @@ struct SourcePacketState {
     local: Option<PacketLayerGate>,
     relays: BTreeMap<RelayTargetId, PacketLayerGate>,
     audio: Option<SourceAudioPolicyState>,
+    filter_audio_at_source: bool,
     effective: Option<PacketLayerGate>,
+    filter_generation: SourceFilterGeneration,
+}
+
+#[derive(Debug, Default)]
+struct DecoderRefreshDemand {
+    open: bool,
+    any_rid: bool,
+    rids: Vec<Rid>,
+}
+
+impl DecoderRefreshDemand {
+    fn rebuild(&mut self, destinations: Option<&[MediaRouteDestination]>) {
+        self.open = false;
+        self.any_rid = false;
+        self.rids.clear();
+        let Some(destinations) = destinations else {
+            return;
+        };
+        for destination in destinations
+            .iter()
+            .filter(|destination| destination.active && destination.requires_decoder_refresh)
+        {
+            match destination.pending_gate {
+                Some(PacketLayerGate::Open) => self.open = true,
+                Some(PacketLayerGate::Rid(rid)) => {
+                    if !self.rids.contains(&rid) {
+                        self.rids.push(rid);
+                    }
+                    self.any_rid |= destination.packet_gate == PacketLayerGate::Block;
+                }
+                Some(PacketLayerGate::Block) | None => {}
+            }
+        }
+    }
+
+    fn need(&self, incoming_rid: Option<Rid>) -> DecoderRefreshNeed {
+        let pending =
+            self.open || incoming_rid.is_some_and(|rid| self.rids.contains(&rid) || self.any_rid);
+        if pending {
+            DecoderRefreshNeed::PendingDestination
+        } else {
+            DecoderRefreshNeed::None
+        }
+    }
 }
 
 impl RouteSource {
@@ -172,6 +224,7 @@ impl RouteSource {
         let route = self.local_route.get_or_insert_with(MediaRouteEntry::new);
         let index = route.destinations.len();
         route.push_destination(destination);
+        self.refresh_decoder_refresh_demand();
         (index, became_forwarding)
     }
 
@@ -199,6 +252,7 @@ impl RouteSource {
         if route.destinations.is_empty() {
             self.local_route = None;
         }
+        self.refresh_decoder_refresh_demand();
         Some(RemovedConsumerRoute {
             destination,
             moved,
@@ -207,10 +261,28 @@ impl RouteSource {
     }
 
     pub(super) fn set_source_active(&mut self, active: bool) {
+        let resumed = active && !self.source_active;
         self.source_active = active;
         if !active {
-            self.producer.pending_rid_refreshes.clear();
+            if let Some(route) = self.local_route.as_mut() {
+                for destination in route
+                    .destinations
+                    .iter_mut()
+                    .filter(|destination| destination.active)
+                {
+                    destination.pause_delivery();
+                }
+            }
+        } else if resumed && let Some(route) = self.local_route.as_mut() {
+            for destination in route
+                .destinations
+                .iter_mut()
+                .filter(|destination| destination.active)
+            {
+                destination.restart_delivery();
+            }
         }
+        self.refresh_decoder_refresh_demand();
     }
 
     pub(super) fn apply_source_activity(&mut self, update: SourceActivityUpdate) -> bool {
@@ -232,37 +304,70 @@ impl RouteSource {
         media_id: TransportMediaId,
         active: bool,
     ) -> Result<bool, TransportAdapterError> {
-        let route = self
-            .local_route
-            .as_mut()
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        validate_destination(route, dst_idx, session_key, media_id)?;
-        Ok(route.set_destination_active(dst_idx, active))
+        let changed = {
+            let route = self
+                .local_route
+                .as_mut()
+                .ok_or(TransportAdapterError::TransportUnavailable)?;
+            validate_destination(route, dst_idx, session_key, media_id)?;
+            route.set_destination_active(dst_idx, active)
+        };
+        if changed {
+            self.refresh_decoder_refresh_demand();
+        }
+        Ok(changed)
     }
 
+    /// keeps the destination gate effective while a decodable strict RID target is pending
+    ///
+    /// opaque destinations apply RID gates immediately because they cannot emit
+    /// decoder readiness
     pub(super) fn set_consumer_pkt_gate(
         &mut self,
         dst_idx: usize,
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-        pending_gate: Option<PacketLayerGate>,
     ) -> Result<bool, TransportAdapterError> {
-        let route = self
-            .local_route
-            .as_mut()
-            .ok_or(TransportAdapterError::TransportUnavailable)?;
-        let dst = validate_destination(route, dst_idx, session_key, media_id)?;
-        let changed = dst.packet_gate != packet_gate || dst.pending_gate != pending_gate;
-        dst.packet_gate = packet_gate;
-        dst.pending_gate = pending_gate;
+        let changed = {
+            let route = self
+                .local_route
+                .as_mut()
+                .ok_or(TransportAdapterError::TransportUnavailable)?;
+            let dst = validate_destination(route, dst_idx, session_key, media_id)?;
+            let pending_gate = dst
+                .requires_decoder_refresh
+                .then_some(packet_gate)
+                .filter(|gate| gate.selected_rid().is_some());
+            let (packet_gate, pending_gate) = match pending_gate {
+                Some(target_gate) if dst.packet_gate == target_gate => (target_gate, None),
+                Some(target_gate) => (
+                    match dst.packet_gate {
+                        PacketLayerGate::Rid(_) => dst.packet_gate,
+                        PacketLayerGate::Block | PacketLayerGate::Open => PacketLayerGate::Block,
+                    },
+                    Some(target_gate),
+                ),
+                None => (packet_gate, None),
+            };
+            let changed = dst.packet_gate != packet_gate || dst.pending_gate != pending_gate;
+            if !dst.requires_decoder_refresh && dst.packet_gate != packet_gate {
+                dst.advance_delivery();
+            }
+            dst.packet_gate = packet_gate;
+            dst.pending_gate = pending_gate;
+            changed
+        };
+        if changed {
+            self.refresh_decoder_refresh_demand();
+        }
         Ok(changed)
     }
 
     pub(super) fn update_rid_readiness(
         &mut self,
         source_id: TransportMediaId,
-        incoming_rid: Rid,
+        incoming_rid: Option<Rid>,
         is_keyframe: bool,
         ready: &[Rid],
         stale: &mut Vec<Rid>,
@@ -274,7 +379,7 @@ impl RouteSource {
         let Some(route) = self.local_route.as_mut() else {
             return RidReadinessRouteUpdate::default();
         };
-        update_selected_rid_dsts(
+        let update = update_selected_rid_dsts(
             route,
             source_id,
             incoming_rid,
@@ -282,11 +387,16 @@ impl RouteSource {
             ready,
             stale,
             pending_selected,
-        )
+        );
+        if update.changed_gate() {
+            self.refresh_decoder_refresh_demand();
+        }
+        update
     }
 
     pub(super) fn take_route(&mut self) -> Option<RemovedRoute> {
         let route = self.local_route.take()?;
+        self.refresh_decoder_refresh_demand();
         Some(RemovedRoute {
             stopped_forwarding: self.relay.is_none(),
             route,
@@ -296,29 +406,42 @@ impl RouteSource {
     pub(super) fn remove_dsts_for_session(
         &mut self,
         session_key: &TransportSessionKey,
-    ) -> Option<ForwardingChange> {
+    ) -> Option<(ForwardingChange, Vec<MovedConsumerRoute>)> {
         let route = self.local_route.as_mut()?;
-        let destination_count = route.destinations.len();
-        route
-            .destinations
-            .retain(|destination| destination.dest_session != *session_key);
-        if route.destinations.len() == destination_count {
-            return None;
-        }
-        route.active_destination_count = route
+        let mut moved = Vec::new();
+        let mut removed = false;
+        while let Some(index) = route
             .destinations
             .iter()
-            .filter(|destination| destination.active)
-            .count();
+            .position(|destination| destination.dest_session == *session_key)
+        {
+            route.remove_destination(index);
+            removed = true;
+            if let Some(destination) = route.destinations.get(index) {
+                moved.push(MovedConsumerRoute {
+                    session_key: destination.dest_session.clone(),
+                    mid: destination.dest_mid,
+                    media_id: destination.dest_transport_media_id,
+                    dst_idx: index,
+                });
+            }
+        }
+        if !removed {
+            return None;
+        }
         let stopped_forwarding = route.destinations.is_empty() && self.relay.is_none();
         if route.destinations.is_empty() {
             self.local_route = None;
         }
-        Some(if stopped_forwarding {
-            ForwardingChange::StoppedForwarding
-        } else {
-            ForwardingChange::StillForwarding
-        })
+        self.refresh_decoder_refresh_demand();
+        Some((
+            if stopped_forwarding {
+                ForwardingChange::StoppedForwarding
+            } else {
+                ForwardingChange::StillForwarding
+            },
+            moved,
+        ))
     }
 
     pub(super) fn refresh_route_pkt_gate(&mut self) -> PacketLayerGate {
@@ -330,20 +453,93 @@ impl RouteSource {
     }
 
     pub(super) fn has_kf_demand(&self, rid: Option<Rid>) -> bool {
+        self.has_local_kf_demand(rid)
+            || self.active_relay_targets().is_some_and(|targets| {
+                targets
+                    .iter()
+                    .any(|target| self.relay_target_has_kf_demand(target.target_id, rid))
+            })
+    }
+
+    pub(super) fn has_local_kf_demand(&self, rid: Option<Rid>) -> bool {
         if !self.source_active {
             return false;
         }
-        let local_demand = self.local_route.as_ref().is_some_and(|route| {
+        self.local_route.as_ref().is_some_and(|route| {
             route.destinations.iter().any(|destination| {
-                destination.active
-                    && matches!(
-                        destination.keyframe_target_rid(None),
-                        DestinationKeyframeTarget::Current(target_rid)
-                            if target_rid == rid
-                    )
+                if !destination.active {
+                    return false;
+                }
+                match (rid, destination.keyframe_target_rid(None)) {
+                    (_, DestinationKeyframeTarget::Stale) => false,
+                    (None, DestinationKeyframeTarget::Current(_))
+                    | (Some(_), DestinationKeyframeTarget::Current(None)) => true,
+                    (Some(rid), DestinationKeyframeTarget::Current(Some(target_rid))) => {
+                        rid == target_rid
+                    }
+                }
             })
-        });
-        local_demand || self.active_relay_targets().is_some()
+        })
+    }
+
+    pub(super) fn relay_target_has_kf_demand(
+        &self,
+        target_id: RelayTargetId,
+        rid: Option<Rid>,
+    ) -> bool {
+        if !self.source_active || !self.is_relay_target_active(target_id) {
+            return false;
+        }
+        match self.relay_packet_gate(target_id) {
+            Some(PacketLayerGate::Open) => true,
+            Some(PacketLayerGate::Rid(selected_rid)) => rid.is_none_or(|rid| rid == *selected_rid),
+            Some(PacketLayerGate::Block) | None => false,
+        }
+    }
+
+    pub(super) fn decoder_refresh_need(
+        &self,
+        incoming_rid: Option<Rid>,
+        incoming_ssrc: Ssrc,
+    ) -> DecoderRefreshNeed {
+        if !self.source_active {
+            return DecoderRefreshNeed::None;
+        }
+        let need = self.decoder_refresh.need(incoming_rid);
+        if need != DecoderRefreshNeed::None {
+            return need;
+        }
+        if self
+            .producer
+            .decoder_ssrc(incoming_rid)
+            .is_some_and(|ssrc| ssrc != incoming_ssrc)
+        {
+            DecoderRefreshNeed::SourceTransition
+        } else {
+            DecoderRefreshNeed::None
+        }
+    }
+
+    pub(super) fn advance_delivery_for(&mut self, incoming_rid: Option<Rid>) {
+        let Some(route) = self.local_route.as_mut() else {
+            return;
+        };
+        for destination in &mut route.destinations {
+            if destination.active
+                && destination.pending_gate.is_none()
+                && destination.packet_gate.permits(incoming_rid)
+            {
+                destination.advance_delivery();
+            }
+        }
+    }
+
+    fn refresh_decoder_refresh_demand(&mut self) {
+        self.decoder_refresh.rebuild(
+            self.local_route
+                .as_ref()
+                .map(|route| route.destinations.as_slice()),
+        );
     }
 
     pub(super) fn register_remote_source(
@@ -431,10 +627,11 @@ impl RouteSource {
         &mut self,
         voice_activity: Option<bool>,
         audio_level_dbov: Option<i8>,
+        filter_at_source: bool,
         now: Instant,
     ) -> bool {
         self.packet
-            .observe_audio_activity(voice_activity, audio_level_dbov, now)
+            .observe_audio_activity(voice_activity, audio_level_dbov, filter_at_source, now)
     }
 
     pub(super) fn set_local_pkt_gate(&mut self, gate: Option<PacketLayerGate>) {
@@ -465,6 +662,10 @@ impl RouteSource {
             Some(PacketLayerGate::Open) | None => None,
             gate => gate,
         }
+    }
+
+    pub(super) const fn source_filter_generation(&self) -> SourceFilterGeneration {
+        self.packet.filter_generation
     }
 
     pub(super) fn add_relay_target(
@@ -633,6 +834,7 @@ impl SourcePacketState {
         &mut self,
         voice_activity: Option<bool>,
         audio_level_dbov: Option<i8>,
+        filter_at_source: bool,
         now: Instant,
     ) -> bool {
         let previous = self.audio.clone();
@@ -644,7 +846,9 @@ impl SourcePacketState {
         };
         audio.observe_packet(voice_activity, audio_level_dbov, now);
         self.audio = Some(audio);
-        let changed = self.audio != previous;
+        let authority_changed = self.filter_audio_at_source != filter_at_source;
+        self.filter_audio_at_source = filter_at_source;
+        let changed = self.audio != previous || authority_changed;
         if changed {
             self.refresh_effective();
         }
@@ -663,6 +867,7 @@ impl SourcePacketState {
 
     fn clear(&mut self) {
         self.audio = None;
+        self.filter_audio_at_source = false;
         self.local = None;
         self.relays.clear();
         self.effective = None;
@@ -681,10 +886,21 @@ impl SourcePacketState {
     }
 
     fn refresh_effective(&mut self) {
-        self.effective = intersect_packet_gates(
+        let audio_gate = if self.filter_audio_at_source {
+            self.audio.as_ref().map(SourceAudioPolicyState::packet_gate)
+        } else {
+            None
+        };
+        let effective = intersect_packet_gates(
             aggregate_packet_gates(self.local.iter().chain(self.relays.values())),
-            self.audio.as_ref().map(SourceAudioPolicyState::packet_gate),
+            audio_gate,
         );
+        if self.effective == Some(PacketLayerGate::Block)
+            && effective.is_some_and(|gate| gate != PacketLayerGate::Block)
+        {
+            self.filter_generation = self.filter_generation.next();
+        }
+        self.effective = effective;
     }
 }
 
@@ -694,35 +910,78 @@ pub(super) struct ProducerSourceState {
     pub(super) ssrcs: Vec<Ssrc>,
     pub(super) codecs: PacketCodecs,
     last_keyframe: Option<Instant>,
+    last_ssrc: Option<Ssrc>,
+    decoder_ssrc: Option<Ssrc>,
     rids: Vec<ProducerRidLiveness>,
-    pub(super) pending_rid_refreshes: Vec<RidKeyframeRefresh>,
 }
 
 impl ProducerSourceState {
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) fn observe_packet(
         &mut self,
         rid: Option<Rid>,
         is_keyframe: bool,
         now: Instant,
     ) -> bool {
-        let Some(rid) = rid else {
-            if is_keyframe {
-                self.last_keyframe = Some(now);
-            }
-            return false;
-        };
-        if let Some(liveness) = self.rids.iter_mut().find(|liveness| liveness.rid == rid) {
-            liveness.observe(is_keyframe, now);
-            return false;
+        let (first_rid_packet, _changed_ssrc) = self.observe_rtp(rid, Ssrc::from(0), now);
+        if is_keyframe {
+            self.observe_decoder_refresh(rid, Ssrc::from(0), now);
         }
-        self.rids.push(ProducerRidLiveness::new_with_keyframe(
-            rid,
-            is_keyframe,
-            now,
-        ));
-        true
+        first_rid_packet
     }
 
+    pub(super) fn observe_rtp(
+        &mut self,
+        rid: Option<Rid>,
+        ssrc: Ssrc,
+        now: Instant,
+    ) -> (bool, bool) {
+        let Some(rid) = rid else {
+            let changed_ssrc = self.last_ssrc.is_some_and(|previous| previous != ssrc);
+            self.last_ssrc = Some(ssrc);
+            return (false, changed_ssrc);
+        };
+        if let Some(liveness) = self.rids.iter_mut().find(|liveness| liveness.rid == rid) {
+            return (false, liveness.observe(ssrc, now));
+        }
+        self.rids.push(ProducerRidLiveness::new(rid, ssrc, now));
+        (true, false)
+    }
+
+    pub(super) fn observe_decoder_refresh(
+        &mut self,
+        rid: Option<Rid>,
+        ssrc: Ssrc,
+        now: Instant,
+    ) -> bool {
+        let Some(rid) = rid else {
+            let changed = self.decoder_ssrc.is_some_and(|previous| previous != ssrc);
+            self.last_keyframe = Some(now);
+            self.decoder_ssrc = Some(ssrc);
+            return changed;
+        };
+        if let Some(liveness) = self.rids.iter_mut().find(|entry| entry.rid == rid) {
+            let changed = liveness
+                .decoder_ssrc
+                .is_some_and(|previous| previous != ssrc);
+            liveness.last_keyframe = Some(now);
+            liveness.decoder_ssrc = Some(ssrc);
+            return changed;
+        }
+        false
+    }
+
+    pub(super) fn decoder_ssrc(&self, rid: Option<Rid>) -> Option<Ssrc> {
+        let Some(rid) = rid else {
+            return self.decoder_ssrc;
+        };
+        self.rids
+            .iter()
+            .find(|entry| entry.rid == rid)
+            .and_then(|entry| entry.decoder_ssrc)
+    }
+
+    #[cfg(test)]
     pub(super) fn rid_is_ready(&self, rid: Rid, now: Instant, max_age: Duration) -> bool {
         self.rids
             .iter()
@@ -749,7 +1008,6 @@ impl ProducerSourceState {
             && self.codecs.is_empty()
             && self.last_keyframe.is_none()
             && self.rids.is_empty()
-            && self.pending_rid_refreshes.is_empty()
     }
 }
 
@@ -758,22 +1016,26 @@ struct ProducerRidLiveness {
     rid: Rid,
     last_seen: Instant,
     last_keyframe: Option<Instant>,
+    last_ssrc: Ssrc,
+    decoder_ssrc: Option<Ssrc>,
 }
 
 impl ProducerRidLiveness {
-    fn new_with_keyframe(rid: Rid, is_keyframe: bool, observed_at: Instant) -> Self {
+    fn new(rid: Rid, ssrc: Ssrc, observed_at: Instant) -> Self {
         Self {
             rid,
             last_seen: observed_at,
-            last_keyframe: is_keyframe.then_some(observed_at),
+            last_keyframe: None,
+            last_ssrc: ssrc,
+            decoder_ssrc: None,
         }
     }
 
-    fn observe(&mut self, is_keyframe: bool, observed_at: Instant) {
+    fn observe(&mut self, ssrc: Ssrc, observed_at: Instant) -> bool {
+        let changed = self.last_ssrc != ssrc;
+        self.last_ssrc = ssrc;
         self.last_seen = observed_at;
-        if is_keyframe {
-            self.last_keyframe = Some(observed_at);
-        }
+        changed
     }
 
     fn is_ready(&self, now: Instant, max_age: Duration) -> bool {
@@ -809,7 +1071,7 @@ fn validate_destination<'a>(
 fn update_selected_rid_dsts(
     route: &mut MediaRouteEntry,
     source_id: TransportMediaId,
-    incoming_rid: Rid,
+    incoming_rid: Option<Rid>,
     is_keyframe: bool,
     ready: &[Rid],
     stale: &mut Vec<Rid>,
@@ -817,20 +1079,28 @@ fn update_selected_rid_dsts(
 ) -> RidReadinessRouteUpdate {
     let mut update = RidReadinessRouteUpdate::default();
     for dst in &mut route.destinations {
-        suspend_stale_dst_gate(dst, source_id, incoming_rid, ready, stale, &mut update);
-        let Some(selected_rid) = dst
-            .pending_gate
-            .as_ref()
-            .and_then(PacketLayerGate::selected_rid)
-        else {
+        if !dst.active {
+            continue;
+        }
+        if let Some(incoming_rid) = incoming_rid {
+            suspend_stale_dst_gate(dst, source_id, incoming_rid, ready, stale, &mut update);
+        }
+        let Some(pending_gate) = dst.pending_gate else {
             continue;
         };
-        push_unique_rid(pending_selected, selected_rid);
-        if selected_rid != incoming_rid {
+        if let Some(selected_rid) = pending_gate.selected_rid() {
+            push_unique_rid(pending_selected, selected_rid);
+        }
+        let matches_refresh = match pending_gate {
+            PacketLayerGate::Rid(rid) => incoming_rid == Some(rid),
+            PacketLayerGate::Open => true,
+            PacketLayerGate::Block => false,
+        };
+        if !matches_refresh {
             continue;
         }
         update.mark_pending_selected_gate();
-        if is_keyframe && let Some(packet_gate) = dst.pending_gate.take() {
+        if is_keyframe && let Some(packet_gate) = dst.pending_gate {
             debug!(
                 ?source_id,
                 consumer_session_key = ?dst.dest_session,
@@ -839,11 +1109,11 @@ fn update_selected_rid_dsts(
                 activated_packet_gate = ?packet_gate,
                 "activated deferred strict RID packet gate after producer RID became live"
             );
-            dst.packet_gate = packet_gate;
+            dst.activate_refresh(packet_gate);
             update.mark_activated_pending_gate();
         }
     }
-    if is_keyframe && update.selected_gate != RidReadinessSelectedGateUpdate::Activated {
+    if is_keyframe && let Some(incoming_rid) = incoming_rid {
         activate_bootstrap_dsts(route, source_id, incoming_rid, &mut update);
     }
     update
@@ -889,6 +1159,9 @@ fn activate_bootstrap_dsts(
     update: &mut RidReadinessRouteUpdate,
 ) {
     for dst in &mut route.destinations {
+        if !dst.active {
+            continue;
+        }
         let Some(selected_rid) = dst
             .pending_gate
             .as_ref()
@@ -907,7 +1180,7 @@ fn activate_bootstrap_dsts(
             pending_selected_rid = ?selected_rid,
             "activated bootstrap fallback RID packet gate while selected producer RID is pending"
         );
-        dst.packet_gate = PacketLayerGate::Rid(incoming_rid);
+        dst.activate_bootstrap_refresh(PacketLayerGate::Rid(incoming_rid));
         update.mark_bootstrap_fallback();
     }
 }

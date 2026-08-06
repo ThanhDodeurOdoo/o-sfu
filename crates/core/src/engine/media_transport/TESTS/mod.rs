@@ -11,6 +11,7 @@ use std::{
 use o_sfu_router::{
     MediaKind,
     rtp::{MediaStream, StreamBinding},
+    test_support::rtp_samples::sample_video_rtp_parameters,
 };
 use str0m::media::Mid;
 
@@ -335,8 +336,8 @@ async fn media_transport_plan_updates_source_route() {
     let consumer_session = test_session_key(60, 1, 2, UserId::Integer(2));
     let peer_source_session = test_session_key(60, 2, 3, UserId::Integer(3));
     let missing_session = test_session_key(60, 0, 4, UserId::Integer(4));
-    let source_rtp_parameters = sample_rtp_parameters("cam-up", 81_000);
-    let consumer_rtp_parameters = sample_rtp_parameters("cam-down", 82_000);
+    let source_rtp_parameters = sample_video_rtp_parameters(Some("cam-up"), 81_000);
+    let consumer_rtp_parameters = sample_video_rtp_parameters(Some("cam-down"), 82_000);
 
     prepare_rtc_sessions(
         &adapter,
@@ -442,7 +443,7 @@ async fn media_transport_plan_updates_source_route() {
         ConsumerRouteControl::new(route)
             .packet_gate(packet_gate)
             .activity(ConsumerActivity::from_active(active))
-            .request_keyframe(true)
+            .request_decoder_refresh(true)
     };
     plan.push_consumer(
         ConsumerRouteControl::new(cross_room_route).packet_gate(SourcePacketGate::Rid("hi".into())),
@@ -452,7 +453,7 @@ async fn media_transport_plan_updates_source_route() {
     plan.push_consumer(
         ConsumerRouteControl::new(missing_route)
             .activity(ConsumerActivity::Inactive)
-            .request_keyframe(true),
+            .request_decoder_refresh(true),
         2,
     );
     plan.push_consumer(follow_up(misaddressed_route, Some("hi"), false), 3);
@@ -531,7 +532,7 @@ async fn media_transport_plan_updates_source_route() {
         .route_entry_by_media_id(route.source_transport_media_id())
         .await
         .unwrap_or_else(|| panic!("video route should survive planned route control"));
-    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
+    assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Block);
     assert!(route_entry.source_active);
     assert_eq!(route_entry.active_destination_count, 1);
     assert!(route_entry.destinations.iter().any(|destination| {

@@ -6,7 +6,6 @@
 //! negotiated browser media lookup remains in `media_registry`
 
 mod active_rank;
-mod rid_refresh;
 mod source;
 
 use std::{
@@ -19,8 +18,7 @@ use std::{
 
 use active_rank::ActiveSpeakerRank;
 use o_sfu_router::rtp::MediaStream;
-use rid_refresh::RidRefreshQueue;
-use source::{RemovedConsumerRoute, RouteSource};
+use source::{MovedConsumerRoute, RemovedConsumerRoute, RouteSource};
 pub(super) use source::{RidReadinessRouteUpdate, RidReadinessSelectedGateUpdate};
 use str0m::{
     media::{KeyframeRequestKind, Pt, Rid},
@@ -31,10 +29,17 @@ use tracing::debug;
 use super::{
     bitrate::MediaBitrateCounter,
     commands::RemoteSourceControl,
-    keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker, SourceKeyframeRequest},
+    decoder_refresh::DecoderRefreshNeed,
+    keyframe_tracker::{
+        KeyframeRequestDecision, KeyframeRequestOrigin, KeyframeRequestTracker,
+        SourceKeyframeRequest,
+    },
     relay_registry::{ActiveRelayTarget, RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
-    source_route::{MediaRouteDestination, MediaRouteEntry, PacketCodec, RemoteSourceRegistration},
+    source_route::{
+        MediaRouteDestination, MediaRouteEntry, PacketCodec, RemoteSourceRegistration,
+        SourceFilterGeneration,
+    },
 };
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityUpdate,
@@ -49,7 +54,12 @@ pub(super) struct RouteTable {
     active: ActiveSpeakerRank,
     remote_gate_queue: VecDeque<TransportMediaId>,
     keyframe_requests: KeyframeRequestTracker,
-    rid_refresh: RidRefreshQueue,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ProducerRtpObservation {
+    pub(super) first_rid_packet: bool,
+    pub(super) decoder_refresh_need: DecoderRefreshNeed,
 }
 
 impl RouteTable {
@@ -200,18 +210,17 @@ impl RouteTable {
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-        pending_gate: Option<PacketLayerGate>,
     ) -> Result<bool, TransportAdapterError> {
         self.sources
             .get_mut(&source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?
-            .set_consumer_pkt_gate(dst_idx, session_key, media_id, packet_gate, pending_gate)
+            .set_consumer_pkt_gate(dst_idx, session_key, media_id, packet_gate)
     }
 
     pub(super) fn update_rid_readiness(
         &mut self,
         source_id: TransportMediaId,
-        incoming_rid: Rid,
+        incoming_rid: Option<Rid>,
         is_keyframe: bool,
         ready: &[Rid],
         stale: &mut Vec<Rid>,
@@ -245,13 +254,18 @@ impl RouteTable {
         Some(removed.route)
     }
 
-    pub(super) fn remove_dsts_for_session(&mut self, session_key: &TransportSessionKey) {
+    pub(super) fn remove_dsts_for_session(
+        &mut self,
+        session_key: &TransportSessionKey,
+    ) -> Vec<(TransportMediaId, MovedConsumerRoute)> {
         let mut affected = Vec::new();
+        let mut moved_routes = Vec::new();
         let mut removed_forwarding_sources = 0;
         for (source_id, source) in &mut self.sources {
-            if let Some(change) = source.remove_dsts_for_session(session_key) {
+            if let Some((change, moved)) = source.remove_dsts_for_session(session_key) {
                 removed_forwarding_sources += usize::from(change.stopped_forwarding());
                 affected.push(*source_id);
+                moved_routes.extend(moved.into_iter().map(|moved| (*source_id, moved)));
             }
         }
         self.forwarding_sources -= removed_forwarding_sources;
@@ -260,6 +274,7 @@ impl RouteTable {
             self.prune_unrouted_remote_src(source_id);
             self.prune_empty(source_id);
         }
+        moved_routes
     }
 
     pub(super) fn refresh_src_pkt_gate(&mut self, source_id: TransportMediaId) {
@@ -431,6 +446,21 @@ impl RouteTable {
         })
     }
 
+    pub(super) fn decoder_refresh_is_observable(&self, source_id: TransportMediaId) -> bool {
+        self.sources
+            .get(&source_id)
+            .is_some_and(|source| !source.producer.codecs.is_empty())
+    }
+
+    pub(super) fn source_filter_generation(
+        &self,
+        source_id: TransportMediaId,
+    ) -> Option<SourceFilterGeneration> {
+        self.sources
+            .get(&source_id)
+            .map(RouteSource::source_filter_generation)
+    }
+
     pub(super) fn clear_packet_codecs(&mut self, source_id: TransportMediaId) {
         if let Some(source) = self.sources.get_mut(&source_id) {
             source.producer.codecs.clear();
@@ -443,14 +473,10 @@ impl RouteTable {
         source_id: TransportMediaId,
         parameters: &MediaStream,
     ) {
-        let codecs = PacketCodec::from_parameters(parameters);
-        if codecs.is_empty() {
-            self.clear_packet_codecs(source_id);
-        } else {
-            self.source_mut(source_id).producer.codecs = codecs;
-        }
+        self.source_mut(source_id).producer.codecs = PacketCodec::from_parameters(parameters);
     }
 
+    #[cfg(any(test, feature = "internal-benchmarks"))]
     pub(super) fn observe_producer_packet(
         &mut self,
         source_id: TransportMediaId,
@@ -464,6 +490,31 @@ impl RouteTable {
             .observe_packet(rid, is_keyframe, now);
         self.prune_empty(source_id);
         observed
+    }
+
+    pub(super) fn observe_producer_rtp(
+        &mut self,
+        source_id: TransportMediaId,
+        rid: Option<Rid>,
+        ssrc: Ssrc,
+        decoder_capable: bool,
+        now: Instant,
+    ) -> ProducerRtpObservation {
+        let source = self.source_mut(source_id);
+        let decoder_refresh_need = if decoder_capable {
+            source.decoder_refresh_need(rid, ssrc)
+        } else {
+            DecoderRefreshNeed::None
+        };
+        let (first_rid_packet, changed_ssrc) = source.producer.observe_rtp(rid, ssrc, now);
+        if changed_ssrc && !decoder_capable {
+            source.advance_delivery_for(rid);
+        }
+        self.prune_empty(source_id);
+        ProducerRtpObservation {
+            first_rid_packet,
+            decoder_refresh_need,
+        }
     }
 
     pub(super) fn source_activity_snapshot(
@@ -484,6 +535,7 @@ impl RouteTable {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn producer_rid_is_ready(
         &self,
         source_id: TransportMediaId,
@@ -509,53 +561,16 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn schedule_rid_refresh(
-        &mut self,
-        source_id: TransportMediaId,
-        rid: Rid,
-        request_at: Instant,
-    ) {
-        let source = self.sources.entry(source_id).or_default();
-        self.rid_refresh
-            .schedule(source, source_id, rid, request_at);
-    }
-
-    pub(super) fn drain_due_rid_refreshes(
-        &mut self,
-        source_id: TransportMediaId,
-        rid: Rid,
-        now: Instant,
-    ) -> usize {
-        self.sources.get_mut(&source_id).map_or(0, |source| {
-            let mut due_count = 0;
-            source.producer.pending_rid_refreshes.retain(|refresh| {
-                let due = refresh.rid == rid && refresh.request_at <= now;
-                due_count += usize::from(due);
-                !due
-            });
-            due_count
-        })
-    }
-
-    pub(super) fn drain_all_due_rid_refreshes(
-        &mut self,
-        now: Instant,
-    ) -> Vec<(TransportMediaId, Rid)> {
-        self.rid_refresh.drain_due(&mut self.sources, now)
-    }
-
-    pub(super) fn next_rid_refresh_deadline(&mut self) -> Option<Instant> {
-        self.rid_refresh.next_deadline(&self.sources)
-    }
-
     pub(super) fn track_kf_req(
         &mut self,
         source_id: TransportMediaId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
+        origin: KeyframeRequestOrigin,
         now: Instant,
     ) -> KeyframeRequestDecision {
-        self.keyframe_requests.track(source_id, rid, kind, now)
+        self.keyframe_requests
+            .track(source_id, rid, kind, origin, now)
     }
 
     pub(super) fn forget_kf_req(&mut self, source_id: TransportMediaId, rid: Option<Rid>) {
@@ -566,8 +581,14 @@ impl RouteTable {
         &mut self,
         source_id: TransportMediaId,
         rid: Option<Rid>,
-    ) -> usize {
-        self.keyframe_requests.observe_refresh(source_id, rid)
+        ssrc: Ssrc,
+        now: Instant,
+    ) -> Option<usize> {
+        let source = self.sources.get_mut(&source_id)?;
+        if source.producer.observe_decoder_refresh(rid, ssrc, now) {
+            source.advance_delivery_for(rid);
+        }
+        Some(self.keyframe_requests.observe_refresh(source_id, rid, now))
     }
 
     pub(super) fn drain_due_kf_reqs(
@@ -611,6 +632,7 @@ impl RouteTable {
         );
     }
 
+    #[cfg(any(test, feature = "testing-transport", feature = "internal-benchmarks"))]
     pub(super) fn observe_audio_activity(
         &mut self,
         source_id: TransportMediaId,
@@ -618,11 +640,33 @@ impl RouteTable {
         audio_level_dbov: Option<i8>,
         now: Instant,
     ) -> bool {
+        self.observe_audio_activity_with_filter(
+            source_id,
+            voice_activity,
+            audio_level_dbov,
+            true,
+            now,
+        )
+    }
+
+    pub(super) fn observe_audio_activity_with_filter(
+        &mut self,
+        source_id: TransportMediaId,
+        voice_activity: Option<bool>,
+        audio_level_dbov: Option<i8>,
+        filter_at_source: bool,
+        now: Instant,
+    ) -> bool {
         let packet_gate_changed = match self.sources.entry(source_id) {
             Entry::Occupied(mut entry) => {
                 let source = entry.get_mut();
                 let previous_packet_gate = source.effective_packet_gate();
-                if !source.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+                if !source.observe_audio_activity(
+                    voice_activity,
+                    audio_level_dbov,
+                    filter_at_source,
+                    now,
+                ) {
                     return false;
                 }
                 previous_packet_gate != source.effective_packet_gate()
@@ -632,7 +676,12 @@ impl RouteTable {
                     return false;
                 }
                 let mut source = RouteSource::default();
-                if !source.observe_audio_activity(voice_activity, audio_level_dbov, now) {
+                if !source.observe_audio_activity(
+                    voice_activity,
+                    audio_level_dbov,
+                    filter_at_source,
+                    now,
+                ) {
                     return false;
                 }
                 if source.is_empty() {

@@ -652,6 +652,8 @@ impl PacketLoopState {
         };
         self.clear_producer_ssrcs(session_key, transport_media_id);
         self.routes.clear_packet_codecs(transport_media_id);
+        self.pending_decoder_refreshes
+            .remove_source(transport_media_id);
         self.routes
             .replace_producer_ssrcs(transport_media_id, Vec::new());
     }

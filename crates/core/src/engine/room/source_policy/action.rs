@@ -104,8 +104,8 @@ impl ConsumerPacketSelectionUpdate {
     }
 
     pub(in crate::engine::room) fn route_control(&self) -> ConsumerRouteControl {
-        let mut control =
-            ConsumerRouteControl::new(self.route.clone()).request_keyframe(self.request_keyframe);
+        let mut control = ConsumerRouteControl::new(self.route.clone())
+            .request_decoder_refresh(self.request_keyframe);
         if self.route_activity_changed {
             control = control.activity(ConsumerActivity::from_active(self.route_active()));
         }

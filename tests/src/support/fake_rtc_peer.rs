@@ -41,6 +41,7 @@ pub struct FakeRtcPeer {
     local_addr: SocketAddr,
     send_paths: BTreeMap<MediaKind, ProtocolSendPath>,
     connected: bool,
+    received_nacks: u64,
     start_wallclock: Instant,
     next_synthetic_ssrc: u32,
 }
@@ -63,7 +64,10 @@ impl FakeRtcPeer {
             .await
             .ok()?;
         let local_addr = socket.local_addr().ok()?;
-        let mut rtc = Rtc::builder().set_rtp_mode(true).build(Instant::now());
+        let mut rtc = Rtc::builder()
+            .set_rtp_mode(true)
+            .set_stats_interval(Some(Duration::from_millis(50)))
+            .build(Instant::now());
         rtc.add_local_candidate(Candidate::host(local_addr, "udp").ok()?)?;
         Some(Self {
             rtc,
@@ -71,6 +75,7 @@ impl FakeRtcPeer {
             local_addr,
             send_paths: BTreeMap::new(),
             connected: false,
+            received_nacks: 0,
             start_wallclock: Instant::now(),
             next_synthetic_ssrc: 0x0f00_0001,
         })
@@ -113,6 +118,7 @@ impl FakeRtcPeer {
             &self.socket,
             self.local_addr,
             &mut self.connected,
+            &mut self.received_nacks,
             Instant::now() + timeout_window,
             true,
         )
@@ -134,6 +140,7 @@ impl FakeRtcPeer {
                 &self.socket,
                 self.local_addr,
                 &mut self.connected,
+                &mut self.received_nacks,
                 Instant::now() + IO_SLICE,
                 false,
             )
@@ -155,6 +162,7 @@ impl FakeRtcPeer {
             &self.socket,
             self.local_addr,
             &mut self.connected,
+            &mut self.received_nacks,
             Instant::now() + IO_SLICE,
             false,
         )
@@ -168,9 +176,30 @@ impl FakeRtcPeer {
             &self.socket,
             self.local_addr,
             &mut self.connected,
+            &mut self.received_nacks,
             Instant::now() + timeout_window,
         )
         .await
+    }
+
+    pub async fn wait_for_nack(&mut self, timeout_window: Duration) -> Option<()> {
+        let deadline = Instant::now() + timeout_window;
+        while Instant::now() < deadline {
+            pump_until(
+                &mut self.rtc,
+                &self.socket,
+                self.local_addr,
+                &mut self.connected,
+                &mut self.received_nacks,
+                (Instant::now() + IO_SLICE).min(deadline),
+                false,
+            )
+            .await?;
+            if self.received_nacks > 0 {
+                return Some(());
+            }
+        }
+        None
     }
 
     fn write_rtp_packet(&mut self, frame: FakeMediaFrame) -> Option<()> {
@@ -244,6 +273,7 @@ async fn pump_until(
     socket: &UdpSocket,
     local_addr: SocketAddr,
     connected: &mut bool,
+    received_nacks: &mut u64,
     deadline: Instant,
     stop_on_connected: bool,
 ) -> Option<bool> {
@@ -262,6 +292,9 @@ async fn pump_until(
                 if stop_on_connected {
                     return Some(true);
                 }
+            }
+            Output::Event(Event::MediaEgressStats(stats)) => {
+                *received_nacks = (*received_nacks).max(stats.nacks);
             }
             Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected)) => {
                 return None;
@@ -313,6 +346,7 @@ async fn pump_until_rtp(
     socket: &UdpSocket,
     local_addr: SocketAddr,
     connected: &mut bool,
+    received_nacks: &mut u64,
     deadline: Instant,
 ) -> Option<ReceivedRtpPacket> {
     let mut receive_buffer = [0_u8; RECEIVE_BUFFER_LEN];
@@ -330,6 +364,9 @@ async fn pump_until_rtp(
             }
             Output::Event(Event::Connected) => {
                 *connected = true;
+            }
+            Output::Event(Event::MediaEgressStats(stats)) => {
+                *received_nacks = (*received_nacks).max(stats.nacks);
             }
             Output::Event(Event::IceConnectionStateChange(IceConnectionState::Disconnected)) => {
                 return None;

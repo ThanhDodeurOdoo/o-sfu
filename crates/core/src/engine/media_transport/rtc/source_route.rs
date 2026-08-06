@@ -12,6 +12,16 @@ use super::{
 };
 use crate::engine::media_transport::{TransportMediaId, TransportSessionKey, TransportSourceKey};
 
+/// source packet-filter generation used to distinguish intentional RTP gaps
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct SourceFilterGeneration(u64);
+
+impl SourceFilterGeneration {
+    pub(super) const fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
 /// forwarding destination selected for one source media route
 ///
 /// one producer media id can fan out to many consumer transports
@@ -37,15 +47,12 @@ pub(super) struct MediaRouteDestination {
     /// source payload types can differ from consumer payload types after router
     /// negotiation, so forwarding must not reuse the publisher value blindly
     pub(super) dest_payload_type: Option<Pt>,
-    /// stable retransmission policy for this consumer media line
-    ///
-    /// this is captured when the route is registered because the consumer
-    /// media kind is already known there
-    /// the packet loop can then write local RTP without asking `str0m` to
-    /// rediscover the media kind for every destination packet
-    pub(super) nackable: bool,
     /// destination-level activity gate controlled by consumer state
     pub(super) active: bool,
+    /// whether delivery must resume from a complete decoder refresh
+    pub(super) requires_decoder_refresh: bool,
+    /// destination delivery generation used to re-anchor receiver RTP identity
+    pub(super) delivery_epoch: u64,
     /// effective transport gate used by the packet loop right now
     pub(super) packet_gate: PacketLayerGate,
     /// selected strict gate that is waiting for a decodable live RID
@@ -121,8 +128,10 @@ impl MediaRouteEntry {
         }
         if active {
             self.active_destination_count += 1;
+            destination.restart_delivery();
         } else {
             self.active_destination_count -= 1;
+            destination.pause_delivery();
         }
         destination.active = active;
         true
@@ -135,19 +144,50 @@ pub(super) enum DestinationKeyframeTarget {
 }
 
 impl MediaRouteDestination {
+    pub(super) fn advance_delivery(&mut self) {
+        self.delivery_epoch = self.delivery_epoch.wrapping_add(1);
+    }
+
+    pub(super) fn pause_delivery(&mut self) {
+        if !self.requires_decoder_refresh {
+            return;
+        }
+        if self.pending_gate.is_none() {
+            self.pending_gate = Some(self.packet_gate);
+        }
+        self.packet_gate = PacketLayerGate::Block;
+    }
+
+    pub(super) fn restart_delivery(&mut self) {
+        self.advance_delivery();
+        self.pause_delivery();
+    }
+
+    pub(super) fn activate_refresh(&mut self, packet_gate: PacketLayerGate) {
+        self.packet_gate = packet_gate;
+        self.pending_gate = None;
+        self.advance_delivery();
+    }
+
+    pub(super) fn activate_bootstrap_refresh(&mut self, packet_gate: PacketLayerGate) {
+        self.packet_gate = packet_gate;
+        self.advance_delivery();
+    }
+
+    /// resolves the RID that the next destination refresh must target
+    ///
+    /// a pending strict target takes precedence over the incumbent gate
     pub(super) fn keyframe_target_rid(&self, open_rid: Option<Rid>) -> DestinationKeyframeTarget {
+        if let Some(pending_gate) = self.pending_gate {
+            return match pending_gate {
+                PacketLayerGate::Rid(rid) => DestinationKeyframeTarget::Current(Some(rid)),
+                PacketLayerGate::Open => DestinationKeyframeTarget::Current(None),
+                PacketLayerGate::Block => DestinationKeyframeTarget::Stale,
+            };
+        }
         let target_rid = match self.packet_gate {
             PacketLayerGate::Rid(rid) => Some(rid),
-            PacketLayerGate::Block => {
-                let Some(rid) = self
-                    .pending_gate
-                    .as_ref()
-                    .and_then(PacketLayerGate::selected_rid)
-                else {
-                    return DestinationKeyframeTarget::Stale;
-                };
-                Some(rid)
-            }
+            PacketLayerGate::Block => return DestinationKeyframeTarget::Stale,
             PacketLayerGate::Open => open_rid,
         };
         DestinationKeyframeTarget::Current(target_rid)

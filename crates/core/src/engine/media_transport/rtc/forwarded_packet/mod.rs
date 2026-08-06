@@ -19,13 +19,17 @@ use std::{mem::take, sync::Arc, time::Instant};
 
 use o_sfu_rfc::rtp::{h264, vp8};
 use str0m::{
-    media::{ExtensionValues, Mid, Rid},
-    rtp::{RtpHeader, RtpPacket, Ssrc, Vp8Descriptor, Vp8Patch, Vp8PatchError},
+    media::{ExtensionValues, Rid},
+    rtp::{RtpHeader, RtpPacket, SeqNo, Ssrc, Vp8Descriptor, Vp8Patch, Vp8PatchError},
 };
 
 use super::{
-    local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
-    slots::SessionHandle, source_route::PacketCodec, state::PacketLoopState,
+    decoder_refresh::{DecoderRefreshEvidence, DecoderRefreshPacket, Vp8RefreshFragment},
+    local_forwarding::LocalForwardedRtp,
+    local_send_rewrite::Vp8PayloadIdentity,
+    slots::SessionHandle,
+    source_route::{PacketCodec, SourceFilterGeneration},
+    state::PacketLoopState,
 };
 use crate::engine::{
     RoomInstanceId,
@@ -59,6 +63,8 @@ pub struct ForwardedPacket {
     /// relay clones carry this value so a target worker can apply the same
     /// route-control RID without owning the source worker registry
     resolved_source_rid: Option<Rid>,
+    /// source packet-filter generation captured with this RTP event
+    source_filter_generation: Option<SourceFilterGeneration>,
     /// turn-local source observations shared by stats, route planning and egress
     facts: Option<PacketFacts>,
     /// whether source-worker side effects still belong to this packet
@@ -118,14 +124,14 @@ struct ForwardedRtpData {
 #[derive(Debug)]
 pub(super) struct ForwardedRelayRtpData {
     pub(super) header: RtpHeader,
+    pub(super) sequence_number: SeqNo,
 }
 
-/// source observations that should be computed once per packet-loop turn
+/// immutable source observations computed once per packet
 ///
 /// facts are copied into each caller that needs them
-/// they do not own packet bytes and they must not be treated as durable media
-/// state after the current batch because route-control registries can change
-/// between turns
+/// buffered decoder-refresh packets may keep these facts across turns
+/// destination planning still resolves current route state when packets are released
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PacketFacts {
     /// source producer selected by MID, SSRC or relay metadata
@@ -138,8 +144,8 @@ pub(super) struct PacketFacts {
     pub(super) voice_activity: Option<bool>,
     /// audio level projected from RTP header extensions
     pub(super) audio_level: Option<i8>,
-    /// whether this packet can refresh decoder state for the source codec
-    pub(super) decoder_refresh: bool,
+    /// packet identity used to prove a complete decoder-refresh frame
+    pub(super) decoder_refresh_packet: DecoderRefreshPacket,
     /// parsed VP8 descriptor and identity needed by local egress rewrites
     pub(super) vp8_payload: Option<PacketVp8Payload>,
 }
@@ -180,6 +186,7 @@ impl ForwardedPacket {
             source: ForwardedPacketSource::Local(source_session_handle),
             src_media: None,
             resolved_source_rid: None,
+            source_filter_generation: None,
             facts: None,
             visits_origin_sinks: true,
             received_at: rtp_packet.timestamp,
@@ -236,11 +243,11 @@ impl ForwardedPacket {
             return Some(facts);
         }
         let src_media = self.resolve_src_media(state)?;
+        self.source_filter_generation?;
         let rid = self.compute_route_control_rid(state);
-        let packet_codec = state
-            .routes
-            .packet_codec(src_media, self.rtp_header().payload_type);
-        let decoder_refresh = self.decoder_refresh(packet_codec);
+        self.resolved_source_rid = rid;
+        let decoder_refresh_packet = self.decoder_refresh_packet(state, src_media);
+        let packet_codec = decoder_refresh_packet.codec;
         let extensions = self.route_control_extension_values();
         let facts = PacketFacts {
             src_media,
@@ -248,11 +255,35 @@ impl ForwardedPacket {
             room_instance_id: self.src_key(state)?.room_instance_id(),
             voice_activity: extensions.voice_activity,
             audio_level: extensions.audio_level,
-            decoder_refresh,
+            decoder_refresh_packet,
             vp8_payload: self.resolve_vp8_payload(packet_codec),
         };
         self.facts = Some(facts);
         Some(facts)
+    }
+
+    /// captures source generations before a polled local packet is queued
+    pub(super) fn capture_source_generations(&mut self, state: &PacketLoopState) -> bool {
+        if self.source_filter_generation.is_some() {
+            return true;
+        }
+        let Some(src_media) = self.resolve_src_media(state) else {
+            return false;
+        };
+        let Some(filter_generation) = state.routes.source_filter_generation(src_media) else {
+            return false;
+        };
+        self.source_filter_generation = Some(filter_generation);
+        true
+    }
+
+    /// replaces the packet filter generation after same-packet policy reopening
+    pub(super) fn replace_source_filter_generation(&mut self, generation: SourceFilterGeneration) {
+        self.source_filter_generation = Some(generation);
+    }
+
+    pub(super) fn source_filter_generation(&self) -> Option<SourceFilterGeneration> {
+        self.source_filter_generation
     }
 
     /// returns the cached VP8 descriptor facts local egress should use for rewriting
@@ -278,13 +309,11 @@ impl ForwardedPacket {
         self.rtp_header().ssrc
     }
 
-    pub(super) fn route_control_mid(&self) -> Option<Mid> {
-        self.route_control_extension_values().mid
-    }
-
-    pub(super) fn route_control_rid_extension(&self) -> Option<Rid> {
-        let extensions = self.route_control_extension_values();
-        extensions.rid.or(extensions.rid_repair)
+    pub(super) fn sequence_number(&self) -> SeqNo {
+        match &self.data {
+            ForwardedPacketData::Str0mRtp(rtp_data) => rtp_data.rtp_packet.seq_no,
+            ForwardedPacketData::RelayRtp(rtp_data) => rtp_data.sequence_number,
+        }
     }
 
     /// creates a relay-owned view that shares this packet payload
@@ -299,16 +328,23 @@ impl ForwardedPacket {
         state: &PacketLoopState,
         src_media: TransportMediaId,
     ) -> Option<Self> {
+        if matches!(&self.source, ForwardedPacketSource::Local(_)) && self.facts.is_none() {
+            return None;
+        }
         Some(Self {
             source: ForwardedPacketSource::Relayed(self.source.session_key(state)?.clone()),
             src_media: Some(src_media),
-            resolved_source_rid: self.resolved_source_rid,
+            resolved_source_rid: self
+                .facts
+                .map_or(self.resolved_source_rid, |facts| facts.rid),
+            source_filter_generation: self.source_filter_generation,
             facts: self.facts,
             visits_origin_sinks: false,
             received_at: self.received_at,
             payload: Arc::clone(&self.payload),
             data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
                 header: self.rtp_header().clone(),
+                sequence_number: self.sequence_number(),
             }),
         })
     }
@@ -348,6 +384,11 @@ impl ForwardedPacket {
         resolved
     }
 
+    fn route_control_rid_from_ssrc(&self, state: &PacketLoopState) -> Option<Rid> {
+        let src_key = self.source.session_key(state)?;
+        state.source_rid_for_ssrc(src_key, self.rtp_header().ssrc)
+    }
+
     /// exposes a mutable local-send view over this packet
     ///
     /// callers should resolve any packet facts they still need before calling
@@ -361,7 +402,12 @@ impl ForwardedPacket {
             }
             ForwardedPacketData::RelayRtp(rtp_data) => {
                 let header = &rtp_data.header;
-                LocalForwardedRtp::from_relay(header, self.received_at, payload)
+                LocalForwardedRtp::from_relay(
+                    header,
+                    rtp_data.sequence_number,
+                    self.received_at,
+                    payload,
+                )
             }
         }
     }
@@ -377,18 +423,36 @@ impl ForwardedPacket {
         }
     }
 
-    fn route_control_rid_from_ssrc(&self, state: &PacketLoopState) -> Option<Rid> {
-        let src_key = self.source.session_key(state)?;
-        state.source_rid_for_ssrc(src_key, self.rtp_header().ssrc)
+    fn decoder_refresh_evidence(
+        &self,
+        codec: Option<PacketCodec>,
+    ) -> Option<DecoderRefreshEvidence> {
+        match codec {
+            Some(PacketCodec::H264(packetization_mode)) => Some(DecoderRefreshEvidence::H264 {
+                starts_idr: h264::payload_starts_idr(self.payload.as_ref(), packetization_mode),
+            }),
+            Some(PacketCodec::Vp8) => {
+                Vp8RefreshFragment::parse(self.payload.as_ref()).map(DecoderRefreshEvidence::Vp8)
+            }
+            None => None,
+        }
     }
 
-    fn decoder_refresh(&self, codec: Option<PacketCodec>) -> bool {
-        match codec {
-            Some(PacketCodec::H264(packetization_mode)) => {
-                h264::payload_starts_idr(self.payload.as_ref(), packetization_mode)
-            }
-            Some(PacketCodec::Vp8) => vp8::payload_starts_keyframe(self.payload.as_ref()),
-            None => false,
+    fn decoder_refresh_packet(
+        &self,
+        state: &PacketLoopState,
+        src_media: TransportMediaId,
+    ) -> DecoderRefreshPacket {
+        let header = self.rtp_header();
+        let codec = state.routes.packet_codec(src_media, header.payload_type);
+        DecoderRefreshPacket {
+            sequence_number: self.sequence_number(),
+            timestamp: header.timestamp,
+            marker: header.marker,
+            ssrc: header.ssrc,
+            payload_type: header.payload_type,
+            codec,
+            evidence: self.decoder_refresh_evidence(codec),
         }
     }
 
@@ -396,7 +460,6 @@ impl ForwardedPacket {
         if codec != Some(PacketCodec::Vp8) {
             return None;
         }
-        self.resolved_source_rid?;
         PacketVp8Payload::parse(self.payload.as_ref())
     }
 }

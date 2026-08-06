@@ -60,8 +60,9 @@ pub fn apply_route_control_request(
             target_id,
             rid,
             kind,
+            origin,
         } => {
-            worker_request_remote_kf(state, metrics, &source, target_id, rid, kind);
+            worker_request_remote_kf(state, metrics, &source, target_id, rid, kind, origin);
             Ok(())
         }
         RouteControlRequest::SetRemoteSourcePacketGate {
@@ -101,7 +102,7 @@ pub fn apply_media_control_batch(
             Ok(())
         })),
         ConsumerGates { source, updates } => Applied(routes::worker_set_consumer_pkt_gates(
-            state, &source, updates, now,
+            state, &source, updates,
         )),
         ConsumerFollowUp(updates) => Consumers(map_updates(updates, |control| {
             if let Some(activity) = control.activity
@@ -112,7 +113,7 @@ pub fn apply_media_control_batch(
                     error,
                 )));
             }
-            if control.request_keyframe
+            if control.request_decoder_refresh
                 && let Err(error) = worker_request_consumer_kf(state, metrics, &control.route)
             {
                 return ConsumerRouteControlOutcome(Some(ConsumerRouteControlFailure::Keyframe(

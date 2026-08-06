@@ -1,6 +1,9 @@
 use std::time::{Duration, Instant};
 
-use str0m::media::{KeyframeRequestKind, Mid, Rid};
+use str0m::{
+    media::{KeyframeRequestKind, Mid, Rid},
+    rtp::Ssrc,
+};
 
 use crate::engine::{
     UserId,
@@ -8,7 +11,11 @@ use crate::engine::{
         ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
         TransportMediaId,
         rtc::{
-            keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker},
+            decoder_refresh::DecoderRefreshNeed,
+            keyframe_tracker::{
+                KEYFRAME_REQUEST_RETRY_ATTEMPTS, KeyframeRequestDecision, KeyframeRequestOrigin,
+                KeyframeRequestTracker,
+            },
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::PacketLayerGate,
             route_table::RouteTable,
@@ -26,6 +33,106 @@ fn assert_active_speaker_ids(state: &RouteTable, now: Instant, expected: &[Trans
         .map(ActiveSpeakerSource::transport_media_id)
         .collect::<Vec<_>>();
     assert_eq!(ids.as_slice(), expected);
+}
+
+#[test]
+fn opaque_rid_switch_advances_the_delivery_epoch() {
+    let mut state = RouteTable::default();
+    let src_media = TransportMediaId::new(201);
+    let consumer_media = TransportMediaId::new(202);
+    let consumer_session = test_transport_session_key(201, 0, 202, UserId::Integer(203));
+    let dst_idx = state.add_consumer_route(
+        src_media,
+        MediaRouteDestination {
+            dest_session: consumer_session.clone(),
+            dest_transport_media_id: consumer_media,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: Mid::from("cam-down"),
+            dest_payload_type: None,
+            active: true,
+            requires_decoder_refresh: false,
+            delivery_epoch: 0,
+            packet_gate: PacketLayerGate::Rid(Rid::from("lo")),
+            pending_gate: None,
+        },
+    );
+
+    assert_eq!(
+        state.set_consumer_pkt_gate(
+            src_media,
+            dst_idx,
+            &consumer_session,
+            consumer_media,
+            PacketLayerGate::Rid(Rid::from("hi")),
+        ),
+        Ok(true)
+    );
+    assert_eq!(
+        state.local_route(src_media).unwrap().destinations[dst_idx].delivery_epoch,
+        1
+    );
+}
+
+#[test]
+fn decoder_refresh_reanchors_a_same_rid_ssrc_replacement() {
+    let mut state = RouteTable::default();
+    let src_media = TransportMediaId::new(204);
+    let consumer_media = TransportMediaId::new(205);
+    let consumer_session = test_transport_session_key(204, 0, 205, UserId::Integer(206));
+    let rid = Rid::from("hi");
+    let first_ssrc = Ssrc::from(4_321);
+    let replacement_ssrc = Ssrc::from(8_765);
+    let now = Instant::now();
+    let dst_idx = state.add_consumer_route(
+        src_media,
+        MediaRouteDestination {
+            dest_session: consumer_session,
+            dest_transport_media_id: consumer_media,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: Mid::from("cam-down"),
+            dest_payload_type: None,
+            active: true,
+            requires_decoder_refresh: true,
+            delivery_epoch: 0,
+            packet_gate: PacketLayerGate::Rid(rid),
+            pending_gate: None,
+        },
+    );
+
+    let _ = state.observe_producer_rtp(src_media, Some(rid), first_ssrc, true, now);
+    assert_eq!(
+        state.observe_decoder_refresh(src_media, Some(rid), first_ssrc, now),
+        Some(0)
+    );
+    let observation = state.observe_producer_rtp(
+        src_media,
+        Some(rid),
+        replacement_ssrc,
+        true,
+        now + Duration::from_millis(1),
+    );
+    assert_eq!(
+        observation.decoder_refresh_need,
+        DecoderRefreshNeed::SourceTransition
+    );
+    assert_eq!(
+        state.local_route(src_media).unwrap().destinations[dst_idx].delivery_epoch,
+        0
+    );
+
+    assert_eq!(
+        state.observe_decoder_refresh(
+            src_media,
+            Some(rid),
+            replacement_ssrc,
+            now + Duration::from_millis(2),
+        ),
+        Some(0)
+    );
+    assert_eq!(
+        state.local_route(src_media).unwrap().destinations[dst_idx].delivery_epoch,
+        1
+    );
 }
 
 fn assert_single_active_speaker(
@@ -60,7 +167,13 @@ fn track_source_wide(
     src_media: TransportMediaId,
     now: Instant,
 ) -> KeyframeRequestDecision {
-    state.track(src_media, None, KeyframeRequestKind::Pli, now)
+    state.track(
+        src_media,
+        None,
+        KeyframeRequestKind::Pli,
+        KeyframeRequestOrigin::ConsumerFeedback,
+        now,
+    )
 }
 
 #[test]
@@ -83,7 +196,7 @@ fn keyframe_tracker_absorbs_repeated_requests_and_forgets_source_wakeup() {
 }
 
 #[test]
-fn keyframe_tracker_expires_pending_request_without_duplicate_feedback() {
+fn keyframe_tracker_retries_feedback_five_times() {
     let mut state = KeyframeRequestTracker::default();
     let src_media = TransportMediaId::new(18);
     let now = Instant::now();
@@ -93,14 +206,39 @@ fn keyframe_tracker_expires_pending_request_without_duplicate_feedback() {
         track_source_wide(&mut state, src_media, now),
         KeyframeRequestDecision::Forward
     );
-    state.drain_due(now + Duration::from_secs(1), &mut retries);
-
-    assert!(retries.is_empty());
+    for attempt in 1..=KEYFRAME_REQUEST_RETRY_ATTEMPTS {
+        state.drain_due(now + Duration::from_secs(u64::from(attempt)), &mut retries);
+        assert_eq!(retries.len(), usize::from(attempt));
+    }
     assert_eq!(state.next_deadline(), None);
     assert_eq!(
         track_source_wide(&mut state, src_media, now + Duration::from_secs(1)),
         KeyframeRequestDecision::Forward
     );
+}
+
+#[test]
+fn decoder_transition_retries_while_demand_remains() {
+    let mut state = KeyframeRequestTracker::default();
+    let src_media = TransportMediaId::new(180);
+    let now = Instant::now();
+
+    assert_eq!(
+        state.track(
+            src_media,
+            None,
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
+            now,
+        ),
+        KeyframeRequestDecision::Forward
+    );
+    for attempt in 1..=KEYFRAME_REQUEST_RETRY_ATTEMPTS + 2 {
+        let mut retries = Vec::new();
+        state.drain_due(now + Duration::from_secs(u64::from(attempt)), &mut retries);
+        assert_eq!(retries.len(), 1);
+    }
+    assert_eq!(state.next_deadline(), Some(now + Duration::from_secs(8)));
 }
 
 #[test]
@@ -119,6 +257,7 @@ fn keyframe_tracker_retries_after_duplicate_feedback() {
             src_media,
             None,
             KeyframeRequestKind::Fir,
+            KeyframeRequestOrigin::ConsumerFeedback,
             now + Duration::from_millis(100)
         ),
         KeyframeRequestDecision::Absorb
@@ -148,6 +287,7 @@ fn keyframe_tracker_tracks_explicit_rids_independently() {
             src_media,
             Some(Rid::from("hi")),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
             now
         ),
         KeyframeRequestDecision::Forward
@@ -157,6 +297,7 @@ fn keyframe_tracker_tracks_explicit_rids_independently() {
             src_media,
             Some(Rid::from("hi")),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
             now
         ),
         KeyframeRequestDecision::Absorb
@@ -166,6 +307,7 @@ fn keyframe_tracker_tracks_explicit_rids_independently() {
             src_media,
             Some(Rid::from("lo")),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
             now
         ),
         KeyframeRequestDecision::Forward
@@ -182,11 +324,23 @@ fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
     let mut retries = Vec::new();
 
     assert_eq!(
-        state.track(src_media, Some(hi), KeyframeRequestKind::Pli, now),
+        state.track(
+            src_media,
+            Some(hi),
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
+            now,
+        ),
         KeyframeRequestDecision::Forward
     );
     assert_eq!(
-        state.track(src_media, Some(lo), KeyframeRequestKind::Pli, now),
+        state.track(
+            src_media,
+            Some(lo),
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
+            now,
+        ),
         KeyframeRequestDecision::Forward
     );
     assert_eq!(
@@ -194,12 +348,13 @@ fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
             src_media,
             Some(hi),
             KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
             now + Duration::from_millis(100)
         ),
         KeyframeRequestDecision::Absorb
     );
 
-    assert_eq!(state.observe_refresh(src_media, Some(lo)), 1);
+    assert_eq!(state.observe_refresh(src_media, Some(lo), now), 1);
     state.drain_due(now + Duration::from_secs(1), &mut retries);
 
     assert_eq!(retries.len(), 1);
@@ -221,11 +376,44 @@ fn keyframe_tracker_decoder_refresh_clears_source_wide_pending_request() {
         track_source_wide(&mut state, src_media, now + Duration::from_millis(100)),
         KeyframeRequestDecision::Absorb
     );
-    assert_eq!(state.observe_refresh(src_media, Some(Rid::from("hi"))), 1);
+    assert_eq!(
+        state.observe_refresh(src_media, Some(Rid::from("hi")), now),
+        1
+    );
 
     state.drain_due(now + Duration::from_secs(1), &mut retries);
 
     assert!(retries.is_empty());
+}
+
+#[test]
+fn decoder_refresh_cools_consumer_feedback_without_delaying_transitions() {
+    let mut state = KeyframeRequestTracker::default();
+    let src_media = TransportMediaId::new(184);
+    let rid = Rid::from("hi");
+    let now = Instant::now();
+
+    assert_eq!(state.observe_refresh(src_media, Some(rid), now), 0);
+    assert_eq!(
+        state.track(
+            src_media,
+            Some(rid),
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
+            now + Duration::from_millis(500),
+        ),
+        KeyframeRequestDecision::Absorb
+    );
+    assert_eq!(
+        state.track(
+            src_media,
+            Some(rid),
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::DecoderTransition,
+            now + Duration::from_millis(500),
+        ),
+        KeyframeRequestDecision::Forward
+    );
 }
 
 #[test]
@@ -322,8 +510,9 @@ fn route_control_removing_last_consumer_route_preserves_producer_packet_state() 
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: Mid::from("cam-down"),
             dest_payload_type: None,
-            nackable: true,
             active: true,
+            requires_decoder_refresh: true,
+            delivery_epoch: 0,
             packet_gate: PacketLayerGate::Open,
             pending_gate: None,
         },

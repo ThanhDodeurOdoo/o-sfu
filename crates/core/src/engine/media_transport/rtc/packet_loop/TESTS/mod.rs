@@ -80,7 +80,8 @@ use crate::{
                     sample_already_relayed_packet, sample_forwarded_packet,
                     sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_rid,
                     sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
-                    sample_rtp_packet, serialize_stun_message, test_transport_session_key,
+                    sample_rtp_packet, serialize_stun_message, set_sample_packet_rtp_identity,
+                    test_transport_session_key,
                 },
             },
         },
@@ -275,8 +276,9 @@ fn insert_open_route(
             dest_stream: consumer_stream,
             dest_mid: consumer_mid,
             dest_payload_type: None,
-            nackable: true,
             active: true,
+            requires_decoder_refresh: true,
+            delivery_epoch: 0,
             packet_gate: PacketLayerGate::Open,
             pending_gate: None,
         },
@@ -345,8 +347,9 @@ fn register_consumer_route_fixture(
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
-            nackable: true,
             active,
+            requires_decoder_refresh: true,
+            delivery_epoch: 0,
             packet_gate,
             pending_gate,
         },
@@ -448,6 +451,7 @@ fn recv_remote_keyframe_request(
                         target_id,
                         rid,
                         kind,
+                        origin: _,
                     },
                 response: None,
             }) => return (source, target_id, rid, kind),
@@ -570,7 +574,7 @@ fn route_feedback_cases() -> [RouteFeedbackCase; 6] {
                 pending: "hi",
             },
             feedback_rid: None,
-            expected: RouteFeedbackExpectation::Rid("lo"),
+            expected: RouteFeedbackExpectation::Rid("hi"),
             kind: KeyframeRequestKind::Pli,
         },
         RouteFeedbackCase {
@@ -712,6 +716,7 @@ impl PacketLoopHarness {
                 packet_index,
                 src_media,
                 dst_idx,
+                0,
             ));
     }
 }
@@ -1035,6 +1040,22 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
     );
 }
 
+fn refresh_video_codec(state: &mut PacketLoopState, src_media: TransportMediaId, codec: CodecName) {
+    state.routes.refresh_packet_codecs(
+        src_media,
+        &RouterRtpParameters::new(
+            vec![MediaFormat::new(
+                RouterMediaKind::Video,
+                codec,
+                PayloadType::new(111),
+                90_000,
+            )],
+            vec![],
+            vec![],
+        ),
+    );
+}
+
 #[test]
 fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
     let producer_session = test_transport_session_key(89, 0, 90, UserId::Integer(91));
@@ -1049,19 +1070,7 @@ fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
         4_321,
         Some(selected_rid),
     );
-    state.routes.refresh_packet_codecs(
-        src_media,
-        &RouterRtpParameters::new(
-            vec![MediaFormat::new(
-                RouterMediaKind::Video,
-                CodecName::H264,
-                PayloadType::new(111),
-                90_000,
-            )],
-            vec![],
-            vec![],
-        ),
-    );
+    refresh_video_codec(&mut state, src_media, CodecName::H264);
     register_consumer_route_fixture(
         &mut state,
         &consumer_session,
@@ -1100,11 +1109,92 @@ fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
         })
     }));
     assert!(drain_ready_sessions(&mut state).is_empty());
-    assert_eq!(state.routes.next_rid_refresh_deadline(), None);
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 0);
     assert_eq!(snapshot.rtc_keyframe_requests_forwarded(), 0);
     assert_eq!(snapshot.rtp_payload_bytes_ingress(), 2);
+}
+
+#[test]
+fn complete_refresh_activates_the_gate_before_buffered_packets_are_released() {
+    let producer_session = test_transport_session_key(90, 0, 91, UserId::Integer(92));
+    let consumer_session = test_transport_session_key(90, 0, 93, UserId::Integer(94));
+    let selected_rid = Rid::from("hi");
+    let mut state = PacketLoopState::default();
+    let src_media = prepare_source_session_with_rid(
+        &mut state,
+        &producer_session,
+        Mid::from("cam-up"),
+        4_321,
+        Some(selected_rid),
+    );
+    refresh_video_codec(&mut state, src_media, CodecName::Vp8);
+    register_consumer_route_fixture(
+        &mut state,
+        &consumer_session,
+        "cam-down",
+        src_media,
+        true,
+        PacketLayerGate::Block,
+        Some(PacketLayerGate::Rid(selected_rid)),
+    );
+    let mut first = sample_forwarded_packet_with_rid(
+        producer_session.clone(),
+        "cam-up",
+        Some("hi"),
+        &[0x10, 0x30, 0x00, 0x00, 0x9d],
+    );
+    set_sample_packet_rtp_identity(&mut first, 10, 7, false);
+    let mut last = sample_forwarded_packet_with_rid(
+        producer_session,
+        "cam-up",
+        Some("hi"),
+        &[0x00, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01],
+    );
+    set_sample_packet_rtp_identity(&mut last, 11, 7, true);
+    let metrics = RuntimeMetrics::default();
+    let mut buffers = PacketLoopBuffers::new();
+    buffers.pending_packets.extend([first, last]);
+
+    record_incoming_stats(
+        &mut state,
+        &SourcePolicySignal::default(),
+        &metrics.register_rtc_worker(),
+        &metrics.register_rtp_worker(),
+        &mut buffers,
+    );
+
+    assert!(state.routes.local_route(src_media).is_some_and(|route| {
+        route.destinations.iter().all(|destination| {
+            destination.packet_gate == PacketLayerGate::Block
+                && destination.pending_gate == Some(PacketLayerGate::Rid(selected_rid))
+        })
+    }));
+    assert!(buffers.pending_packets.is_empty());
+    assert_eq!(
+        state.pending_decoder_refreshes.drain_released(
+            &mut buffers.observed_packets,
+            64,
+            &mut buffers.decoder_refresh_releases,
+        ),
+        2,
+    );
+
+    record_incoming_stats(
+        &mut state,
+        &SourcePolicySignal::default(),
+        &metrics.register_rtc_worker(),
+        &metrics.register_rtp_worker(),
+        &mut buffers,
+    );
+
+    assert!(state.routes.local_route(src_media).is_some_and(|route| {
+        route.destinations.iter().all(|destination| {
+            destination.packet_gate == PacketLayerGate::Rid(selected_rid)
+                && destination.pending_gate.is_none()
+        })
+    }));
+    assert_eq!(buffers.pending_packets.len(), 2);
 }
 
 #[test]
@@ -1802,8 +1892,9 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
-            nackable: false,
             active: true,
+            requires_decoder_refresh: false,
+            delivery_epoch: 0,
             packet_gate: PacketLayerGate::Open,
             pending_gate: None,
         },

@@ -41,6 +41,7 @@ use str0m::{
 
 use super::{
     bitrate::MediaBitrateCounter,
+    decoder_refresh::PendingDecoderRefreshes,
     demux::RemoteAddrDemux,
     local_send_rewrite::ConsumerStreamStore,
     media_registry::SessionMediaRegistry,
@@ -196,6 +197,8 @@ pub(super) struct PacketLoopState {
     pub(super) users: SessionStore,
     /// source-scoped packet routing, relay and recovery state
     pub(super) routes: RouteTable,
+    /// complete decoder-refresh frames held while a destination RID transition is pending
+    pub(super) pending_decoder_refreshes: PendingDecoderRefreshes,
     /// session-scoped media lookup vectors for packet source resolution
     pub(super) session_media: SessionMediaRegistry,
     /// reusable selected-RID readiness scratch vectors

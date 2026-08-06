@@ -82,8 +82,9 @@ impl LocalSendBenchFixture {
                 dest_stream: stream,
                 dest_mid: mid,
                 dest_payload_type: None,
-                nackable: true,
                 active: true,
+                requires_decoder_refresh: true,
+                delivery_epoch: 0,
                 packet_gate: PacketLayerGate::Open,
                 pending_gate: None,
             },
@@ -94,7 +95,7 @@ impl LocalSendBenchFixture {
 
         let packet = sample_forwarded_packet(producer, "cam-up", LOCAL_SEND_PAYLOAD);
         let observed_at = packet.received_at();
-        let forward = PacketForward::from_local_route_destination(0, src_media, dst_idx);
+        let forward = PacketForward::from_local_route_destination(0, src_media, dst_idx, 0);
         let ForwardSendOutcome::LocalRtc {
             payload_bytes: Some(warmup_bytes),
         } = forward.destination.send(&mut state, &packet)

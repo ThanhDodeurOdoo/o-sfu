@@ -104,8 +104,12 @@ mod loop_driver;
 mod session_drain;
 mod udp;
 
+#[cfg(all(test, not(feature = "internal-benchmarks")))]
+pub(super) use buffers::PacketLoopBuffers;
 #[cfg(test)]
 pub use event_observation::{transport_health_from_event, transport_ice_state};
+#[cfg(test)]
+pub(super) use keyframe_requests::drain_due_kf_retries;
 
 #[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
 pub use self::ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at};

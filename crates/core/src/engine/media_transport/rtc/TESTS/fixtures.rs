@@ -15,6 +15,7 @@ pub(super) use std::{
 pub(super) use o_sfu_router::rtp::{
     MediaStream as RouterRtpParameters, StreamBinding as RouterRtpEncoding,
 };
+use o_sfu_router::test_support::rtp_samples::sample_simulcast_video_rtp_parameters;
 pub(super) use str0m::media::{MediaKind as Str0mMediaKind, Mid};
 
 pub(super) use crate::{
@@ -81,8 +82,12 @@ pub(super) fn sample_router_rtp_parameters_with_rid(
     ssrc: u32,
     rid: &str,
 ) -> RouterRtpParameters {
+    let formats = sample_simulcast_video_rtp_parameters(None)
+        .formats()
+        .cloned()
+        .collect();
     RouterRtpParameters::new(
-        vec![],
+        formats,
         vec![],
         vec![RouterRtpEncoding::new().with_ssrc(ssrc).with_rid(rid)],
     )

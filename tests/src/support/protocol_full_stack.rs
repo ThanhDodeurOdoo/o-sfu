@@ -270,6 +270,10 @@ impl ProtocolFakePeer {
         self.rtc_peer.read_rtp_packet(timeout_window).await
     }
 
+    pub async fn wait_for_nack(&mut self, timeout_window: Duration) -> Option<()> {
+        self.rtc_peer.wait_for_nack(timeout_window).await
+    }
+
     pub async fn read_close_code(&mut self) -> Option<CloseCode> {
         read_close_code(&mut self.websocket).await
     }

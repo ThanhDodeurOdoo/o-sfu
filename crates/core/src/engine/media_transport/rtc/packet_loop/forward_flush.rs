@@ -17,31 +17,44 @@
 //! subscriptions or room membership.
 
 use core::hint::cold_path;
-use std::{mem::take, time::Instant};
+use std::{mem::take, ops::Range, time::Instant};
 
-use str0m::media::{KeyframeRequestKind, MediaKind};
+use str0m::{
+    media::{KeyframeRequestKind, MediaKind, Rid},
+    rtp::Ssrc,
+};
 use tokio::sync::mpsc;
 use tracing::debug;
 
 use super::{
     super::{
-        forwarded_packet::{ForwardedPacket, ForwardedPacketSource},
-        forwarding_destination::{ForwardSendOutcome, ForwardingDestination, relay_enqueue_result},
+        decoder_refresh::{
+            DecoderRefreshActivation, DecoderRefreshAdmission, DecoderRefreshAdmissionInput,
+            DecoderRefreshNeed, DecoderRefreshPacket,
+        },
+        forwarded_packet::{ForwardedPacket, ForwardedPacketSource, PacketFacts},
+        forwarding_destination::{
+            ForwardSendOutcome, ForwardingDestination, PacketForward, relay_enqueue_result,
+        },
+        forwarding_planner::plan_forwards,
         media_registry::RegisteredMediaHandle,
         relay_registry::RelayEnqueueOutcome,
         state::PacketLoopState,
         worker::{
-            KeyframeRequestMode, KeyframeRequestTarget, apply_src_rid_ready, request_kf_for_target,
+            KeyframeRequestMode, KeyframeRequestTarget, apply_src_decoder_ready,
+            request_kf_for_target, request_src_decoder_refresh,
         },
     },
     buffers::PacketLoopBuffers,
 };
 use crate::engine::{
+    RoomInstanceId,
     media_transport::{SourcePolicySignal, TransportMediaId, TransportSessionKey},
     metrics::{
         RtcKeyframeRequestOutcome, RtcMetricsRecorder, RtpDecoderRefreshScope, RtpMetricsRecorder,
         RuntimeMetrics,
     },
+    packet_sink_registry::PacketSinkRouteCache,
 };
 
 /// observe packet-path metadata before packets are forwarded
@@ -50,6 +63,7 @@ use crate::engine::{
 /// incoming bitrate become worker state or metrics. The function also coalesces
 /// source-policy wakeups so the room layer is notified once per changed room
 /// after the batch has been inspected.
+#[cfg(any(test, feature = "internal-benchmarks"))]
 pub(super) fn record_incoming_stats(
     state: &mut PacketLoopState,
     source_policy_signal: &SourcePolicySignal,
@@ -57,95 +71,392 @@ pub(super) fn record_incoming_stats(
     rtp: &RtpMetricsRecorder,
     buffers: &mut PacketLoopBuffers,
 ) {
-    let mut pending_packets = take(&mut buffers.pending_packets);
-    for packet in &mut pending_packets {
-        if let Some(facts) = packet.resolve_facts(state) {
-            let payload_len = packet.payload().len();
-            let transport_media_id = facts.src_media;
-            if packet.route_control_mid().is_some() {
-                // MID proves which producer this packet belongs to. Persist the
-                // SSRC before the browser stops sending MID/RID extensions.
-                state.learn_producer_ssrc_from_pkt(
-                    packet.source(),
-                    transport_media_id,
-                    packet.route_control_ssrc(),
-                    packet.route_control_rid_extension(),
+    observe_incoming_packets(state, source_policy_signal, control, rtp, None, buffers);
+}
+
+pub(super) fn observe_and_plan_incoming_packets(
+    state: &mut PacketLoopState,
+    source_policy_signal: &SourcePolicySignal,
+    control: &RtcMetricsRecorder,
+    rtp: &RtpMetricsRecorder,
+    packet_sinks: &PacketSinkRouteCache,
+    buffers: &mut PacketLoopBuffers,
+) {
+    observe_incoming_packets(
+        state,
+        source_policy_signal,
+        control,
+        rtp,
+        Some(packet_sinks),
+        buffers,
+    );
+}
+
+fn observe_incoming_packets(
+    state: &mut PacketLoopState,
+    source_policy_signal: &SourcePolicySignal,
+    control: &RtcMetricsRecorder,
+    rtp: &RtpMetricsRecorder,
+    packet_sinks: Option<&PacketSinkRouteCache>,
+    buffers: &mut PacketLoopBuffers,
+) {
+    let mut incoming_packets = take(&mut buffers.pending_packets);
+    let mut ready_packets = take(&mut buffers.observed_packets);
+    plan_decoder_refresh_releases(
+        state,
+        control,
+        rtp,
+        packet_sinks,
+        buffers,
+        &mut ready_packets,
+    );
+    for mut packet in incoming_packets.drain(..) {
+        let facts = packet.resolve_facts(state);
+        let observed = match observe_packet_metadata(state, rtp, buffers, &mut packet, facts) {
+            PacketMetadataObservation::Observed(observed) => observed,
+            PacketMetadataObservation::Unresolved => {
+                let pkt_idx = ready_packets.len();
+                ready_packets.push(packet);
+                plan_ready_packets(
+                    state,
+                    control,
+                    packet_sinks,
+                    pkt_idx..ready_packets.len(),
+                    &mut ready_packets,
+                    &mut buffers.forwards,
                 );
+                continue;
             }
-            let audio_policy_changed = state.routes.observe_audio_activity(
-                transport_media_id,
-                facts.voice_activity,
-                facts.audio_level,
-                packet.received_at(),
+        };
+        if observed.decoder_refresh_packet.codec.is_some()
+            && state.pending_decoder_refreshes.has_matching_release(
+                observed.room_instance_id,
+                observed.src_media,
+                observed.rid,
+                observed.decoder_refresh_packet,
+            )
+        {
+            update_decoder_readiness(state, control, buffers, &observed);
+            let deferred = state.pending_decoder_refreshes.defer_behind_release(
+                observed.room_instance_id,
+                observed.src_media,
+                observed.rid,
+                observed.decoder_refresh_packet,
+                packet,
             );
-            if facts.decoder_refresh {
-                let cleared = state
-                    .routes
-                    .observe_decoder_refresh(transport_media_id, facts.rid);
-                for _ in 0..cleared {
-                    control.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
+            if !deferred {
+                let src_key = match &observed.source {
+                    ForwardedPacketSource::Relayed(src_key) => Some(src_key.clone()),
+                    ForwardedPacketSource::Local(session_handle) => {
+                        state.users.key_for_handle(*session_handle).cloned()
+                    }
+                };
+                if let Some(src_key) = src_key {
+                    request_src_decoder_refresh(
+                        state,
+                        control,
+                        &src_key,
+                        observed.src_media,
+                        observed.rid,
+                        observed.received_at,
+                    );
                 }
             }
-            if audio_policy_changed {
-                cold_path();
-                buffers
-                    .dirty_source_policy_channel_ids
-                    .push(facts.room_instance_id);
-            }
-            let packet_rid = facts.rid;
-            if packet_rid.is_some() || facts.decoder_refresh {
-                state.routes.observe_producer_packet(
-                    transport_media_id,
-                    packet_rid,
-                    facts.decoder_refresh,
-                    packet.received_at(),
-                );
-            }
-            if facts.decoder_refresh {
-                let scope = if packet_rid.is_some() {
-                    RtpDecoderRefreshScope::Rid
-                } else {
-                    RtpDecoderRefreshScope::Source
-                };
-                rtp.record_decoder_refresh(scope);
-            }
-            if let Some(rid) = packet_rid {
-                buffers.push_rid_readiness(
-                    packet.source(),
-                    transport_media_id,
-                    rid,
-                    facts.decoder_refresh,
-                    packet.received_at(),
-                );
-            }
-            let first_ingress = state
-                .record_incoming_bitrate(transport_media_id, packet.received_at(), payload_len)
-                .unwrap_or(false);
-            if first_ingress {
-                cold_path();
-                let Some(src_key) = packet.src_key(state) else {
-                    continue;
-                };
-                debug!(
-                    user_id = ?src_key.user_id(),
-                    media_worker_id = src_key.media_worker_id().as_usize(),
-                    ?transport_media_id,
-                    payload_bytes = payload_len,
-                    "observed first RTP ingress for published media"
-                );
-                buffers.push_first_video_keyframe(
-                    packet.source(),
-                    transport_media_id,
-                    packet.received_at(),
-                );
-            }
-            rtp.record_ingress(payload_len);
+            continue;
+        }
+        let admission = admit_observed_packet(state, &observed, packet, &mut ready_packets);
+        let packet_range = match admission {
+            DecoderRefreshAdmission::Held => None,
+            DecoderRefreshAdmission::Ready { packet_range } => Some(packet_range),
+        };
+        update_decoder_readiness(state, control, buffers, &observed);
+        if let Some(packet_range) = packet_range {
+            plan_ready_packets(
+                state,
+                control,
+                packet_sinks,
+                packet_range,
+                &mut ready_packets,
+                &mut buffers.forwards,
+            );
         }
     }
-    buffers.pending_packets = pending_packets;
-    flush_pending_rid_readiness(state, control, buffers);
+    buffers.pending_packets = ready_packets;
+    buffers.observed_packets = incoming_packets;
+    buffers.pending_rid_readiness.clear();
     flush_first_video_kfs(state, control, buffers);
     buffers.flush_source_policy_dirty(source_policy_signal);
+}
+
+fn plan_decoder_refresh_releases(
+    state: &mut PacketLoopState,
+    control: &RtcMetricsRecorder,
+    rtp: &RtpMetricsRecorder,
+    packet_sinks: Option<&PacketSinkRouteCache>,
+    buffers: &mut PacketLoopBuffers,
+    ready_packets: &mut [ForwardedPacket],
+) {
+    let mut releases = take(&mut buffers.decoder_refresh_releases);
+    let mut failed_sources = Vec::new();
+    for release in releases.drain(..) {
+        if failed_sources.contains(&release.source_id) {
+            continue;
+        }
+        let may_plan = match release.activation {
+            None => true,
+            Some(activation) => {
+                let source_id = activation.source_id;
+                let activated =
+                    activate_decoder_refresh_release(state, control, rtp, buffers, &activation);
+                if !activated {
+                    state.pending_decoder_refreshes.remove_source(source_id);
+                    failed_sources.push(source_id);
+                }
+                activated
+            }
+        };
+        if may_plan {
+            plan_ready_packets(
+                state,
+                control,
+                packet_sinks,
+                release.packet_range,
+                ready_packets,
+                &mut buffers.forwards,
+            );
+        }
+    }
+    buffers.decoder_refresh_releases = releases;
+}
+
+fn activate_decoder_refresh_release(
+    state: &mut PacketLoopState,
+    control: &RtcMetricsRecorder,
+    rtp: &RtpMetricsRecorder,
+    buffers: &mut PacketLoopBuffers,
+    activation: &DecoderRefreshActivation,
+) -> bool {
+    if !observe_complete_decoder_refresh(
+        state,
+        control,
+        rtp,
+        activation.source_id,
+        activation.rid,
+        activation.ssrc,
+        activation.observed_at,
+    ) {
+        return false;
+    }
+    let Some(readiness) = buffers.push_rid_readiness(
+        &activation.source,
+        activation.source_id,
+        activation.rid,
+        true,
+        activation.observed_at,
+    ) else {
+        return true;
+    };
+    if apply_pending_rid_readiness(state, control, &readiness) {
+        buffers
+            .rid_readiness_changed_sources
+            .push(activation.source_id);
+    }
+    true
+}
+
+struct ObservedIncomingPacket {
+    source: ForwardedPacketSource,
+    room_instance_id: RoomInstanceId,
+    src_media: TransportMediaId,
+    rid: Option<Rid>,
+    received_at: Instant,
+    decoder_refresh_need: DecoderRefreshNeed,
+    decoder_refresh_packet: DecoderRefreshPacket,
+}
+
+enum PacketMetadataObservation {
+    Observed(ObservedIncomingPacket),
+    Unresolved,
+}
+
+fn observe_packet_metadata(
+    state: &mut PacketLoopState,
+    rtp: &RtpMetricsRecorder,
+    buffers: &mut PacketLoopBuffers,
+    packet: &mut ForwardedPacket,
+    facts: Option<PacketFacts>,
+) -> PacketMetadataObservation {
+    let Some(facts) = facts else {
+        return PacketMetadataObservation::Unresolved;
+    };
+    let payload_len = packet.payload().len();
+    let src_media = facts.src_media;
+    let source = packet.source().clone();
+    let received_at = packet.received_at();
+    let decoder_capable = facts.decoder_refresh_packet.codec.is_some();
+    let producer_observation = state.routes.observe_producer_rtp(
+        src_media,
+        facts.rid,
+        facts.decoder_refresh_packet.ssrc,
+        decoder_capable,
+        received_at,
+    );
+    state.learn_producer_ssrc_from_pkt(
+        packet.source(),
+        src_media,
+        packet.route_control_ssrc(),
+        facts.rid,
+    );
+    observe_audio_filter(state, buffers, packet, facts, received_at);
+    if producer_observation.first_rid_packet {
+        debug!(?src_media, ?facts.rid, "observed first RTP for producer RID");
+    }
+    if state.record_incoming_bitrate(src_media, received_at, payload_len) == Some(true) {
+        cold_path();
+        if let Some(src_key) = packet.src_key(state) {
+            debug!(
+                user_id = ?src_key.user_id(),
+                media_worker_id = src_key.media_worker_id().as_usize(),
+                ?src_media,
+                payload_bytes = payload_len,
+                "observed first RTP ingress for published media"
+            );
+            buffers.push_first_video_keyframe(&source, src_media, received_at);
+        }
+    }
+    rtp.record_ingress(payload_len);
+    PacketMetadataObservation::Observed(ObservedIncomingPacket {
+        source,
+        room_instance_id: facts.room_instance_id,
+        src_media,
+        rid: facts.rid,
+        received_at,
+        decoder_refresh_need: producer_observation.decoder_refresh_need,
+        decoder_refresh_packet: facts.decoder_refresh_packet,
+    })
+}
+
+fn observe_audio_filter(
+    state: &mut PacketLoopState,
+    buffers: &mut PacketLoopBuffers,
+    packet: &mut ForwardedPacket,
+    facts: PacketFacts,
+    received_at: Instant,
+) {
+    let filter_at_source = packet.visits_origin_sinks();
+    let activity_changed = state.routes.observe_audio_activity_with_filter(
+        facts.src_media,
+        facts.voice_activity,
+        facts.audio_level,
+        filter_at_source,
+        received_at,
+    );
+    if filter_at_source
+        && let Some(generation) = state.routes.source_filter_generation(facts.src_media)
+    {
+        packet.replace_source_filter_generation(generation);
+    }
+    if activity_changed {
+        cold_path();
+        buffers
+            .dirty_source_policy_channel_ids
+            .push(facts.room_instance_id);
+    }
+}
+
+fn admit_observed_packet(
+    state: &mut PacketLoopState,
+    observed: &ObservedIncomingPacket,
+    packet: ForwardedPacket,
+    ready_packets: &mut Vec<ForwardedPacket>,
+) -> DecoderRefreshAdmission {
+    if observed.decoder_refresh_packet.codec.is_none() {
+        let start = ready_packets.len();
+        ready_packets.push(packet);
+        return DecoderRefreshAdmission::Ready {
+            packet_range: start..ready_packets.len(),
+        };
+    }
+    state.pending_decoder_refreshes.admit(
+        DecoderRefreshAdmissionInput {
+            room_instance_id: observed.room_instance_id,
+            source_id: observed.src_media,
+            rid: observed.rid,
+            need: observed.decoder_refresh_need,
+            packet: observed.decoder_refresh_packet,
+            observed_at: observed.received_at,
+        },
+        packet,
+        ready_packets,
+    )
+}
+
+fn update_decoder_readiness(
+    state: &mut PacketLoopState,
+    control: &RtcMetricsRecorder,
+    buffers: &mut PacketLoopBuffers,
+    observed: &ObservedIncomingPacket,
+) {
+    let Some(readiness) = buffers.push_rid_readiness(
+        &observed.source,
+        observed.src_media,
+        observed.rid,
+        false,
+        observed.received_at,
+    ) else {
+        return;
+    };
+    if apply_pending_rid_readiness(state, control, &readiness) {
+        buffers
+            .rid_readiness_changed_sources
+            .push(observed.src_media);
+    }
+}
+
+fn plan_ready_packets(
+    state: &PacketLoopState,
+    control: &RtcMetricsRecorder,
+    packet_sinks: Option<&PacketSinkRouteCache>,
+    packet_range: Range<usize>,
+    ready_packets: &mut [ForwardedPacket],
+    forwards: &mut Vec<PacketForward>,
+) {
+    let Some(packet_sinks) = packet_sinks else {
+        return;
+    };
+    for pkt_idx in packet_range {
+        if let Some(packet) = ready_packets.get_mut(pkt_idx) {
+            plan_forwards(state, packet_sinks, control, pkt_idx, packet, forwards);
+        }
+    }
+}
+
+fn observe_complete_decoder_refresh(
+    state: &mut PacketLoopState,
+    control: &RtcMetricsRecorder,
+    rtp: &RtpMetricsRecorder,
+    transport_media_id: TransportMediaId,
+    rid: Option<Rid>,
+    ssrc: Ssrc,
+    observed_at: Instant,
+) -> bool {
+    let Some(cleared) =
+        state
+            .routes
+            .observe_decoder_refresh(transport_media_id, rid, ssrc, observed_at)
+    else {
+        return false;
+    };
+    for _ in 0..cleared {
+        control.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
+    }
+    let scope = if rid.is_some() {
+        RtpDecoderRefreshScope::Rid
+    } else {
+        RtpDecoderRefreshScope::Source
+    };
+    rtp.record_decoder_refresh(scope);
+    true
 }
 
 #[cfg(feature = "internal-benchmarks")]
@@ -159,41 +470,34 @@ pub fn record_incoming_stats_for_benchmark(
     record_incoming_stats(state, source_policy_signal, control, rtp, buffers);
 }
 
-fn flush_pending_rid_readiness(
+fn apply_pending_rid_readiness(
     state: &mut PacketLoopState,
     metrics: &RtcMetricsRecorder,
-    buffers: &mut PacketLoopBuffers,
-) {
-    for pending in buffers.pending_rid_readiness.drain(..) {
-        let changed = match &pending.source {
-            ForwardedPacketSource::Relayed(src_key) => apply_src_rid_ready(
+    pending: &super::buffers::PendingRidReadiness,
+) -> bool {
+    match &pending.source {
+        ForwardedPacketSource::Relayed(src_key) => apply_src_decoder_ready(
+            state,
+            metrics,
+            src_key,
+            pending.src_media,
+            pending.rid,
+            pending.complete_refresh,
+            pending.observed_at,
+        ),
+        ForwardedPacketSource::Local(session_handle) => {
+            let Some(src_key) = state.users.key_for_handle(*session_handle).cloned() else {
+                return false;
+            };
+            apply_src_decoder_ready(
                 state,
                 metrics,
-                src_key,
+                &src_key,
                 pending.src_media,
                 pending.rid,
-                pending.is_keyframe,
+                pending.complete_refresh,
                 pending.observed_at,
-            ),
-            ForwardedPacketSource::Local(session_handle) => {
-                let Some(src_key) = state.users.key_for_handle(*session_handle).cloned() else {
-                    continue;
-                };
-                apply_src_rid_ready(
-                    state,
-                    metrics,
-                    &src_key,
-                    pending.src_media,
-                    pending.rid,
-                    pending.is_keyframe,
-                    pending.observed_at,
-                )
-            }
-        };
-        if changed {
-            buffers
-                .rid_readiness_changed_sources
-                .push(pending.src_media);
+            )
         }
     }
 }
@@ -263,7 +567,12 @@ fn request_first_video_kf_for_session(
             KeyframeRequestTarget::Local(src_key, transport_media_id),
             None,
             KeyframeRequestKind::Pli,
-            KeyframeRequestMode::Track(now),
+            KeyframeRequestMode::for_recovery(
+                now,
+                state
+                    .routes
+                    .decoder_refresh_is_observable(transport_media_id),
+            ),
         );
     }
 }

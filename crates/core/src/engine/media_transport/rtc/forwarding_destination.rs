@@ -61,8 +61,8 @@ pub(super) enum ForwardSendOutcome {
 ///
 /// the handle names a source route plus the destination index observed while
 /// planning the current packet-loop turn
-/// it deliberately does not clone the consumer session or RTP rewrite identity
-/// those route-stable facts are resolved during flush while `PacketLoopState`
+/// it captures the delivery epoch because later packets in the turn may advance it
+/// route-stable consumer facts are resolved during flush while `PacketLoopState`
 /// is borrowed mutably
 ///
 /// callers must not persist this value beyond the flush that owns the matching
@@ -73,6 +73,8 @@ pub(super) struct LocalRtcPacketDestination {
     src_media: TransportMediaId,
     /// destination slot inside the route for this packet-loop turn
     dst_idx: usize,
+    /// destination delivery generation observed when this packet was admitted
+    delivery_epoch: u64,
 }
 
 /// packet sink destination tied to the source transport media id
@@ -97,11 +99,14 @@ impl PacketForward {
         pkt_idx: usize,
         src_media: TransportMediaId,
         dst_idx: usize,
+        delivery_epoch: u64,
     ) -> Self {
         Self {
             pkt_idx,
             destination: ForwardingDestination::LocalRtc(LocalRtcPacketDestination::new(
-                src_media, dst_idx,
+                src_media,
+                dst_idx,
+                delivery_epoch,
             )),
         }
     }
@@ -143,6 +148,14 @@ impl ForwardingDestination {
     pub(super) const fn local_route(&self) -> Option<(TransportMediaId, usize)> {
         match self {
             Self::LocalRtc(destination) => Some((destination.src_media, destination.dst_idx)),
+            Self::PacketSink(_) | Self::Relay(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn local_delivery_epoch(&self) -> Option<u64> {
+        match self {
+            Self::LocalRtc(destination) => Some(destination.delivery_epoch),
             Self::PacketSink(_) | Self::Relay(_) => None,
         }
     }
@@ -189,8 +202,12 @@ impl LocalRtcPacketDestination {
     /// this constructor is private so only the forwarding planner can create a
     /// local rtc destination after route-control gates have already accepted
     /// the packet
-    const fn new(src_media: TransportMediaId, dst_idx: usize) -> Self {
-        Self { src_media, dst_idx }
+    const fn new(src_media: TransportMediaId, dst_idx: usize, delivery_epoch: u64) -> Self {
+        Self {
+            src_media,
+            dst_idx,
+            delivery_epoch,
+        }
     }
 
     /// writes one packet to the destination session when the route is still live
@@ -222,14 +239,22 @@ impl LocalRtcPacketDestination {
             let sender = LocalPacketDestination::new(
                 route_destination.dest_transport_media_id,
                 route_destination.dest_stream,
+                self.delivery_epoch,
                 route_destination.dest_mid,
                 route_destination.dest_payload_type,
-                route_destination.nackable,
             );
             let vp8_payload = packet.local_vp8_payload();
-            let Some(payload_bytes) =
-                sender.send(session_state, &packet.local_send_packet(), vp8_payload)
-            else {
+            let Some(source_filter_generation) = packet.source_filter_generation() else {
+                return ForwardSendOutcome::LocalRtc {
+                    payload_bytes: None,
+                };
+            };
+            let Some(payload_bytes) = sender.send(
+                session_state,
+                &packet.local_send_packet(),
+                source_filter_generation,
+                vp8_payload,
+            ) else {
                 return ForwardSendOutcome::LocalRtc {
                     payload_bytes: None,
                 };

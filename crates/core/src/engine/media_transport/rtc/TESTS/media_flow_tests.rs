@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use o_sfu_router::test_support::rtp_samples::sample_simulcast_video_rtp_parameters;
 use tokio::time::timeout;
 
 use super::{super::route_control::PacketLayerGate, fixtures::*};
@@ -297,7 +298,7 @@ async fn rtc_consumer_rid_policy_waits_for_live_rid_before_strict_aggregate_gate
     let producer_session_key = transport_key(1, 21, UserId::Integer(21));
     let first_consumer_key = transport_key(1, 22, UserId::Integer(22));
     let second_consumer_key = transport_key(1, 23, UserId::Integer(23));
-    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 71_000);
+    let producer_rtp_parameters = sample_simulcast_video_rtp_parameters(Some("vid-up"));
     let selected_consumer_rtp_parameters =
         sample_router_rtp_parameters_with_rid("vid-down-1", 72_000, "hi");
     let open_consumer_rtp_parameters = sample_router_rtp_parameters("vid-down-2", 73_000);
@@ -364,7 +365,7 @@ async fn rtc_consumer_packet_gate_update_waits_for_live_rid_before_strict_aggreg
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 123, UserId::Integer(123));
     let consumer_key = transport_key(1, 124, UserId::Integer(124));
-    let producer_rtp_parameters = sample_router_rtp_parameters("vid-up", 81_000);
+    let producer_rtp_parameters = sample_simulcast_video_rtp_parameters(Some("vid-up"));
     let consumer_rtp_parameters = sample_router_rtp_parameters_with_rid("vid-down", 82_000, "hi");
 
     for session_key in [&producer_session_key, &consumer_key] {

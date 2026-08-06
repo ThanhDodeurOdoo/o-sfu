@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, time::Duration};
 
 use super::support::{self as s, media as m, setup as st};
 
@@ -19,7 +19,7 @@ async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() -> s::T
 #[tokio::test]
 async fn fake_rtc_vp8_selected_rid_requires_keyframe_before_forwarding() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
-    Box::pin(assert_selected_rid_requires_refresh(
+    Box::pin(assert_selected_rid_refresh_behavior(
         None,
         "issuer-vp8-selected-rid-keyframe",
         s::UserId::Integer(82),
@@ -97,7 +97,7 @@ async fn fake_rtc_peers_forward_h264_high_rid_idr_without_browsers() -> s::TestR
 #[tokio::test]
 async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
-    Box::pin(assert_selected_rid_requires_refresh(
+    Box::pin(assert_selected_rid_refresh_behavior(
         Some(h264_config()),
         "issuer-h264-selected-rid-idr",
         s::UserId::Integer(78),
@@ -105,6 +105,52 @@ async fn fake_rtc_h264_selected_rid_requires_idr_before_forwarding() -> s::TestR
         s::FakeMediaSource::new(s::SyntheticH264Stream::with_idr(false)),
     ))
     .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_rtc_publisher_receives_nack_for_missing_upload_packet() -> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let st::ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = st::ready_room_fake_integer_peers("issuer-upload-nack", 76, 77).await?;
+
+    let publisher_user_id = s::UserId::Integer(76);
+    let mut source = s::FakeMediaSource::vp8_camera_high();
+    m::publish_video_source_and_ready_route(
+        &server,
+        &room,
+        &mut publisher,
+        &mut subscriber,
+        &publisher_user_id,
+        &source,
+    )
+    .await;
+
+    let mut clock = s::FakeClock::default();
+    m::assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+    let _missing = source.next_frame(&mut clock);
+    assert!(
+        publisher
+            .send_rtp_packet(&mut source, &mut clock)
+            .await
+            .is_some()
+    );
+    assert!(
+        publisher
+            .wait_for_nack(Duration::from_secs(2))
+            .await
+            .is_some()
+    );
     Ok(())
 }
 
@@ -186,7 +232,7 @@ async fn assert_video_source_forwarded(
     Ok(())
 }
 
-async fn assert_selected_rid_requires_refresh(
+async fn assert_selected_rid_refresh_behavior(
     config: Option<s::Config>,
     issuer: &str,
     publisher_user_id: s::UserId,

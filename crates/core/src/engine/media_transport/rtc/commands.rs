@@ -14,6 +14,7 @@ use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
+    keyframe_tracker::KeyframeRequestOrigin,
     relay_registry::{RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
 };
@@ -61,13 +62,13 @@ impl RemoteSourceControl {
     /// asks the source worker to request a keyframe for a remote consumer
     ///
     /// this never waits for the source worker
-    /// if the command cannot be queued, the caller has no stronger recovery
-    /// action than later media or control traffic triggering another request
+    /// a failed send lets the caller retain its bounded source-stream retry
     pub(super) fn request_kf(
         &self,
         source: &TransportSourceKey,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
+        origin: KeyframeRequestOrigin,
     ) -> bool {
         self.send_command(
             RouteControlRequest::RequestRemoteKeyframe {
@@ -75,6 +76,7 @@ impl RemoteSourceControl {
                 target_id: self.target_id,
                 rid,
                 kind,
+                origin,
             },
             RtcRemoteControlDropKind::Keyframe,
         )
@@ -171,6 +173,7 @@ pub enum RouteControlRequest {
         target_id: RelayTargetId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
+        origin: KeyframeRequestOrigin,
     },
     SetRemoteSourcePacketGate {
         source: TransportSourceKey,

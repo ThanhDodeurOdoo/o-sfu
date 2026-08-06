@@ -155,6 +155,7 @@ pub fn assert_remote_keyframe_command(
                             target_id: forwarded_target_id,
                             rid: forwarded_rid,
                             kind: KeyframeRequestKind::Pli,
+                            origin: _,
                         },
                         response: None,
                     }) if source.session_key() == src_key

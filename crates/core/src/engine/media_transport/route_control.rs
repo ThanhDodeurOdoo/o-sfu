@@ -44,7 +44,9 @@ impl<P, C> MediaControlPlan<P, C> {
 
     pub(crate) fn push_consumer(&mut self, control: ConsumerRouteControl, finish: C) {
         assert!(
-            control.packet_gate.is_some() || control.activity.is_some() || control.request_keyframe,
+            control.packet_gate.is_some()
+                || control.activity.is_some()
+                || control.request_decoder_refresh,
             "consumer media control must contain an operation"
         );
         self.consumers.push((control, finish));
@@ -88,7 +90,7 @@ pub(crate) struct ConsumerRouteControl {
     pub(in crate::engine::media_transport) route: TransportConsumerRoute,
     packet_gate: Option<SourcePacketGate>,
     pub(in crate::engine::media_transport) activity: Option<ConsumerActivity>,
-    pub(in crate::engine::media_transport) request_keyframe: bool,
+    pub(in crate::engine::media_transport) request_decoder_refresh: bool,
 }
 
 impl ConsumerRouteControl {
@@ -97,7 +99,7 @@ impl ConsumerRouteControl {
             route,
             packet_gate: None,
             activity: None,
-            request_keyframe: false,
+            request_decoder_refresh: false,
         }
     }
 
@@ -111,8 +113,8 @@ impl ConsumerRouteControl {
         self
     }
 
-    pub(crate) const fn request_keyframe(mut self, request: bool) -> Self {
-        self.request_keyframe = request;
+    pub(crate) const fn request_decoder_refresh(mut self, request: bool) -> Self {
+        self.request_decoder_refresh = request;
         self
     }
 
@@ -262,7 +264,7 @@ impl<P, C> MediaControlExecution<P, C> {
                     (index, control.route.clone(), gate),
                 );
             }
-            if control.activity.is_some() || control.request_keyframe {
+            if control.activity.is_some() || control.request_decoder_refresh {
                 push(&mut execution.consumers, worker, (index, control));
             }
         }

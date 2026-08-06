@@ -276,6 +276,53 @@ fn plan_forwards_skips_inactive_consumer_destinations() {
 }
 
 #[test]
+fn planned_local_destination_captures_delivery_epoch() {
+    let producer_session = test_transport_session_key(30, 0, 31, UserId::Integer(32));
+    let consumer_session = test_transport_session_key(30, 0, 33, UserId::Integer(34));
+    let mut state = PacketLoopState::default();
+    let packet_sink_registry = RoomPacketSinkRegistry::default();
+    let metrics = RuntimeMetrics::default();
+    let mut scenario = MediaWorkerScenario::new(&mut state);
+    let src_media = scenario.source(producer_session.clone(), Mid::from("cam-up"));
+    let consumer_media =
+        scenario.destination(src_media, consumer_session.clone(), Mid::from("cam-down"));
+    let forwards = plan_forwards(
+        &state,
+        &packet_sink_registry,
+        &metrics,
+        vec![sample_forwarded_packet(
+            producer_session,
+            "cam-up",
+            b"payload",
+        )],
+    );
+
+    assert!(matches!(
+        state
+            .routes
+            .set_consumer_active(src_media, 0, &consumer_session, consumer_media, false,),
+        Ok(true)
+    ));
+    assert!(matches!(
+        state
+            .routes
+            .set_consumer_active(src_media, 0, &consumer_session, consumer_media, true,),
+        Ok(true)
+    ));
+    let current_epoch = state
+        .routes
+        .local_route(src_media)
+        .and_then(|route| route.destinations.first())
+        .map(|destination| destination.delivery_epoch);
+    let planned_epoch = forwards
+        .first()
+        .and_then(|forward| forward.destination.local_delivery_epoch());
+
+    assert_eq!(current_epoch, Some(1));
+    assert_eq!(planned_epoch, Some(0));
+}
+
+#[test]
 fn plan_forwards_plans_relay_destinations_without_displacing_local_rtc_flush_order() {
     let producer_session = test_transport_session_key(31, 0, 32, UserId::Integer(33));
     let consumer_session = test_transport_session_key(31, 0, 32, UserId::Integer(34));

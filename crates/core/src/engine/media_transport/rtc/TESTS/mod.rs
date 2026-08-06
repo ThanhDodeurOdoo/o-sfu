@@ -6,6 +6,8 @@
     reason = "test assertions use panic, unwrap, expect, and direct indexing for clear failure messages"
 )]
 
+#[path = "decoder_refresh.rs"]
+mod decoder_refresh;
 #[path = "fixtures.rs"]
 mod fixtures;
 #[path = "forwarding_planner_tests.rs"]

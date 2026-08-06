@@ -53,6 +53,7 @@ pub fn drain_ready_sessions(
     state.collect_ready_sessions(now, &mut buffers.ready_sessions);
     let mut ready_sessions = take(&mut buffers.ready_sessions);
     for session_handle in ready_sessions.drain(..) {
+        let first_pending_packet = buffers.pending_packets.len();
         let session_timeout = {
             let Some((session_key, session_state)) =
                 state.users.get_key_value_mut_by_handle(session_handle)
@@ -61,6 +62,11 @@ pub fn drain_ready_sessions(
             };
             drain_single_session(session_handle, session_key, session_state, context, buffers)
         };
+        if let Some(packets) = buffers.pending_packets.get_mut(first_pending_packet..) {
+            for packet in packets {
+                let _ = packet.capture_source_generations(state);
+            }
+        }
         state.update_session_timeout_by_handle(session_handle, session_timeout);
     }
     buffers.ready_sessions = ready_sessions;

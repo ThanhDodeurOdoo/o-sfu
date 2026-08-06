@@ -8,28 +8,29 @@ use std::{sync::Arc, time::Instant};
 
 use str0m::{
     media::{ExtensionValues, Mid, Pt},
-    rtp::{RtpHeader, RtpPacket, RtpWrite, StreamTx},
+    rtp::{RtpHeader, RtpPacket, RtpWrite, SeqNo, StreamTx},
 };
 use tracing::debug;
 
 use super::{
     forwarded_packet::PacketVp8Payload,
-    local_send_rewrite::{ProjectedIdentity, SourceTransition},
+    local_send_rewrite::{DeliveryGenerations, ProjectedIdentity, SourceTransition},
     slots::ConsumerStreamHandle,
+    source_route::SourceFilterGeneration,
     state::RtcSessionState,
 };
 use crate::engine::media_transport::TransportMediaId;
 
 /// receiver route snapshot used for one local RTP write
 ///
-/// values come from `MediaRouteDestination` after route lookup in the flush turn
+/// route identity comes from flush lookup and the delivery epoch comes from planning
 #[derive(Debug)]
 pub(super) struct LocalPacketDestination {
     transport_media_id: TransportMediaId,
     stream_handle: ConsumerStreamHandle,
+    delivery_epoch: u64,
     mid: Mid,
     payload_type: Option<Pt>,
-    nackable: bool,
 }
 
 /// borrowed RTP metadata plus shared payload bytes for local egress
@@ -42,6 +43,7 @@ enum LocalForwardedRtpData<'a> {
     Str0m(&'a RtpPacket),
     Relay {
         header: &'a RtpHeader,
+        sequence_number: SeqNo,
         timestamp: Instant,
     },
 }
@@ -56,11 +58,16 @@ impl<'a> LocalForwardedRtp<'a> {
 
     pub(super) fn from_relay(
         header: &'a RtpHeader,
+        sequence_number: SeqNo,
         timestamp: Instant,
         payload: &'a Arc<[u8]>,
     ) -> Self {
         Self {
-            data: LocalForwardedRtpData::Relay { header, timestamp },
+            data: LocalForwardedRtpData::Relay {
+                header,
+                sequence_number,
+                timestamp,
+            },
             payload,
         }
     }
@@ -69,6 +76,15 @@ impl<'a> LocalForwardedRtp<'a> {
         match self.data {
             LocalForwardedRtpData::Str0m(packet) => &packet.header,
             LocalForwardedRtpData::Relay { header, .. } => header,
+        }
+    }
+
+    fn sequence_number(&self) -> SeqNo {
+        match self.data {
+            LocalForwardedRtpData::Str0m(packet) => packet.seq_no,
+            LocalForwardedRtpData::Relay {
+                sequence_number, ..
+            } => sequence_number,
         }
     }
 
@@ -84,27 +100,29 @@ impl LocalPacketDestination {
     pub(super) fn new(
         transport_media_id: TransportMediaId,
         stream_handle: ConsumerStreamHandle,
+        delivery_epoch: u64,
         mid: Mid,
         payload_type: Option<Pt>,
-        nackable: bool,
     ) -> Self {
         Self {
             transport_media_id,
             stream_handle,
+            delivery_epoch,
             mid,
             payload_type,
-            nackable,
         }
     }
 
     /// queues one packet in the destination `Rtc`
     ///
-    /// returns `None` when no destination [`StreamTx`] exists or the stream was released
+    /// returns `None` when no destination [`StreamTx`] exists or the packet does
+    /// not belong to the stream's active delivery epoch
     /// successful sends clone only the `Arc<[u8]>` payload handle
     pub(super) fn send(
         &self,
         session_state: &mut RtcSessionState,
         rtp: &LocalForwardedRtp<'_>,
+        source_filter_generation: SourceFilterGeneration,
         vp8_payload: Option<PacketVp8Payload>,
     ) -> Option<usize> {
         let payload_len = rtp.payload.len();
@@ -119,7 +137,9 @@ impl LocalPacketDestination {
             let header = rtp.header();
             let identity = local_send_streams.project_identity(
                 self.stream_handle,
+                DeliveryGenerations::new(self.delivery_epoch, source_filter_generation),
                 header.ssrc,
+                rtp.sequence_number(),
                 header.timestamp,
                 vp8_identity,
             )?;
@@ -160,8 +180,7 @@ impl LocalPacketDestination {
             payload,
         )
         .marker(header.marker)
-        .ext_vals(ext_vals)
-        .nackable(self.nackable);
+        .ext_vals(ext_vals);
         if let Some(csrc) = header.csrc.get(..header.csrc_count) {
             write = write.csrc(csrc);
         }

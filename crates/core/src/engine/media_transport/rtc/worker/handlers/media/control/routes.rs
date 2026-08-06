@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::{MediaKind, Mid, Pt};
 
@@ -14,7 +12,7 @@ use crate::engine::media_transport::{
         route_control::PacketLayerGate,
         simulcast,
         slots::ConsumerStreamHandle,
-        source_route::MediaRouteDestination,
+        source_route::{MediaRouteDestination, PacketCodec},
         state::PacketLoopState,
     },
 };
@@ -29,7 +27,6 @@ pub struct ConsumerRouteRegistration<'a> {
     pub src_media: TransportMediaId,
     pub consumer_rtp: &'a RouterRtpParameters,
     pub active: bool,
-    pub now: Instant,
 }
 
 /// validates source ownership for a route that is about to be created
@@ -110,14 +107,17 @@ pub fn register_consumer_route(
         src_media,
         consumer_rtp,
         active,
-        now,
     } = registration;
-    let (packet_gate, pending_gate) = selected_rid::guarded_pkt_gate(
-        state,
-        src_media,
-        simulcast::initial_consumer_packet_gate(consumer_rtp),
-        now,
-    );
+    let initial_gate = simulcast::initial_consumer_packet_gate(consumer_rtp);
+    let requires_decoder_refresh =
+        !consumer_media_kind.is_audio() && !PacketCodec::from_parameters(consumer_rtp).is_empty();
+    let (packet_gate, pending_gate) = if !requires_decoder_refresh {
+        (initial_gate, None)
+    } else if active && initial_gate == PacketLayerGate::Open {
+        (PacketLayerGate::Block, Some(PacketLayerGate::Open))
+    } else {
+        selected_rid::guarded_pkt_gate(src_media, initial_gate)
+    };
     let dest_payload_type = consumer_payload_type(consumer_rtp);
     let dst_idx = state.routes.add_consumer_route(
         src_media,
@@ -127,8 +127,9 @@ pub fn register_consumer_route(
             dest_stream: consumer_stream,
             dest_mid: consumer_mid,
             dest_payload_type,
-            nackable: !consumer_media_kind.is_audio(),
             active,
+            requires_decoder_refresh,
+            delivery_epoch: 0,
             packet_gate,
             pending_gate,
         },
@@ -245,6 +246,7 @@ pub fn remove_consumer_route(
 }
 
 pub fn remove_source_route(state: &mut PacketLoopState, src_media: TransportMediaId) {
+    state.pending_decoder_refreshes.remove_source(src_media);
     let Some(route_entry) = state.routes.take_route(src_media) else {
         return;
     };
@@ -307,7 +309,6 @@ pub(super) fn worker_set_consumer_pkt_gates(
     state: &mut PacketLoopState,
     source: &TransportSourceKey,
     updates: Vec<(usize, TransportConsumerRoute, PacketLayerGate)>,
-    now: Instant,
 ) -> Vec<TransportResult<()>> {
     let src_media = source.transport_media_id();
     let mut changed = false;
@@ -320,7 +321,7 @@ pub(super) fn worker_set_consumer_pkt_gates(
         let result = update_consumer_route(
             state,
             &route,
-            ConsumerRouteMutation::PacketGate { packet_gate, now },
+            ConsumerRouteMutation::PacketGate(packet_gate),
         );
         results.push(
             result
@@ -337,10 +338,7 @@ pub(super) fn worker_set_consumer_pkt_gates(
 #[derive(Clone, Copy)]
 enum ConsumerRouteMutation {
     Active(bool),
-    PacketGate {
-        packet_gate: PacketLayerGate,
-        now: Instant,
-    },
+    PacketGate(PacketLayerGate),
 }
 
 fn update_consumer_route(
@@ -377,18 +375,13 @@ fn update_consumer_route(
             consumer_media,
             active,
         ),
-        ConsumerRouteMutation::PacketGate { packet_gate, now } => {
-            let (packet_gate, pending_gate) =
-                selected_rid::guarded_pkt_gate(state, src_media, packet_gate, now);
-            state.routes.set_consumer_pkt_gate(
-                src_media,
-                dst_idx,
-                consumer_key,
-                consumer_media,
-                packet_gate,
-                pending_gate,
-            )
-        }
+        ConsumerRouteMutation::PacketGate(packet_gate) => state.routes.set_consumer_pkt_gate(
+            src_media,
+            dst_idx,
+            consumer_key,
+            consumer_media,
+            packet_gate,
+        ),
     }
 }
 /// returns the MID for a local producer after enforcing source ownership

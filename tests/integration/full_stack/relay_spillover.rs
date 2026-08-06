@@ -1,10 +1,5 @@
 use super::support::{self as s, media as m, setup as st, spillover as sp};
 
-enum LowRidProbe {
-    None,
-    DropThenForwardSelected,
-}
-
 #[tokio::test]
 async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
@@ -26,6 +21,7 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() -> s::TestResul
         .await;
 
     let mut source = s::FakeMediaSource::new(s::SyntheticVp8Stream::with_next_keyframe(false));
+    let mut low_source = s::FakeMediaSource::vp8_camera_with_rid("lo");
     assert_selected_video_relay(
         &server,
         &room,
@@ -33,7 +29,7 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() -> s::TestResul
         &mut subscriber,
         &publisher_user_id,
         &mut source,
-        LowRidProbe::DropThenForwardSelected,
+        &mut low_source,
     )
     .await;
     Ok(())
@@ -64,6 +60,8 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() -> s
         .await;
 
     let mut source = s::FakeMediaSource::new(s::SyntheticH264Stream::with_idr(false));
+    let mut low_source =
+        s::FakeMediaSource::new(s::SyntheticH264Stream::new(Some("lo".to_owned())));
     assert_selected_video_relay(
         &server,
         &room,
@@ -71,7 +69,7 @@ async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() -> s
         &mut subscriber,
         &publisher_user_id,
         &mut source,
-        LowRidProbe::None,
+        &mut low_source,
     )
     .await;
     Ok(())
@@ -118,7 +116,7 @@ async fn assert_selected_video_relay(
     subscriber: &mut s::ProtocolFakePeer,
     publisher_user_id: &s::UserId,
     source: &mut s::FakeMediaSource,
-    low_rid_probe: LowRidProbe,
+    low_source: &mut s::FakeMediaSource,
 ) {
     m::publish_video_source_and_ready_route(
         server,
@@ -134,23 +132,8 @@ async fn assert_selected_video_relay(
     let mut clock = s::FakeClock::default();
     m::assert_packet_dropped(publisher, subscriber, source, &mut clock).await;
     m::assert_synthetic_video_packet_forwarded(publisher, subscriber, source, &mut clock).await;
-    match low_rid_probe {
-        LowRidProbe::None => {}
-        LowRidProbe::DropThenForwardSelected => {
-            assert_low_rid_dropped(publisher, subscriber, &mut clock).await;
-            m::assert_synthetic_video_packet_forwarded(publisher, subscriber, source, &mut clock)
-                .await;
-        }
-    }
-}
-
-async fn assert_low_rid_dropped(
-    publisher: &mut s::ProtocolFakePeer,
-    subscriber: &mut s::ProtocolFakePeer,
-    clock: &mut s::FakeClock,
-) {
-    let mut source = s::FakeMediaSource::vp8_camera_with_rid("lo");
-    m::assert_packet_dropped(publisher, subscriber, &mut source, clock).await;
+    m::assert_packet_dropped(publisher, subscriber, low_source, &mut clock).await;
+    m::assert_synthetic_video_packet_forwarded(publisher, subscriber, source, &mut clock).await;
 }
 
 #[tokio::test]

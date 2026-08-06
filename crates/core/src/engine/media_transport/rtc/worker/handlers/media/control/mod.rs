@@ -46,6 +46,8 @@ pub(super) use routes::{
     ensure_local_producer_mid, ensure_route_src_registered, register_consumer_route,
     remove_consumer_route,
 };
+#[cfg(feature = "internal-benchmarks")]
+pub use selected_rid::apply_src_rid_ready;
 #[cfg(test)]
 pub use selected_rid::observe_src_rid_ready;
-pub use selected_rid::{apply_src_rid_ready, drain_due_rid_kf_refreshes};
+pub use selected_rid::{apply_src_decoder_ready, request_src_decoder_refresh};

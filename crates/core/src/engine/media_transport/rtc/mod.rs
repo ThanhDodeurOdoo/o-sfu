@@ -42,6 +42,7 @@ pub mod benchmark_support;
 mod bitrate;
 mod bootstrap;
 mod commands;
+mod decoder_refresh;
 mod demux;
 mod forwarded_packet;
 mod forwarding_destination;

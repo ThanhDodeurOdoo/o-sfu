@@ -1,11 +1,9 @@
 use std::net::SocketAddr;
 
-use o_sfu_rfc::rtp::{CodecName, h264::PacketizationMode};
+use o_sfu_rfc::rtp::CodecName;
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
-    rtp::{
-        CodecSetting, MediaFormat, MediaStream as RouterRtpParameters, PayloadType, StreamBinding,
-    },
+    rtp::{MediaFormat, MediaStream as RouterRtpParameters, PayloadType, StreamBinding},
 };
 use str0m::media::{Mid, Rid};
 
@@ -111,82 +109,8 @@ fn stale_local_forwarded_packet_does_not_resolve_through_reused_slot() {
 }
 
 #[test]
-fn forwarded_packet_facts_detect_h264_idr_for_decoder_refresh() {
+fn mixed_video_profile_classifies_vp8_by_payload_type() {
     let session_key = test_transport_session_key(48, 0, 16, UserId::Integer(14));
-    let producer_mid = Mid::from("cam-up");
-    let mut state = PacketLoopState::default();
-    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: session_key.clone(),
-        mid: producer_mid,
-    });
-    let parameters =
-        RouterRtpParameters::new(vec![video_format(CodecName::H264, 111)], vec![], vec![]);
-    state
-        .routes
-        .refresh_packet_codecs(transport_media_id, &parameters);
-    let mut packet = sample_forwarded_packet(session_key, "cam-up", &[0x65, 0x88]);
-    let facts = packet.resolve_facts(&state);
-    assert!(facts.is_some());
-    let Some(facts) = facts else {
-        return;
-    };
-
-    assert_eq!(facts.src_media, transport_media_id);
-    assert!(facts.decoder_refresh);
-}
-
-#[test]
-fn forwarded_packet_h264_refresh_detection_uses_packetization_mode() {
-    let session_key = test_transport_session_key(48, 0, 16, UserId::Integer(14));
-    let producer_mid = Mid::from("cam-up");
-    let mut state = PacketLoopState::default();
-    let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
-        session_key: session_key.clone(),
-        mid: producer_mid,
-    });
-    let stap_a_idr = &[0x78, 0x00, 0x02, 0x65, 0x88];
-    let mode_0_parameters =
-        RouterRtpParameters::new(
-            vec![video_format(CodecName::H264, 111).with_setting(
-                CodecSetting::H264PacketizationMode(PacketizationMode::SingleNalUnit),
-            )],
-            vec![],
-            vec![],
-        );
-    state
-        .routes
-        .refresh_packet_codecs(transport_media_id, &mode_0_parameters);
-    let mut mode_0_packet = sample_forwarded_packet(session_key.clone(), "cam-up", stap_a_idr);
-    let mode_0_facts = mode_0_packet.resolve_facts(&state);
-    assert!(mode_0_facts.is_some());
-    let Some(mode_0_facts) = mode_0_facts else {
-        return;
-    };
-    assert!(!mode_0_facts.decoder_refresh);
-
-    let mode_1_parameters =
-        RouterRtpParameters::new(
-            vec![video_format(CodecName::H264, 111).with_setting(
-                CodecSetting::H264PacketizationMode(PacketizationMode::NonInterleaved),
-            )],
-            vec![],
-            vec![],
-        );
-    state
-        .routes
-        .refresh_packet_codecs(transport_media_id, &mode_1_parameters);
-    let mut mode_1_packet = sample_forwarded_packet(session_key, "cam-up", stap_a_idr);
-    let mode_1_facts = mode_1_packet.resolve_facts(&state);
-    assert!(mode_1_facts.is_some());
-    let Some(mode_1_facts) = mode_1_facts else {
-        return;
-    };
-    assert!(mode_1_facts.decoder_refresh);
-}
-
-#[test]
-fn forwarded_packet_decoder_refresh_follows_the_packet_payload_type() {
-    let session_key = test_transport_session_key(53, 0, 21, UserId::Integer(19));
     let producer_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
@@ -204,20 +128,18 @@ fn forwarded_packet_decoder_refresh_follows_the_packet_payload_type() {
     state
         .routes
         .refresh_packet_codecs(transport_media_id, &parameters);
-    let mut vp8_packet = sample_forwarded_packet(session_key.clone(), "cam-up", &[0x10, 0x00]);
-    if let ForwardedPacketData::RelayRtp(rtp) = &mut vp8_packet.data {
+    let mut packet = sample_forwarded_packet(session_key, "cam-up", &[0x10, 0x00]);
+    if let ForwardedPacketData::RelayRtp(rtp) = &mut packet.data {
         rtp.header.payload_type = 96.into();
     }
-    let vp8_facts = vp8_packet.resolve_facts(&state);
-    assert!(vp8_facts.is_some_and(|facts| facts.decoder_refresh));
+    let facts = packet.resolve_facts(&state);
+    assert!(facts.is_some());
+    let Some(facts) = facts else { return };
 
-    let mut h264_packet =
-        sample_forwarded_packet_with_rid(session_key, "cam-up", Some("hi"), &[0x65, 0x88]);
-    if let ForwardedPacketData::RelayRtp(rtp) = &mut h264_packet.data {
-        rtp.header.payload_type = 111.into();
-    }
-    let h264_facts = h264_packet.resolve_facts(&state);
-    assert!(h264_facts.is_some_and(|facts| facts.decoder_refresh && facts.vp8_payload.is_none()));
+    assert_eq!(facts.src_media, transport_media_id);
+    assert_eq!(facts.decoder_refresh_packet.codec, Some(PacketCodec::Vp8));
+    assert!(facts.decoder_refresh_packet.evidence.is_some());
+    assert!(facts.vp8_payload.is_some());
 }
 
 #[test]
@@ -235,11 +157,11 @@ fn forwarded_packet_relay_clone_preserves_source_facts() {
     });
     source_state.routes.refresh_packet_codecs(
         src_media,
-        &RouterRtpParameters::new(vec![video_format(CodecName::H264, 111)], vec![], vec![]),
+        &RouterRtpParameters::new(vec![video_format(CodecName::Vp8, 111)], vec![], vec![]),
     );
-    let mut source_packet = sample_local_forwarded_packet(session_handle, "cam-up", &[0x65, 0x88]);
+    let mut source_packet = sample_local_forwarded_packet(session_handle, "cam-up", &[0x10, 0x00]);
     let source_facts = source_packet.resolve_facts(&source_state);
-    assert!(source_facts.is_some_and(|facts| facts.decoder_refresh));
+    assert!(source_facts.is_some_and(|facts| facts.decoder_refresh_packet.evidence.is_some()));
 
     let relay_packet = source_packet.share_for_relay(&source_state, src_media);
     assert!(relay_packet.is_some());

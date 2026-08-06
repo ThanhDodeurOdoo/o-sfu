@@ -2,11 +2,13 @@ use std::{sync::Arc, time::Instant};
 
 use str0m::{
     media::{ExtensionValues, Mid, Pt, Rid},
-    rtp::{RtpHeader, Ssrc},
+    rtp::{RtpHeader, SeqNo, Ssrc},
 };
 
 use super::{ForwardedPacket, ForwardedPacketData, ForwardedPacketSource, ForwardedRelayRtpData};
-use crate::engine::media_transport::TransportSessionKey;
+use crate::engine::media_transport::{
+    TransportSessionKey, rtc::source_route::SourceFilterGeneration,
+};
 #[cfg(test)]
 use crate::engine::{
     media_transport::TransportMediaId, media_transport::rtc::slots::SessionHandle,
@@ -158,9 +160,11 @@ fn sample_forwarded_packet_with_source(
         resolved_source_rid: None,
         facts: None,
         visits_origin_sinks: true,
+        source_filter_generation: Some(SourceFilterGeneration::default()),
         received_at,
         payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+            sequence_number: SeqNo::from(1),
             header: RtpHeader {
                 version: 2,
                 has_padding: false,
@@ -197,9 +201,11 @@ pub fn sample_forwarded_packet_without_mid(
         resolved_source_rid: None,
         facts: None,
         visits_origin_sinks: true,
+        source_filter_generation: Some(SourceFilterGeneration::default()),
         received_at,
         payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
+            sequence_number: SeqNo::from(1),
             header: RtpHeader {
                 version: 2,
                 has_padding: false,
@@ -215,6 +221,21 @@ pub fn sample_forwarded_packet_without_mid(
                 header_len: 12,
             },
         }),
+    }
+}
+
+#[cfg(test)]
+pub fn set_sample_packet_rtp_identity(
+    packet: &mut ForwardedPacket,
+    sequence_number: u16,
+    timestamp: u32,
+    marker: bool,
+) {
+    if let ForwardedPacketData::RelayRtp(rtp) = &mut packet.data {
+        rtp.sequence_number = SeqNo::from(u64::from(sequence_number));
+        rtp.header.sequence_number = sequence_number;
+        rtp.header.timestamp = timestamp;
+        rtp.header.marker = marker;
     }
 }
 

@@ -203,7 +203,6 @@ pub fn handle_worker_command(
                     consumer_rtp_parameters: &consumer_rtp_parameters,
                     active,
                 },
-                context.now,
             ),
         ),
         RtcWorkerCommand::ApplyMediaControlBatch { batch, response } => respond(

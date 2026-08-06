@@ -298,7 +298,8 @@ pub fn worker_add_recv_media(
                 api.declare_media(mid, media_kind);
             }
             for (ssrc, rid) in recv_encoding_identities(rtp_parameters) {
-                api.expect_stream_rx(ssrc, None, mid, rid);
+                api.expect_stream_rx(ssrc, None, mid, rid)
+                    .suppress_nack(true);
                 if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
                     stream_rx.request_remb(Str0mBitrate::bps(policy.max_bitrate_in.as_bps()));
                 }
@@ -402,7 +403,6 @@ fn worker_stage_native_recv_media(
 pub fn worker_add_send_media(
     state: &mut PacketLoopState,
     request: AddSendMediaRequest<'_>,
-    now: Instant,
 ) -> TransportResult<TransportMediaId> {
     let AddSendMediaRequest {
         consumer_key,
@@ -466,7 +466,6 @@ pub fn worker_add_send_media(
             src_media,
             consumer_rtp: consumer_rtp_parameters,
             active,
-            now,
         },
     );
     debug!(

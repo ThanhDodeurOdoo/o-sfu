@@ -4,17 +4,22 @@
 //! publisher identity can change when source selection or simulcast switches
 //!
 //! ```text
-//! publisher SSRC/timestamp/VP8 -> [`ConsumerStreamStore::project_identity`]
-//!                              -> receiver seq/timestamp/VP8
+//! publisher SSRC/seq/timestamp/VP8 -> [`ConsumerStreamStore::project_identity`]
+//!                                  -> receiver seq/timestamp/VP8
 //! ```
 //!
 //! state is scoped to the destination session so every consumer can rewrite the
 //! same source packet without copying payload bytes
 
+use std::cmp::Ordering;
+
 use o_sfu_rfc::rtp::vp8::LONG_PICTURE_ID_MODULUS;
 use str0m::rtp::{SeqNo, Ssrc};
 
-use super::slots::{ConsumerStreamHandle, ConsumerStreamSlot, SlotStore};
+use super::{
+    slots::{ConsumerStreamHandle, ConsumerStreamSlot, SlotStore},
+    source_route::SourceFilterGeneration,
+};
 
 /// receiver identity state for one consumer route
 ///
@@ -22,7 +27,9 @@ use super::slots::{ConsumerStreamHandle, ConsumerStreamSlot, SlotStore};
 /// sequence, timestamp and VP8 counter space
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct ConsumerStream {
-    next_seq_no: SeqNo,
+    delivery_epoch: u64,
+    source_filter_generation: SourceFilterGeneration,
+    sequence: SequenceProjection,
     rtp: RtpTimeline,
     vp8: Vp8Projection,
 }
@@ -50,97 +57,222 @@ impl ConsumerStreamStore {
 
     /// rewrites one source packet through `stream_handle`
     ///
-    /// returns `None` when the handle is stale or released
+    /// returns `None` when the handle is stale or the packet conflicts with the
+    /// active delivery epoch
     /// same-source packets preserve RTP and VP8 deltas
+    /// a new delivery epoch compacts packets intentionally filtered by routing
+    /// a new source filter generation compacts only the receiver sequence gap
     /// source switches continue from the last projected receiver identity
     pub(super) fn project_identity(
         &mut self,
         stream_handle: ConsumerStreamHandle,
+        delivery: DeliveryGenerations,
         source_ssrc: Ssrc,
+        source_seq_no: SeqNo,
         source_timestamp: u32,
         vp8_payload: Vp8PayloadIdentity,
     ) -> Option<ProjectedIdentity> {
-        self.streams
-            .get_mut(stream_handle)
-            .map(|stream| stream.project(source_ssrc, source_timestamp, vp8_payload))
+        self.streams.get_mut(stream_handle)?.project(
+            delivery,
+            source_ssrc,
+            source_seq_no,
+            source_timestamp,
+            vp8_payload,
+        )
     }
 }
 
 impl ConsumerStream {
     /// projects one packet after handle validation
     ///
-    /// sequence numbers are always receiver-local
+    /// sequence numbers are receiver-local and reject packets before the epoch anchor
+    /// a different source SSRC requires a new delivery epoch
+    /// epochs use half-range serial arithmetic so stale planned packets cannot re-anchor
+    /// stale source filter generations are rejected before projection state changes
     /// timestamp and VP8 counters follow source deltas until the publisher SSRC
     /// changes
     fn project(
         &mut self,
+        delivery: DeliveryGenerations,
         source_ssrc: Ssrc,
+        source_seq_no: SeqNo,
         source_timestamp: u32,
         vp8_payload: Vp8PayloadIdentity,
-    ) -> ProjectedIdentity {
-        let seq_no = self.next_seq_no.inc();
-        let (rtp_timestamp, vp8_payload, transition) = match &mut self.rtp {
+    ) -> Option<ProjectedIdentity> {
+        let epoch_delta = delivery.epoch.wrapping_sub(self.delivery_epoch);
+        let reanchor = match epoch_delta {
+            0 => false,
+            delta if delta <= u64::MAX / 2 => true,
+            _ => return None,
+        };
+        let filter_reanchor = match delivery.source_filter.cmp(&self.source_filter_generation) {
+            Ordering::Less => return None,
+            Ordering::Equal => false,
+            Ordering::Greater => true,
+        };
+        let mut sequence_projection = self.sequence;
+        if reanchor || filter_reanchor {
+            sequence_projection.reset_source_anchor();
+        }
+        let sequence = sequence_projection.project(source_ssrc, source_seq_no)?;
+        let (rtp_timestamp, transition) = match &mut self.rtp {
             RtpTimeline::Active {
                 ssrc,
                 src_anchor,
                 dst_anchor,
-                last,
-            } if *ssrc == source_ssrc => {
+                highest,
+            } if *ssrc == source_ssrc && !reanchor => {
                 let rtp_timestamp =
                     dst_anchor.wrapping_add(source_timestamp.wrapping_sub(*src_anchor));
-                *last = rtp_timestamp;
-                (
-                    rtp_timestamp,
-                    self.vp8.project::<NORMAL_VP8_PROJECTION>(vp8_payload),
-                    SourceTransition::Unchanged,
-                )
+                if sequence.advances_high_water {
+                    *highest = rtp_timestamp;
+                }
+                (rtp_timestamp, SourceTransition::Unchanged)
             }
             RtpTimeline::Active {
                 ssrc: previous_ssrc,
-                last,
+                highest,
                 ..
             } => {
                 let previous_ssrc = *previous_ssrc;
-                let rtp_timestamp = last.wrapping_add(1);
+                let rtp_timestamp = highest.wrapping_add(1);
                 self.rtp = RtpTimeline::Active {
                     ssrc: source_ssrc,
                     src_anchor: source_timestamp,
                     dst_anchor: rtp_timestamp,
-                    last: rtp_timestamp,
+                    highest: rtp_timestamp,
                 };
-                (
-                    rtp_timestamp,
-                    self.vp8.project::<REANCHOR_VP8_PROJECTION>(vp8_payload),
-                    SourceTransition::Switched { previous_ssrc },
-                )
+                let transition = if previous_ssrc == source_ssrc {
+                    SourceTransition::Unchanged
+                } else {
+                    SourceTransition::Switched { previous_ssrc }
+                };
+                (rtp_timestamp, transition)
             }
             RtpTimeline::Empty => {
                 self.rtp = RtpTimeline::Active {
                     ssrc: source_ssrc,
                     src_anchor: source_timestamp,
                     dst_anchor: source_timestamp,
-                    last: source_timestamp,
+                    highest: source_timestamp,
                 };
-                (
-                    source_timestamp,
-                    self.vp8.project::<NORMAL_VP8_PROJECTION>(vp8_payload),
-                    SourceTransition::Unchanged,
-                )
+                (source_timestamp, SourceTransition::Unchanged)
             }
         };
-        ProjectedIdentity {
-            seq_no,
+        let reanchor_vp8 = reanchor || matches!(transition, SourceTransition::Switched { .. });
+        let vp8_payload = if sequence.advances_high_water {
+            self.vp8.project_with_reanchor(vp8_payload, reanchor_vp8)
+        } else {
+            let mut projection = self.vp8;
+            projection.project_with_reanchor(vp8_payload, reanchor_vp8)
+        };
+        self.delivery_epoch = delivery.epoch;
+        self.source_filter_generation = delivery.source_filter;
+        self.sequence = sequence_projection;
+        Some(ProjectedIdentity {
+            seq_no: sequence.seq_no,
             rtp_timestamp,
             vp8_payload,
             transition,
+        })
+    }
+}
+
+/// route generations that distinguish intentional delivery gaps
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DeliveryGenerations {
+    epoch: u64,
+    source_filter: SourceFilterGeneration,
+}
+
+impl DeliveryGenerations {
+    pub(super) const fn new(epoch: u64, source_filter: SourceFilterGeneration) -> Self {
+        Self {
+            epoch,
+            source_filter,
         }
     }
 }
 
+/// sequence mapping for the active publisher source
+///
+/// same-source packets keep source sequence deltas so receiver NACKs describe
+/// the packet loss observed at ingress
+/// packets before the delivery epoch anchor cannot reuse an emitted identity
+/// one epoch accepts one publisher SSRC
+#[derive(Debug, Clone, Copy, Default)]
+struct SequenceProjection {
+    next_seq_no: SeqNo,
+    timeline: SequenceTimeline,
+}
+
+impl SequenceProjection {
+    fn reset_source_anchor(&mut self) {
+        self.timeline = SequenceTimeline::Empty;
+    }
+
+    fn project(&mut self, source_ssrc: Ssrc, source_seq_no: SeqNo) -> Option<ProjectedSequence> {
+        match &mut self.timeline {
+            SequenceTimeline::Active {
+                ssrc,
+                src_anchor,
+                dst_anchor,
+                highest_src,
+            } if *ssrc == source_ssrc => {
+                if source_seq_no < *src_anchor {
+                    return None;
+                }
+                let seq_no: SeqNo = (**dst_anchor + (*source_seq_no - **src_anchor)).into();
+                let advances_high_water = source_seq_no > *highest_src;
+                if advances_high_water {
+                    *highest_src = source_seq_no;
+                    self.next_seq_no = (*seq_no + 1).into();
+                }
+                Some(ProjectedSequence {
+                    seq_no,
+                    advances_high_water,
+                })
+            }
+            SequenceTimeline::Active { .. } => None,
+            SequenceTimeline::Empty => {
+                let seq_no = self.next_seq_no.inc();
+                self.timeline = SequenceTimeline::Active {
+                    ssrc: source_ssrc,
+                    src_anchor: source_seq_no,
+                    dst_anchor: seq_no,
+                    highest_src: source_seq_no,
+                };
+                Some(ProjectedSequence {
+                    seq_no,
+                    advances_high_water: true,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectedSequence {
+    seq_no: SeqNo,
+    advances_high_water: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+enum SequenceTimeline {
+    #[default]
+    Empty,
+    Active {
+        ssrc: Ssrc,
+        src_anchor: SeqNo,
+        dst_anchor: SeqNo,
+        highest_src: SeqNo,
+    },
+}
+
 /// rtp timestamp mapping for the active publisher source
 ///
-/// same-source packets use source deltas
-/// source switches start at `last + 1`
+/// same-source packets use source deltas without moving the high-water mark backward
+/// source switches and delivery epochs start at `highest + 1`
 #[derive(Debug, Clone, Copy, Default)]
 enum RtpTimeline {
     #[default]
@@ -149,7 +281,7 @@ enum RtpTimeline {
         ssrc: Ssrc,
         src_anchor: u32,
         dst_anchor: u32,
-        last: u32,
+        highest: u32,
     },
 }
 
@@ -167,6 +299,18 @@ const NORMAL_VP8_PROJECTION: bool = false;
 const REANCHOR_VP8_PROJECTION: bool = true;
 
 impl Vp8Projection {
+    fn project_with_reanchor(
+        &mut self,
+        vp8_payload: Vp8PayloadIdentity,
+        reanchor: bool,
+    ) -> Vp8PayloadIdentity {
+        if reanchor {
+            self.project::<REANCHOR_VP8_PROJECTION>(vp8_payload)
+        } else {
+            self.project::<NORMAL_VP8_PROJECTION>(vp8_payload)
+        }
+    }
+
     fn project<const REANCHOR: bool>(
         &mut self,
         vp8_payload: Vp8PayloadIdentity,

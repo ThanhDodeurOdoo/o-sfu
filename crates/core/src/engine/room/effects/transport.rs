@@ -145,7 +145,7 @@ impl RoomRouteEffects {
         self.0.push_consumer(
             ConsumerRouteControl::new(target.transport_route().clone())
                 .activity(ConsumerActivity::from_active(active))
-                .request_keyframe(target.request_keyframe_after_activity(active)),
+                .request_decoder_refresh(target.request_keyframe_after_activity(active)),
             ConsumerRouteFinish::Activity(activity),
         );
     }
@@ -159,14 +159,15 @@ impl RoomRouteEffects {
         self.0.push_consumer(
             ConsumerRouteControl::new(route.clone())
                 .activity(ConsumerActivity::from_active(active))
-                .request_keyframe(active && kind == MediaKind::Video),
+                .request_decoder_refresh(active && kind == MediaKind::Video),
             ConsumerRouteFinish::SetupActivity(route, active),
         );
     }
 
     pub(super) fn keyframe(&mut self, target: ConsumerRouteTarget) {
         self.0.push_consumer(
-            ConsumerRouteControl::new(target.transport_route().clone()).request_keyframe(true),
+            ConsumerRouteControl::new(target.transport_route().clone())
+                .request_decoder_refresh(true),
             ConsumerRouteFinish::Keyframe(target),
         );
     }

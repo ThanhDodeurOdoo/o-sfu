@@ -11,7 +11,7 @@ use tracing::debug;
 use super::{
     super::super::super::{
         commands::RemoteSourceControl,
-        keyframe_tracker::KeyframeRequestDecision,
+        keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestOrigin},
         media_registry::RegisteredMediaHandle,
         route_control::PacketLayerGate,
         source_route::{MediaRouteDestination, RemoteSourceRegistration},
@@ -35,6 +35,7 @@ pub fn worker_request_remote_kf(
     target_id: RelayTargetId,
     rid: Option<Rid>,
     kind: KeyframeRequestKind,
+    origin: KeyframeRequestOrigin,
 ) {
     let src_media = src.transport_media_id();
     if !state
@@ -50,7 +51,10 @@ pub fn worker_request_remote_kf(
         KeyframeRequestTarget::Local(src.session_key(), src_media),
         rid,
         kind,
-        KeyframeRequestMode::Track(Instant::now()),
+        KeyframeRequestMode::Relayed {
+            origin,
+            now: Instant::now(),
+        },
     );
 }
 
@@ -78,7 +82,10 @@ pub(super) fn worker_request_resumed_video_kf(
         KeyframeRequestTarget::Local(source.session_key(), src_media),
         None,
         KeyframeRequestKind::Pli,
-        KeyframeRequestMode::Track(now),
+        KeyframeRequestMode::for_recovery(
+            now,
+            state.routes.decoder_refresh_is_observable(src_media),
+        ),
     );
 }
 
@@ -90,22 +97,54 @@ pub enum KeyframeRequestTarget<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum KeyframeRequestMode {
-    Track(Instant),
-    Retry,
+    ConsumerFeedback(Instant),
+    RecoveryHint(Instant),
+    DecoderTransition(Instant),
+    Relayed {
+        origin: KeyframeRequestOrigin,
+        now: Instant,
+    },
+    Retry(KeyframeRequestOrigin),
 }
 
 impl KeyframeRequestMode {
-    fn track_at(self) -> Option<Instant> {
+    pub(in crate::engine::media_transport::rtc) const fn for_recovery(
+        now: Instant,
+        decoder_refresh_is_observable: bool,
+    ) -> Self {
+        if decoder_refresh_is_observable {
+            Self::DecoderTransition(now)
+        } else {
+            Self::RecoveryHint(now)
+        }
+    }
+
+    fn tracking(self) -> Option<(KeyframeRequestOrigin, Instant)> {
         match self {
-            Self::Track(now) => Some(now),
-            Self::Retry => None,
+            Self::ConsumerFeedback(now)
+            | Self::RecoveryHint(now)
+            | Self::DecoderTransition(now) => Some((self.origin(), now)),
+            Self::Relayed { origin, now } => Some((origin, now)),
+            Self::Retry(_) => None,
+        }
+    }
+
+    fn origin(self) -> KeyframeRequestOrigin {
+        match self {
+            Self::ConsumerFeedback(_) => KeyframeRequestOrigin::ConsumerFeedback,
+            Self::RecoveryHint(_) => KeyframeRequestOrigin::RecoveryHint,
+            Self::DecoderTransition(_) => KeyframeRequestOrigin::DecoderTransition,
+            Self::Relayed { origin, .. } | Self::Retry(origin) => origin,
         }
     }
 
     fn outcome(self) -> RtcKeyframeRequestOutcome {
         match self {
-            Self::Track(_) => RtcKeyframeRequestOutcome::Forwarded,
-            Self::Retry => RtcKeyframeRequestOutcome::Retry,
+            Self::ConsumerFeedback(_)
+            | Self::RecoveryHint(_)
+            | Self::DecoderTransition(_)
+            | Self::Relayed { .. } => RtcKeyframeRequestOutcome::Forwarded,
+            Self::Retry(_) => RtcKeyframeRequestOutcome::Retry,
         }
     }
 }
@@ -166,11 +205,10 @@ fn request_remote_kf(
     if !track_kf_req(state, metrics, src.transport_media_id(), rid, kind, mode) {
         return;
     }
-    if src_control.request_kf(src, rid, kind) {
+    let origin = mode.origin();
+    if src_control.request_kf(src, rid, kind, origin) {
         metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
         metrics.record_rtc_keyframe_request(mode.outcome());
-    } else {
-        state.routes.forget_kf_req(src.transport_media_id(), rid);
     }
 }
 
@@ -182,10 +220,10 @@ fn track_kf_req(
     kind: KeyframeRequestKind,
     mode: KeyframeRequestMode,
 ) -> bool {
-    let Some(now) = mode.track_at() else {
+    let Some((origin, now)) = mode.tracking() else {
         return true;
     };
-    match state.routes.track_kf_req(src_media, rid, kind, now) {
+    match state.routes.track_kf_req(src_media, rid, kind, origin, now) {
         KeyframeRequestDecision::Forward => true,
         KeyframeRequestDecision::Absorb => {
             metrics.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
@@ -234,6 +272,7 @@ pub fn worker_request_consumer_kf(
     }
     let dst_rid = kf_req_rid(destination);
     let now = Instant::now();
+    let mode = KeyframeRequestMode::for_recovery(now, destination.requires_decoder_refresh);
     match route_source {
         RouteSourceKind::Local => {
             request_kf_for_target(
@@ -242,7 +281,7 @@ pub fn worker_request_consumer_kf(
                 KeyframeRequestTarget::Local(src_key, src_media),
                 dst_rid,
                 KeyframeRequestKind::Pli,
-                KeyframeRequestMode::Track(now),
+                mode,
             );
         }
         RouteSourceKind::Remote => {
@@ -259,7 +298,7 @@ pub fn worker_request_consumer_kf(
                 KeyframeRequestTarget::Remote(&src, &src_control),
                 dst_rid,
                 KeyframeRequestKind::Pli,
-                KeyframeRequestMode::Track(now),
+                mode,
             );
         }
     }

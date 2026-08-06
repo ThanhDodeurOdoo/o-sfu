@@ -44,12 +44,12 @@ use std::{
     thread,
 };
 
-#[cfg(feature = "internal-benchmarks")]
-pub use handlers::apply_media_control_batch;
 pub(super) use handlers::{
-    KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_rid_ready,
-    drain_due_rid_kf_refreshes, handle_worker_command, request_kf_for_target,
+    KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_decoder_ready,
+    handle_worker_command, request_kf_for_target, request_src_decoder_refresh,
 };
+#[cfg(feature = "internal-benchmarks")]
+pub use handlers::{apply_media_control_batch, apply_src_rid_ready};
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 #[cfg(any(test, feature = "internal-benchmarks"))]

@@ -18,6 +18,7 @@ use str0m::media::Rid;
 
 use super::{
     super::{
+        decoder_refresh::DecoderRefreshRelease,
         forwarded_packet::{ForwardedPacket, ForwardedPacketSource},
         forwarding_destination::PacketForward,
         keyframe_tracker::SourceKeyframeRequest,
@@ -43,11 +44,12 @@ pub(super) struct PendingTransmit {
     pub(super) contents: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub(super) struct PendingRidReadiness {
     pub(super) source: ForwardedPacketSource,
     pub(super) src_media: TransportMediaId,
-    pub(super) rid: Rid,
-    pub(super) is_keyframe: bool,
+    pub(super) rid: Option<Rid>,
+    pub(super) complete_refresh: bool,
     pub(super) observed_at: Instant,
 }
 
@@ -72,6 +74,10 @@ pub struct PacketLoopBuffers {
     pub(super) pending_transmits: Vec<PendingTransmit>,
     /// media packets produced by local adapter sessions or inbound relays
     pub pending_packets: Vec<ForwardedPacket>,
+    /// reusable input side of the observation and planning pipeline
+    pub(super) observed_packets: Vec<ForwardedPacket>,
+    /// ordered decoder-refresh batches staged for activation and planning
+    pub(super) decoder_refresh_releases: Vec<DecoderRefreshRelease>,
     /// raw keyframe feedback emitted by consumer sessions before source lookup
     pub pending_keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
     /// sessions ready for polling after dirty and timeout scheduling is merged
@@ -103,6 +109,8 @@ impl PacketLoopBuffers {
         Self {
             pending_transmits: Vec::with_capacity(64),
             pending_packets: Vec::with_capacity(32),
+            observed_packets: Vec::with_capacity(32),
+            decoder_refresh_releases: Vec::with_capacity(8),
             pending_keyframe_requests: Vec::with_capacity(8),
             ready_sessions: Vec::with_capacity(32),
             coalesced_keyframe_requests: Vec::with_capacity(8),
@@ -119,6 +127,8 @@ impl PacketLoopBuffers {
     pub fn clear(&mut self) {
         self.pending_transmits.clear();
         self.pending_packets.clear();
+        self.observed_packets.clear();
+        self.decoder_refresh_releases.clear();
         self.pending_keyframe_requests.clear();
         self.ready_sessions.clear();
         self.coalesced_keyframe_requests.clear();
@@ -146,28 +156,31 @@ impl PacketLoopBuffers {
         &mut self,
         source: &ForwardedPacketSource,
         src_media: TransportMediaId,
-        rid: Rid,
-        is_keyframe: bool,
+        rid: Option<Rid>,
+        complete_refresh: bool,
         observed_at: Instant,
-    ) {
+    ) -> Option<PendingRidReadiness> {
         if let Some(pending) = self
             .pending_rid_readiness
             .iter_mut()
             .find(|pending| pending.src_media == src_media && pending.rid == rid)
         {
-            pending.is_keyframe |= is_keyframe;
+            let changed = complete_refresh && !pending.complete_refresh;
+            pending.complete_refresh |= complete_refresh;
             if pending.observed_at < observed_at {
                 pending.observed_at = observed_at;
             }
-            return;
+            return changed.then(|| pending.clone());
         }
-        self.pending_rid_readiness.push(PendingRidReadiness {
+        let pending = PendingRidReadiness {
             source: source.clone(),
             src_media,
             rid,
-            is_keyframe,
+            complete_refresh,
             observed_at,
-        });
+        };
+        self.pending_rid_readiness.push(pending.clone());
+        Some(pending)
     }
 
     pub(super) fn push_first_video_keyframe(

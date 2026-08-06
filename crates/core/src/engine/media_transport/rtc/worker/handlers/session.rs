@@ -45,7 +45,16 @@ pub(super) fn worker_close_session(
     for (src_media, _handle) in &removed_media_handles {
         remove_source_route(state, *src_media);
     }
-    state.routes.remove_dsts_for_session(session_key);
+    let moved_routes = state.routes.remove_dsts_for_session(session_key);
+    for (src_media, moved) in moved_routes {
+        state.set_consumer_dst_idx(
+            &moved.session_key,
+            moved.mid,
+            moved.media_id,
+            src_media,
+            Some(moved.dst_idx),
+        );
+    }
     let mid_registry = &state.mid_registry;
     state
         .routes

@@ -1,7 +1,7 @@
 //! keyframe request tracking for RTC producer sources
 //!
 //! duplicate feedback is absorbed while one request is pending
-//! a retry is emitted only when another request arrived before the deadline
+//! bounded feedback retries expire while decoder transitions remain demand-driven
 
 use std::{
     cmp::Reverse,
@@ -14,6 +14,7 @@ use str0m::media::{KeyframeRequestKind, Rid};
 use crate::engine::media_transport::TransportMediaId;
 
 pub(super) const KEYFRAME_REQUEST_RETRY_DELAY: Duration = Duration::from_secs(1);
+pub(super) const KEYFRAME_REQUEST_RETRY_ATTEMPTS: u8 = 5;
 const KEYFRAME_RETRY_DRAIN_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,10 +24,18 @@ pub enum KeyframeRequestDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::engine::media_transport) enum KeyframeRequestOrigin {
+    ConsumerFeedback,
+    RecoveryHint,
+    DecoderTransition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceKeyframeRequest {
     pub src_media: TransportMediaId,
     pub rid: Option<Rid>,
     pub kind: KeyframeRequestKind,
+    pub(super) origin: KeyframeRequestOrigin,
 }
 
 impl SourceKeyframeRequest {
@@ -38,6 +47,7 @@ impl SourceKeyframeRequest {
 #[derive(Debug, Default)]
 pub struct KeyframeRequestTracker {
     pending: Vec<KeyframeRequestState>,
+    cooldowns: Vec<KeyframeRequestCooldown>,
     deadlines: BinaryHeap<Reverse<KeyframeRequestDeadline>>,
     next_id: u64,
 }
@@ -64,8 +74,17 @@ impl KeyframeRequestTracker {
         src_media: TransportMediaId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
+        origin: KeyframeRequestOrigin,
         now: Instant,
     ) -> KeyframeRequestDecision {
+        self.cooldowns.retain(|cooldown| cooldown.until > now);
+        if origin == KeyframeRequestOrigin::ConsumerFeedback
+            && self.cooldowns.iter().any(|cooldown| {
+                cooldown.src_media == src_media && (rid.is_none() || cooldown.rid == rid)
+            })
+        {
+            return KeyframeRequestDecision::Absorb;
+        }
         let Some(request) = self
             .pending
             .iter_mut()
@@ -75,12 +94,13 @@ impl KeyframeRequestTracker {
                 src_media,
                 rid,
                 kind,
+                origin,
             };
             let pending = KeyframeRequestState {
                 request,
                 deadline: now + KEYFRAME_REQUEST_RETRY_DELAY,
                 id: self.next_id,
-                retry_on_timeout: false,
+                retry_policy: RetryPolicy::for_origin(origin),
             };
             self.next_id = self.next_id.saturating_add(1);
             self.deadlines.push(Reverse(pending.deadline()));
@@ -88,7 +108,10 @@ impl KeyframeRequestTracker {
             return KeyframeRequestDecision::Forward;
         };
         request.request.kind = coalesce_kf_kind(request.request.kind, kind);
-        request.retry_on_timeout = true;
+        if origin == KeyframeRequestOrigin::DecoderTransition {
+            request.request.origin = origin;
+            request.retry_policy = RetryPolicy::WhileDemand;
+        }
         KeyframeRequestDecision::Absorb
     }
 
@@ -98,13 +121,36 @@ impl KeyframeRequestTracker {
 
     pub fn forget_source(&mut self, src_media: TransportMediaId) {
         self.remove_pending(|request| request.request.src_media == src_media);
+        self.cooldowns
+            .retain(|cooldown| cooldown.src_media != src_media);
     }
 
-    pub fn observe_refresh(&mut self, src_media: TransportMediaId, rid: Option<Rid>) -> usize {
-        self.remove_pending(|request| {
+    pub fn observe_refresh(
+        &mut self,
+        src_media: TransportMediaId,
+        rid: Option<Rid>,
+        now: Instant,
+    ) -> usize {
+        let removed = self.remove_pending(|request| {
             request.request.src_media == src_media
                 && (request.request.rid.is_none() || request.request.rid == rid)
-        })
+        });
+        self.cooldowns.retain(|cooldown| cooldown.until > now);
+        let until = now + KEYFRAME_REQUEST_RETRY_DELAY;
+        if let Some(cooldown) = self
+            .cooldowns
+            .iter_mut()
+            .find(|cooldown| cooldown.src_media == src_media && cooldown.rid == rid)
+        {
+            cooldown.until = until;
+        } else {
+            self.cooldowns.push(KeyframeRequestCooldown {
+                src_media,
+                rid,
+                until,
+            });
+        }
+        removed
     }
 
     pub fn drain_due(&mut self, now: Instant, retries: &mut Vec<SourceKeyframeRequest>) {
@@ -128,16 +174,27 @@ impl KeyframeRequestTracker {
             let Some(request) = self.pending.get_mut(index) else {
                 continue;
             };
-            if !request.retry_on_timeout {
+            if matches!(request.retry_policy, RetryPolicy::Bounded(0)) {
                 self.pending.swap_remove(index);
                 continue;
             }
-            request.retry_on_timeout = false;
-            request.deadline = now + KEYFRAME_REQUEST_RETRY_DELAY;
-            request.id = self.next_id;
-            self.next_id = self.next_id.saturating_add(1);
-            self.deadlines.push(Reverse(request.deadline()));
-            retries.push(request.request);
+            let retry = request.request;
+            let reschedule = match &mut request.retry_policy {
+                RetryPolicy::Bounded(retries_remaining) => {
+                    *retries_remaining -= 1;
+                    *retries_remaining > 0
+                }
+                RetryPolicy::WhileDemand => true,
+            };
+            if reschedule {
+                request.deadline = now + KEYFRAME_REQUEST_RETRY_DELAY;
+                request.id = self.next_id;
+                self.next_id = self.next_id.saturating_add(1);
+                self.deadlines.push(Reverse(request.deadline()));
+            } else {
+                self.pending.swap_remove(index);
+            }
+            retries.push(retry);
         }
     }
 
@@ -168,7 +225,31 @@ struct KeyframeRequestState {
     request: SourceKeyframeRequest,
     deadline: Instant,
     id: u64,
-    retry_on_timeout: bool,
+    retry_policy: RetryPolicy,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RetryPolicy {
+    Bounded(u8),
+    WhileDemand,
+}
+
+impl RetryPolicy {
+    const fn for_origin(origin: KeyframeRequestOrigin) -> Self {
+        match origin {
+            KeyframeRequestOrigin::ConsumerFeedback | KeyframeRequestOrigin::RecoveryHint => {
+                Self::Bounded(KEYFRAME_REQUEST_RETRY_ATTEMPTS)
+            }
+            KeyframeRequestOrigin::DecoderTransition => Self::WhileDemand,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KeyframeRequestCooldown {
+    src_media: TransportMediaId,
+    rid: Option<Rid>,
+    until: Instant,
 }
 
 impl KeyframeRequestState {

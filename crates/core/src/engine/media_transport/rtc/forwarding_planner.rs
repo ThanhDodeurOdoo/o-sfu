@@ -198,7 +198,10 @@ fn populate_local_forwards(
         for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
             if dst.packet_gate.permits(packet_rid) {
                 forwards.push(PacketForward::from_local_route_destination(
-                    pkt_idx, src_media, dst_idx,
+                    pkt_idx,
+                    src_media,
+                    dst_idx,
+                    dst.delivery_epoch,
                 ));
             }
         }
@@ -207,7 +210,10 @@ fn populate_local_forwards(
     for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
         if dst.active && dst.packet_gate.permits(packet_rid) {
             forwards.push(PacketForward::from_local_route_destination(
-                pkt_idx, src_media, dst_idx,
+                pkt_idx,
+                src_media,
+                dst_idx,
+                dst.delivery_epoch,
             ));
         }
     }

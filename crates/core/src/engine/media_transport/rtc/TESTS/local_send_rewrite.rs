@@ -8,23 +8,27 @@ use super::*;
 fn projected(
     streams: &mut ConsumerStreamStore,
     stream_handle: ConsumerStreamHandle,
-    source_ssrc: Ssrc,
+    delivery: DeliveryGenerations,
+    source_ssrc: u32,
+    source_seq_no: u64,
     source_timestamp: u32,
     vp8_payload: Vp8PayloadIdentity,
 ) -> ProjectedIdentity {
-    let Some(identity) =
-        streams.project_identity(stream_handle, source_ssrc, source_timestamp, vp8_payload)
-    else {
-        panic!("consumer stream handle should be live");
+    let Some(identity) = streams.project_identity(
+        stream_handle,
+        delivery,
+        source_ssrc.into(),
+        source_seq_no.into(),
+        source_timestamp,
+        vp8_payload,
+    ) else {
+        panic!("packet should project through the active consumer stream");
     };
     identity
 }
 
-fn allocate_at(streams: &mut ConsumerStreamStore, next_seq_no: u64) -> ConsumerStreamHandle {
-    streams.streams.insert(ConsumerStream {
-        next_seq_no: next_seq_no.into(),
-        ..ConsumerStream::default()
-    })
+const fn delivery(epoch: u64, source_filter: SourceFilterGeneration) -> DeliveryGenerations {
+    DeliveryGenerations::new(epoch, source_filter)
 }
 
 fn vp8(picture_id: u16, tl0_pic_idx: u8) -> Vp8PayloadIdentity {
@@ -35,330 +39,287 @@ fn vp8(picture_id: u16, tl0_pic_idx: u8) -> Vp8PayloadIdentity {
 }
 
 #[test]
-fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
+fn source_sequence_gaps_remain_visible_to_the_receiver() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
+    let stream = streams.allocate();
+    let filter = SourceFilterGeneration::default();
 
     let first = projected(
         &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
+        stream,
+        delivery(0, filter),
+        111,
+        10,
+        1_000,
+        vp8(10, 10),
     );
-    let second = projected(
+    let after_loss = projected(
         &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
+        stream,
+        delivery(0, filter),
+        111,
+        12,
+        3_000,
+        vp8(12, 12),
+    );
+    let reordered = projected(
+        &mut streams,
+        stream,
+        delivery(0, filter),
+        111,
+        11,
+        2_000,
+        vp8(11, 11),
+    );
+    let next = projected(
+        &mut streams,
+        stream,
+        delivery(0, filter),
+        111,
+        13,
+        4_000,
+        vp8(13, 13),
     );
 
-    assert_eq!(first.seq_no.roc(), 0);
-    assert!(first.seq_no.is_next(second.seq_no));
+    assert_eq!(*after_loss.seq_no, *first.seq_no + 2);
+    assert_eq!(*reordered.seq_no, *first.seq_no + 1);
+    assert_eq!(*next.seq_no, *first.seq_no + 3);
+    assert_eq!(after_loss.rtp_timestamp, 3_000);
+    assert_eq!(reordered.rtp_timestamp, 2_000);
+    assert_eq!(next.rtp_timestamp, 4_000);
 }
 
 #[test]
-fn projected_sequence_numbers_are_scoped_by_consumer_stream() {
+fn delivery_epoch_compacts_an_intentional_gap() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = allocate_at(&mut streams, 10);
-    let other_stream_handle = allocate_at(&mut streams, 10);
+    let stream = streams.allocate();
+    let filter = SourceFilterGeneration::default();
+
+    let before_pause = projected(
+        &mut streams,
+        stream,
+        delivery(0, filter),
+        111,
+        10,
+        10_000,
+        vp8(10, 10),
+    );
+    let after_resume = projected(
+        &mut streams,
+        stream,
+        delivery(1, filter),
+        111,
+        100,
+        90_000,
+        vp8(100, 100),
+    );
+
+    assert!(before_pause.seq_no.is_next(after_resume.seq_no));
+    assert_eq!(after_resume.rtp_timestamp, before_pause.rtp_timestamp + 1);
+    assert_eq!(after_resume.vp8_payload, vp8(11, 11));
+    assert_eq!(after_resume.transition, SourceTransition::Unchanged);
+}
+
+#[test]
+fn stale_delivery_epoch_cannot_reanchor_projection() {
+    let mut streams = ConsumerStreamStore::default();
+    let stream = streams.allocate();
+    let filter = SourceFilterGeneration::default();
+
+    let _ = projected(
+        &mut streams,
+        stream,
+        delivery(0, filter),
+        111,
+        10,
+        1_000,
+        vp8(10, 10),
+    );
+    let current = projected(
+        &mut streams,
+        stream,
+        delivery(1, filter),
+        111,
+        20,
+        2_000,
+        vp8(20, 20),
+    );
+    assert!(
+        streams
+            .project_identity(
+                stream,
+                DeliveryGenerations::new(0, filter),
+                111.into(),
+                11_u64.into(),
+                1_100,
+                vp8(11, 11),
+            )
+            .is_none()
+    );
+    let next = projected(
+        &mut streams,
+        stream,
+        delivery(1, filter),
+        111,
+        21,
+        2_100,
+        vp8(21, 21),
+    );
+
+    assert!(current.seq_no.is_next(next.seq_no));
+    assert_eq!(next.rtp_timestamp, current.rtp_timestamp + 100);
+}
+
+#[test]
+fn source_filter_generation_compacts_only_the_sequence_gap() {
+    let mut streams = ConsumerStreamStore::default();
+    let stream = streams.allocate();
+    let initial_filter = SourceFilterGeneration::default();
+    let reopened_filter = initial_filter.next();
+
+    let before_filter = projected(
+        &mut streams,
+        stream,
+        delivery(0, initial_filter),
+        111,
+        10,
+        10_000,
+        vp8(10, 10),
+    );
+    let after_filter = projected(
+        &mut streams,
+        stream,
+        delivery(0, reopened_filter),
+        111,
+        100,
+        90_000,
+        vp8(100, 100),
+    );
+
+    assert!(before_filter.seq_no.is_next(after_filter.seq_no));
+    assert_eq!(after_filter.rtp_timestamp, 90_000);
+    assert_eq!(after_filter.vp8_payload, vp8(100, 100));
+    assert!(
+        streams
+            .project_identity(
+                stream,
+                DeliveryGenerations::new(0, initial_filter),
+                111.into(),
+                101_u64.into(),
+                90_100,
+                vp8(101, 101),
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn source_switch_requires_a_new_delivery_epoch() {
+    let mut streams = ConsumerStreamStore::default();
+    let stream = streams.allocate();
+    let filter = SourceFilterGeneration::default();
+
+    let low = projected(
+        &mut streams,
+        stream,
+        delivery(0, filter),
+        111,
+        10,
+        90_000,
+        vp8(10, 10),
+    );
+    assert!(
+        streams
+            .project_identity(
+                stream,
+                DeliveryGenerations::new(0, filter),
+                222.into(),
+                20_u64.into(),
+                1_000,
+                vp8(20, 20),
+            )
+            .is_none()
+    );
+    let high = projected(
+        &mut streams,
+        stream,
+        delivery(1, filter),
+        222,
+        20,
+        1_000,
+        vp8(20, 20),
+    );
+
+    assert!(low.seq_no.is_next(high.seq_no));
+    assert_eq!(high.rtp_timestamp, low.rtp_timestamp + 1);
+    assert_eq!(high.vp8_payload, vp8(11, 11));
+    assert_eq!(
+        high.transition,
+        SourceTransition::Switched {
+            previous_ssrc: 111.into()
+        }
+    );
+}
+
+#[test]
+fn vp8_counters_wrap_in_their_wire_spaces() {
+    let mut streams = ConsumerStreamStore::default();
+    let stream = streams.allocate();
+    let filter = SourceFilterGeneration::default();
 
     let first = projected(
         &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
+        stream,
+        delivery(0, filter),
+        111,
+        10,
+        1_000,
+        vp8(LONG_PICTURE_ID_MODULUS - 1, u8::MAX),
     );
     let second = projected(
         &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
-    );
-    let other = projected(
-        &mut streams,
-        other_stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
+        stream,
+        delivery(0, filter),
+        111,
+        11,
+        2_000,
+        vp8(0, 0),
     );
 
-    assert_eq!(first.seq_no.roc(), 0);
-    assert!(first.seq_no.is_next(second.seq_no));
-    assert_eq!(other.seq_no, first.seq_no);
+    assert_eq!(first.vp8_payload, vp8(LONG_PICTURE_ID_MODULUS - 1, u8::MAX));
+    assert_eq!(second.vp8_payload, vp8(0, 0));
 }
 
 #[test]
-fn forgetting_transport_media_streams_drops_all_stream_state_for_that_consumer() {
+fn released_consumer_stream_handle_is_rejected_after_slot_reuse() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = allocate_at(&mut streams, 10);
-
-    let first = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
-    );
-    let second = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
-    );
-
-    streams.release(stream_handle);
-    let replacement_stream_handle = allocate_at(&mut streams, 10);
-
-    let reset = projected(
-        &mut streams,
-        replacement_stream_handle,
-        Ssrc::from(111),
-        1234,
-        Vp8PayloadIdentity::default(),
-    );
-    assert!(first.seq_no.is_next(second.seq_no));
-    assert_eq!(reset.seq_no, first.seq_no);
-}
-
-#[test]
-fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    streams.release(stream_handle);
-    let replacement_handle = streams.allocate();
-
-    let replacement = projected(
-        &mut streams,
-        replacement_handle,
-        Ssrc::from(222),
-        5678,
-        Vp8PayloadIdentity::default(),
-    );
+    let stale = streams.allocate();
+    streams.release(stale);
+    let replacement = streams.allocate();
+    let delivery = DeliveryGenerations::new(0, SourceFilterGeneration::default());
 
     assert!(
         streams
             .project_identity(
-                stream_handle,
-                Ssrc::from(111),
-                1234,
+                stale,
+                delivery,
+                111.into(),
+                10_u64.into(),
+                1_000,
                 Vp8PayloadIdentity::default(),
             )
             .is_none()
     );
-    let replacement_next = projected(
-        &mut streams,
-        replacement_handle,
-        Ssrc::from(222),
-        5678,
-        Vp8PayloadIdentity::default(),
+    assert!(
+        streams
+            .project_identity(
+                replacement,
+                delivery,
+                222.into(),
+                20_u64.into(),
+                2_000,
+                Vp8PayloadIdentity::default(),
+            )
+            .is_some()
     );
-    assert!(replacement.seq_no.is_next(replacement_next.seq_no));
-}
-
-#[test]
-fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let first = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        10_000,
-        Vp8PayloadIdentity::default(),
-    );
-    let second = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        13_000,
-        Vp8PayloadIdentity::default(),
-    );
-
-    assert_eq!(first.rtp_timestamp, 10_000);
-    assert_eq!(second.rtp_timestamp, 13_000);
-    assert_eq!(first.transition, SourceTransition::Unchanged);
-    assert_eq!(second.transition, SourceTransition::Unchanged);
-}
-
-#[test]
-fn projected_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let low = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        90_000,
-        Vp8PayloadIdentity::default(),
-    );
-    let high = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        1_000,
-        Vp8PayloadIdentity::default(),
-    );
-    let high_next = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        4_000,
-        Vp8PayloadIdentity::default(),
-    );
-
-    assert_eq!(low.rtp_timestamp, 90_000);
-    assert_eq!(high.rtp_timestamp, 90_001);
-    assert_eq!(high_next.rtp_timestamp, 93_001);
-    assert_eq!(low.transition, SourceTransition::Unchanged);
-    assert_eq!(
-        high.transition,
-        SourceTransition::Switched {
-            previous_ssrc: Ssrc::from(111)
-        }
-    );
-    assert_eq!(high_next.transition, SourceTransition::Unchanged);
-}
-
-#[test]
-fn projected_vp8_identifiers_wrap_across_source_switches() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let low = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        90_000,
-        vp8(32_767, 255),
-    );
-    let high = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        1_000,
-        vp8(12, 4),
-    );
-    let high_next = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        4_000,
-        vp8(14, 6),
-    );
-
-    assert_eq!(low.vp8_payload.picture_id, Some(32_767));
-    assert_eq!(low.vp8_payload.tl0_pic_idx, Some(255));
-    assert_eq!(high.vp8_payload.picture_id, Some(0));
-    assert_eq!(high.vp8_payload.tl0_pic_idx, Some(0));
-    assert_eq!(high_next.vp8_payload.picture_id, Some(2));
-    assert_eq!(high_next.vp8_payload.tl0_pic_idx, Some(2));
-}
-
-#[test]
-fn missing_vp8_fields_preserve_last_projected_identity_across_switches() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let low = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        90_000,
-        vp8(100, 30),
-    );
-    let high_gap = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        1_000,
-        Vp8PayloadIdentity::default(),
-    );
-    let high = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        4_000,
-        vp8(12, 4),
-    );
-
-    assert_eq!(low.vp8_payload.picture_id, Some(100));
-    assert_eq!(low.vp8_payload.tl0_pic_idx, Some(30));
-    assert_eq!(high_gap.vp8_payload, Vp8PayloadIdentity::default());
-    assert_eq!(high.vp8_payload.picture_id, Some(101));
-    assert_eq!(high.vp8_payload.tl0_pic_idx, Some(31));
-}
-
-#[test]
-fn missing_vp8_fields_are_tracked_independently_across_switches() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let _low = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        90_000,
-        vp8(100, 30),
-    );
-    let missing_picture_id = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        1_000,
-        Vp8PayloadIdentity {
-            picture_id: None,
-            tl0_pic_idx: Some(4),
-        },
-    );
-    let picture_id_resumed = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        4_000,
-        vp8(12, 5),
-    );
-
-    assert_eq!(missing_picture_id.vp8_payload.picture_id, None);
-    assert_eq!(missing_picture_id.vp8_payload.tl0_pic_idx, Some(31));
-    assert_eq!(picture_id_resumed.vp8_payload.picture_id, Some(101));
-    assert_eq!(picture_id_resumed.vp8_payload.tl0_pic_idx, Some(32));
-
-    let other_stream_handle = streams.allocate();
-    let _low = projected(
-        &mut streams,
-        other_stream_handle,
-        Ssrc::from(333),
-        90_000,
-        vp8(200, 40),
-    );
-    let missing_tl0 = projected(
-        &mut streams,
-        other_stream_handle,
-        Ssrc::from(444),
-        1_000,
-        Vp8PayloadIdentity {
-            picture_id: Some(12),
-            tl0_pic_idx: None,
-        },
-    );
-    let tl0_resumed = projected(
-        &mut streams,
-        other_stream_handle,
-        Ssrc::from(444),
-        4_000,
-        vp8(13, 4),
-    );
-
-    assert_eq!(missing_tl0.vp8_payload.picture_id, Some(201));
-    assert_eq!(missing_tl0.vp8_payload.tl0_pic_idx, None);
-    assert_eq!(tl0_resumed.vp8_payload.picture_id, Some(202));
-    assert_eq!(tl0_resumed.vp8_payload.tl0_pic_idx, Some(41));
 }
