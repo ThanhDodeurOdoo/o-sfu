@@ -113,6 +113,7 @@ pub fn handle_worker_command(
             response,
             negotiation::worker_apply_session_answer(
                 state,
+                context.config.profile.as_ref(),
                 context.config.bitrate_limits.max_bitrate_in(),
                 &session_key,
                 &answer_sdp,

@@ -8,6 +8,18 @@ use tracing::debug;
 
 use crate::Bitrate;
 
+#[derive(Clone, Copy)]
+pub(super) enum ReceiveRepair {
+    Suppressed,
+    Negotiated,
+}
+
+impl ReceiveRepair {
+    fn suppresses_nack(self) -> bool {
+        matches!(self, Self::Suppressed)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum StaleSsrcPolicy {
     KeepExisting,
@@ -21,10 +33,12 @@ pub(super) fn apply_recv_stream(
     ssrc: Ssrc,
     max_bitrate_in: Bitrate,
     stale_policy: StaleSsrcPolicy,
+    repair: ReceiveRepair,
 ) {
     if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
         let existing_ssrc = Ssrc::from(*stream_rx.ssrc());
         if stale_policy == StaleSsrcPolicy::KeepExisting || existing_ssrc == ssrc {
+            stream_rx.suppress_nack(repair.suppresses_nack());
             stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
             return;
         }
@@ -37,7 +51,8 @@ pub(super) fn apply_recv_stream(
             "replaced stale recv stream SSRC while applying answer"
         );
     }
-    api.expect_stream_rx(ssrc, None, mid, rid);
+    api.expect_stream_rx(ssrc, None, mid, rid)
+        .suppress_nack(repair.suppresses_nack());
     if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
         stream_rx.request_remb(Str0mBitrate::bps(max_bitrate_in.as_bps()));
     }

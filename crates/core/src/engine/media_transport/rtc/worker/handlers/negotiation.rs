@@ -27,7 +27,7 @@ use super::{
         state::PacketLoopState,
     },
     publication::{answer_producer_projection, refresh_negotiated_producer_parameters},
-    recv_stream::{StaleSsrcPolicy, apply_recv_stream},
+    recv_stream::{ReceiveRepair, StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
     Bitrate, VideoBitrateLimits,
@@ -126,6 +126,7 @@ pub(super) fn worker_create_session_renegotiation_offer(
         }
         return Err(TransportAdapterError::UnsupportedFeature);
     };
+    let offer_sdp = RtpProfile::strip_downstream_repair(&offer_sdp);
     let upload_slots = session_state
         .sdp_negotiation
         .staged_offer_upload_slots
@@ -145,6 +146,7 @@ pub(super) fn worker_create_session_renegotiation_offer(
 /// addresses that later packet-loop recovery depends on.
 pub(super) fn worker_apply_session_answer(
     state: &mut PacketLoopState,
+    profile: &RtpProfile,
     max_bitrate_in: Bitrate,
     session_key: &TransportSessionKey,
     answer_sdp: &str,
@@ -154,12 +156,14 @@ pub(super) fn worker_apply_session_answer(
         .iter()
         .map(|(_transport_media_id, mid)| *mid)
         .collect::<Vec<_>>();
-    let answer = SdpAnswer::from_sdp_string(answer_sdp)
+    let answer_sdp = RtpProfile::strip_downstream_answer_repair(answer_sdp);
+    RtpProfile::validate_answer_sdp(&answer_sdp)?;
+    let answer = SdpAnswer::from_sdp_string(&answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
     let client_capabilities =
-        negotiated_capabilities::client_rtp_capabilities_from_sdp_answer(&answer)?;
-    let producer_answer_projection = answer_producer_projection(&answer, &producer_mids)?;
+        negotiated_capabilities::client_rtp_capabilities_from_sdp_answer(&answer, profile)?;
+    let producer_answer_projection = answer_producer_projection(&answer, &producer_mids, profile)?;
     let offer_encodings = offer_encodings_by_mid(state, session_key, &producer_mids)?;
     let rids_by_mid = producer_mids
         .iter()
@@ -168,7 +172,7 @@ pub(super) fn worker_apply_session_answer(
                 .get(mid)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            simulcast::send_rids_for_mid(answer_sdp, *mid, encodings)
+            simulcast::send_rids_for_mid(&answer_sdp, *mid, encodings)
                 .map(|rids| (*mid, rids))
                 .map_err(|_error| TransportAdapterError::InvalidInput)
         })
@@ -333,6 +337,7 @@ fn apply_pending_recv_streams(
                 stream.ssrc,
                 max_bitrate_in,
                 StaleSsrcPolicy::ReplaceStale,
+                ReceiveRepair::Suppressed,
             );
         }
     }

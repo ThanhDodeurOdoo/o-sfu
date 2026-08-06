@@ -560,7 +560,7 @@ test("H264-only live publish applies RID simulcast and renders when supported", 
     }
 });
 
-test("live browser negotiation keeps RTX pairs only for eligible optional codecs", async ({
+test("live browser negotiation keeps upload repair out of consumer media", async ({
     browserName,
     context
 }) => {
@@ -587,17 +587,23 @@ test("live browser negotiation keeps RTX pairs only for eligible optional codecs
             authKey: server.authKey,
             httpBaseUrl: server.httpBaseUrl
         });
-        const peer = await createPeerPage(context);
-        await connectPeer(peer, {
+        const publisher = await createPeerPage(context);
+        await connectPeer(publisher, {
             channelUuid,
             jwt: createConnectToken(channelUuid, 77),
             url: server.wsUrl
         });
 
-        await expect.poll(async () => (await peerSnapshot(peer)).state).toBe("connected");
-        await expect.poll(async () => peerLocalDescriptionSdp(peer)).not.toBeNull();
-        const sdp = await peerLocalDescriptionSdp(peer);
-        const codecs = parseVideoCodecAnswer(sdp);
+        await expect.poll(async () => (await peerSnapshot(publisher)).state).toBe("connected");
+        await publishSyntheticCamera(publisher, "upload-repair");
+        await expect
+            .poll(async () => {
+                const sdp = await peerLocalDescriptionSdp(publisher);
+                return sdp ? videoMediaSectionsByDirection(sdp, "sendonly").length : 0;
+            })
+            .toBeGreaterThan(0);
+        const publisherSdp = await peerLocalDescriptionSdp(publisher);
+        const codecs = parseVideoCodecAnswer(publisherSdp);
 
         expect(codecs.videoCodecPayloadTypes.size).toBeGreaterThan(0);
         if (codecs.h264PayloadTypes.size > 0) {
@@ -615,11 +621,35 @@ test("live browser negotiation keeps RTX pairs only for eligible optional codecs
         if (codecs.vp9Profiles.size > 0) {
             expect(codecs.vp9Profiles).toEqual(new Set(["0", "2"]));
         }
-        for (const payloadType of codecs.h264PayloadTypes) {
-            expect(codecs.rtxAssociations.has(payloadType)).toBeFalsy();
+        const uploadSections = videoMediaSectionsByDirection(publisherSdp, "sendonly");
+        expect(uploadSections.length).toBeGreaterThan(0);
+        for (const section of uploadSections) {
+            expect(section).toMatch(/^a=rtpmap:\d+ rtx\//im);
+            expect(section).toMatch(/^a=fmtp:\d+ .*\bapt=/im);
+            expect(section).toMatch(/^a=rtcp-fb:(?:\*|\d+) nack\s*$/im);
         }
-        for (const payloadType of codecs.vp9PayloadTypes) {
-            expect(codecs.rtxAssociations.has(payloadType)).toBeTruthy();
+
+        const subscriber = await createPeerPage(context);
+        await connectPeer(subscriber, {
+            channelUuid,
+            jwt: createConnectToken(channelUuid, 78),
+            url: server.wsUrl
+        });
+        await expectCameraTrackUpdate(subscriber, 77, true);
+        await expect
+            .poll(async () => {
+                const sdp = await peerLocalDescriptionSdp(subscriber);
+                return sdp ? videoMediaSectionsByDirection(sdp, "recvonly").length : 0;
+            })
+            .toBeGreaterThan(0);
+        const subscriberSdp = await peerLocalDescriptionSdp(subscriber);
+        const consumerSections = videoMediaSectionsByDirection(subscriberSdp, "recvonly");
+        for (const section of consumerSections) {
+            expect(section).not.toMatch(/^a=rtpmap:\d+ rtx\//im);
+            expect(section).not.toMatch(/^a=fmtp:\d+ .*\bapt=/im);
+            expect(section).not.toMatch(/^a=rtcp-fb:(?:\*|\d+) nack\s*$/im);
+            expect(section).not.toContain("urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id");
+            expect(section).not.toMatch(/^a=ssrc-group:FID\b/im);
         }
     } finally {
         await server.stop();
@@ -792,6 +822,15 @@ function trackUpdateExpectation(sessionId, type, active, kind) {
 
 function pixelDistance(left, right) {
     return Math.hypot(left.red - right.red, left.green - right.green, left.blue - right.blue);
+}
+
+function videoMediaSectionsByDirection(sdp, direction) {
+    return sdp
+        .split(/\r?\n(?=m=)/)
+        .filter(
+            (section) =>
+                section.startsWith("m=video ") && section.split(/\r?\n/).includes(`a=${direction}`)
+        );
 }
 
 function parseVideoCodecAnswer(sdp) {

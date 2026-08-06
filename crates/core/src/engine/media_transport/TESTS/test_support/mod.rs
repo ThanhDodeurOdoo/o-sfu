@@ -17,6 +17,7 @@ use {
     crate::engine::sync::lock_unpoisoned,
     o_sfu_router::rtp::MediaStream as RouterRtpParameters,
     std::sync::Mutex,
+    str0m::{Rtc, change::SdpOffer},
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use {
@@ -39,6 +40,39 @@ use crate::RtcPortRange;
 
 #[cfg(test)]
 pub(super) type MediaControlBatchLog = Arc<Mutex<Vec<(usize, &'static str, Vec<usize>)>>>;
+
+#[cfg(test)]
+fn answer_without_generic_nack(answer_sdp: impl AsRef<str>) -> String {
+    let mut answer = answer_sdp
+        .as_ref()
+        .lines()
+        .filter(|line| {
+            let Some(value) = line.strip_prefix("a=rtcp-fb:") else {
+                return true;
+            };
+            let mut fields = value.split_ascii_whitespace();
+            fields.next().is_none()
+                || !fields
+                    .next()
+                    .is_some_and(|kind| kind.eq_ignore_ascii_case("nack"))
+                || fields.next().is_some()
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    answer.push_str("\r\n");
+    answer
+}
+
+#[cfg(test)]
+pub(crate) fn try_remote_answer(remote: &mut Rtc, offer: SdpOffer) -> Option<String> {
+    let answer = remote.sdp_api().accept_offer(offer).ok()?;
+    Some(answer_without_generic_nack(answer.to_sdp_string()))
+}
+
+#[cfg(test)]
+pub(crate) fn try_remote_answer_sdp(remote: &mut Rtc, offer_sdp: &str) -> Option<String> {
+    try_remote_answer(remote, SdpOffer::from_sdp_string(offer_sdp).ok()?)
+}
 
 #[derive(Debug, Clone, Copy)]
 #[cfg(any(test, feature = "testing-transport"))]

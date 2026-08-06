@@ -17,12 +17,19 @@ use super::{
 };
 use crate::{
     AudioCodecPreference, VideoCodecPreference,
-    engine::media_transport::{SessionUploadSlot, TransportMediaId},
+    engine::media_transport::{
+        SessionUploadSlot, TransportMediaId,
+        test_support::{try_remote_answer, try_remote_answer_sdp},
+    },
 };
 
 const CHROME_OFFER_AUDIO_ONLY: &str = include_str!("testdata/chrome_offer_audio_only.sdp");
 const FIREFOX_OFFER_AUDIO_ONLY: &str = include_str!("testdata/firefox_offer_audio_only.sdp");
 const SAFARI_DATA_CHANNEL_OFFER: &str = include_str!("testdata/safari_datachannel_offer.sdp");
+
+fn remote_answer_sdp(remote: &mut Rtc, offer_sdp: &str) -> String {
+    try_remote_answer_sdp(remote, offer_sdp).expect("remote answer should build")
+}
 
 #[tokio::test]
 async fn rtc_initial_session_offer_accepts_answer_without_candidates() {
@@ -34,16 +41,11 @@ async fn rtc_initial_session_offer_accepts_answer_without_candidates() {
     assert!(offer_sdp.contains("m=audio"));
     assert!(offer_sdp.contains("m=video"));
     assert!(offer_sdp.contains("a=recvonly"));
+    assert!(offer_sdp.contains("a=rtpmap:97 rtx/90000"));
+    assert!(offer_sdp.contains("a=rtcp-fb:96 nack"));
 
     let mut remote = Rtc::new(Instant::now());
-    let answer_sdp = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&offer_sdp)
-                .expect("adapter should return parseable SDP offer"),
-        )
-        .expect("remote RTC should accept the adapter offer")
-        .to_sdp_string();
+    let answer_sdp = remote_answer_sdp(&mut remote, &offer_sdp);
     assert!(!answer_sdp.contains("a=candidate:"));
 
     assert!(
@@ -151,8 +153,10 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
         "video offers should retain the keyframe feedback surface used after layer switches"
     );
     assert!(
-        !offer_sdp.contains("a=rtpmap:97 rtx/90000") && !offer_sdp.contains("a=fmtp:97 apt=96"),
-        "VP8 simulcast offers should not negotiate RTX until RID repair packets are demuxed safely"
+        offer_sdp.contains("a=rtpmap:97 rtx/90000")
+            && offer_sdp.contains("a=fmtp:97 apt=96")
+            && offer_sdp.contains("a=rtcp-fb:96 nack\r\n"),
+        "producer upload offers should negotiate packet repair"
     );
     let video_slot = upload_slots
         .iter()
@@ -322,14 +326,7 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
                 .expect("test host candidate should build"),
         )
         .expect("remote candidate should register");
-    let answer = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&offer_sdp)
-                .expect("adapter should return parseable SDP offer"),
-        )
-        .expect("remote answer should build")
-        .to_sdp_string();
+    let answer = remote_answer_sdp(&mut remote, &offer_sdp);
 
     let applied_answer = adapter
         .apply_session_answer(&session_key, &answer)
@@ -416,13 +413,7 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         "simulcast publish offers should advertise the selected-layer receive ladder"
     );
 
-    let answer_sdp = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
-        )
-        .expect("remote simulcast answer should build")
-        .to_sdp_string();
+    let answer_sdp = remote_answer_sdp(&mut remote, &renegotiation_offer);
     let answer_sdp =
         answer_with_simulcast_send_rids(&answer_sdp, &negotiated_mid, &[("lo", Some(150_000))]);
     let applied_answer = adapter
@@ -481,13 +472,7 @@ async fn rtc_simulcast_answer_rejects_unoffered_rid_alternatives() {
         .expect("staged simulcast renegotiation offer should be available")
         .into_parts()
         .0;
-    let answer_sdp = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
-        )
-        .expect("remote simulcast answer should build")
-        .to_sdp_string();
+    let answer_sdp = remote_answer_sdp(&mut remote, &renegotiation_offer);
     let answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
         &negotiated_mid,
@@ -538,13 +523,7 @@ async fn rtc_simulcast_answer_rejects_unoffered_plain_rid() {
         .expect("staged simulcast renegotiation offer should be available")
         .into_parts()
         .0;
-    let answer_sdp = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
-        )
-        .expect("remote simulcast answer should build")
-        .to_sdp_string();
+    let answer_sdp = remote_answer_sdp(&mut remote, &renegotiation_offer);
     let answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
         &negotiated_mid,
@@ -584,13 +563,7 @@ async fn rtc_simulcast_answer_rejects_larger_max_br_than_offer() {
         .expect("staged simulcast renegotiation offer should be available")
         .into_parts()
         .0;
-    let answer_sdp = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
-        )
-        .expect("remote simulcast answer should build")
-        .to_sdp_string();
+    let answer_sdp = remote_answer_sdp(&mut remote, &renegotiation_offer);
     let answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
         &negotiated_mid,
@@ -629,13 +602,7 @@ async fn rtc_producer_answer_rejects_non_one_byte_extmap_id() {
         .expect("staged renegotiation offer should be available")
         .into_parts()
         .0;
-    let answer_sdp = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&renegotiation_offer).expect("producer offer should parse"),
-        )
-        .expect("remote producer answer should build")
-        .to_sdp_string();
+    let answer_sdp = remote_answer_sdp(&mut remote, &renegotiation_offer);
     let answer_sdp = answer_with_extmap_id(&answer_sdp, &negotiated_mid, 15);
 
     assert_eq!(
@@ -797,14 +764,7 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         .debug_resolve_mid(transport_media_id)
         .await
         .expect("transport media should expose its negotiated mid");
-    let answer_sdp = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&renegotiation_sdp)
-                .expect("default simulcast offer should parse"),
-        )
-        .expect("remote default simulcast answer should build")
-        .to_sdp_string();
+    let answer_sdp = remote_answer_sdp(&mut remote, &renegotiation_sdp);
     let answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
         &negotiated_mid,
@@ -931,6 +891,11 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .await
         .expect("transport media should resolve to the server-assigned mid");
     assert!(renegotiation_sdp.contains(&format!("a=mid:{renegotiated_mid}")));
+    let consumer_section = media_section_for_mid(&renegotiation_sdp, &renegotiated_mid)
+        .expect("consumer media section should exist");
+    assert!(consumer_section.contains("a=sendonly"));
+    assert!(!consumer_section.contains(" rtx/90000"));
+    assert!(!consumer_section.contains("a=rtcp-fb:96 nack\r\n"));
 
     apply_offer_answer(&adapter, &consumer_key, &mut remote, renegotiation_sdp).await;
 
@@ -1156,14 +1121,7 @@ async fn rtc_session_cleanup_releases_declined_staged_producer_without_follow_up
         .create_session_renegotiation_offer(&session_key)
         .await
         .expect("addition offer should be available");
-    let answer = remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(&addition_offer.into_parts().0)
-                .expect("addition offer should parse"),
-        )
-        .expect("remote answer should build")
-        .to_sdp_string();
+    let answer = remote_answer_sdp(&mut remote, &addition_offer.into_parts().0);
     let declined_answer = answer_with_mid_direction(&answer, &producer_mid, "inactive");
 
     let applied_answer = adapter
@@ -1468,16 +1426,9 @@ async fn apply_offer_answer(
     let offer =
         SdpOffer::from_sdp_string(&offer_sdp).expect("adapter should return parseable SDP offer");
     assert!(offer.session.end_of_candidates());
-    let answer = remote
-        .sdp_api()
-        .accept_offer(offer)
-        .expect("remote answer should build");
-    assert!(
-        adapter
-            .apply_session_answer(session_key, &answer.to_sdp_string())
-            .await
-            .is_ok()
-    );
+    let answer = try_remote_answer(remote, offer).expect("remote answer should build");
+    let result = adapter.apply_session_answer(session_key, &answer).await;
+    assert!(result.is_ok(), "session answer should apply: {result:?}");
 }
 
 async fn setup_queued_removal_sources(

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use o_sfu_rfc::rtp as rfc_rtp;
-use o_sfu_router::rtp::{CodecSetting, MediaCodecCapability};
+use o_sfu_rfc::{rtp as rfc_rtp, webrtc::rtp_header_extension_uri};
+use o_sfu_router::rtp::{CodecSetting, RtcpFeedbackKind};
 
 use super::client_rtp_capabilities_from_answer;
 
@@ -9,7 +9,7 @@ const CHROMIUM_OPTIONAL_CODECS_ANSWER: &str =
     include_str!("testdata/chromium_optional_codecs_answer.sdp");
 
 #[test]
-fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
+fn chromium_answer_projection_keeps_optional_video_profiles_without_rtx() {
     let projected = client_rtp_capabilities_from_answer(CHROMIUM_OPTIONAL_CODECS_ANSWER);
     assert!(
         projected.is_some(),
@@ -68,24 +68,40 @@ fn chromium_answer_projection_keeps_optional_video_profiles_and_rtx_pairs() {
         BTreeSet::from([Some(String::from("0")), Some(String::from("2"))])
     );
 
-    let optional_payload_types = projected
-        .codecs()
-        .filter(|codec| matches!(codec.codec_name(), "H264" | "VP9"))
-        .filter_map(MediaCodecCapability::payload_type)
-        .collect::<BTreeSet<_>>();
-    let rtx_associations = projected
-        .codecs()
-        .filter(|codec| codec.codec_name() == "rtx")
-        .filter_map(|codec| {
-            codec.parameters().find_map(|(key, value)| {
-                if key != rfc_rtp::fmtp::RTX_ASSOCIATION {
-                    return None;
-                }
-                value.parse::<u8>().ok()
-            })
+    assert!(projected.codecs().all(|codec| codec.codec_name() != "rtx"));
+    assert!(projected.codecs().all(|codec| {
+        codec
+            .rtcp_feedback()
+            .all(|feedback| feedback.kind() != &RtcpFeedbackKind::Nack)
+    }));
+    let vp8 = projected.codecs().find(|codec| codec.codec_name() == "VP8");
+    assert!(vp8.is_some(), "captured Chromium answer should keep VP8");
+    let Some(vp8) = vp8 else {
+        return;
+    };
+    let vp8_feedback = vp8
+        .rtcp_feedback()
+        .map(|feedback| feedback.kind().clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        vp8_feedback,
+        [
+            RtcpFeedbackKind::TransportCc,
+            RtcpFeedbackKind::NackPli,
+            RtcpFeedbackKind::CcmFir,
+            RtcpFeedbackKind::GoogRemb,
+        ]
+    );
+    assert!(
+        projected.header_extensions().all(|extension| {
+            extension.uri() != rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID
         })
-        .collect::<BTreeSet<_>>();
-    assert!(optional_payload_types.is_subset(&rtx_associations));
+    );
+    assert!(
+        projected
+            .header_extensions()
+            .any(|extension| { extension.uri() == rtp_header_extension_uri::RTP_STREAM_ID })
+    );
 }
 
 #[test]

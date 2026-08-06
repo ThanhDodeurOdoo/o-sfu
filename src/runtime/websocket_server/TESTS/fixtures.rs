@@ -16,7 +16,11 @@ pub(super) use o_sfu_protocol::wire::{
     ServerEnvelope, ServerMessage, ServerRequest, SessionDescriptionPayload, StreamType, UserId,
     UserPermissions, WelcomePayload,
 };
-use str0m::{Candidate, Rtc, change::SdpOffer};
+use str0m::{
+    Candidate, Rtc, RtcConfig,
+    change::SdpOffer,
+    format::{CodecConfig, PayloadParams},
+};
 pub(super) use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -586,13 +590,34 @@ pub(super) fn test_rtc_answer_sdp(request: &ServerRequest) -> Option<String> {
     let offer_sdp = match request {
         ServerRequest::Offer(payload) | ServerRequest::Renegotiate(payload) => &payload.sdp,
     };
-    let mut rtc = Rtc::new(Instant::now());
+    let mut rtc = rtc_without_retransmission(Rtc::builder());
     rtc.add_local_candidate(Candidate::host(next_websocket_test_peer_addr(), "udp").ok()?)?;
     let answer = rtc
         .sdp_api()
         .accept_offer(SdpOffer::from_sdp_string(offer_sdp).ok()?)
         .ok()?;
     Some(answer.to_sdp_string())
+}
+
+pub(super) fn rtc_without_retransmission(mut config: RtcConfig) -> Rtc {
+    let payloads = config
+        .codec_config()
+        .params()
+        .iter()
+        .map(without_retransmission)
+        .collect();
+    *config.codec_config() = CodecConfig::new_from_payload_params(payloads);
+    config.build(Instant::now())
+}
+
+fn without_retransmission(payload: &PayloadParams) -> PayloadParams {
+    let mut projected = PayloadParams::new(payload.pt(), None, payload.spec());
+    projected.set_fb_transport_cc(payload.fb_transport_cc());
+    projected.set_fb_nack(false);
+    projected.set_fb_pli(payload.fb_pli());
+    projected.set_fb_fir(payload.fb_fir());
+    projected.set_fb_remb(payload.fb_remb());
+    projected
 }
 
 pub(super) async fn read_websocket_ping(websocket: &mut TestWebSocket) -> Option<Vec<u8>> {

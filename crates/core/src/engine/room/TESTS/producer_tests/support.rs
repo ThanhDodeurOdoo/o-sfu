@@ -9,7 +9,7 @@ pub(super) use o_sfu_telemetry::diagnostics::{
     DiagnosticsSourceSelector, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
     DiagnosticsVideoRoutePriority,
 };
-pub(super) use str0m::{Candidate, Rtc, change::SdpOffer, media::Mid};
+pub(super) use str0m::{Candidate, Rtc, media::Mid};
 
 pub(super) use super::super::{api::NegotiatedPublish, fixtures::*};
 pub(super) use crate::{
@@ -19,6 +19,7 @@ pub(super) use crate::{
             SessionOffer, TransportMediaId, TransportSessionKey,
             test_support::{
                 test_media_transport_config, test_media_transport_deps, test_rtc_port_range,
+                try_remote_answer_sdp,
             },
         },
         room::{PublishIntentOutcome, RemoteTrackSnapshot, Room},
@@ -504,14 +505,7 @@ pub(super) async fn apply_offer_answer(
 }
 
 pub(super) fn remote_answer_sdp(remote: &mut Rtc, offer_sdp: &str) -> String {
-    remote
-        .sdp_api()
-        .accept_offer(
-            SdpOffer::from_sdp_string(offer_sdp)
-                .expect("adapter should return parseable SDP offer"),
-        )
-        .expect("remote answer should build")
-        .to_sdp_string()
+    try_remote_answer_sdp(remote, offer_sdp).expect("remote answer should build")
 }
 
 pub(super) fn video_rtp_parameters_with_mid(mid: &str, ssrc: u32) -> MediaStream {

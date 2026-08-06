@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, time::Instant};
+use std::net::SocketAddr;
 
 use str0m::{
     Candidate, Rtc,
@@ -6,6 +6,8 @@ use str0m::{
     format::{Codec, FormatParams},
     media::Frequency,
 };
+
+use super::rtc_without_retransmission;
 
 pub(crate) struct ProtocolHarnessRtcPeer {
     rtc: Rtc,
@@ -46,7 +48,7 @@ impl ProtocolHarnessRtcPeerFactory {
 }
 
 pub(crate) fn default_protocol_harness_rtc() -> Rtc {
-    Rtc::new(Instant::now())
+    rtc_without_retransmission(Rtc::builder())
 }
 
 pub(crate) fn reduced_capability_rtc() -> Rtc {
@@ -70,5 +72,5 @@ pub(crate) fn reduced_capability_rtc() -> Rtc {
         None,
         FormatParams::default(),
     );
-    config.build(Instant::now())
+    rtc_without_retransmission(config)
 }

@@ -30,10 +30,10 @@ use {
 
 use super::{
     super::super::{
-        rtp_projection, simulcast,
+        RtpProfile, rtp_projection, simulcast,
         state::{PacketLoopState, RtcSessionState},
     },
-    recv_stream::{StaleSsrcPolicy, apply_recv_stream},
+    recv_stream::{ReceiveRepair, StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
     Bitrate,
@@ -51,6 +51,7 @@ pub(super) struct AnswerProducerProjection {
 pub(super) fn answer_producer_projection(
     answer: &SdpAnswer,
     producer_mids: &[Mid],
+    profile: &RtpProfile,
 ) -> Result<Vec<AnswerProducerProjection>, TransportAdapterError> {
     answer
         .media_lines
@@ -60,11 +61,15 @@ pub(super) fn answer_producer_projection(
             Ok(AnswerProducerProjection {
                 mid: media_line.mid(),
                 direction: media_line.direction(),
-                payload_params: media_line.rtp_params(),
+                payload_params: profile.project_answer_payloads(&media_line.rtp_params()),
                 header_extensions: media_line
                     .extmaps()
                     .into_iter()
-                    .map(rtp_projection::header_extension)
+                    .filter_map(|extension| {
+                        profile
+                            .project_answer_header_extension(extension)
+                            .transpose()
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
                 primary_ssrcs: media_line
                     .ssrc_info()
@@ -115,6 +120,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
             };
             let primary_payload_type = rtp_projection::router_payload_type(*primary_payload.pt())?;
             let formats = project_media_formats(media_kind, &media_line.payload_params)?;
+            let repair = receive_repair(&media_line.payload_params);
             let rids = rids_by_mid.get(&mid).map(Vec::as_slice).unwrap_or_default();
             let bindings = project_bindings(
                 session_state,
@@ -123,7 +129,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 rids,
                 &media_line.primary_ssrcs,
             );
-            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in);
+            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in, repair);
             let Some(parameters) =
                 build_projected_parameters(mid, formats, media_line.header_extensions, bindings)
             else {
@@ -162,6 +168,7 @@ fn apply_projected_recv_streams(
     mid: Mid,
     bindings: &[StreamBinding],
     max_bitrate_in: Bitrate,
+    repair: ReceiveRepair,
 ) {
     let mut api = session_state.rtc.direct_api();
     for binding in bindings {
@@ -175,11 +182,23 @@ fn apply_projected_recv_streams(
             ssrc.into(),
             max_bitrate_in,
             StaleSsrcPolicy::KeepExisting,
+            repair,
         );
     }
     #[cfg(test)]
     {
         session_state.max_bitrate_in = Some(max_bitrate_in);
+    }
+}
+
+fn receive_repair(payloads: &[PayloadParams]) -> ReceiveRepair {
+    if payloads
+        .iter()
+        .any(|payload| payload.fb_nack() && payload.resend().is_some())
+    {
+        ReceiveRepair::Negotiated
+    } else {
+        ReceiveRepair::Suppressed
     }
 }
 

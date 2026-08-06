@@ -270,6 +270,16 @@ pub mod sdp {
         /// Reference: RFC 8285 section 5.
         pub const EXTMAP: &str = "extmap";
 
+        /// `a=fmtp:<pt> <parameter-list>`
+        ///
+        /// Reference: RFC 8866 section 6.5.
+        pub const FMTP: &str = "fmtp";
+
+        /// `a=rtpmap:<pt> <encoding>/<clock-rate>`
+        ///
+        /// Reference: RFC 8866 section 6.6.
+        pub const RTPMAP: &str = "rtpmap";
+
         /// `a=rtcp-fb:<pt> <feedback-type> [<feedback-parameter>]`
         ///
         /// Reference: RFC 4585 section 4.2.
@@ -290,6 +300,11 @@ pub mod sdp {
         /// Reference: RFC 8853 section 5.1.
         pub const SIMULCAST: &str = "simulcast";
 
+        /// `a=ssrc-group:<semantics> <ssrc-list>`
+        ///
+        /// Reference: RFC 5576 section 4.2.
+        pub const SSRC_GROUP: &str = "ssrc-group";
+
         /// `a=setup:<role>`
         ///
         /// References: RFC 4145, RFC 5763.
@@ -299,6 +314,13 @@ pub mod sdp {
         ///
         /// Reference: RFC 9143 section 9.
         pub const MID: &str = "mid";
+    }
+
+    pub mod ssrc_group_semantics {
+        /// Flow identification between an original and retransmission SSRC.
+        ///
+        /// Reference: RFC 5576 section 4.2.
+        pub const FID: &str = "FID";
     }
 
     /// `a=rid` directions and validation helpers.

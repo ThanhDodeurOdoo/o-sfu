@@ -40,18 +40,18 @@ fn all_codec_sets_keep_profile_views_aligned() {
             .expect("code-controlled RTP profile should project");
         let mut config = profile.session_config();
         let capabilities = profile.router_capabilities();
-        assert!(
-            capabilities
-                .codecs()
-                .filter(|codec| codec.codec_name() != "rtx")
-                .map(|codec| (codec.codec_name().to_owned(), codec.payload_type()))
-                .eq(config
-                    .codec_config()
-                    .params()
-                    .iter()
-                    .map(|payload| (payload.spec().codec.to_string(), Some(*payload.pt())))),
-            "capability mismatch for codec mask {mask}"
-        );
+        let mut codecs = capabilities.codecs();
+        for payload in config.codec_config().params() {
+            let primary = codecs.next().expect("primary codec should project");
+            assert_eq!(primary.codec_name(), payload.spec().codec.to_string());
+            assert_eq!(primary.payload_type(), Some(*payload.pt()));
+            if let Some(resend) = payload.resend() {
+                let rtx = codecs.next().expect("RTX codec should project");
+                assert_eq!(rtx.codec_name(), "rtx");
+                assert_eq!(rtx.payload_type(), Some(*resend));
+            }
+        }
+        assert!(codecs.next().is_none(), "codec mismatch for mask {mask}");
         for (kind, audio) in [(MediaKind::Audio, true), (MediaKind::Video, false)] {
             assert_eq!(profile.codec_names(kind), unique_names(&mut config, audio));
         }
@@ -81,14 +81,14 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
             (Codec::Opus, 111_u8, None),
             (Codec::PCMU, 0, None),
             (Codec::PCMA, 8, None),
-            (Codec::Vp8, 96, None),
-            (Codec::H264, 127, None),
-            (Codec::H264, 125, None),
-            (Codec::H264, 108, None),
-            (Codec::H264, 124, None),
-            (Codec::H264, 123, None),
-            (Codec::H264, 35, None),
-            (Codec::H264, 114, None),
+            (Codec::Vp8, 96, Some(97)),
+            (Codec::H264, 127, Some(121)),
+            (Codec::H264, 125, Some(107)),
+            (Codec::H264, 108, Some(109)),
+            (Codec::H264, 124, Some(120)),
+            (Codec::H264, 123, Some(119)),
+            (Codec::H264, 35, Some(36)),
+            (Codec::H264, 114, Some(115)),
             (Codec::H265, 102, Some(103)),
             (Codec::Vp9, 98, Some(99)),
             (Codec::Vp9, 100, Some(101)),
@@ -160,11 +160,10 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
                 .into_iter()
                 .flatten())
         );
-        if let Some(rtx_pt) = payload.resend() {
+        if let Some(resend) = payload.resend() {
             let rtx = codecs.next().expect("RTX router codec should project");
             assert_eq!(rtx.codec_name(), "rtx");
-            assert_eq!(rtx.payload_type(), Some(*rtx_pt));
-            assert_eq!(rtx.rtx_associated_payload_type(), Some(*payload.pt()));
+            assert_eq!(rtx.payload_type(), Some(*resend));
         }
     }
     assert!(codecs.next().is_none());
@@ -180,7 +179,6 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
             (3, rtp_header_extension_uri::TRANSPORT_WIDE_CC_DRAFT_01),
             (4, rtp_header_extension_uri::MID),
             (10, rtp_header_extension_uri::RTP_STREAM_ID),
-            (11, rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID),
             (13, "urn:3gpp:video-orientation"),
         ]
     );
@@ -192,4 +190,60 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
         .iter()
         .map(|(id, extension)| (id, extension.as_uri()));
     assert!(router_exts.eq(rtc_exts));
+}
+
+#[test]
+fn answer_validation_keeps_repair_only_for_producer_uploads() {
+    for attribute in [
+        "a=rtpmap:97 rtx/90000",
+        "a=fmtp:97 apt=96",
+        "a=rtcp-fb:96 nack",
+        "a=extmap:11 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id",
+        "a=ssrc-group:FID 4000000001 4000000002",
+    ] {
+        let downstream =
+            format!("m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\na=recvonly\r\n{attribute}\r\n");
+        let upload = format!("m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\na=sendonly\r\n{attribute}\r\n");
+        assert!(RtpProfile::validate_answer_sdp(&downstream).is_err());
+        assert!(RtpProfile::validate_answer_sdp(&upload).is_ok());
+    }
+    for attribute in [
+        "a=rtpmap:96 VP8/90000",
+        "a=rtcp-fb:96 nack pli",
+        "a=extmap:10 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id",
+    ] {
+        assert!(RtpProfile::validate_answer_sdp(attribute).is_ok());
+    }
+}
+
+#[test]
+fn offer_projection_strips_repair_only_from_consumer_media() {
+    let offer = concat!(
+        "v=0\r\n",
+        "m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\n",
+        "a=recvonly\r\n",
+        "a=rtpmap:96 VP8/90000\r\n",
+        "a=rtpmap:97 rtx/90000\r\n",
+        "a=fmtp:97 apt=96\r\n",
+        "a=rtcp-fb:96 nack\r\n",
+        "m=video 9 UDP/TLS/RTP/SAVPF 96 97\r\n",
+        "a=sendonly\r\n",
+        "a=rtpmap:96 VP8/90000\r\n",
+        "a=rtpmap:97 rtx/90000\r\n",
+        "a=fmtp:97 apt=96\r\n",
+        "a=rtcp-fb:96 nack\r\n",
+    );
+
+    let projected = RtpProfile::strip_downstream_repair(offer);
+    let sections = projected.split("m=video").collect::<Vec<_>>();
+    assert_eq!(sections.len(), 3);
+    let upload = sections.get(1).copied().unwrap_or_default();
+    let consumer = sections.get(2).copied().unwrap_or_default();
+    assert!(upload.contains("SAVPF 96 97"));
+    assert!(upload.contains("a=rtpmap:97 rtx/90000"));
+    assert!(upload.contains("a=rtcp-fb:96 nack"));
+    assert!(consumer.contains("SAVPF 96\r\n"));
+    assert!(!consumer.contains("rtx/90000"));
+    assert!(!consumer.contains(" apt="));
+    assert!(!consumer.contains("a=rtcp-fb:96 nack\r\n"));
 }
