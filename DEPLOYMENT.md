@@ -38,7 +38,7 @@ RTC server KEY = <same value as AUTH_KEY>
 openssl rand -base64 32
 ```
 
-## recomended production environment
+## basic production environment
 
 ```env
 PROXY=true
@@ -47,7 +47,6 @@ AUTH_KEY=<base64-auth-key>
 DIAGNOSTICS_AUTH_TOKEN=<diagnostics-token>
 RTC_MIN_PORT=40000
 RTC_MAX_PORT=40099
-RTC_UDP_IO_BACKEND=io_uring # needs unconfined docker, otherwise run 'tokio'
 TELEMETRY_LOG_FORMAT=json
 TELEMETRY_DEPLOYMENT_ENVIRONMENT=production
 ```
@@ -58,6 +57,8 @@ TELEMETRY_DEPLOYMENT_ENVIRONMENT=production
 
 `TELEMETRY_DEPLOYMENT_ENVIRONMENT=production` setting it to `production` makes the tracing switch to ratio-based sampling so only a subset of traces is captured to reduce load on the tracing system
 
+`ROOM_MAX_LOCAL_ROUTERS` must be less than or equal to `RTC_MEDIA_WORKER_COUNT`
+
 > [!WARNING]
 > IO_URING
 >
@@ -67,15 +68,13 @@ TELEMETRY_DEPLOYMENT_ENVIRONMENT=production
 > that being said, there is no indication that it leads to vulnerabilities in o-sfu use case,
 > and io_uring is "commonly" used in many high throughput systems.
 >
-> If you want to enable it, use `RTC_UDP_IO_BACKEND=io_uring`, if you're running inside docker,
-> docker must be configured in `unconfined` mode.
-
-```
-security_opt:
-      - seccomp=unconfined
-```
-
-`ROOM_MAX_LOCAL_ROUTERS` must be less than or equal to `RTC_MEDIA_WORKER_COUNT`
+> If you know what you are doing and want to enable it, use `RTC_UDP_IO_BACKEND=io_uring`.
+>
+> If you're running inside docker, docker must be explicitely configured in `unconfined` mode.
+>```
+>security_opt:
+>      - seccomp=unconfined
+>```
 
 ## image
 
