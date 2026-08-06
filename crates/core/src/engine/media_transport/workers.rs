@@ -58,7 +58,7 @@ impl MediaTransport {
     /// Returns the latest bitrate estimates for the requested sessions.
     ///
     /// Missing sessions are omitted from the snapshot. Estimates are suitable
-    /// for diagnostics and policy input, not for accounting.
+    /// for diagnostics, not for accounting.
     #[must_use]
     pub fn transport_bitrate_snapshot(
         &self,

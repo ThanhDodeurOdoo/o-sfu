@@ -4,7 +4,8 @@ use super::support::*;
 use crate::engine::{
     UserInfo,
     media_transport::{
-        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportMediaId, TransportTeardown,
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId,
+        TransportTeardown,
     },
     room::{
         DeactivateIntentOutcome, media_graph::ReceiverRouteActivity,
@@ -1268,6 +1269,91 @@ async fn video_download_limit_pauses_lowest_ranked_receiver_routes() {
         active_destination_receivers(&scenario.adapter, [third_camera_media_id]).await,
         vec![UserId::Integer(1), UserId::Integer(2)]
     );
+}
+
+#[tokio::test]
+async fn constrained_bandwidth_can_pause_a_pinned_route() {
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+    scenario
+        .set_scalable_video_layout(2, 1, VideoLayoutIntent::Pinned)
+        .await;
+    let receiver = UserId::Integer(2);
+    let connection_id = user_connection_id(&scenario.room, &receiver).await;
+    let session_key = scenario
+        .room
+        .transport_user_key(&receiver, connection_id)
+        .await;
+    let receiver_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::zero())],
+    };
+    for _ in 0..VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS {
+        let tx = {
+            let state = scenario.room.state.read().await;
+            SourcePolicyTransaction::plan_from_state(&state, &[], &receiver_bandwidth)
+                .expect("constrained receiver should produce a policy update")
+        };
+        tx.execute(&scenario.room, &scenario.adapter).await;
+    }
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::BudgetPressure),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn zero_budget_pauses_observed_ridless_readable_video() {
+    let (room, adapter, _publisher_rx, _subscriber_rx) = setup_two_ready_users().await;
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    publish_track(
+        &room,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &adapter,
+    )
+    .await;
+    let source_media = source_media_id(&room, &publisher, TestSourceKind::ReadableVideo).await;
+    let connection_id = user_connection_id(&room, &receiver).await;
+    let session_key = room.transport_user_key(&receiver, connection_id).await;
+    let receiver_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::zero())],
+    };
+    let source_bitrate = TransportBitrateSnapshot {
+        total: Bitrate::from_kbps(500),
+        per_media: vec![(source_media, Bitrate::from_kbps(500))],
+    };
+    for _ in 0..VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS {
+        let tx = {
+            let state = room.state.read().await;
+            SourcePolicyTransaction::plan_from_state_with_source_bitrate(
+                &state,
+                &[],
+                &receiver_bandwidth,
+                &source_bitrate,
+            )
+            .expect("observed source bitrate should produce a budget update")
+        };
+        tx.execute(&room, &adapter).await;
+    }
+
+    assert_subscription_policy_pause_reason(
+        &room,
+        &adapter,
+        &receiver,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        Some(DiagnosticsPolicyPauseReason::BudgetPressure),
+    )
+    .await;
 }
 
 #[tokio::test]

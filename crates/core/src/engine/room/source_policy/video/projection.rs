@@ -48,11 +48,10 @@ pub(super) fn consumer_packet_selection_update(
     let route_activity_changed =
         selection.policy_pause_reason != current_selection.policy_pause_reason();
     let request_keyframe = selection.policy_pause_reason.is_none()
-        && (selection.request_keyframe || !current_selection.policy_allows_delivery());
-    let mut outcomes = route_outcomes(planned_route, selection);
-    if budget.over_budget_exception_reason().is_some() {
-        outcomes = outcomes.with_protected_over_budget();
-    }
+        && (selection.request_keyframe
+            || selection.selector != current_selection.selector()
+            || !current_selection.policy_allows_delivery());
+    let outcomes = route_outcomes(planned_route, selection);
     Some(ConsumerPacketSelectionUpdate {
         key: input.key.clone(),
         source_id: input.source.source_id(),

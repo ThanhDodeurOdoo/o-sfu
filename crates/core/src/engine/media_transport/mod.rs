@@ -407,8 +407,7 @@ impl MediaTransport {
             })
     }
 
-    /// Subscribes to source-policy invalidation signals emitted by transport
-    /// workers.
+    /// Subscribes to packet observations and timed source-policy invalidations.
     #[must_use]
     pub fn source_policy_subscription(&self) -> SourcePolicyUpdateSubscription {
         self.source_policy_signal.subscribe()

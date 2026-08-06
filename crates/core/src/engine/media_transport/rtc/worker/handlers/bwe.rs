@@ -1,9 +1,8 @@
 //! receiver-side bandwidth-estimation target updates.
 //!
-//! Room policy owns the receiver send demand (selected video plus the admitted
-//! audio delivered to that receiver). The RTC worker only applies that demand to
-//! the session-local str0m BWE controller after capping it to the configured
-//! outgoing ceiling.
+//! Room policy owns eventual receiver media demand. The RTC worker applies that
+//! demand to the session-local str0m BWE controller after capping it to the
+//! configured outgoing ceiling.
 
 use str0m::bwe::Bitrate as Str0mBitrate;
 

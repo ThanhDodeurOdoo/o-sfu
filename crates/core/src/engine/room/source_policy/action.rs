@@ -19,7 +19,6 @@ impl BudgetSolverOutcomes {
     const DEGRADED: u8 = 1 << 0;
     const PAUSED: u8 = 1 << 1;
     const RESUMED: u8 = 1 << 2;
-    const PROTECTED_OVER_BUDGET: u8 = 1 << 3;
 
     pub(super) const fn degraded() -> Self {
         Self {
@@ -37,11 +36,6 @@ impl BudgetSolverOutcomes {
         }
     }
 
-    pub(super) const fn with_protected_over_budget(mut self) -> Self {
-        self.bits |= Self::PROTECTED_OVER_BUDGET;
-        self
-    }
-
     pub(super) const fn is_degraded(self) -> bool {
         self.bits & Self::DEGRADED != 0
     }
@@ -52,10 +46,6 @@ impl BudgetSolverOutcomes {
 
     pub(super) const fn is_resumed(self) -> bool {
         self.bits & Self::RESUMED != 0
-    }
-
-    pub(super) const fn is_protected_over_budget(self) -> bool {
-        self.bits & Self::PROTECTED_OVER_BUDGET != 0
     }
 }
 
@@ -101,6 +91,10 @@ impl ConsumerPacketSelectionUpdate {
 
     pub(super) const fn requires_media_transport_effect(&self) -> bool {
         self.packet_gate.is_some() || self.route_activity_changed || self.request_keyframe
+    }
+
+    pub(super) const fn requires_follow_up(&self) -> bool {
+        self.pressure_observations > 0 || self.upgrade_observations > 0
     }
 
     pub(in crate::engine::room) fn route_control(&self) -> ConsumerRouteControl {

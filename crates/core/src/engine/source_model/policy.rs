@@ -114,20 +114,20 @@ impl SourceLayoutPolicy {
 /// pausing and over-budget diagnostics
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceAdaptationPolicy {
-    /// keep this source out of receiver-video BWE control
+    /// keep an uncapped source out of receiver-video BWE control
     ///
     /// useful for audio or metadata-like sources that can route through normal
     /// subscriptions without spending visible-video budget
     None,
-    /// let the receiver-video planner choose among advertised encodings
+    /// let the receiver-video planner budget the source and choose an encoding
     ///
     /// useful for sources where thumbnail routes may downswitch or pause under
     /// receiver budget pressure
     ScalableVideo,
     /// keep readable detail ahead of normal thumbnail adaptation
     ///
-    /// useful for text-heavy visual sources that must stay on the highest
-    /// advertised encoding even while ordinary thumbnails degrade or pause
+    /// useful for text-heavy visual sources that stay on the highest advertised
+    /// encoding until lower-priority routes are exhausted then pause if needed
     ReadableDetail,
 }
 
@@ -186,8 +186,7 @@ pub enum ActiveSpeakerSourceRole {
 
 /// receiver-specific layout role before a concrete encoding is chosen
 ///
-/// the budget planner reads this role to decide quality targets, overload
-/// protection and pause order
+/// the budget planner reads this role to decide quality targets and pause order
 /// transport code only sees the final packet gate after the role resolves
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceRoomPolicySelector {
@@ -211,8 +210,7 @@ pub enum SourceRoomPolicySelector {
     ActiveSpeaker,
     /// the source is visible as a secondary tile
     ///
-    /// visible thumbnails can downswitch or pause when protected routes leave
-    /// the receiver over budget
+    /// visible thumbnails downswitch and pause before higher-priority routes
     VisibleThumbnail,
     /// the receiver is subscribed but the source is not visible right now
     ///
@@ -254,13 +252,13 @@ impl SourceRoomPolicySelector {
 
 /// overload priority derived from a route's room-policy selector
 ///
-/// lower-priority buckets pause first after cheaper encodings are exhausted
-/// protected buckets are not paused by normal overload handling
+/// lower-priority buckets exhaust their cheaper encodings and pause before
+/// overload handling changes a higher-priority bucket
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceRoutePriority {
     /// explicit receiver intent
     ///
-    /// pinned and featured routes are protected and outrank every other route
+    /// pinned and featured routes outrank every other route and pause last
     PinnedOrFeatured,
     /// detail-preserving source policy
     ///
@@ -274,8 +272,7 @@ pub enum SourceRoutePriority {
     ActiveSpeaker,
     /// visible secondary route
     ///
-    /// visible thumbnails can downswitch and then pause if protected
-    /// routes still leave the receiver over budget
+    /// visible thumbnails downswitch and then pause before higher-priority routes
     VisibleThumbnail,
     /// route that is not currently visible
     ///
@@ -314,7 +311,7 @@ pub enum PolicyPauseReason {
 /// application stream names
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadLayerPolicyRole {
-    /// highest useful quality for protected or detail-focused routes
+    /// highest useful quality for high-priority or detail-focused routes
     ///
     /// the planner avoids this as the first cheap fallback when a lower-cost
     /// encoding exists

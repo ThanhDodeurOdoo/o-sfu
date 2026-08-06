@@ -310,7 +310,7 @@ async fn setup_ready_room_fixture_with_adapter(
     make_session_ready_with_transport(&room, &UserId::Integer(1), &adapter).await;
 
     if options.publish_camera_before_subscriber_ready {
-        try_publish_camera(&room, &UserId::Integer(1), &adapter).await;
+        publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
         create_transport_session_offer(&room, &UserId::Integer(2), &adapter).await;
     }
 
@@ -652,23 +652,6 @@ impl SourcePolicyScenario {
                 .await
         );
     }
-}
-
-pub(super) async fn try_publish_camera(
-    room: &Arc<super::super::Room>,
-    user_id: &UserId,
-    media_transport: &MediaTransport,
-) -> Option<UserStreamId> {
-    room.test_api()
-        .media()
-        .publish_track(
-            user_id,
-            TestSourceKind::ScalableVideo,
-            MediaKind::Video,
-            test_video_rtp_parameters(),
-            media_transport,
-        )
-        .await
 }
 
 pub(super) async fn publish_simulcast_camera(

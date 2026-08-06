@@ -100,6 +100,10 @@ pub(super) fn receiver_video_routes<'a>(
                 .receiver_bandwidth_by_connection
                 .get(&route.route.consumer_session_key().connection_id())
                 .copied(),
+            source_bitrate: input
+                .source_bitrate_by_media
+                .get(&route.route.source_transport_media_id())
+                .copied(),
             audio_budget_reserve: input
                 .audio_reserve_by_connection
                 .get(&route.route.consumer_session_key().connection_id())
@@ -127,6 +131,7 @@ pub(super) struct ReceiverVideoRouteInput<'a> {
     pub(super) visible_scalable_route_count: usize,
     pub(super) active_speaker_rank: Option<usize>,
     pub(super) receiver_bandwidth: Option<Bitrate>,
+    pub(super) source_bitrate: Option<Bitrate>,
     pub(super) audio_budget_reserve: Bitrate,
 }
 

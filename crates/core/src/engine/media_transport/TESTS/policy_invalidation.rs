@@ -1,9 +1,12 @@
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
-use tokio::{sync::Barrier, time::timeout};
+use tokio::{
+    sync::Barrier,
+    time::{Instant, timeout},
+};
 
-use super::SourcePolicySignal;
-use crate::RoomInstanceId;
+use super::{SOURCE_POLICY_FOLLOW_UP_DELAY, SourcePolicySignal};
+use crate::{RoomInstanceId, engine::sync::lock_unpoisoned};
 
 #[tokio::test]
 async fn wait_for_update_observes_dirty_state_marked_before_wait() {
@@ -16,6 +19,17 @@ async fn wait_for_update_observes_dirty_state_marked_before_wait() {
         updates.ok(),
         Some(BTreeSet::from([RoomInstanceId::from_raw(7)]))
     );
+}
+
+#[tokio::test]
+async fn wait_for_update_observes_absolute_deadline() {
+    let signal = SourcePolicySignal::default();
+    let subscription = signal.subscribe();
+    let room = RoomInstanceId::from_raw(13);
+    signal.mark_dirty_at(room, Instant::now() + Duration::from_millis(10));
+
+    let updates = timeout(Duration::from_secs(1), subscription.wait_for_update()).await;
+    assert_eq!(updates.ok(), Some(BTreeSet::from([room])));
 }
 
 #[tokio::test]
@@ -82,4 +96,26 @@ async fn wait_for_update_observes_batch_dirty_marks() {
             RoomInstanceId::from_raw(10),
         ]))
     );
+}
+
+#[test]
+fn delayed_marks_keep_one_deadline_per_room() {
+    let signal = SourcePolicySignal::default();
+    let room = RoomInstanceId::from_raw(12);
+    signal.mark_dirty_after(room, SOURCE_POLICY_FOLLOW_UP_DELAY);
+    let first_deadline = {
+        let pending = lock_unpoisoned(&signal.0.pending);
+        pending.scheduled_by_room.get(&room).copied()
+    };
+
+    signal.mark_dirty_after(room, SOURCE_POLICY_FOLLOW_UP_DELAY);
+
+    let pending = lock_unpoisoned(&signal.0.pending);
+    assert_eq!(pending.scheduled_by_room.len(), 1);
+    assert_eq!(pending.scheduled_by_deadline.len(), 1);
+    assert_eq!(
+        pending.scheduled_by_room.get(&room).copied(),
+        first_deadline
+    );
+    drop(pending);
 }
