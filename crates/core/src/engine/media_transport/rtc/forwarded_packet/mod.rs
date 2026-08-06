@@ -385,7 +385,7 @@ impl ForwardedPacket {
     fn decoder_refresh(&self, codec: Option<PacketCodec>) -> bool {
         match codec {
             Some(PacketCodec::H264(packetization_mode)) => {
-                h264::payload_starts_idr(self.payload.as_ref(), packetization_mode)
+                h264::payload_starts_keyframe(self.payload.as_ref(), packetization_mode)
             }
             Some(PacketCodec::Vp8) => vp8::payload_starts_keyframe(self.payload.as_ref()),
             None => false,

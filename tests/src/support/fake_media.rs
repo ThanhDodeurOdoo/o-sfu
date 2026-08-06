@@ -517,18 +517,18 @@ fn synthetic_vp8_payload_with_long_picture_id(
         return None;
     }
     let picture_id = picture_id & rtp::vp8::LONG_PICTURE_ID_MASK;
-    let mut payload = Vec::with_capacity(body.len() + 7);
+    let mut payload = Vec::with_capacity(body.len() + 16);
     payload.push(rtp::vp8::X_BIT | rtp::vp8::S_BIT);
     payload.push(rtp::vp8::I_BIT | rtp::vp8::L_BIT | rtp::vp8::T_BIT);
     payload.push(rtp::vp8::LONG_PICTURE_ID_BIT | u8::try_from(picture_id >> 8).ok()?);
     payload.push(u8::try_from(picture_id & 0xff).ok()?);
     payload.push(tl0_pic_idx);
     payload.push(temporal_layer_id << 6);
-    payload.push(if keyframe {
-        0
+    if keyframe {
+        payload.extend_from_slice(&[0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01]);
     } else {
-        rtp::vp8::INTERFRAME_BIT
-    });
+        payload.push(rtp::vp8::INTERFRAME_BIT);
+    }
     payload.extend_from_slice(body);
     Some(payload)
 }

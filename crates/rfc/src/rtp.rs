@@ -452,7 +452,7 @@ pub mod vp8 {
     /// Start of VP8 partition bit in the payload descriptor.
     pub const S_BIT: u8 = 0b0001_0000;
 
-    const PARTITION_ID_MASK: u8 = 0b0000_1111;
+    const PARTITION_ID_MASK: u8 = 0b0000_0111;
 
     /// `PictureID` present bit in the extended VP8 payload descriptor.
     pub const I_BIT: u8 = 0b1000_0000;
@@ -471,6 +471,12 @@ pub mod vp8 {
     /// VP8 payload-header P bit set for interframes.
     pub const INTERFRAME_BIT: u8 = 0b0000_0001;
 
+    const VERSION_MASK: u8 = 0b0000_1110;
+    const VERSION_SHIFT: u32 = 1;
+    const MAX_DEFINED_VERSION: u8 = 3;
+    const DIMENSION_MASK: u16 = 0x3fff;
+    const KEYFRAME_SYNC_CODE: [u8; 3] = [0x9d, 0x01, 0x2a];
+
     /// value mask for the 7-bit VP8 short `PictureID` field
     pub const SHORT_PICTURE_ID_MASK: u16 = 0x7f;
 
@@ -483,12 +489,12 @@ pub mod vp8 {
     /// Value mask for the two-bit VP8 temporal-layer identity.
     pub const TEMPORAL_LAYER_ID_MASK: u8 = 0b0000_0011;
 
-    /// Detects the first RTP packet of a VP8 keyframe.
+    /// Detects a complete VP8 keyframe prefix in the first RTP packet.
     ///
     /// RFC 7741 section 4.2 defines the VP8 payload descriptor. A decodable
     /// keyframe starts at partition 0 (`S=1`, `PartID=0`) and the VP8 payload
-    /// header starts with `P=0`. The input must be the RTP codec payload. It is
-    /// not a complete RTP packet.
+    /// header starts with `P=0`. RFC 6386 section 9.1 defines the keyframe sync
+    /// code and dimensions. The input must be the RTP codec payload.
     ///
     /// Truncated descriptors, missing payload headers and non-start partitions
     /// return `false`. The helper performs only the cheap
@@ -501,19 +507,22 @@ pub mod vp8 {
         if descriptor & S_BIT == 0 || descriptor & PARTITION_ID_MASK != 0 {
             return false;
         }
-        let payload_header = if descriptor & X_BIT == 0 {
-            rest.first()
+        let frame = if descriptor & X_BIT == 0 {
+            rest
         } else {
-            extended_payload_header(rest)
+            let Some(frame) = extended_frame_payload(rest) else {
+                return false;
+            };
+            frame
         };
-        payload_header.is_some_and(|header| header & INTERFRAME_BIT == 0)
+        valid_keyframe_prefix(frame)
     }
 
-    /// Locates the VP8 payload header after an extended descriptor.
+    /// Locates the VP8 frame bytes after an extended descriptor.
     ///
     /// `None` means the extension bits advertise fields that are not present in
     /// the slice. The keyframe probe treats that as "not a keyframe".
-    fn extended_payload_header(payload: &[u8]) -> Option<&u8> {
+    fn extended_frame_payload(payload: &[u8]) -> Option<&[u8]> {
         let (&extension, mut rest) = payload.split_first()?;
         if extension & I_BIT != 0 {
             let (&picture_id, remaining) = rest.split_first()?;
@@ -524,15 +533,39 @@ pub mod vp8 {
             };
         }
         if extension & L_BIT != 0 {
-            if extension & T_BIT == 0 {
-                return None;
-            }
             rest = rest.get(1..)?;
         }
         if extension & T_BIT != 0 || extension & K_BIT != 0 {
             rest = rest.get(1..)?;
         }
-        rest.first()
+        (!rest.is_empty()).then_some(rest)
+    }
+
+    fn valid_keyframe_prefix(frame: &[u8]) -> bool {
+        let &[
+            tag,
+            _,
+            _,
+            sync_0,
+            sync_1,
+            sync_2,
+            width_low,
+            width_high,
+            height_low,
+            height_high,
+            ..,
+        ] = frame
+        else {
+            return false;
+        };
+        let version = (tag & VERSION_MASK) >> VERSION_SHIFT;
+        let width = u16::from_le_bytes([width_low, width_high]) & DIMENSION_MASK;
+        let height = u16::from_le_bytes([height_low, height_high]) & DIMENSION_MASK;
+        tag & INTERFRAME_BIT == 0
+            && version <= MAX_DEFINED_VERSION
+            && [sync_0, sync_1, sync_2] == KEYFRAME_SYNC_CODE
+            && width != 0
+            && height != 0
     }
 }
 
@@ -770,6 +803,9 @@ pub mod h264 {
     /// H264 IDR slice NAL unit type.
     pub const NAL_UNIT_TYPE_IDR: u8 = 5;
 
+    /// H264 sequence parameter set NAL unit type.
+    pub const NAL_UNIT_TYPE_SPS: u8 = 7;
+
     /// H264 STAP-A aggregation packet type.
     pub const NAL_UNIT_TYPE_STAP_A: u8 = 24;
 
@@ -926,39 +962,39 @@ pub mod h264 {
         Level5_2,
     }
 
-    /// Detects an H264 RTP packet that starts an IDR access unit.
+    /// Detects an H264 RTP packet that starts a decoder-refresh sequence.
     ///
-    /// RFC 6184 carries IDR frames either as a single NAL unit, inside a STAP-A
-    /// aggregation packet, or as the first fragment of a FU-A packet.
+    /// RFC 6184 carries sequence parameter sets and IDR slices as single NAL
+    /// units, inside STAP-A packets or as the first fragment of FU-A packets.
     ///
     /// The input must be the RTP codec payload, not a complete RTP packet.
     /// Truncated aggregation packets and incomplete FU-A packets return
     /// `false`. The helper does not parse a full access unit. It only answers
     /// whether this packet can refresh a decoder if forwarded.
     #[must_use]
-    pub fn payload_starts_idr(payload: &[u8], packetization_mode: PacketizationMode) -> bool {
+    pub fn payload_starts_keyframe(payload: &[u8], packetization_mode: PacketizationMode) -> bool {
         let Some((&nal_header, rest)) = payload.split_first() else {
             return false;
         };
         match nal_header & NAL_UNIT_TYPE_MASK {
-            NAL_UNIT_TYPE_IDR => true,
+            NAL_UNIT_TYPE_IDR | NAL_UNIT_TYPE_SPS => true,
             NAL_UNIT_TYPE_STAP_A if packetization_mode.allows_aggregation_and_fragmentation() => {
-                stap_a_contains_idr(rest)
+                stap_a_contains_keyframe_nal(rest)
             }
             NAL_UNIT_TYPE_FU_A if packetization_mode.allows_aggregation_and_fragmentation() => {
-                fu_a_starts_idr(rest)
+                fu_a_starts_keyframe(rest)
             }
             _ => false,
         }
     }
 
-    /// Scans a STAP-A payload for any contained IDR NAL unit.
+    /// Scans a STAP-A payload for a sequence parameter set or IDR slice.
     ///
     /// each aggregate entry is length-prefixed and must use a single NAL unit type
     /// malformed lengths fail closed because the caller cannot safely trust later
     /// bytes as NAL boundaries
-    fn stap_a_contains_idr(mut payload: &[u8]) -> bool {
-        let mut contains_idr = false;
+    fn stap_a_contains_keyframe_nal(mut payload: &[u8]) -> bool {
+        let mut contains_keyframe_nal = false;
         while !payload.is_empty() {
             let Some((len, rest)) = payload.split_first_chunk::<2>() else {
                 return false;
@@ -974,20 +1010,23 @@ pub mod h264 {
             if !(1..NAL_UNIT_TYPE_STAP_A).contains(&nal_type) {
                 return false;
             }
-            contains_idr |= nal_type == NAL_UNIT_TYPE_IDR;
+            contains_keyframe_nal |= matches!(nal_type, NAL_UNIT_TYPE_IDR | NAL_UNIT_TYPE_SPS);
             payload = remaining_payload;
         }
-        contains_idr
+        contains_keyframe_nal
     }
 
-    /// Detects whether a FU-A packet is the first fragment of an IDR NAL unit.
-    fn fu_a_starts_idr(payload: &[u8]) -> bool {
+    /// Detects the first fragment of a sequence parameter set or IDR slice.
+    fn fu_a_starts_keyframe(payload: &[u8]) -> bool {
         let Some((&fu_header, _fragment)) = payload.split_first() else {
             return false;
         };
         fu_header & FU_START_BIT != 0
             && fu_header & FU_END_BIT == 0
-            && fu_header & NAL_UNIT_TYPE_MASK == NAL_UNIT_TYPE_IDR
+            && matches!(
+                fu_header & NAL_UNIT_TYPE_MASK,
+                NAL_UNIT_TYPE_IDR | NAL_UNIT_TYPE_SPS
+            )
     }
 
     impl TryFrom<u8> for LevelIdc {
