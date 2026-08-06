@@ -13,7 +13,7 @@ use super::super::{
     route_control::PacketLayerGate,
     state::PacketLoopState,
     test_support::{MediaWorkerScenario, test_transport_session_key},
-    worker::apply_src_rid_ready,
+    worker::apply_src_decoder_ready,
 };
 use crate::engine::{
     UserId,
@@ -96,12 +96,12 @@ impl RidReadinessBenchFixture {
             false,
             self.now,
         );
-        let changed = apply_src_rid_ready(
+        let changed = apply_src_decoder_ready(
             &mut self.state,
             &self.rtc_metrics,
             &self.source_session,
             self.src_media,
-            self.rid,
+            Some(self.rid),
             true,
             self.now,
         );

@@ -50,7 +50,8 @@ async fn rtc_initial_session_offer_accepts_answer_without_candidates() {
         adapter
             .apply_session_answer(&session_key, &answer_sdp)
             .await
-            .is_ok()
+            .is_ok(),
+        "{answer_sdp}"
     );
     assert_eq!(
         adapter
@@ -150,10 +151,9 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
         )),
         "video offers should retain the keyframe feedback surface used after layer switches"
     );
-    assert!(
-        !offer_sdp.contains("a=rtpmap:97 rtx/90000") && !offer_sdp.contains("a=fmtp:97 apt=96"),
-        "VP8 simulcast offers should not negotiate RTX until RID repair packets are demuxed safely"
-    );
+    assert!(!offer_sdp.contains(" rtx/90000"));
+    assert!(!offer_sdp.contains(" apt="));
+    assert!(!offer_sdp.contains("a=rtcp-fb:96 nack\r\n"));
     let video_slot = upload_slots
         .iter()
         .find(|slot| slot.kind == RouterMediaKind::Video)
@@ -348,10 +348,6 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
             (RouterMediaKind::Audio, String::from("opus")),
             (RouterMediaKind::Video, String::from("VP8")),
         ]
-    );
-    assert!(
-        projected.codecs().all(|codec| codec.codec_name() != "rtx"),
-        "the production VP8 receive surface should not negotiate RTX until RID repair packets are demuxed safely"
     );
     assert!(
         projected.codecs().all(|codec| codec.codec_name() != "H264"),
@@ -931,6 +927,11 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
         .await
         .expect("transport media should resolve to the server-assigned mid");
     assert!(renegotiation_sdp.contains(&format!("a=mid:{renegotiated_mid}")));
+    let consumer_section = media_section_for_mid(&renegotiation_sdp, &renegotiated_mid)
+        .expect("consumer offer should contain its send-only media section");
+    assert!(consumer_section.contains("a=sendonly"));
+    assert!(!consumer_section.contains(" rtx/90000"));
+    assert!(!consumer_section.contains(" apt="));
 
     apply_offer_answer(&adapter, &consumer_key, &mut remote, renegotiation_sdp).await;
 
@@ -1472,11 +1473,13 @@ async fn apply_offer_answer(
         .sdp_api()
         .accept_offer(offer)
         .expect("remote answer should build");
+    let answer_sdp = answer.to_sdp_string();
     assert!(
         adapter
-            .apply_session_answer(session_key, &answer.to_sdp_string())
+            .apply_session_answer(session_key, &answer_sdp)
             .await
-            .is_ok()
+            .is_ok(),
+        "{answer_sdp}"
     );
 }
 

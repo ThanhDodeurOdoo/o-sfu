@@ -29,14 +29,12 @@ pub(super) fn client_rtp_capabilities_from_sdp_answer(
             continue;
         };
         for payload in &rtp_parameters {
+            if payload.spec().codec == Codec::Rtx {
+                continue;
+            }
             let codec = rtp_projection::media_capability(media_kind, payload)?;
             if !codecs.contains(&codec) {
                 codecs.push(codec);
-            }
-            if let Some(rtx_codec) = rtp_projection::rtx_capability(media_kind, payload)?
-                && !codecs.contains(&rtx_codec)
-            {
-                codecs.push(rtx_codec);
             }
         }
         for (id, extension) in media_line.extmaps() {

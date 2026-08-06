@@ -17,15 +17,15 @@
 
 use std::{mem::take, sync::Arc, time::Instant};
 
-use o_sfu_rfc::rtp::{h264, vp8};
+use o_sfu_rfc::rtp::vp8;
 use str0m::{
     media::{ExtensionValues, Mid, Rid},
-    rtp::{RtpHeader, RtpPacket, Ssrc, Vp8Descriptor, Vp8Patch, Vp8PatchError},
+    rtp::{RtpHeader, RtpPacket, SeqNo, Ssrc, Vp8Descriptor, Vp8Patch, Vp8PatchError},
 };
 
 use super::{
     local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
-    slots::SessionHandle, source_route::PacketCodec, state::PacketLoopState,
+    slots::SessionHandle, state::PacketLoopState,
 };
 use crate::engine::{
     RoomInstanceId,
@@ -118,6 +118,8 @@ struct ForwardedRtpData {
 #[derive(Debug)]
 pub(super) struct ForwardedRelayRtpData {
     pub(super) header: RtpHeader,
+    /// extended source sequence preserved across rollover and reordering
+    pub(super) sequence_number: SeqNo,
 }
 
 /// source observations that should be computed once per packet-loop turn
@@ -237,10 +239,15 @@ impl ForwardedPacket {
         }
         let src_media = self.resolve_src_media(state)?;
         let rid = self.compute_route_control_rid(state);
-        let packet_codec = state
+        let is_vp8 = state
             .routes
-            .packet_codec(src_media, self.rtp_header().payload_type);
-        let decoder_refresh = self.decoder_refresh(packet_codec);
+            .is_vp8_payload(src_media, self.rtp_header().payload_type);
+        let decoder_refresh = is_vp8 && vp8::payload_starts_keyframe(self.payload.as_ref());
+        let vp8_payload = if is_vp8 && self.resolved_source_rid.is_some() {
+            PacketVp8Payload::parse(self.payload.as_ref())
+        } else {
+            None
+        };
         let extensions = self.route_control_extension_values();
         let facts = PacketFacts {
             src_media,
@@ -249,7 +256,7 @@ impl ForwardedPacket {
             voice_activity: extensions.voice_activity,
             audio_level: extensions.audio_level,
             decoder_refresh,
-            vp8_payload: self.resolve_vp8_payload(packet_codec),
+            vp8_payload,
         };
         self.facts = Some(facts);
         Some(facts)
@@ -299,6 +306,12 @@ impl ForwardedPacket {
         state: &PacketLoopState,
         src_media: TransportMediaId,
     ) -> Option<Self> {
+        let (header, sequence_number) = match &self.data {
+            ForwardedPacketData::Str0mRtp(data) => {
+                (data.rtp_packet.header.clone(), data.rtp_packet.seq_no)
+            }
+            ForwardedPacketData::RelayRtp(data) => (data.header.clone(), data.sequence_number),
+        };
         Some(Self {
             source: ForwardedPacketSource::Relayed(self.source.session_key(state)?.clone()),
             src_media: Some(src_media),
@@ -308,7 +321,8 @@ impl ForwardedPacket {
             received_at: self.received_at,
             payload: Arc::clone(&self.payload),
             data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
-                header: self.rtp_header().clone(),
+                header,
+                sequence_number,
             }),
         })
     }
@@ -361,7 +375,12 @@ impl ForwardedPacket {
             }
             ForwardedPacketData::RelayRtp(rtp_data) => {
                 let header = &rtp_data.header;
-                LocalForwardedRtp::from_relay(header, self.received_at, payload)
+                LocalForwardedRtp::from_relay(
+                    header,
+                    rtp_data.sequence_number,
+                    self.received_at,
+                    payload,
+                )
             }
         }
     }
@@ -380,24 +399,6 @@ impl ForwardedPacket {
     fn route_control_rid_from_ssrc(&self, state: &PacketLoopState) -> Option<Rid> {
         let src_key = self.source.session_key(state)?;
         state.source_rid_for_ssrc(src_key, self.rtp_header().ssrc)
-    }
-
-    fn decoder_refresh(&self, codec: Option<PacketCodec>) -> bool {
-        match codec {
-            Some(PacketCodec::H264(packetization_mode)) => {
-                h264::payload_starts_keyframe(self.payload.as_ref(), packetization_mode)
-            }
-            Some(PacketCodec::Vp8) => vp8::payload_starts_keyframe(self.payload.as_ref()),
-            None => false,
-        }
-    }
-
-    fn resolve_vp8_payload(&self, codec: Option<PacketCodec>) -> Option<PacketVp8Payload> {
-        if codec != Some(PacketCodec::Vp8) {
-            return None;
-        }
-        self.resolved_source_rid?;
-        PacketVp8Payload::parse(self.payload.as_ref())
     }
 }
 

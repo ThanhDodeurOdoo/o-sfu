@@ -1,9 +1,10 @@
-use o_sfu_rfc::rtp::h264::{LevelIdc, PacketizationMode, Profile, ProfileLevelId};
+use o_sfu_rfc::{rtp, webrtc};
 use o_sfu_router::{MediaKind as RouterMediaKind, rtp::MediaCapabilities};
 use str0m::{
     Rtc, RtcConfig,
-    format::{Codec, CodecConfig, FormatParams},
-    media::{Frequency, MediaKind},
+    format::{Codec, CodecConfig, PayloadParams},
+    media::MediaKind,
+    rtp::Extension,
 };
 
 use super::rtp_projection;
@@ -11,25 +12,6 @@ use crate::{
     AudioCodecPreference, CodecPreferences, MediaCodecFlags, VideoCodecPreference,
     engine::media_transport::TransportAdapterError,
 };
-
-const VP8_PAYLOAD_TYPE: u8 = 96;
-const H264_PROFILES: &[(u8, PacketizationMode, Profile)] = &[
-    (127, PacketizationMode::NonInterleaved, Profile::Baseline),
-    (125, PacketizationMode::SingleNalUnit, Profile::Baseline),
-    (
-        108,
-        PacketizationMode::NonInterleaved,
-        Profile::ConstrainedBaseline,
-    ),
-    (
-        124,
-        PacketizationMode::SingleNalUnit,
-        Profile::ConstrainedBaseline,
-    ),
-    (123, PacketizationMode::NonInterleaved, Profile::Main),
-    (35, PacketizationMode::SingleNalUnit, Profile::Main),
-    (114, PacketizationMode::NonInterleaved, Profile::High),
-];
 
 #[derive(Debug)]
 pub(in crate::engine::media_transport) struct RtpProfile {
@@ -45,7 +27,16 @@ impl RtpProfile {
         flags: MediaCodecFlags,
         preferences: CodecPreferences,
     ) -> Result<Self, TransportAdapterError> {
-        let mut config = Rtc::builder().clear_codecs().set_rtp_mode(true);
+        let mut config = Rtc::builder()
+            .clear_codecs()
+            .clear_extension_map()
+            .set_extension(1, Extension::AudioLevel)
+            .set_extension(2, Extension::AbsoluteSendTime)
+            .set_extension(3, Extension::TransportSequenceNumber)
+            .set_extension(4, Extension::RtpMid)
+            .set_extension(10, Extension::RtpStreamId)
+            .set_extension(13, Extension::VideoOrientation)
+            .set_rtp_mode(true);
         let codecs = config.codec_config();
         for codec in preferences.audio_order() {
             if !codec.enabled_by(flags) {
@@ -62,20 +53,15 @@ impl RtpProfile {
                 continue;
             }
             match codec {
-                VideoCodecPreference::Vp8 => codecs.add_config(
-                    VP8_PAYLOAD_TYPE.into(),
-                    None,
-                    Codec::Vp8,
-                    Frequency::NINETY_KHZ,
-                    None,
-                    FormatParams::default(),
-                ),
-                VideoCodecPreference::H264 => add_h264_codecs(codecs),
+                VideoCodecPreference::Vp8 => codecs.enable_vp8(true),
+                VideoCodecPreference::H264 => codecs.enable_h264(true),
                 VideoCodecPreference::H265 => codecs.enable_h265(true),
                 VideoCodecPreference::Vp9 => codecs.enable_vp9(true),
                 VideoCodecPreference::Av1 => codecs.enable_av1(true),
             }
         }
+        let payloads = codecs.params().iter().map(without_retransmission).collect();
+        *codecs = CodecConfig::new_from_payload_params(payloads);
         let simulcast_codec = preferences
             .video_order()
             .into_iter()
@@ -139,17 +125,74 @@ impl RtpProfile {
     pub(super) fn simulcast_codec(&self) -> Option<Codec> {
         self.simulcast_codec
     }
+
+    /// Rejects SDP answers that reintroduce unsupported repair streams.
+    ///
+    /// Callers must run this before `accept_answer` so unsupported repair state
+    /// cannot enter the pending offer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportAdapterError::InvalidInput`] for RTX payloads, `apt`
+    /// mappings, repaired RID extensions or FID SSRC groups.
+    pub(super) fn validate_answer_sdp(answer_sdp: &str) -> Result<(), TransportAdapterError> {
+        if answer_sdp.lines().any(is_retransmission_attribute) {
+            return Err(TransportAdapterError::InvalidInput);
+        }
+        Ok(())
+    }
 }
 
-fn add_h264_codecs(codecs: &mut CodecConfig) {
-    for &(payload_type, packetization_mode, profile) in H264_PROFILES {
-        codecs.add_h264(
-            payload_type.into(),
-            None,
-            packetization_mode == PacketizationMode::NonInterleaved,
-            ProfileLevelId::new(profile, LevelIdc::Level3_1).packed_value(),
-        );
+/// Removes retransmission while preserving congestion and decoder-refresh
+/// feedback.
+///
+/// Local egress keeps `RtpWrite::nackable` false, so the offer must omit
+/// retransmission.
+fn without_retransmission(payload: &PayloadParams) -> PayloadParams {
+    let mut projected = PayloadParams::new(payload.pt(), None, payload.spec());
+    projected.set_fb_transport_cc(payload.fb_transport_cc());
+    projected.set_fb_nack(false);
+    projected.set_fb_pli(payload.fb_pli());
+    projected.set_fb_fir(payload.fb_fir());
+    projected.set_fb_remb(payload.fb_remb());
+    projected
+}
+
+fn is_retransmission_attribute(line: &str) -> bool {
+    const RTPMAP: &str = "rtpmap";
+    const FMTP: &str = "fmtp";
+    const SSRC_GROUP: &str = "ssrc-group";
+    const FLOW_IDENTIFICATION: &str = "FID";
+
+    let Some(value) = line.strip_prefix("a=") else {
+        return false;
+    };
+    let Some((name, value)) = value.split_once(':') else {
+        return false;
+    };
+    if name.eq_ignore_ascii_case(RTPMAP) {
+        return value
+            .split_ascii_whitespace()
+            .nth(1)
+            .and_then(|encoding| encoding.split('/').next())
+            .is_some_and(|codec| codec.eq_ignore_ascii_case(rtp::codec_name::RTX));
     }
+    if name.eq_ignore_ascii_case(FMTP) {
+        return value
+            .split(|character: char| character.is_ascii_whitespace() || character == ';')
+            .filter_map(|parameter| parameter.split_once('='))
+            .any(|(key, _value)| key.eq_ignore_ascii_case(rtp::fmtp::RTX_ASSOCIATION));
+    }
+    if name.eq_ignore_ascii_case(webrtc::sdp::attribute::EXTMAP) {
+        return value.split_ascii_whitespace().nth(1).is_some_and(|uri| {
+            uri.eq_ignore_ascii_case(webrtc::rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID)
+        });
+    }
+    name.eq_ignore_ascii_case(SSRC_GROUP)
+        && value
+            .split_ascii_whitespace()
+            .next()
+            .is_some_and(|semantics| semantics.eq_ignore_ascii_case(FLOW_IDENTIFICATION))
 }
 
 #[cfg(test)]

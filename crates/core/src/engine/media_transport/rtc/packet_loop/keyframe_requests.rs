@@ -11,7 +11,7 @@ use str0m::media::{KeyframeRequest as RtcKeyframeRequest, KeyframeRequestKind, M
 use super::{
     super::{
         commands::RemoteSourceControl,
-        keyframe_tracker::{SourceKeyframeRequest, coalesce_kf_kind},
+        keyframe_tracker::{KeyframeRequestOrigin, SourceKeyframeRequest, coalesce_kf_kind},
         media_registry::RegisteredMediaHandle,
         state::PacketLoopState,
         worker::{KeyframeRequestMode, KeyframeRequestTarget, request_kf_for_target},
@@ -207,7 +207,10 @@ fn flush_coalesced_kf_req(
         route.target(coalesced_request.src_media),
         coalesced_request.rid,
         coalesced_request.kind,
-        KeyframeRequestMode::Track(now),
+        KeyframeRequestMode::Track {
+            now,
+            origin: KeyframeRequestOrigin::ConsumerFeedback,
+        },
     );
 }
 

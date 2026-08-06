@@ -1,7 +1,7 @@
 //! executable forwarding destinations for one packet-loop flush
 //!
 //! the forwarding planner records destination intent in this file's types before
-//! `flush_forward_routes` executes the side effects in a stable order
+//! `flush_packet_forwards` executes the side effects in a stable order
 //! keeping destinations as data lets planning stay read-only over route state
 //! while the flush step owns mutable rtc state, payload fanout and destination
 //! metrics
@@ -19,17 +19,6 @@ use crate::engine::{
     metrics::{RtcRelayEnqueueResult, RtpForwardDestinationKind, RtpRelayDropKind},
     packet_sink_registry::RegisteredPacketSink,
 };
-
-/// one planned packet-to-destination edge for the current packet-loop turn
-///
-/// `pkt_idx` points into the turn-local pending packet buffer
-/// the value is only valid until the current flush completes, which keeps the
-/// hot path from cloning packet payloads while destinations are being planned
-#[derive(Debug)]
-pub(super) struct PacketForward {
-    pub(super) pkt_idx: usize,
-    pub(super) destination: ForwardingDestination,
-}
 
 /// concrete side effect performed for one planned packet
 ///
@@ -66,7 +55,7 @@ pub(super) enum ForwardSendOutcome {
 /// is borrowed mutably
 ///
 /// callers must not persist this value beyond the flush that owns the matching
-/// `PacketForward`
+/// destination
 #[derive(Debug, Copy, Clone)]
 pub(super) struct LocalRtcPacketDestination {
     /// source route that owned the destination when planning ran
@@ -87,57 +76,41 @@ pub(super) struct RelayPacketDestination {
     target: RelayPacketMailbox,
 }
 
-impl PacketForward {
+impl ForwardingDestination {
     /// builds a local rtc destination from an already-authorized route slot
     ///
     /// the caller must pass the destination index produced while walking the
     /// current `MediaRouteEntry`
     /// the index is resolved again during flush so planning can stay clone-free
     pub(super) fn from_local_route_destination(
-        pkt_idx: usize,
         src_media: TransportMediaId,
         dst_idx: usize,
     ) -> Self {
-        Self {
-            pkt_idx,
-            destination: ForwardingDestination::LocalRtc(LocalRtcPacketDestination::new(
-                src_media, dst_idx,
-            )),
-        }
+        Self::LocalRtc(LocalRtcPacketDestination::new(src_media, dst_idx))
     }
 
     /// builds a packet sink destination for the source side of a route
     pub(super) fn from_packet_sink(
-        pkt_idx: usize,
         transport_media_id: TransportMediaId,
         sink: RegisteredPacketSink,
     ) -> Self {
-        Self {
-            pkt_idx,
-            destination: ForwardingDestination::PacketSink(PacketSinkDestination {
-                transport_media_id,
-                sink,
-            }),
-        }
+        Self::PacketSink(PacketSinkDestination {
+            transport_media_id,
+            sink,
+        })
     }
 
     /// builds a relay destination for the source side of a route
     pub(super) fn from_relay_target(
-        pkt_idx: usize,
         transport_media_id: TransportMediaId,
         target: RelayPacketMailbox,
     ) -> Self {
-        Self {
-            pkt_idx,
-            destination: ForwardingDestination::Relay(RelayPacketDestination {
-                transport_media_id,
-                target,
-            }),
-        }
+        Self::Relay(RelayPacketDestination {
+            transport_media_id,
+            target,
+        })
     }
-}
 
-impl ForwardingDestination {
     /// exposes the local rtc route handle for route-planner assertions
     #[cfg(test)]
     pub(super) const fn local_route(&self) -> Option<(TransportMediaId, usize)> {
@@ -222,9 +195,9 @@ impl LocalRtcPacketDestination {
             let sender = LocalPacketDestination::new(
                 route_destination.dest_transport_media_id,
                 route_destination.dest_stream,
+                route_destination.delivery_generation,
                 route_destination.dest_mid,
                 route_destination.dest_payload_type,
-                route_destination.nackable,
             );
             let vp8_payload = packet.local_vp8_payload();
             let Some(payload_bytes) =

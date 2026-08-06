@@ -41,7 +41,10 @@ use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
     delay::PacketLoopDelaySnapshot,
     event_observation::observe_rtc_event,
-    forward_flush::{drain_relay_packets, flush_forward_routes, record_incoming_stats},
+    forward_flush::{
+        drain_relay_packets, finish_incoming_stats, flush_packet_forwards, record_incoming_packet,
+        record_incoming_stats,
+    },
     ingress_routing::route_pkt_to_session,
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
     keyframe_requests::{
@@ -66,7 +69,7 @@ use crate::{
                 bitrate::BitrateRegistry,
                 bootstrap,
                 commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
-                forwarding_destination::PacketForward,
+                forwarding_destination::ForwardingDestination,
                 media_registry::RegisteredMediaHandle,
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
@@ -275,8 +278,9 @@ fn insert_open_route(
             dest_stream: consumer_stream,
             dest_mid: consumer_mid,
             dest_payload_type: None,
-            nackable: true,
             active: true,
+            requires_decoder_refresh: false,
+            delivery_generation: 0,
             packet_gate: PacketLayerGate::Open,
             pending_gate: None,
         },
@@ -345,8 +349,9 @@ fn register_consumer_route_fixture(
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
-            nackable: true,
             active,
+            requires_decoder_refresh: false,
+            delivery_generation: 0,
             packet_gate,
             pending_gate,
         },
@@ -570,7 +575,7 @@ fn route_feedback_cases() -> [RouteFeedbackCase; 6] {
                 pending: "hi",
             },
             feedback_rid: None,
-            expected: RouteFeedbackExpectation::Rid("lo"),
+            expected: RouteFeedbackExpectation::Rid("hi"),
             kind: KeyframeRequestKind::Pli,
         },
         RouteFeedbackCase {
@@ -605,18 +610,37 @@ fn populate_forward_routes(
     packet_sinks: &RoomPacketSinkRegistry,
     metrics: &RtcMetricsRecorder,
     pending_packets: &mut [super::super::forwarded_packet::ForwardedPacket],
-    forwards: &mut Vec<super::super::forwarding_destination::PacketForward>,
+    forwards: &mut Vec<super::super::forwarding_destination::ForwardingDestination>,
 ) {
     let mut packet_sink_cache = PacketSinkRouteCache::default();
     packet_sink_cache.refresh_from(packet_sinks);
-    for (pkt_idx, packet) in pending_packets.iter_mut().enumerate() {
+    for packet in pending_packets {
         super::super::forwarding_planner::plan_forwards(
             state,
             &packet_sink_cache,
             metrics,
-            pkt_idx,
             packet,
             forwards,
+        );
+    }
+}
+
+fn flush_only_packet_forwards(
+    state: &mut PacketLoopState,
+    metrics: &RuntimeMetrics,
+    rtp_metrics: &RtpMetricsRecorder,
+    rtc_recorder: &RtcMetricsRecorder,
+    buffers: &PacketLoopBuffers,
+) {
+    assert_eq!(buffers.pending_packets.len(), 1);
+    if let Some(packet) = buffers.pending_packets.first() {
+        flush_packet_forwards(
+            state,
+            metrics,
+            rtp_metrics,
+            rtc_recorder,
+            packet,
+            &buffers.forwards,
         );
     }
 }
@@ -674,44 +698,40 @@ impl PacketLoopHarness {
         control_rx
     }
 
-    fn only_packet_index(&self) -> usize {
+    fn assert_only_packet(&self) {
         assert_eq!(
             self.buffers.pending_packets.len(),
             1,
             "forward fixture should contain exactly one packet"
         );
-        0
     }
 
     fn add_recording_sink(&mut self, src_media: TransportMediaId, sink: &Arc<CountingSink>) {
-        let packet_index = self.only_packet_index();
-        self.buffers.forwards.push(PacketForward::from_packet_sink(
-            packet_index,
-            src_media,
-            RegisteredPacketSink::new(
-                Arc::<CountingSink>::clone(sink),
-                RtpForwardDestinationKind::Recording,
-            ),
-        ));
+        self.assert_only_packet();
+        self.buffers
+            .forwards
+            .push(ForwardingDestination::from_packet_sink(
+                src_media,
+                RegisteredPacketSink::new(
+                    Arc::<CountingSink>::clone(sink),
+                    RtpForwardDestinationKind::Recording,
+                ),
+            ));
     }
 
     fn add_relay(&mut self, src_media: TransportMediaId, target: RelayPacketMailbox) {
-        let packet_index = self.only_packet_index();
-        self.buffers.forwards.push(PacketForward::from_relay_target(
-            packet_index,
-            src_media,
-            target,
-        ));
+        self.assert_only_packet();
+        self.buffers
+            .forwards
+            .push(ForwardingDestination::from_relay_target(src_media, target));
     }
 
     fn add_local(&mut self, src_media: TransportMediaId, dst_idx: usize) {
-        let packet_index = self.only_packet_index();
+        self.assert_only_packet();
         self.buffers
             .forwards
-            .push(PacketForward::from_local_route_destination(
-                packet_index,
-                src_media,
-                dst_idx,
+            .push(ForwardingDestination::from_local_route_destination(
+                src_media, dst_idx,
             ));
     }
 }
@@ -980,7 +1000,7 @@ fn recording_forward_destination_captures_packets_without_bypassing_the_contract
         &mut harness.buffers.pending_packets,
         &mut harness.buffers.forwards,
     );
-    flush_forward_routes(
+    flush_only_packet_forwards(
         &mut harness.state,
         &harness.metrics,
         &harness.rtp_metrics,
@@ -1036,6 +1056,104 @@ fn record_incoming_stats_learns_dynamic_rid_ssrc_bindings_from_rtp_extensions() 
 }
 
 #[test]
+fn selected_rid_keyframe_does_not_admit_an_earlier_delta_from_the_same_batch() {
+    let producer_session = test_transport_session_key(188, 0, 189, UserId::Integer(190));
+    let consumer_session = test_transport_session_key(188, 0, 191, UserId::Integer(192));
+    let selected_rid = Rid::from("hi");
+    let mut harness = PacketLoopHarness::new();
+    let src_media = prepare_source_session_with_rid(
+        &mut harness.state,
+        &producer_session,
+        Mid::from("cam-up"),
+        4_321,
+        Some(selected_rid),
+    );
+    harness.state.routes.refresh_vp8_payload_types(
+        src_media,
+        &RouterRtpParameters::new(
+            vec![MediaFormat::new(
+                RouterMediaKind::Video,
+                CodecName::Vp8,
+                PayloadType::new(111),
+                90_000,
+            )],
+            vec![],
+            vec![],
+        ),
+    );
+    let consumer_mid = Mid::from("cam-down");
+    let consumer_media = register_consumer_media(
+        &mut harness.state,
+        &consumer_session,
+        consumer_mid,
+        src_media,
+    );
+    insert_consumer_route_fixture(
+        &mut harness.state,
+        src_media,
+        MediaRouteDestination {
+            dest_session: consumer_session,
+            dest_transport_media_id: consumer_media,
+            dest_stream: ConsumerStreamHandle::default(),
+            dest_mid: consumer_mid,
+            dest_payload_type: None,
+            active: true,
+            requires_decoder_refresh: true,
+            delivery_generation: 0,
+            packet_gate: PacketLayerGate::Block,
+            pending_gate: Some(PacketLayerGate::Rid(selected_rid)),
+        },
+    );
+    let mut packets = [
+        sample_forwarded_packet_with_rid(
+            producer_session.clone(),
+            "cam-up",
+            Some("hi"),
+            &[
+                0x10, 0x31, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+            ],
+        ),
+        sample_forwarded_packet_with_rid(
+            producer_session,
+            "cam-up",
+            Some("hi"),
+            &[
+                0x10, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+            ],
+        ),
+    ];
+    let packet_sinks = PacketSinkRouteCache::default();
+
+    for (packet_index, packet) in packets.iter_mut().enumerate() {
+        record_incoming_packet(
+            &mut harness.state,
+            &harness.rtc_metrics,
+            &harness.rtp_metrics,
+            &mut harness.buffers,
+            packet,
+        );
+        super::super::forwarding_planner::plan_forwards(
+            &harness.state,
+            &packet_sinks,
+            &harness.rtc_metrics,
+            packet,
+            &mut harness.buffers.forwards,
+        );
+        if packet_index == 0 {
+            assert!(harness.buffers.forwards.is_empty());
+        }
+    }
+    finish_incoming_stats(
+        &mut harness.state,
+        &SourcePolicySignal::default(),
+        &harness.rtc_metrics,
+        &mut harness.buffers,
+    );
+
+    assert_eq!(harness.buffers.forwards.len(), 1);
+}
+
+#[test]
 fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
     let producer_session = test_transport_session_key(89, 0, 90, UserId::Integer(91));
     let consumer_session = test_transport_session_key(89, 0, 92, UserId::Integer(93));
@@ -1049,7 +1167,7 @@ fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
         4_321,
         Some(selected_rid),
     );
-    state.routes.refresh_packet_codecs(
+    state.routes.refresh_vp8_payload_types(
         src_media,
         &RouterRtpParameters::new(
             vec![MediaFormat::new(
@@ -1100,7 +1218,6 @@ fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
         })
     }));
     assert!(drain_ready_sessions(&mut state).is_empty());
-    assert_eq!(state.routes.next_rid_refresh_deadline(), None);
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.rtc_route_control_forwarded(), 0);
     assert_eq!(snapshot.rtc_keyframe_requests_forwarded(), 0);
@@ -1108,7 +1225,7 @@ fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
 }
 
 #[test]
-fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
+fn flush_packet_forwards_records_non_local_forwarding_volume_by_destination() {
     let source_session = test_transport_session_key(118, 0, 119, UserId::Integer(120));
     let src_media = TransportMediaId::new(121);
     let mut harness = PacketLoopHarness::new();
@@ -1126,7 +1243,7 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
         ));
     harness.add_recording_sink(src_media, &sink);
     harness.add_relay(src_media, relay_mailbox);
-    flush_forward_routes(
+    flush_only_packet_forwards(
         &mut harness.state,
         &harness.metrics,
         &harness.rtp_metrics,
@@ -1151,8 +1268,8 @@ fn flush_forward_routes_records_non_local_forwarding_volume_by_destination() {
 }
 
 #[test]
-fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Result<(), &'static str>
-{
+fn flush_packet_forwards_records_packet_sink_source_key_for_local_packet()
+-> Result<(), &'static str> {
     let source_session = test_transport_session_key(130, 0, 131, UserId::Integer(132));
     let src_media = TransportMediaId::new(133);
     let mut harness = PacketLoopHarness::new();
@@ -1174,7 +1291,7 @@ fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Res
         ));
     harness.add_recording_sink(src_media, &sink);
 
-    flush_forward_routes(
+    flush_only_packet_forwards(
         &mut harness.state,
         &harness.metrics,
         &harness.rtp_metrics,
@@ -1187,7 +1304,7 @@ fn flush_forward_routes_records_packet_sink_source_key_for_local_packet() -> Res
 }
 
 #[test]
-fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
+fn flush_packet_forwards_records_closed_relays_and_keeps_later_destinations() {
     let source_session = test_transport_session_key(119, 0, 120, UserId::Integer(121));
     let src_media = TransportMediaId::new(122);
     let mut harness = PacketLoopHarness::new();
@@ -1207,7 +1324,7 @@ fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
     drop(relay_rx);
     harness.add_relay(src_media, relay_mailbox);
     harness.add_recording_sink(src_media, &sink);
-    flush_forward_routes(
+    flush_only_packet_forwards(
         &mut harness.state,
         &harness.metrics,
         &harness.rtp_metrics,
@@ -1224,7 +1341,7 @@ fn flush_forward_routes_records_closed_relays_and_keeps_later_destinations() {
 }
 
 #[test]
-fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'static str> {
+fn flush_packet_forwards_marks_local_consumer_sessions_dirty() -> Result<(), &'static str> {
     let producer_session = test_transport_session_key(218, 0, 219, UserId::Integer(220));
     let consumer_session = test_transport_session_key(218, 0, 221, UserId::Integer(222));
     let consumer_mid = Mid::from("cam-down");
@@ -1258,7 +1375,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'st
     );
     harness.add_local(src_media, 0);
 
-    flush_forward_routes(
+    flush_only_packet_forwards(
         &mut harness.state,
         &harness.metrics,
         &harness.rtp_metrics,
@@ -1282,7 +1399,7 @@ fn flush_forward_routes_marks_local_consumer_sessions_dirty() -> Result<(), &'st
 }
 
 #[test]
-fn flush_forward_routes_drops_stale_local_consumer_stream_handle() -> Result<(), &'static str> {
+fn flush_packet_forwards_drops_stale_local_consumer_stream_handle() -> Result<(), &'static str> {
     let producer_session = test_transport_session_key(219, 0, 220, UserId::Integer(221));
     let consumer_session = test_transport_session_key(219, 0, 222, UserId::Integer(223));
     let consumer_mid = Mid::from("cam-down");
@@ -1315,7 +1432,7 @@ fn flush_forward_routes_drops_stale_local_consumer_stream_handle() -> Result<(),
     );
     harness.add_local(src_media, 0);
 
-    flush_forward_routes(
+    flush_only_packet_forwards(
         &mut harness.state,
         &harness.metrics,
         &harness.rtp_metrics,
@@ -1802,8 +1919,9 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
-            nackable: false,
             active: true,
+            requires_decoder_refresh: false,
+            delivery_generation: 0,
             packet_gate: PacketLayerGate::Open,
             pending_gate: None,
         },
@@ -2043,7 +2161,7 @@ fn drain_relay_packets_stops_at_the_configured_cap() {
 }
 
 #[test]
-fn flush_forward_routes_records_relay_overload_drops() {
+fn flush_packet_forwards_records_relay_overload_drops() {
     let source_session = test_transport_session_key(29, 0, 30, UserId::Integer(31));
     let src_media = TransportMediaId::new(32);
     let mut harness = PacketLoopHarness::new();
@@ -2066,7 +2184,7 @@ fn flush_forward_routes_records_relay_overload_drops() {
     );
     harness.add_relay(src_media, relay_mailbox);
 
-    flush_forward_routes(
+    flush_only_packet_forwards(
         &mut harness.state,
         &harness.metrics,
         &harness.rtp_metrics,

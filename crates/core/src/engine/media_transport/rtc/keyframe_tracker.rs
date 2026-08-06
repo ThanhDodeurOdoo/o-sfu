@@ -1,7 +1,8 @@
 //! keyframe request tracking for RTC producer sources
 //!
 //! duplicate feedback is absorbed while one request is pending
-//! a retry is emitted only when another request arrived before the deadline
+//! feedback and opaque recovery use bounded retries
+//! observable decoder transitions retry until route demand clears
 
 use std::{
     cmp::Reverse,
@@ -14,12 +15,24 @@ use str0m::media::{KeyframeRequestKind, Rid};
 use crate::engine::media_transport::TransportMediaId;
 
 pub(super) const KEYFRAME_REQUEST_RETRY_DELAY: Duration = Duration::from_secs(1);
+pub(super) const KEYFRAME_REQUEST_RETRY_ATTEMPTS: u8 = 5;
 const KEYFRAME_RETRY_DRAIN_LIMIT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyframeRequestDecision {
     Forward,
     Absorb,
+}
+
+/// Selects the retry lifetime for one coalesced source and RID request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::engine::media_transport) enum KeyframeRequestOrigin {
+    /// Receiver PLI or FIR with a bounded retry tail.
+    ConsumerFeedback,
+    /// Recovery request with no RTP-visible completion signal.
+    RecoveryHint,
+    /// Blocked decoder route retried until refresh or demand removal.
+    DecoderTransition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,11 +72,16 @@ pub fn coalesce_kf_kind(
 }
 
 impl KeyframeRequestTracker {
+    /// Arms one source and RID request or strengthens its pending state.
+    ///
+    /// FIR takes precedence over PLI. A decoder transition also upgrades a
+    /// bounded request to retry while route demand remains.
     pub fn track(
         &mut self,
         src_media: TransportMediaId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
+        origin: KeyframeRequestOrigin,
         now: Instant,
     ) -> KeyframeRequestDecision {
         let Some(request) = self
@@ -80,7 +98,7 @@ impl KeyframeRequestTracker {
                 request,
                 deadline: now + KEYFRAME_REQUEST_RETRY_DELAY,
                 id: self.next_id,
-                retry_on_timeout: false,
+                retry_policy: RetryPolicy::for_origin(origin),
             };
             self.next_id = self.next_id.saturating_add(1);
             self.deadlines.push(Reverse(pending.deadline()));
@@ -88,7 +106,9 @@ impl KeyframeRequestTracker {
             return KeyframeRequestDecision::Forward;
         };
         request.request.kind = coalesce_kf_kind(request.request.kind, kind);
-        request.retry_on_timeout = true;
+        if origin == KeyframeRequestOrigin::DecoderTransition {
+            request.retry_policy = RetryPolicy::WhileDemand;
+        }
         KeyframeRequestDecision::Absorb
     }
 
@@ -108,11 +128,11 @@ impl KeyframeRequestTracker {
     }
 
     pub fn drain_due(&mut self, now: Instant, retries: &mut Vec<SourceKeyframeRequest>) {
-        let mut remaining = KEYFRAME_RETRY_DRAIN_LIMIT;
+        let mut drain_budget = KEYFRAME_RETRY_DRAIN_LIMIT;
         while matches!(
             self.deadlines.peek(),
             Some(Reverse(deadline)) if deadline.deadline <= now
-        ) && remaining > 0
+        ) && drain_budget > 0
         {
             let Some(Reverse(deadline)) = self.deadlines.pop() else {
                 break;
@@ -124,20 +144,31 @@ impl KeyframeRequestTracker {
             else {
                 continue;
             };
-            remaining -= 1;
+            drain_budget -= 1;
             let Some(request) = self.pending.get_mut(index) else {
                 continue;
             };
-            if !request.retry_on_timeout {
+            let retry = request.request;
+            let reschedule = match &mut request.retry_policy {
+                RetryPolicy::Bounded(attempts_remaining) if *attempts_remaining > 0 => {
+                    *attempts_remaining -= 1;
+                    *attempts_remaining > 0
+                }
+                RetryPolicy::Bounded(_) => {
+                    self.pending.swap_remove(index);
+                    continue;
+                }
+                RetryPolicy::WhileDemand => true,
+            };
+            retries.push(retry);
+            if reschedule {
+                request.deadline = now + KEYFRAME_REQUEST_RETRY_DELAY;
+                request.id = self.next_id;
+                self.next_id = self.next_id.saturating_add(1);
+                self.deadlines.push(Reverse(request.deadline()));
+            } else {
                 self.pending.swap_remove(index);
-                continue;
             }
-            request.retry_on_timeout = false;
-            request.deadline = now + KEYFRAME_REQUEST_RETRY_DELAY;
-            request.id = self.next_id;
-            self.next_id = self.next_id.saturating_add(1);
-            self.deadlines.push(Reverse(request.deadline()));
-            retries.push(request.request);
         }
     }
 
@@ -168,7 +199,24 @@ struct KeyframeRequestState {
     request: SourceKeyframeRequest,
     deadline: Instant,
     id: u64,
-    retry_on_timeout: bool,
+    retry_policy: RetryPolicy,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RetryPolicy {
+    Bounded(u8),
+    WhileDemand,
+}
+
+impl RetryPolicy {
+    const fn for_origin(origin: KeyframeRequestOrigin) -> Self {
+        match origin {
+            KeyframeRequestOrigin::ConsumerFeedback | KeyframeRequestOrigin::RecoveryHint => {
+                Self::Bounded(KEYFRAME_REQUEST_RETRY_ATTEMPTS)
+            }
+            KeyframeRequestOrigin::DecoderTransition => Self::WhileDemand,
+        }
+    }
 }
 
 impl KeyframeRequestState {

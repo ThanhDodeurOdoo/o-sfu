@@ -40,7 +40,7 @@ async fn fake_rtc_cross_worker_vp8_selected_rid_survives_relay() -> s::TestResul
 }
 
 #[tokio::test]
-async fn fake_rtc_cross_worker_h264_selected_rid_requires_idr_after_relay() -> s::TestResult {
+async fn fake_rtc_cross_worker_h264_selected_rid_forwards_opaque_payload() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
     let mut config = st::cross_worker_test_config();
     config.codecs.flags = s::MediaCodecFlags::default()
@@ -132,7 +132,9 @@ async fn assert_selected_video_relay(
     m::assert_video_subscription_selected_rid(server, room, subscriber, publisher_user_id, "hi")
         .await;
     let mut clock = s::FakeClock::default();
-    m::assert_packet_dropped(publisher, subscriber, source, &mut clock).await;
+    if source.codec() == s::CodecName::Vp8 {
+        m::assert_packet_dropped(publisher, subscriber, source, &mut clock).await;
+    }
     m::assert_synthetic_video_packet_forwarded(publisher, subscriber, source, &mut clock).await;
     match low_rid_probe {
         LowRidProbe::None => {}

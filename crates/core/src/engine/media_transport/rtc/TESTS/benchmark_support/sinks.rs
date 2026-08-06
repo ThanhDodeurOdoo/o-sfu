@@ -11,7 +11,7 @@ use str0m::media::Mid;
 use super::super::{
     forwarding_planner::plan_forwards,
     media_registry::RegisteredMediaHandle,
-    packet_loop::{PacketLoopBuffers, flush_forward_routes},
+    packet_loop::{PacketLoopBuffers, flush_packet_forwards},
     state::PacketLoopState,
     test_support::{sample_forwarded_packet, test_transport_session_key},
 };
@@ -126,22 +126,22 @@ impl PacketSinkFanoutBenchFixture {
     }
 
     fn plan_and_flush_once(&mut self) {
-        for (pkt_idx, packet) in self.buffers.pending_packets.iter_mut().enumerate() {
+        for packet in &mut self.buffers.pending_packets {
             plan_forwards(
                 &self.state,
                 &self.packet_sinks,
                 &self.route_metrics,
-                pkt_idx,
                 packet,
                 &mut self.buffers.forwards,
             );
+            flush_packet_forwards(
+                &mut self.state,
+                &self.metrics,
+                &self.egress_metrics,
+                &self.route_metrics,
+                packet,
+                &self.buffers.forwards,
+            );
         }
-        flush_forward_routes(
-            &mut self.state,
-            &self.metrics,
-            &self.egress_metrics,
-            &self.route_metrics,
-            &self.buffers,
-        );
     }
 }

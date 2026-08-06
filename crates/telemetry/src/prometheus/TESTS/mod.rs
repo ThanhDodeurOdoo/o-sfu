@@ -83,9 +83,6 @@ fn assert_transport_lifecycle_metrics(rendered: &str) {
     assert_rtc_keyframe_request_metrics(rendered);
     assert!(rendered.contains("osfu_source_selection_updates_total{selector=\"encoding\"} 1"));
     assert!(rendered.contains("osfu_budget_solver_outcomes_total{outcome=\"degraded\"} 1"));
-    assert!(
-        rendered.contains("osfu_budget_solver_outcomes_total{outcome=\"protected_over_budget\"} 1")
-    );
     assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"checking\"} 1"));
     assert!(rendered.contains("osfu_transport_ice_state_changes_total{state=\"connected\"} 1"));
     assert!(rendered.contains("osfu_transport_dtls_connected_total 1"));
@@ -164,7 +161,6 @@ fn sample_metrics() -> RuntimeMetrics {
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Paused);
     metrics.record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
-    metrics.record_budget_solver_outcome(BudgetSolverOutcome::ProtectedOverBudget);
     metrics
 }
 

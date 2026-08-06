@@ -4,7 +4,7 @@ use str0m::media::Mid;
 
 use super::super::{
     forwarded_packet::ForwardedPacket,
-    forwarding_destination::PacketForward,
+    forwarding_destination::ForwardingDestination,
     forwarding_planner::plan_forwards,
     state::PacketLoopState,
     test_support::{MediaWorkerScenario, sample_forwarded_packet, test_transport_session_key},
@@ -29,7 +29,7 @@ pub struct FanoutBenchTopology {
     packet_sinks: PacketSinkRouteCache,
     metrics: Arc<RtcMetricsRecorder>,
     pending_packets: Vec<ForwardedPacket>,
-    forwards: Vec<PacketForward>,
+    forwards: Vec<ForwardingDestination>,
 }
 
 impl FanoutBenchTopology {
@@ -85,12 +85,11 @@ impl FanoutBenchTopology {
 
     #[inline(never)]
     fn plan_single_turn(&mut self) -> usize {
-        for (pkt_idx, packet) in self.pending_packets.iter_mut().enumerate() {
+        for packet in &mut self.pending_packets {
             plan_forwards(
                 &self.state,
                 &self.packet_sinks,
                 &self.metrics,
-                pkt_idx,
                 packet,
                 &mut self.forwards,
             );

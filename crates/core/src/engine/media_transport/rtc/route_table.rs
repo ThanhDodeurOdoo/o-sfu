@@ -4,9 +4,41 @@
 //! source transport media id
 //! source route data types live in `source_route`
 //! negotiated browser media lookup remains in `media_registry`
+//!
+//! VP8 decoder recovery joins destination gates with keyframe retry state:
+//!
+//! ```text
+//! decoder-gated route change or resume        ingress restart
+//!                    |                              |
+//!                    v                              |
+//!             block delivery                        |
+//!                    +--------------+---------------+
+//!                                   v
+//!                     coalesce PLI/FIR by source/RID
+//!                                   |
+//!                                   v
+//!                     retry while demand remains
+//!                                   |
+//!                                   v
+//!                        incoming source packet
+//!                                   |
+//!                      +------------+-----------+
+//!                      |                        |
+//!               blocked delta packet       VP8 refresh
+//!                      |                        |
+//!                     drop            activate pending gate
+//!                                               |
+//!                                               v
+//!                                    plan and forward refresh
+//! ```
+//!
+//! This demand-coupled loop applies when VP8 parsing can observe completion.
+//! Consumer feedback and opaque recovery keep bounded retry tails.
+//! `record_incoming_packet` must run before `plan_forwards` for each packet
+//! so the activating refresh is eligible without exposing earlier delta packets
+//! from the same batch.
 
 mod active_rank;
-mod rid_refresh;
 mod source;
 
 use std::{
@@ -19,7 +51,6 @@ use std::{
 
 use active_rank::ActiveSpeakerRank;
 use o_sfu_router::rtp::MediaStream;
-use rid_refresh::RidRefreshQueue;
 use source::{RemovedConsumerRoute, RouteSource};
 pub(super) use source::{RidReadinessRouteUpdate, RidReadinessSelectedGateUpdate};
 use str0m::{
@@ -31,10 +62,15 @@ use tracing::debug;
 use super::{
     bitrate::MediaBitrateCounter,
     commands::RemoteSourceControl,
-    keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestTracker, SourceKeyframeRequest},
+    keyframe_tracker::{
+        KeyframeRequestDecision, KeyframeRequestOrigin, KeyframeRequestTracker,
+        SourceKeyframeRequest,
+    },
     relay_registry::{ActiveRelayTarget, RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
-    source_route::{MediaRouteDestination, MediaRouteEntry, PacketCodec, RemoteSourceRegistration},
+    source_route::{
+        MediaRouteDestination, MediaRouteEntry, RemoteSourceRegistration, vp8_payload_types,
+    },
 };
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityUpdate,
@@ -49,7 +85,6 @@ pub(super) struct RouteTable {
     active: ActiveSpeakerRank,
     remote_gate_queue: VecDeque<TransportMediaId>,
     keyframe_requests: KeyframeRequestTracker,
-    rid_refresh: RidRefreshQueue,
 }
 
 impl RouteTable {
@@ -200,18 +235,17 @@ impl RouteTable {
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-        pending_gate: Option<PacketLayerGate>,
     ) -> Result<bool, TransportAdapterError> {
         self.sources
             .get_mut(&source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?
-            .set_consumer_pkt_gate(dst_idx, session_key, media_id, packet_gate, pending_gate)
+            .set_consumer_pkt_gate(dst_idx, session_key, media_id, packet_gate)
     }
 
-    pub(super) fn update_rid_readiness(
+    pub(super) fn update_decoder_readiness(
         &mut self,
         source_id: TransportMediaId,
-        incoming_rid: Rid,
+        incoming_rid: Option<Rid>,
         is_keyframe: bool,
         ready: &[Rid],
         stale: &mut Vec<Rid>,
@@ -220,7 +254,7 @@ impl RouteTable {
         let Some(source) = self.sources.get_mut(&source_id) else {
             return RidReadinessRouteUpdate::default();
         };
-        let update = source.update_rid_readiness(
+        let update = source.update_decoder_readiness(
             source_id,
             incoming_rid,
             is_keyframe,
@@ -417,37 +451,29 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn packet_codec(
-        &self,
-        source_id: TransportMediaId,
-        payload_type: Pt,
-    ) -> Option<PacketCodec> {
-        self.sources.get(&source_id).and_then(|source| {
-            source
-                .producer
-                .codecs
-                .iter()
-                .find_map(|(candidate, codec)| (*candidate == payload_type).then_some(*codec))
-        })
+    pub(super) fn is_vp8_payload(&self, source_id: TransportMediaId, payload_type: Pt) -> bool {
+        self.sources
+            .get(&source_id)
+            .is_some_and(|source| source.producer.vp8_payload_types.contains(&payload_type))
     }
 
-    pub(super) fn clear_packet_codecs(&mut self, source_id: TransportMediaId) {
+    pub(super) fn clear_vp8_payload_types(&mut self, source_id: TransportMediaId) {
         if let Some(source) = self.sources.get_mut(&source_id) {
-            source.producer.codecs.clear();
+            source.producer.vp8_payload_types.clear();
         }
     }
 
-    /// refreshes packet codec classification from negotiated RTP parameters
-    pub(super) fn refresh_packet_codecs(
+    /// Refreshes VP8 payload-type classification from negotiated RTP parameters.
+    pub(super) fn refresh_vp8_payload_types(
         &mut self,
         source_id: TransportMediaId,
         parameters: &MediaStream,
     ) {
-        let codecs = PacketCodec::from_parameters(parameters);
-        if codecs.is_empty() {
-            self.clear_packet_codecs(source_id);
+        let payload_types = vp8_payload_types(parameters).collect::<Vec<_>>();
+        if payload_types.is_empty() {
+            self.clear_vp8_payload_types(source_id);
         } else {
-            self.source_mut(source_id).producer.codecs = codecs;
+            self.source_mut(source_id).producer.vp8_payload_types = payload_types;
         }
     }
 
@@ -484,6 +510,7 @@ impl RouteTable {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn producer_rid_is_ready(
         &self,
         source_id: TransportMediaId,
@@ -503,49 +530,9 @@ impl RouteTable {
         max_age: Duration,
         ready_rids: &mut Vec<Rid>,
     ) {
-        ready_rids.clear();
         if let Some(source) = self.sources.get(&source_id) {
             source.producer.collect_ready_rids(now, max_age, ready_rids);
         }
-    }
-
-    pub(super) fn schedule_rid_refresh(
-        &mut self,
-        source_id: TransportMediaId,
-        rid: Rid,
-        request_at: Instant,
-    ) {
-        let source = self.sources.entry(source_id).or_default();
-        self.rid_refresh
-            .schedule(source, source_id, rid, request_at);
-    }
-
-    pub(super) fn drain_due_rid_refreshes(
-        &mut self,
-        source_id: TransportMediaId,
-        rid: Rid,
-        now: Instant,
-    ) -> usize {
-        self.sources.get_mut(&source_id).map_or(0, |source| {
-            let mut due_count = 0;
-            source.producer.pending_rid_refreshes.retain(|refresh| {
-                let due = refresh.rid == rid && refresh.request_at <= now;
-                due_count += usize::from(due);
-                !due
-            });
-            due_count
-        })
-    }
-
-    pub(super) fn drain_all_due_rid_refreshes(
-        &mut self,
-        now: Instant,
-    ) -> Vec<(TransportMediaId, Rid)> {
-        self.rid_refresh.drain_due(&mut self.sources, now)
-    }
-
-    pub(super) fn next_rid_refresh_deadline(&mut self) -> Option<Instant> {
-        self.rid_refresh.next_deadline(&self.sources)
     }
 
     pub(super) fn track_kf_req(
@@ -553,9 +540,11 @@ impl RouteTable {
         source_id: TransportMediaId,
         rid: Option<Rid>,
         kind: KeyframeRequestKind,
+        origin: KeyframeRequestOrigin,
         now: Instant,
     ) -> KeyframeRequestDecision {
-        self.keyframe_requests.track(source_id, rid, kind, now)
+        self.keyframe_requests
+            .track(source_id, rid, kind, origin, now)
     }
 
     pub(super) fn forget_kf_req(&mut self, source_id: TransportMediaId, rid: Option<Rid>) {
@@ -568,6 +557,12 @@ impl RouteTable {
         rid: Option<Rid>,
     ) -> usize {
         self.keyframe_requests.observe_refresh(source_id, rid)
+    }
+
+    pub(super) fn decoder_refresh_is_observable(&self, source_id: TransportMediaId) -> bool {
+        self.sources
+            .get(&source_id)
+            .is_some_and(|source| !source.producer.vp8_payload_types.is_empty())
     }
 
     pub(super) fn drain_due_kf_reqs(

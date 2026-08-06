@@ -56,7 +56,7 @@ impl ConsumerSourceSelection {
             active,
             selector: SourceSelector::Open,
             policy_pause_reason: None,
-            budget: ReceiverVideoBudgetDiagnostics::new(None, None, 0, Bitrate::zero(), None),
+            budget: ReceiverVideoBudgetDiagnostics::new(None, None, 0, Bitrate::zero()),
             pressure_observations: 0,
             upgrade_observations: 0,
         }

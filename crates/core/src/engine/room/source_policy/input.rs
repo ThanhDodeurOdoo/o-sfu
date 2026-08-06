@@ -12,7 +12,7 @@ use crate::{
         ConnectionId, UserId,
         media_transport::{
             ActiveSpeakerSource, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
-            TransportMediaId,
+            TransportBitrateSnapshot, TransportMediaId,
         },
         room::{
             media_graph::ConsumerRouteView,
@@ -28,6 +28,7 @@ pub(super) struct SourcePolicySnapshot<'a> {
     pub(super) routes: Vec<ConsumerRouteView<'a>>,
     pub(super) receiver_bwe_targets: BTreeMap<UserId, ReceiverBweTargetUpdate>,
     pub(super) receiver_bandwidth_by_connection: BTreeMap<ConnectionId, Bitrate>,
+    pub(super) source_bitrate_by_media: BTreeMap<TransportMediaId, Bitrate>,
     pub(super) active_speaker_media_ids: BTreeSet<TransportMediaId>,
     pub(super) admitted_audio_media_ids: BTreeSet<TransportMediaId>,
     pub(super) deaf_receiver_connection_ids: BTreeSet<ConnectionId>,
@@ -45,6 +46,7 @@ impl<'a> SourcePolicySnapshot<'a> {
         room: &'a RoomState,
         active_speaker_sources: &[ActiveSpeakerSource],
         receiver_bandwidth_snapshot: &ReceiverBandwidthSnapshot,
+        source_bitrate_snapshot: &TransportBitrateSnapshot,
     ) -> Self {
         let ranked_sources = rank_room_active_speakers(room, active_speaker_sources);
         let media_limits = room.media_limits;
@@ -78,6 +80,7 @@ impl<'a> SourcePolicySnapshot<'a> {
             receiver_bandwidth_by_connection: receiver_bandwidth_by_connection(
                 receiver_bandwidth_snapshot,
             ),
+            source_bitrate_by_media: source_bitrate_snapshot.per_media.iter().copied().collect(),
             active_speaker_media_ids: active_speakers,
             admitted_audio_media_ids: admitted_audio_speakers,
             deaf_receiver_connection_ids,

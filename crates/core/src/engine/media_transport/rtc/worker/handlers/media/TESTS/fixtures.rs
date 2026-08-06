@@ -77,10 +77,6 @@ impl LocalVideoRoute {
         Self::build(seed, ssrc, Some(rid), PacketLayerGate::Open, false)
     }
 
-    pub fn with_pending_rid_gate(seed: u64, ssrc: u32, rid: Rid) -> Self {
-        Self::build(seed, ssrc, Some(rid), PacketLayerGate::Rid(rid), true)
-    }
-
     pub fn with_rid_gate(seed: u64, ssrc: u32, rid: Rid, packet_gate: PacketLayerGate) -> Self {
         Self::build(seed, ssrc, Some(rid), packet_gate, false)
     }

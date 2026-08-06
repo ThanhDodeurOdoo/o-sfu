@@ -16,7 +16,11 @@ use fixtures::{
     LocalVideoRoute, RemoteVideoRoute, prepare_pending_selected_rid_route,
     set_consumer_packet_gate_at,
 };
-use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, PayloadType, StreamBinding};
+use o_sfu_rfc::rtp::CodecName;
+use o_sfu_router::{
+    MediaKind as RouterMediaKind,
+    rtp::{MediaFormat, MediaStream as RouterRtpParameters, PayloadType, StreamBinding},
+};
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
     rtp::Ssrc,
@@ -25,8 +29,8 @@ use tokio::sync::mpsc;
 
 use super::{
     AddSendMediaRequest, KeyframeRequestMode, KeyframeRequestTarget, apply_media_control_batch,
-    apply_route_control_request, control::remove_consumer_route, drain_due_rid_kf_refreshes,
-    request_kf_for_target, worker_add_send_media, worker_remove_media,
+    apply_route_control_request, control::remove_consumer_route, request_kf_for_target,
+    worker_add_send_media, worker_remove_media,
 };
 use crate::{
     Bitrate,
@@ -42,7 +46,7 @@ use crate::{
                     RemoteSourceControl, RouteControlRequest, WorkerMediaControlBatch,
                     WorkerMediaControlBatchOutcome,
                 },
-                keyframe_tracker::KeyframeRequestDecision,
+                keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestOrigin},
                 media_registry::{ConsumerKeyframeTarget, RegisteredMediaHandle},
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
@@ -163,13 +167,6 @@ fn remote_source_activity_gates_feedback_and_rejects_stale_reconciliation() {
         None,
     );
     assert!(route.state.routes.next_kf_deadline().is_some());
-    route.state.routes.schedule_rid_refresh(
-        route.src_media,
-        Rid::from("hi"),
-        now + Duration::from_secs(1),
-    );
-    assert!(route.state.routes.next_rid_refresh_deadline().is_some());
-
     apply_route_control_request(
         &mut route.state,
         &route.rtc_metrics,
@@ -187,7 +184,6 @@ fn remote_source_activity_gates_feedback_and_rejects_stale_reconciliation() {
         .routes
         .drain_due_kf_reqs(now + Duration::from_secs(2), &mut retries);
     assert!(retries.is_empty());
-    assert!(route.state.routes.next_rid_refresh_deadline().is_none());
     let WorkerMediaControlBatchOutcome::Consumers(results) = route.request_kf() else {
         panic!("inactive source feedback should return a consumer result");
     };
@@ -219,7 +215,7 @@ fn remote_source_activity_gates_feedback_and_rejects_stale_reconciliation() {
 }
 
 #[test]
-fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
+fn source_worker_forwards_each_coalesced_remote_keyframe_request() {
     let source_session = test_source_session_key(111);
     let source_mid = Mid::from("cam-up");
     let mut state = PacketLoopState::default();
@@ -264,8 +260,8 @@ fn remote_keyframe_requests_forward_once_and_then_absorb_within_the_window() {
         vec![source_session.clone()]
     );
     let snapshot = metrics.snapshot();
-    assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
-    assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 2);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
     assert_eq!(snapshot.rtc_route_control_route_gated_relay_drops(), 0);
 }
 
@@ -526,7 +522,8 @@ fn set_consumer_pkt_gate_updates_one_route_without_rewriting_the_source_gate() {
         state.routes.local_route(src_media),
         Some(route_entry) if route_entry.destinations.iter().any(|destination| {
             destination.dest_session == first_consumer_session
-                && destination.packet_gate == PacketLayerGate::Rid("lo".into())
+                && destination.packet_gate == PacketLayerGate::Block
+                && destination.pending_gate == Some(PacketLayerGate::Rid("lo".into()))
         })
     ));
     assert_eq!(
@@ -592,7 +589,7 @@ fn removing_consumer_route_clears_feedback_index_and_repairs_moved_route() {
 }
 
 #[test]
-fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
+fn selected_rid_gate_waits_for_a_keyframe_despite_recent_packet_liveness() {
     let selected_rid = Rid::from("hi");
     let mut route = LocalVideoRoute::with_rid(531, 88_921, selected_rid);
     let observed_at = Instant::now();
@@ -615,8 +612,8 @@ fn selected_rid_gate_uses_supplied_time_for_live_and_stale_updates() {
         &route.state,
         route.src_media,
         &route.consumer_session,
-        &PacketLayerGate::Rid(selected_rid),
-        None,
+        &PacketLayerGate::Block,
+        Some(&PacketLayerGate::Rid(selected_rid)),
     );
 
     set_consumer_packet_gate_at(
@@ -649,10 +646,13 @@ fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
 
     let now = Instant::now();
     assert_eq!(
-        route
-            .state
-            .routes
-            .track_kf_req(route.src_media, None, KeyframeRequestKind::Pli, now),
+        route.state.routes.track_kf_req(
+            route.src_media,
+            None,
+            KeyframeRequestKind::Pli,
+            KeyframeRequestOrigin::ConsumerFeedback,
+            now,
+        ),
         KeyframeRequestDecision::Forward
     );
 
@@ -702,54 +702,6 @@ fn selected_rid_packet_gate_switches_from_bootstrap_fallback_on_selected_keyfram
 
     assert!(route.observe_rid_ready(route.selected_rid, true, now + Duration::from_millis(20)));
     route.assert_packet_gate(PacketLayerGate::Rid(route.selected_rid), None);
-}
-
-#[test]
-fn selected_rid_activation_sends_bounded_follow_up_keyframe_refreshes() {
-    let selected_rid = Rid::from("hi");
-    let mut route = LocalVideoRoute::with_pending_rid_gate(431, 88_351, selected_rid);
-
-    let now = Instant::now();
-    assert!(route.observe_rid_ready(selected_rid, true, now));
-    assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
-
-    for (elapsed_ms, expected_forwarded) in [
-        (700, 1),
-        (1_200, 2),
-        (2_700, 3),
-        (5_200, 4),
-        (8_200, 5),
-        (13_200, 6),
-    ] {
-        assert!(!route.observe_rid_ready(
-            selected_rid,
-            true,
-            now + Duration::from_millis(elapsed_ms)
-        ));
-        assert_eq!(
-            route.metrics.snapshot().rtc_route_control_forwarded(),
-            expected_forwarded
-        );
-    }
-}
-
-#[test]
-fn selected_rid_keyframe_refreshes_are_timer_driven_after_activation() {
-    let selected_rid = Rid::from("hi");
-    let mut route = LocalVideoRoute::with_pending_rid_gate(531, 88_451, selected_rid);
-
-    let now = Instant::now();
-    assert!(route.observe_rid_ready(selected_rid, true, now));
-    assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 1);
-
-    drain_due_rid_kf_refreshes(
-        &mut route.state,
-        &route.rtc_metrics,
-        now + Duration::from_millis(1_200),
-    );
-
-    assert_eq!(route.metrics.snapshot().rtc_route_control_forwarded(), 2);
-    route.assert_source_ready();
 }
 
 #[test]
@@ -938,7 +890,30 @@ fn selected_rid_relay_retries_saturated_readiness_keyframe() {
     let snapshot = route.metrics.snapshot();
     assert_eq!(snapshot.rtc_remote_control_keyframe_drops(), 1);
     assert!(route.control_rx.try_recv().is_ok());
-    route.request_kf();
+    let Some(deadline) = route.state.routes.next_kf_deadline() else {
+        panic!("saturated keyframe request should remain scheduled");
+    };
+    let Some((source, control)) = route
+        .state
+        .routes
+        .remote_source(route.src_media)
+        .map(RemoteSourceRegistration::cloned_control_path)
+    else {
+        panic!("remote source should remain registered");
+    };
+    let mut retries = Vec::new();
+    route.state.routes.drain_due_kf_reqs(deadline, &mut retries);
+    let Some(retry) = retries.pop() else {
+        panic!("saturated keyframe request should become due");
+    };
+    request_kf_for_target(
+        &mut route.state,
+        &route.rtc_metrics,
+        KeyframeRequestTarget::Remote(&source, &control),
+        retry.rid,
+        retry.kind,
+        KeyframeRequestMode::Retry,
+    );
     assert_remote_keyframe_command(
         &mut route.control_rx,
         &route.source_session,
@@ -1134,7 +1109,6 @@ fn add_send_media_rolls_back_remote_source_registration_when_consumer_session_is
             consumer_rtp_parameters: &consumer_rtp_parameters,
             active: true,
         },
-        Instant::now(),
     );
 
     assert_eq!(result, Err(TransportAdapterError::TransportUnavailable));
@@ -1159,7 +1133,12 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
         .is_ok()
     );
     let consumer_rtp_parameters = RouterRtpParameters::new(
-        vec![],
+        vec![MediaFormat::new(
+            RouterMediaKind::Video,
+            CodecName::Vp8,
+            PayloadType::new(96),
+            90_000,
+        )],
         vec![],
         vec![
             StreamBinding::new()
@@ -1186,7 +1165,6 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
                 consumer_rtp_parameters: &consumer_rtp_parameters,
                 active: true,
             },
-            Instant::now(),
         )
         .is_ok()
     );
@@ -1195,7 +1173,11 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
         panic!("consumer session should exist after RTC state bootstrap");
     };
     let mut direct_api = consumer_session_state.rtc.direct_api();
-    assert!(direct_api.stream_tx_by_mid(consumer_mid, None).is_some());
+    assert!(
+        direct_api
+            .stream_tx_by_mid(consumer_mid, None)
+            .is_some_and(|stream| stream.rtx().is_none())
+    );
     assert!(
         direct_api
             .stream_tx_by_mid(consumer_mid, Some(Rid::from("lo")))
@@ -1227,7 +1209,7 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
 }
 
 #[test]
-fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
+fn add_send_media_blocks_initial_video_until_a_decoder_refresh() {
     let source_session = test_source_session_key(751);
     let consumer_session = test_consumer_session_key(751);
     let source_mid = Mid::from("cam-up");
@@ -1255,7 +1237,12 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
         .is_ok()
     );
     let consumer_rtp_parameters = RouterRtpParameters::new(
-        vec![],
+        vec![MediaFormat::new(
+            RouterMediaKind::Video,
+            CodecName::Vp8,
+            PayloadType::new(96),
+            90_000,
+        )],
         vec![],
         vec![
             StreamBinding::new()
@@ -1278,7 +1265,6 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
                 consumer_rtp_parameters: &consumer_rtp_parameters,
                 active: true,
             },
-            observed_at + Duration::from_millis(250),
         )
         .is_ok()
     );
@@ -1287,8 +1273,8 @@ fn add_send_media_uses_supplied_time_for_initial_selected_rid_gate() {
         &state,
         src_media,
         &consumer_session,
-        &PacketLayerGate::Rid(selected_rid),
-        None,
+        &PacketLayerGate::Block,
+        Some(&PacketLayerGate::Rid(selected_rid)),
     );
 }
 
@@ -1308,7 +1294,10 @@ fn request_keyframe_ignores_wrong_source_owner() {
         KeyframeRequestTarget::Local(&wrong_session, src_media),
         None,
         KeyframeRequestKind::Pli,
-        KeyframeRequestMode::Track(Instant::now()),
+        KeyframeRequestMode::Track {
+            now: Instant::now(),
+            origin: KeyframeRequestOrigin::ConsumerFeedback,
+        },
     );
 
     assert!(drain_ready_sessions(&mut state).is_empty());

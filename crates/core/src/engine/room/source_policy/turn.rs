@@ -3,7 +3,7 @@
 use std::mem;
 
 use super::{
-    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate},
+    action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RouteBudgetOutcome},
     audio,
     input::SourcePolicySnapshot,
     video,
@@ -11,6 +11,7 @@ use super::{
 use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, MediaTransport, ReceiverBandwidthSnapshot, ReceiverBweTargetUpdate,
+        TransportBitrateSnapshot,
     },
     metrics::{self, BudgetSolverOutcome},
     room::{
@@ -84,9 +85,15 @@ async fn run_packet_selection(
             .map(|(user_id, connection_id)| state.transport_user_key(user_id, connection_id))
             .collect::<Vec<_>>()
     };
-    let bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
+    let receiver_bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
+    let source_bitrate = media_transport.transport_bitrate_snapshot(&sessions);
     let state = room.state.read().await;
-    SourcePolicyTransaction::plan_from_state(&state, active_speakers, &bandwidth)
+    SourcePolicyTransaction::plan(
+        &state,
+        active_speakers,
+        &receiver_bandwidth,
+        &source_bitrate,
+    )
 }
 
 #[derive(Debug, Default)]
@@ -97,12 +104,18 @@ pub(in crate::engine::room) struct SourcePolicyTransaction {
 }
 
 impl SourcePolicyTransaction {
-    pub(in crate::engine::room) fn plan_from_state(
+    pub(in crate::engine::room) fn plan(
         state: &RoomState,
         active_speakers: &[ActiveSpeakerSource],
-        bandwidth: &ReceiverBandwidthSnapshot,
+        receiver_bandwidth: &ReceiverBandwidthSnapshot,
+        source_bitrate: &TransportBitrateSnapshot,
     ) -> Option<Self> {
-        let mut input = SourcePolicySnapshot::from_state(state, active_speakers, bandwidth);
+        let mut input = SourcePolicySnapshot::from_state(
+            state,
+            active_speakers,
+            receiver_bandwidth,
+            source_bitrate,
+        );
         let mut tx = Self::default();
         audio::append_audio_route_activity(&mut tx, &input);
         let receiver_bwe_targets = mem::take(&mut input.receiver_bwe_targets);
@@ -132,7 +145,9 @@ impl SourcePolicyTransaction {
                     .await,
             );
         }
-        commit_accepted_updates(room, &state_updates, &self.featured_users).await;
+        if commit_accepted_updates(room, &state_updates, &self.featured_users).await {
+            media_transport.schedule_source_policy_follow_up(room.instance_id());
+        }
     }
 
     #[cfg(test)]
@@ -155,19 +170,22 @@ async fn commit_accepted_updates(
     room: &Room,
     state_updates: &[ConsumerPacketSelectionUpdate],
     featured_users: &[FeaturedUserUpdate],
-) {
+) -> bool {
     if state_updates.is_empty() && featured_users.is_empty() {
-        return;
+        return false;
     }
     record_source_selection_metrics(room, state_updates);
-    let info_fanout = {
+    let (info_fanout, requires_follow_up) = {
         let mut state = room.state.write().await;
-        commit_packet_updates(&mut state, state_updates);
-        commit_featured_user_updates(&mut state, featured_users)
+        let requires_follow_up = commit_packet_updates(&mut state, state_updates);
+        let info_fanout = commit_featured_user_updates(&mut state, featured_users);
+        drop(state);
+        (info_fanout, requires_follow_up)
     };
     if let Some(info_fanout) = info_fanout {
         info_fanout.emit();
     }
+    requires_follow_up
 }
 
 fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelectionUpdate]) {
@@ -176,29 +194,20 @@ fn record_source_selection_metrics(room: &Room, updates: &[ConsumerPacketSelecti
             room.metrics
                 .record_source_selection_update(metrics::source_selection_kind(update.selector));
         }
-        let outcomes = update.outcomes;
-        if outcomes.is_degraded() {
-            room.metrics
-                .record_budget_solver_outcome(BudgetSolverOutcome::Degraded);
-        }
-        if outcomes.is_paused() {
-            room.metrics
-                .record_budget_solver_outcome(BudgetSolverOutcome::Paused);
-        }
-        if outcomes.is_resumed() {
-            room.metrics
-                .record_budget_solver_outcome(BudgetSolverOutcome::Resumed);
-        }
-        if outcomes.is_protected_over_budget() {
-            room.metrics
-                .record_budget_solver_outcome(BudgetSolverOutcome::ProtectedOverBudget);
+        if let Some(outcome) = update.outcome {
+            room.metrics.record_budget_solver_outcome(match outcome {
+                RouteBudgetOutcome::Degraded => BudgetSolverOutcome::Degraded,
+                RouteBudgetOutcome::Paused => BudgetSolverOutcome::Paused,
+                RouteBudgetOutcome::Resumed => BudgetSolverOutcome::Resumed,
+            });
         }
     }
 }
 
-fn commit_packet_updates(state: &mut RoomState, updates: &[ConsumerPacketSelectionUpdate]) {
+fn commit_packet_updates(state: &mut RoomState, updates: &[ConsumerPacketSelectionUpdate]) -> bool {
+    let mut requires_follow_up = false;
     for update in updates {
-        state.topology.update_consumer_source_selection(
+        let committed = state.topology.update_consumer_source_selection(
             &update.key,
             update.source_id,
             &update.route,
@@ -212,7 +221,9 @@ fn commit_packet_updates(state: &mut RoomState, updates: &[ConsumerPacketSelecti
                 );
             },
         );
+        requires_follow_up |= committed && update.requires_follow_up();
     }
+    requires_follow_up
 }
 
 fn commit_featured_user_updates(

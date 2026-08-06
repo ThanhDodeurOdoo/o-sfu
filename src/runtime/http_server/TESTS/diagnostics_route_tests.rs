@@ -6,7 +6,12 @@
     reason = "the diagnostics route tests keep one end-to-end diagnostics scenario with direct field assertions"
 )]
 
-use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeSet,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use o_sfu_protocol::wire::StreamType;
 use o_sfu_router::{
@@ -290,9 +295,16 @@ async fn diagnostics_routes_return_current_room_and_user_details() -> TestResult
             ..Default::default()
         },
     );
-    transport_test
-        .record_incoming_media(&source_key, 125, Instant::now())
-        .await;
+    let observed_at = Instant::now();
+    for (elapsed, bytes) in [
+        (Duration::ZERO, 62),
+        (Duration::from_millis(500), 63),
+        (Duration::from_secs(1), 1),
+    ] {
+        transport_test
+            .record_incoming_media(&source_key, bytes, observed_at + elapsed)
+            .await;
+    }
     let source_requests = || transport_test.source_diagnostics_request_count();
 
     let room_summaries: Vec<DiagnosticsRoomSummary> =
@@ -513,7 +525,6 @@ async fn diagnostics_routes_return_current_room_and_user_details() -> TestResult
     assert_eq!(selection.selected_video_budget_bps, Some(10_000_000));
     assert_eq!(selection.active_video_route_count, 1);
     assert_eq!(selection.selected_video_bitrate_bps, 900_000);
-    assert_eq!(selection.over_budget_exception_reason, None);
     assert_eq!(source_requests(), 4);
 
     Ok(())

@@ -23,8 +23,8 @@
 //!   `-- session teardown and worker draining
 //! ```
 //!
-//! [`TransportMediaId`] values allocated by a worker must stay process-wide
-//! distinct
+//! [`TransportMediaId`](crate::engine::media_transport::TransportMediaId)
+//! values allocated by a worker must stay process-wide distinct
 //! source route maps and relay maps use them as packet-path keys even when a
 //! source is forwarded to another worker
 //! the worker manager assigns each worker a media-id range before the packet
@@ -47,8 +47,8 @@ use std::{
 #[cfg(feature = "internal-benchmarks")]
 pub use handlers::apply_media_control_batch;
 pub(super) use handlers::{
-    KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_rid_ready,
-    drain_due_rid_kf_refreshes, handle_worker_command, request_kf_for_target,
+    KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_decoder_ready,
+    handle_worker_command, request_kf_for_target,
 };
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;

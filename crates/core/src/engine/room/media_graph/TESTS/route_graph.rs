@@ -135,7 +135,6 @@ fn intent_survives_detach_and_resets_source_selection() {
                 Some(Bitrate::from_kbps(600)),
                 2,
                 Bitrate::from_kbps(500),
-                None,
             ));
             selection.set_adaptation_observations(3, 4);
         })

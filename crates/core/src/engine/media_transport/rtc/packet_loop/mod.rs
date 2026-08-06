@@ -107,14 +107,14 @@ mod udp;
 #[cfg(test)]
 pub use event_observation::{transport_health_from_event, transport_ice_state};
 
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::engine::media_transport::rtc) use self::forward_flush::flush_packet_forwards;
 #[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
 pub use self::ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at};
 #[cfg(feature = "internal-benchmarks")]
 pub use self::{
     buffers::PacketLoopBuffers,
-    forward_flush::{
-        drain_relay_packets, flush_forward_routes, record_incoming_stats_for_benchmark,
-    },
+    forward_flush::{drain_relay_packets, record_incoming_stats_for_benchmark},
     keyframe_requests::{PendingKeyframeRequest, flush_pending_kf_reqs_at},
     loop_driver::route_queued_ingress_datagrams_for_benchmark,
     session_drain::{SessionDrainContext, drain_ready_sessions},

@@ -66,6 +66,8 @@ pub trait SyntheticRtpStream: fmt::Debug {
 
     fn next_packet(&mut self, clock: &mut FakeClock) -> SyntheticRtpPacket;
 
+    fn request_keyframe(&mut self, _rid: Option<&str>) {}
+
     fn media_kind(&self) -> MediaKind {
         media_kind_for_stream_type(self.stream_type())
     }
@@ -131,6 +133,10 @@ impl FakeMediaSource {
 
     pub fn next_frame(&mut self, clock: &mut FakeClock) -> FakeMediaFrame {
         self.stream.next_packet(clock)
+    }
+
+    pub fn request_keyframe(&mut self, rid: Option<&str>) {
+        self.stream.request_keyframe(rid);
     }
 }
 
@@ -289,6 +295,12 @@ impl SyntheticRtpStream for SyntheticVp8Stream {
             payload,
         }
     }
+
+    fn request_keyframe(&mut self, rid: Option<&str>) {
+        if rid.is_none() || rid == self.rid.as_deref() {
+            self.next_keyframe = true;
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,6 +373,12 @@ impl SyntheticRtpStream for SyntheticH264Stream {
                 ..ExtensionValues::default()
             },
             payload: synthetic_h264_payload(&body, idr),
+        }
+    }
+
+    fn request_keyframe(&mut self, rid: Option<&str>) {
+        if rid.is_none() || rid == self.rid.as_deref() {
+            self.next_idr = true;
         }
     }
 }

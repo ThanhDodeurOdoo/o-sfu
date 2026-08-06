@@ -19,7 +19,7 @@ use str0m::media::Rid;
 use super::{
     super::{
         forwarded_packet::{ForwardedPacket, ForwardedPacketSource},
-        forwarding_destination::PacketForward,
+        forwarding_destination::ForwardingDestination,
         keyframe_tracker::SourceKeyframeRequest,
         slots::SessionHandle,
     },
@@ -41,14 +41,6 @@ pub(super) const MAX_RELAY_PACKETS_PER_ITERATION: usize = 64;
 pub(super) struct PendingTransmit {
     pub(super) destination: SocketAddr,
     pub(super) contents: Vec<u8>,
-}
-
-pub(super) struct PendingRidReadiness {
-    pub(super) source: ForwardedPacketSource,
-    pub(super) src_media: TransportMediaId,
-    pub(super) rid: Rid,
-    pub(super) is_keyframe: bool,
-    pub(super) observed_at: Instant,
 }
 
 pub(super) struct PendingFirstVideoKeyframe {
@@ -80,16 +72,16 @@ pub struct PacketLoopBuffers {
     pub(super) coalesced_keyframe_requests: Vec<SourceKeyframeRequest>,
     /// due keyframe retries drained from the tracker
     pub(super) keyframe_retries: Vec<SourceKeyframeRequest>,
-    /// source/RID-keyed readiness work after packet-level liveness is updated
-    pub(super) pending_rid_readiness: Vec<PendingRidReadiness>,
+    /// source/RID pairs already checked for readiness during this turn
+    pub(super) observed_rids: Vec<(TransportMediaId, Rid)>,
     /// first-ingress keyframe probes delayed until RID readiness work is known
     pub(super) pending_first_video_keyframes: Vec<PendingFirstVideoKeyframe>,
     /// sources whose selected-RID route state changed during this turn
     pub(super) rid_readiness_changed_sources: Vec<TransportMediaId>,
     /// rooms whose source policy must be recomputed after packet observations
     pub(super) dirty_source_policy_channel_ids: Vec<RoomInstanceId>,
-    /// concrete forwarding destinations planned for `pending_packets`
-    pub forwards: Vec<PacketForward>,
+    /// concrete forwarding destinations planned for the current packet
+    pub forwards: Vec<ForwardingDestination>,
 }
 
 impl PacketLoopBuffers {
@@ -107,7 +99,7 @@ impl PacketLoopBuffers {
             ready_sessions: Vec::with_capacity(32),
             coalesced_keyframe_requests: Vec::with_capacity(8),
             keyframe_retries: Vec::with_capacity(8),
-            pending_rid_readiness: Vec::with_capacity(8),
+            observed_rids: Vec::with_capacity(8),
             pending_first_video_keyframes: Vec::with_capacity(8),
             rid_readiness_changed_sources: Vec::with_capacity(8),
             dirty_source_policy_channel_ids: Vec::with_capacity(8),
@@ -123,7 +115,7 @@ impl PacketLoopBuffers {
         self.ready_sessions.clear();
         self.coalesced_keyframe_requests.clear();
         self.keyframe_retries.clear();
-        self.pending_rid_readiness.clear();
+        self.observed_rids.clear();
         self.pending_first_video_keyframes.clear();
         self.rid_readiness_changed_sources.clear();
         self.dirty_source_policy_channel_ids.clear();
@@ -142,32 +134,12 @@ impl PacketLoopBuffers {
         self.pending_transmits.iter_mut()
     }
 
-    pub(super) fn push_rid_readiness(
-        &mut self,
-        source: &ForwardedPacketSource,
-        src_media: TransportMediaId,
-        rid: Rid,
-        is_keyframe: bool,
-        observed_at: Instant,
-    ) {
-        if let Some(pending) = self
-            .pending_rid_readiness
-            .iter_mut()
-            .find(|pending| pending.src_media == src_media && pending.rid == rid)
-        {
-            pending.is_keyframe |= is_keyframe;
-            if pending.observed_at < observed_at {
-                pending.observed_at = observed_at;
-            }
-            return;
+    pub(super) fn observe_rid_once(&mut self, src_media: TransportMediaId, rid: Rid) -> bool {
+        if self.observed_rids.contains(&(src_media, rid)) {
+            return false;
         }
-        self.pending_rid_readiness.push(PendingRidReadiness {
-            source: source.clone(),
-            src_media,
-            rid,
-            is_keyframe,
-            observed_at,
-        });
+        self.observed_rids.push((src_media, rid));
+        true
     }
 
     pub(super) fn push_first_video_keyframe(

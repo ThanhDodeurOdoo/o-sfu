@@ -5,12 +5,11 @@ use std::{
 };
 
 use str0m::{
-    media::{Mid, Rid},
+    media::{Mid, Pt, Rid},
     rtp::Ssrc,
 };
 use tracing::debug;
 
-use super::rid_refresh::RidKeyframeRefresh;
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityRevision,
     SourceActivityUpdate, TransportAdapterError, TransportMediaId, TransportRidActivity,
@@ -23,7 +22,7 @@ use crate::engine::media_transport::{
             PacketLayerGate, SourceAudioPolicyState, aggregate_packet_gates, intersect_packet_gates,
         },
         source_route::{
-            DestinationKeyframeTarget, MediaRouteDestination, MediaRouteEntry, PacketCodecs,
+            DestinationKeyframeTarget, MediaRouteDestination, MediaRouteEntry,
             RemoteSourceRegistration,
         },
     },
@@ -59,7 +58,7 @@ impl RidReadinessRouteUpdate {
     }
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum RidReadinessSelectedGateUpdate {
     #[default]
     None,
@@ -207,9 +206,16 @@ impl RouteSource {
     }
 
     pub(super) fn set_source_active(&mut self, active: bool) {
+        if self.source_active == active {
+            return;
+        }
         self.source_active = active;
-        if !active {
-            self.producer.pending_rid_refreshes.clear();
+        if let Some(route) = &mut self.local_route {
+            if active {
+                route.advance_delivery();
+            } else {
+                route.pause_delivery();
+            }
         }
     }
 
@@ -246,23 +252,31 @@ impl RouteSource {
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-        pending_gate: Option<PacketLayerGate>,
     ) -> Result<bool, TransportAdapterError> {
         let route = self
             .local_route
             .as_mut()
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         let dst = validate_destination(route, dst_idx, session_key, media_id)?;
-        let changed = dst.packet_gate != packet_gate || dst.pending_gate != pending_gate;
-        dst.packet_gate = packet_gate;
-        dst.pending_gate = pending_gate;
-        Ok(changed)
+        let selected_gate = dst.pending_gate.unwrap_or(dst.packet_gate);
+        if selected_gate == packet_gate {
+            return Ok(false);
+        }
+        if dst.requires_decoder_refresh {
+            dst.packet_gate = PacketLayerGate::Block;
+            dst.pending_gate = Some(packet_gate);
+        } else {
+            dst.packet_gate = packet_gate;
+            dst.pending_gate = None;
+        }
+        dst.advance_delivery();
+        Ok(true)
     }
 
-    pub(super) fn update_rid_readiness(
+    pub(super) fn update_decoder_readiness(
         &mut self,
         source_id: TransportMediaId,
-        incoming_rid: Rid,
+        incoming_rid: Option<Rid>,
         is_keyframe: bool,
         ready: &[Rid],
         stale: &mut Vec<Rid>,
@@ -274,7 +288,7 @@ impl RouteSource {
         let Some(route) = self.local_route.as_mut() else {
             return RidReadinessRouteUpdate::default();
         };
-        update_selected_rid_dsts(
+        update_decoder_ready_dsts(
             route,
             source_id,
             incoming_rid,
@@ -339,7 +353,7 @@ impl RouteSource {
                     && matches!(
                         destination.keyframe_target_rid(None),
                         DestinationKeyframeTarget::Current(target_rid)
-                            if target_rid == rid
+                            if rid.is_none() || target_rid == rid
                     )
             })
         });
@@ -433,8 +447,17 @@ impl RouteSource {
         audio_level_dbov: Option<i8>,
         now: Instant,
     ) -> bool {
-        self.packet
-            .observe_audio_activity(voice_activity, audio_level_dbov, now)
+        let previous_gate = self
+            .local_route
+            .is_some()
+            .then(|| self.packet_filter_gate());
+        let changed = self
+            .packet
+            .observe_audio_activity(voice_activity, audio_level_dbov, now);
+        if previous_gate.is_some_and(|gate| gate != self.packet_filter_gate()) {
+            self.advance_local_delivery();
+        }
+        changed
     }
 
     pub(super) fn set_local_pkt_gate(&mut self, gate: Option<PacketLayerGate>) {
@@ -523,8 +546,18 @@ impl RouteSource {
     }
 
     pub(super) fn forget_packet_state(&mut self) {
+        let previous_gate = self.packet_filter_gate();
         self.packet.clear();
+        if previous_gate != self.packet_filter_gate() {
+            self.advance_local_delivery();
+        }
         self.producer = ProducerSourceState::default();
+    }
+
+    fn advance_local_delivery(&mut self) {
+        if let Some(route) = &mut self.local_route {
+            route.advance_delivery();
+        }
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -692,10 +725,9 @@ impl SourcePacketState {
 pub(super) struct ProducerSourceState {
     pub(super) registered: bool,
     pub(super) ssrcs: Vec<Ssrc>,
-    pub(super) codecs: PacketCodecs,
+    pub(super) vp8_payload_types: Vec<Pt>,
     last_keyframe: Option<Instant>,
     rids: Vec<ProducerRidLiveness>,
-    pub(super) pending_rid_refreshes: Vec<RidKeyframeRefresh>,
 }
 
 impl ProducerSourceState {
@@ -723,6 +755,7 @@ impl ProducerSourceState {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn rid_is_ready(&self, rid: Rid, now: Instant, max_age: Duration) -> bool {
         self.rids
             .iter()
@@ -746,10 +779,9 @@ impl ProducerSourceState {
     pub(super) fn is_empty(&self) -> bool {
         !self.registered
             && self.ssrcs.is_empty()
-            && self.codecs.is_empty()
+            && self.vp8_payload_types.is_empty()
             && self.last_keyframe.is_none()
             && self.rids.is_empty()
-            && self.pending_rid_refreshes.is_empty()
     }
 }
 
@@ -806,10 +838,10 @@ fn validate_destination<'a>(
     Ok(dst)
 }
 
-fn update_selected_rid_dsts(
+fn update_decoder_ready_dsts(
     route: &mut MediaRouteEntry,
     source_id: TransportMediaId,
-    incoming_rid: Rid,
+    incoming_rid: Option<Rid>,
     is_keyframe: bool,
     ready: &[Rid],
     stale: &mut Vec<Rid>,
@@ -817,33 +849,38 @@ fn update_selected_rid_dsts(
 ) -> RidReadinessRouteUpdate {
     let mut update = RidReadinessRouteUpdate::default();
     for dst in &mut route.destinations {
-        suspend_stale_dst_gate(dst, source_id, incoming_rid, ready, stale, &mut update);
-        let Some(selected_rid) = dst
-            .pending_gate
-            .as_ref()
-            .and_then(PacketLayerGate::selected_rid)
-        else {
+        if let Some(incoming_rid) = incoming_rid {
+            suspend_stale_dst_gate(dst, source_id, incoming_rid, ready, stale, &mut update);
+        }
+        let Some(pending_gate) = dst.pending_gate else {
             continue;
         };
-        push_unique_rid(pending_selected, selected_rid);
-        if selected_rid != incoming_rid {
+        if let Some(selected_rid) = pending_gate.selected_rid() {
+            push_unique_rid(pending_selected, selected_rid);
+            if Some(selected_rid) != incoming_rid {
+                continue;
+            }
+        } else if !matches!(pending_gate, PacketLayerGate::Open) {
             continue;
         }
         update.mark_pending_selected_gate();
-        if is_keyframe && let Some(packet_gate) = dst.pending_gate.take() {
+        if is_keyframe {
             debug!(
                 ?source_id,
                 consumer_session_key = ?dst.dest_session,
                 consumer_transport_media_id = ?dst.dest_transport_media_id,
                 ?incoming_rid,
-                activated_packet_gate = ?packet_gate,
+                activated_packet_gate = ?pending_gate,
                 "activated deferred strict RID packet gate after producer RID became live"
             );
-            dst.packet_gate = packet_gate;
+            dst.activate_refresh(pending_gate);
             update.mark_activated_pending_gate();
         }
     }
-    if is_keyframe && update.selected_gate != RidReadinessSelectedGateUpdate::Activated {
+    if is_keyframe
+        && update.selected_gate != RidReadinessSelectedGateUpdate::Activated
+        && let Some(incoming_rid) = incoming_rid
+    {
         activate_bootstrap_dsts(route, source_id, incoming_rid, &mut update);
     }
     update
@@ -876,8 +913,7 @@ fn suspend_stale_dst_gate(
         pending_packet_gate = ?packet_gate,
         "blocked stale selected RID route until selected producer RID resumes"
     );
-    dst.packet_gate = PacketLayerGate::Block;
-    dst.pending_gate = Some(packet_gate);
+    dst.pause_delivery();
     push_unique_rid(stale, selected_rid);
     update.suspended_stale_gate = true;
 }
@@ -907,7 +943,7 @@ fn activate_bootstrap_dsts(
             pending_selected_rid = ?selected_rid,
             "activated bootstrap fallback RID packet gate while selected producer RID is pending"
         );
-        dst.packet_gate = PacketLayerGate::Rid(incoming_rid);
+        dst.activate_bootstrap_refresh(PacketLayerGate::Rid(incoming_rid));
         update.mark_bootstrap_fallback();
     }
 }

@@ -7,13 +7,12 @@ use o_sfu_rfc::rtp::Ssrc;
 use o_sfu_router::{MediaKind, rtp::MediaFormat};
 use o_sfu_telemetry::diagnostics::{
     DiagnosticsActiveSpeaker, DiagnosticsActiveSpeakerReason, DiagnosticsActiveSpeakerState,
-    DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsOverBudgetExceptionReason,
-    DiagnosticsPolicyPauseReason, DiagnosticsPublication, DiagnosticsQualitySummary,
-    DiagnosticsRouteState, DiagnosticsSource, DiagnosticsSourceEncoding,
-    DiagnosticsSourceSelection, DiagnosticsSourceSelectionReason, DiagnosticsSourceSelector,
-    DiagnosticsSubscription, DiagnosticsTransportCounts, DiagnosticsUserSummary,
-    DiagnosticsUserTransport, DiagnosticsUserView, DiagnosticsVideoLayoutRole,
-    DiagnosticsVideoRoutePriority, DiagnosticsWorkerSummary,
+    DiagnosticsIncomingBitrate, DiagnosticsMediaKind, DiagnosticsPolicyPauseReason,
+    DiagnosticsPublication, DiagnosticsQualitySummary, DiagnosticsRouteState, DiagnosticsSource,
+    DiagnosticsSourceEncoding, DiagnosticsSourceSelection, DiagnosticsSourceSelectionReason,
+    DiagnosticsSourceSelector, DiagnosticsSubscription, DiagnosticsTransportCounts,
+    DiagnosticsUserSummary, DiagnosticsUserTransport, DiagnosticsUserView,
+    DiagnosticsVideoLayoutRole, DiagnosticsVideoRoutePriority, DiagnosticsWorkerSummary,
 };
 
 use super::{Room, RoomMediaCounts, state::RoomState};
@@ -30,9 +29,9 @@ use crate::{
         },
         observability::diagnostics_transport_health,
         source_model::{
-            ConsumerSourceSelection, OverBudgetExceptionReason, PolicyPauseReason,
-            PublishedSourceDescriptor, SourceEncodingDescriptor, SourceEncodingId,
-            SourceRoomPolicySelector, SourceRoutePriority, SourceSelector, UserStreamId,
+            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceDescriptor,
+            SourceEncodingDescriptor, SourceEncodingId, SourceRoomPolicySelector,
+            SourceRoutePriority, SourceSelector, UserStreamId,
         },
     },
 };
@@ -716,7 +715,6 @@ fn selection(
         latest_receiver_bandwidth_estimate_bps: budget
             .latest_receiver_bandwidth()
             .map(Bitrate::as_bps),
-        over_budget_exception_reason: budget.over_budget_exception_reason().map(Into::into),
         policy_allows_delivery: selection.policy_allows_delivery(),
         policy_pause_reason: selection.policy_pause_reason().map(Into::into),
         pressure_observations: selection.pressure_observations(),
@@ -774,14 +772,6 @@ fn transport_session_keys(state: &RoomState) -> Vec<TransportSessionKey> {
         .transport_user_entries()
         .map(|(user_id, connection_id)| state.transport_user_key(user_id, connection_id))
         .collect()
-}
-
-impl From<OverBudgetExceptionReason> for DiagnosticsOverBudgetExceptionReason {
-    fn from(value: OverBudgetExceptionReason) -> Self {
-        match value {
-            OverBudgetExceptionReason::ProtectedRoute => Self::ProtectedRoute,
-        }
-    }
 }
 
 impl From<PolicyPauseReason> for DiagnosticsPolicyPauseReason {

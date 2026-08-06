@@ -15,7 +15,7 @@ use crate::engine::{
         TransportMediaId, TransportSessionKey,
         rtc::{
             forwarded_packet::ForwardedPacket,
-            forwarding_destination::{ForwardingDestination, PacketForward},
+            forwarding_destination::ForwardingDestination,
             forwarding_planner::plan_forwards as plan_pkt_forwards,
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::PacketLayerGate,
@@ -61,20 +61,13 @@ fn populate_forward_routes(
     packet_sinks: &RoomPacketSinkRegistry,
     metrics: &RuntimeMetrics,
     pending_packets: &mut [ForwardedPacket],
-    forwards: &mut Vec<PacketForward>,
+    forwards: &mut Vec<ForwardingDestination>,
 ) {
     let mut packet_sink_cache = PacketSinkRouteCache::default();
     packet_sink_cache.refresh_from(packet_sinks);
     let rtc_metrics = metrics.register_rtc_worker();
-    for (pkt_idx, packet) in pending_packets.iter_mut().enumerate() {
-        plan_pkt_forwards(
-            state,
-            &packet_sink_cache,
-            &rtc_metrics,
-            pkt_idx,
-            packet,
-            forwards,
-        );
+    for packet in pending_packets {
+        plan_pkt_forwards(state, &packet_sink_cache, &rtc_metrics, packet, forwards);
     }
 }
 
@@ -102,7 +95,7 @@ fn plan_forwards(
     packet_sinks: &RoomPacketSinkRegistry,
     metrics: &RuntimeMetrics,
     mut pending_packets: Vec<ForwardedPacket>,
-) -> Vec<PacketForward> {
+) -> Vec<ForwardingDestination> {
     let mut forwards = Vec::new();
     populate_forward_routes(
         state,
@@ -116,23 +109,21 @@ fn plan_forwards(
 
 fn assert_forward_plan(
     state: &PacketLoopState,
-    forwards: &[PacketForward],
-    expected: &[(usize, ExpectedForward<'_>)],
+    forwards: &[ForwardingDestination],
+    expected: &[ExpectedForward<'_>],
 ) {
     assert_eq!(forwards.len(), expected.len());
-    for (forward, (pkt_idx, destination)) in forwards.iter().zip(expected) {
-        assert_eq!(forward.pkt_idx, *pkt_idx);
-        match destination {
+    for (forward, expected) in forwards.iter().zip(expected) {
+        match expected {
             ExpectedForward::Local(session) => assert!(matches!(
-                &forward.destination,
+                forward,
                 destination if local_destination_session(state, destination) == Some(*session)
             )),
-            ExpectedForward::PacketSink => assert!(matches!(
-                &forward.destination,
-                ForwardingDestination::PacketSink(_)
-            )),
+            ExpectedForward::PacketSink => {
+                assert!(matches!(forward, ForwardingDestination::PacketSink(_)));
+            }
             ExpectedForward::Kind(kind) => {
-                assert_eq!(forward.destination.metrics_kind(), *kind);
+                assert_eq!(forward.metrics_kind(), *kind);
             }
         }
     }
@@ -170,11 +161,8 @@ fn plan_forwards_keeps_recording_and_local_rtc_destinations_together() {
         &state,
         &forwards,
         &[
-            (0, ExpectedForward::PacketSink),
-            (
-                0,
-                ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
-            ),
+            ExpectedForward::PacketSink,
+            ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
         ],
     );
     assert!(
@@ -194,7 +182,7 @@ fn plan_forwards_keeps_recording_and_local_rtc_destinations_together() {
         )],
     );
 
-    assert_forward_plan(&state, &forwards, &[(0, ExpectedForward::PacketSink)]);
+    assert_forward_plan(&state, &forwards, &[ExpectedForward::PacketSink]);
 }
 
 #[test]
@@ -271,7 +259,7 @@ fn plan_forwards_skips_inactive_consumer_destinations() {
     assert_forward_plan(
         &state,
         &forwards,
-        &[(0, ExpectedForward::Local(&active_consumer_session))],
+        &[ExpectedForward::Local(&active_consumer_session)],
     );
 }
 
@@ -320,19 +308,10 @@ fn plan_forwards_plans_relay_destinations_without_displacing_local_rtc_flush_ord
         &state,
         &forwards,
         &[
-            (0, ExpectedForward::PacketSink),
-            (
-                0,
-                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
-            ),
-            (
-                0,
-                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
-            ),
-            (
-                0,
-                ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
-            ),
+            ExpectedForward::PacketSink,
+            ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
         ],
     );
 }
@@ -383,9 +362,8 @@ fn plan_forwards_gates_relay_only_sources_without_removing_targets() {
     assert_forward_plan(
         &state,
         &forwards,
-        &[(
-            0,
-            ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+        &[ExpectedForward::Kind(
+            RtpForwardDestinationKind::IntraNodeRelay,
         )],
     );
 }
@@ -428,10 +406,7 @@ fn plan_forwards_keeps_relay_packets_out_of_recording_and_second_hop_relay_sinks
     assert_forward_plan(
         &state,
         &forwards,
-        &[(
-            0,
-            ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
-        )],
+        &[ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc)],
     );
 }
 
@@ -477,14 +452,8 @@ fn plan_forwards_only_relays_the_registered_source_media() {
         &state,
         &forwards,
         &[
-            (
-                0,
-                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
-            ),
-            (
-                0,
-                ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
-            ),
+            ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ExpectedForward::Kind(RtpForwardDestinationKind::LocalRtc),
         ],
     );
     assert_eq!(
@@ -544,8 +513,8 @@ fn plan_forwards_enforces_per_consumer_rid_gates_after_aggregate_admits() {
         &state,
         &forwards,
         &[
-            (0, ExpectedForward::Local(&hi_consumer_session)),
-            (1, ExpectedForward::Local(&lo_consumer_session)),
+            ExpectedForward::Local(&hi_consumer_session),
+            ExpectedForward::Local(&lo_consumer_session),
         ],
     );
     let snapshot = metrics.snapshot();
@@ -610,14 +579,8 @@ fn plan_forwards_enforces_per_relay_target_gates_after_aggregate_admits() {
         &state,
         &forwards,
         &[
-            (
-                0,
-                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
-            ),
-            (
-                1,
-                ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
-            ),
+            ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
+            ExpectedForward::Kind(RtpForwardDestinationKind::IntraNodeRelay),
         ],
     );
     let snapshot = metrics.snapshot();
@@ -686,9 +649,9 @@ fn plan_forwards_gates_only_the_selected_source_media() {
         &state,
         &forwards,
         &[
-            (0, ExpectedForward::PacketSink),
-            (1, ExpectedForward::PacketSink),
-            (1, ExpectedForward::Local(&open_consumer_session)),
+            ExpectedForward::PacketSink,
+            ExpectedForward::PacketSink,
+            ExpectedForward::Local(&open_consumer_session),
         ],
     );
     let snapshot = metrics.snapshot();

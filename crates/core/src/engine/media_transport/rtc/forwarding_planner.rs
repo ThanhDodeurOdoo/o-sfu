@@ -25,7 +25,7 @@ use str0m::media::Rid;
 
 use super::{
     forwarded_packet::ForwardedPacket,
-    forwarding_destination::PacketForward,
+    forwarding_destination::ForwardingDestination,
     relay_registry::{ActiveRelayTarget, RelayTargetId},
     route_control::PacketLayerGate,
     source_route::MediaRouteEntry,
@@ -50,9 +50,8 @@ pub(super) fn plan_forwards(
     state: &PacketLoopState,
     packet_sinks: &PacketSinkRouteCache,
     metrics: &RtcMetricsRecorder,
-    pkt_idx: usize,
     pkt: &mut ForwardedPacket,
-    forwards: &mut Vec<PacketForward>,
+    forwards: &mut Vec<ForwardingDestination>,
 ) {
     let Some(facts) = pkt.resolve_facts(state) else {
         return;
@@ -66,8 +65,7 @@ pub(super) fn plan_forwards(
     };
     let (route_entry, relay_targets, source_gate) = if let Some(origin_sink) = origin_sink {
         if !state.routes.has_forwarding_sources() {
-            forwards.push(PacketForward::from_packet_sink(
-                pkt_idx,
+            forwards.push(ForwardingDestination::from_packet_sink(
                 src_media,
                 origin_sink,
             ));
@@ -75,8 +73,7 @@ pub(super) fn plan_forwards(
         }
         let view = state.routes.forward_view(src_media, visits_origin);
         reserve_forward_capacity(Some(&origin_sink), view.1, view.0, forwards);
-        forwards.push(PacketForward::from_packet_sink(
-            pkt_idx,
+        forwards.push(ForwardingDestination::from_packet_sink(
             src_media,
             origin_sink,
         ));
@@ -94,17 +91,10 @@ pub(super) fn plan_forwards(
         return;
     }
     if let Some(relay_targets) = relay_targets {
-        populate_relay_forwards(
-            state,
-            relay_targets,
-            pkt_idx,
-            src_media,
-            packet_rid,
-            forwards,
-        );
+        populate_relay_forwards(state, relay_targets, src_media, packet_rid, forwards);
     }
     if let Some(route_entry) = route_entry {
-        populate_local_forwards(route_entry, pkt_idx, src_media, packet_rid, forwards);
+        populate_local_forwards(route_entry, src_media, packet_rid, forwards);
     }
 }
 
@@ -119,7 +109,7 @@ fn reserve_forward_capacity(
     origin_sink: Option<&RegisteredPacketSink>,
     relay_targets: Option<&[ActiveRelayTarget]>,
     route_entry: Option<&MediaRouteEntry>,
-    forwards: &mut Vec<PacketForward>,
+    forwards: &mut Vec<ForwardingDestination>,
 ) {
     let planned_forwards = usize::from(origin_sink.is_some())
         + relay_targets.map_or(0, <[ActiveRelayTarget]>::len)
@@ -159,17 +149,15 @@ fn src_gate_permits(
 fn populate_relay_forwards(
     state: &PacketLoopState,
     relay_targets: &[ActiveRelayTarget],
-    pkt_idx: usize,
     src_media: TransportMediaId,
     packet_rid: Option<Rid>,
-    forwards: &mut Vec<PacketForward>,
+    forwards: &mut Vec<ForwardingDestination>,
 ) {
     for relay_target in relay_targets {
         if !relay_target_gate_permits(state, src_media, relay_target.target_id, packet_rid) {
             continue;
         }
-        forwards.push(PacketForward::from_relay_target(
-            pkt_idx,
+        forwards.push(ForwardingDestination::from_relay_target(
             src_media,
             relay_target.target.clone(),
         ));
@@ -189,16 +177,15 @@ fn populate_relay_forwards(
 /// consumer identity
 fn populate_local_forwards(
     route_entry: &MediaRouteEntry,
-    pkt_idx: usize,
     src_media: TransportMediaId,
     packet_rid: Option<Rid>,
-    forwards: &mut Vec<PacketForward>,
+    forwards: &mut Vec<ForwardingDestination>,
 ) {
     if route_entry.active_destination_count == route_entry.destinations.len() {
         for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
             if dst.packet_gate.permits(packet_rid) {
-                forwards.push(PacketForward::from_local_route_destination(
-                    pkt_idx, src_media, dst_idx,
+                forwards.push(ForwardingDestination::from_local_route_destination(
+                    src_media, dst_idx,
                 ));
             }
         }
@@ -206,8 +193,8 @@ fn populate_local_forwards(
     }
     for (dst_idx, dst) in route_entry.destinations.iter().enumerate() {
         if dst.active && dst.packet_gate.permits(packet_rid) {
-            forwards.push(PacketForward::from_local_route_destination(
-                pkt_idx, src_media, dst_idx,
+            forwards.push(ForwardingDestination::from_local_route_destination(
+                src_media, dst_idx,
             ));
         }
     }

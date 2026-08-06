@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use str0m::{
     media::{MediaKind, Mid},
@@ -6,10 +10,10 @@ use str0m::{
 };
 
 use super::super::{
-    bitrate::BitrateRegistry,
+    bitrate::{BitrateRegistry, MediaBitrateCounter},
     bootstrap,
     forwarded_packet::ForwardedPacket,
-    forwarding_destination::{ForwardSendOutcome, PacketForward},
+    forwarding_destination::{ForwardSendOutcome, ForwardingDestination},
     route_control::PacketLayerGate,
     source_route::MediaRouteDestination,
     state::PacketLoopState,
@@ -30,10 +34,11 @@ const LOCAL_SEND_PAYLOAD: &[u8] = b"payload";
 pub struct LocalSendBenchFixture {
     state: PacketLoopState,
     bitrate_registry: BitrateRegistry,
+    egress_bitrate: Arc<MediaBitrateCounter>,
     session_keys: [TransportSessionKey; 1],
     observed_at: Instant,
     packet: ForwardedPacket,
-    forward: PacketForward,
+    destination: ForwardingDestination,
     warmup_bytes: usize,
     sent_packets: usize,
     sent_bytes: u64,
@@ -82,22 +87,23 @@ impl LocalSendBenchFixture {
                 dest_stream: stream,
                 dest_mid: mid,
                 dest_payload_type: None,
-                nackable: true,
                 active: true,
+                requires_decoder_refresh: false,
+                delivery_generation: 0,
                 packet_gate: PacketLayerGate::Open,
                 pending_gate: None,
             },
         );
         let mut bitrate_registry = BitrateRegistry::default();
         let counter = Arc::clone(&session.egress_bitrate);
-        bitrate_registry.register_session_egress(&consumer, counter);
+        bitrate_registry.register_session_egress(&consumer, Arc::clone(&counter));
 
         let packet = sample_forwarded_packet(producer, "cam-up", LOCAL_SEND_PAYLOAD);
         let observed_at = packet.received_at();
-        let forward = PacketForward::from_local_route_destination(0, src_media, dst_idx);
+        let destination = ForwardingDestination::from_local_route_destination(src_media, dst_idx);
         let ForwardSendOutcome::LocalRtc {
             payload_bytes: Some(warmup_bytes),
-        } = forward.destination.send(&mut state, &packet)
+        } = destination.send(&mut state, &packet)
         else {
             panic!("benchmark local-send warm-up should succeed");
         };
@@ -105,10 +111,11 @@ impl LocalSendBenchFixture {
         Self {
             state,
             bitrate_registry,
+            egress_bitrate: counter,
             session_keys: [consumer],
             observed_at,
             packet,
-            forward,
+            destination,
             warmup_bytes,
             sent_packets: 0,
             sent_bytes: 0,
@@ -119,7 +126,7 @@ impl LocalSendBenchFixture {
         for _ in 0..LOCAL_SEND_PACKETS {
             if let ForwardSendOutcome::LocalRtc {
                 payload_bytes: Some(payload_bytes),
-            } = self.forward.destination.send(&mut self.state, &self.packet)
+            } = self.destination.send(&mut self.state, &self.packet)
             {
                 self.sent_packets = self.sent_packets.saturating_add(1);
                 self.sent_bytes = self
@@ -130,20 +137,24 @@ impl LocalSendBenchFixture {
     }
 
     #[must_use]
-    pub fn accounting_matches(&self) -> bool {
+    pub fn accounting_matches(self) -> bool {
+        self.egress_bitrate
+            .record(self.observed_at + Duration::from_millis(500), 0);
+        self.egress_bitrate
+            .record(self.observed_at + Duration::from_secs(1), 0);
         let measured_bytes = LOCAL_SEND_PACKETS.saturating_mul(LOCAL_SEND_PAYLOAD.len());
         let total_bytes = measured_bytes.saturating_add(self.warmup_bytes);
         self.warmup_bytes == LOCAL_SEND_PAYLOAD.len()
             && self.sent_packets == LOCAL_SEND_PACKETS
             && self.sent_bytes == u64::try_from(measured_bytes).unwrap_or(u64::MAX)
-            && self
-                .bitrate_registry
-                .egress_bitrate_snapshot_at(&self.session_keys, self.observed_at)
-                == Bitrate::from_bps(
-                    u64::try_from(total_bytes)
-                        .unwrap_or(u64::MAX)
-                        .saturating_mul(8),
-                )
+            && self.bitrate_registry.egress_bitrate_snapshot_at(
+                &self.session_keys,
+                self.observed_at + Duration::from_secs(1),
+            ) == Bitrate::from_bps(
+                u64::try_from(total_bytes)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(8),
+            )
     }
 }
 
