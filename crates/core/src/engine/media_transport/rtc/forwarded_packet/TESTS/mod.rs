@@ -204,7 +204,13 @@ fn forwarded_packet_decoder_refresh_follows_the_packet_payload_type() {
     state
         .routes
         .refresh_packet_codecs(transport_media_id, &parameters);
-    let mut vp8_packet = sample_forwarded_packet(session_key.clone(), "cam-up", &[0x10, 0x00]);
+    let mut vp8_packet = sample_forwarded_packet(
+        session_key.clone(),
+        "cam-up",
+        &[
+            0x10, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+        ],
+    );
     if let ForwardedPacketData::RelayRtp(rtp) = &mut vp8_packet.data {
         rtp.header.payload_type = 96.into();
     }

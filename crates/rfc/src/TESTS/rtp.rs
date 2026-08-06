@@ -122,45 +122,53 @@ fn h264_packetization_mode_parses_rfc_values() {
 }
 
 #[test]
-fn h264_payload_keyframe_detection_covers_idr_packetizations() {
-    assert!(h264::payload_starts_idr(
+fn h264_payload_keyframe_detection_covers_parameter_sets_and_idr() {
+    assert!(h264::payload_starts_keyframe(
+        &[0x67, 0x42],
+        PacketizationMode::SingleNalUnit
+    ));
+    assert!(h264::payload_starts_keyframe(
         &[0x65, 0x88],
         PacketizationMode::SingleNalUnit
     ));
-    assert!(h264::payload_starts_idr(
+    assert!(h264::payload_starts_keyframe(
         &[0x78, 0x00, 0x02, 0x67, 0x42, 0x00, 0x02, 0x65, 0x88],
         PacketizationMode::NonInterleaved
     ));
-    assert!(h264::payload_starts_idr(
+    assert!(h264::payload_starts_keyframe(
+        &[0x7c, 0x87, 0x42],
+        PacketizationMode::NonInterleaved
+    ));
+    assert!(h264::payload_starts_keyframe(
         &[0x7c, 0x85, 0x88],
         PacketizationMode::NonInterleaved
     ));
-    assert!(!h264::payload_starts_idr(
+    assert!(!h264::payload_starts_keyframe(
         &[0x7c, 0xc5, 0x88],
         PacketizationMode::NonInterleaved
     ));
-    assert!(!h264::payload_starts_idr(
+    assert!(!h264::payload_starts_keyframe(
         &[0x41, 0x9a],
         PacketizationMode::NonInterleaved
     ));
-    assert!(!h264::payload_starts_idr(
+    assert!(!h264::payload_starts_keyframe(
         &[0x7c, 0x05, 0x88],
         PacketizationMode::NonInterleaved
     ));
-    assert!(!h264::payload_starts_idr(
+    assert!(!h264::payload_starts_keyframe(
         &[0x78, 0x00, 0x02, 0x65, 0x88],
         PacketizationMode::SingleNalUnit
     ));
-    assert!(!h264::payload_starts_idr(
+    assert!(!h264::payload_starts_keyframe(
         &[0x7c, 0x85, 0x88],
         PacketizationMode::SingleNalUnit
     ));
-    assert!(!h264::payload_starts_idr(
+    assert!(!h264::payload_starts_keyframe(
         &[0x78, 0x00, 0x01, 0x65, 0x00, 0x03, 0x41, 0x88],
         PacketizationMode::NonInterleaved
     ));
     for nested_header in [0x78, 0x7c] {
-        assert!(!h264::payload_starts_idr(
+        assert!(!h264::payload_starts_keyframe(
             &[0x78, 0x00, 0x02, 0x65, 0x88, 0x00, 0x01, nested_header],
             PacketizationMode::NonInterleaved
         ));
@@ -206,15 +214,27 @@ fn frame_marking_helpers_extract_temporal_layer_id() {
 #[test]
 fn vp8_payload_keyframe_detection_follows_payload_descriptor() {
     assert!(!super::vp8::payload_starts_keyframe(&[]));
-    assert!(super::vp8::payload_starts_keyframe(&[0x10, 0x00]));
+    assert!(!super::vp8::payload_starts_keyframe(&[0x10, 0x00]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x10, 0x01]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x00, 0x00]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x11, 0x00]));
     assert!(super::vp8::payload_starts_keyframe(&[
-        0x90, 0x80, 0x42, 0x00,
+        0x10, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
     ]));
     assert!(super::vp8::payload_starts_keyframe(&[
-        0x90, 0x80, 0x80, 0x42, 0x00,
+        0x90, 0x80, 0x42, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+    ]));
+    assert!(super::vp8::payload_starts_keyframe(&[
+        0x90, 0x80, 0x80, 0x42, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+    ]));
+    assert!(super::vp8::payload_starts_keyframe(&[
+        0x90, 0x40, 0x42, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+    ]));
+    assert!(!super::vp8::payload_starts_keyframe(&[
+        0x10, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2b, 0x80, 0x02, 0x68, 0x01,
+    ]));
+    assert!(!super::vp8::payload_starts_keyframe(&[
+        0x10, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x00, 0x00, 0x68, 0x01,
     ]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x40, 0, 0]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x80]));
