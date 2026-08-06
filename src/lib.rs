@@ -1,21 +1,33 @@
-//! o-sfu is a Selective Forwading Unit for audio/video calls
+//! A Selective Forwarding Unit (SFU) for audio/video calls.
 //!
-//! This handles room admission, routing topology, media policy, packet
-//! forwarding, signaling and telemetry for applications that need a dedicated SFU server.
+//! A SFU receives each participant's media once and selectively forwards it to
+//! the others, so an N-party call costs one upload per sender rather than one
+//! per listener and no stream is transcoded or mixed. `o-sfu` runs this model as
+//! a dedicated server that handles room admission, routing topology, media
+//! policy, packet forwarding, signaling and telemetry. Applications provision
+//! rooms over HTTP, browsers connect over WebSocket and media travels over UDP
+//! with `str0m` terminating ICE, DTLS and SRTP.
 //!
-//! root crate (`o-sfu/src`) contains:
+//! # High-Level Features
 //!
-//! - configuration loading through [`config::Config`] and [`Runtime`]
-//!   construction through [`Runtime::new`]
-//! - room provisioning, disconnect, statistics, metrics and diagnostics
-//!   through [`http`]
-//! - room admission through [`core::prelude::SfuCore`] and user-session
-//!   orchestration through [`core::prelude::MediaSession`]
-//! - process lifecycle through [`run`], [`Runtime::serve_listener`],
-//!   [`core::server::metrics::RuntimeMetrics`] and structured tracing
+//! - **Separation of concerns**: Pure sans-I/O routing policy separated from worker-local packet loops.
+//! - **Robust state management**: Room transitions run under short exclusive locks. Side effects are planned then executed asynchronously.
+//! - **Deterministic signaling**: Browser signaling remains in a sans-I/O `ProtocolCore`, yielding ordered commands for predictable WebRTC orchestration.
+//! - **Predictable teardown**: Explicit async cleanup ensures all resources are released or forcefully drained.
 //!
+//! # Core Concepts
 //!
-//! # architecture
+//! `o-sfu` is built around a strict separation of three planes: the **control plane** (admission and room policy), the **routing plane** (the placement graph that maps users to connections) and the **packet plane** (RTP forwarding on worker loops).
+//!
+//! - **[`Runtime`]**: Owns the process lifecycle, the HTTP/WebSocket servers and graceful shutdown.
+//! - **[`core::server::room::Room`]**: The control plane boundary for a set of participants. It commits membership and media relationships.
+//! - **[`o_sfu_router::Router`]**: The routing plane, a pure, sans-I/O engine owning the placement graph that maps users to connections.
+//! - **[`core::prelude::MediaSession`]**: Orchestrates a user's connection, bridging room intent to transport effects.
+//! - **[`core::server::transport::MediaTransport`]**: Owns the media workers and hides their threading model. Each worker holds a packet loop and applies projected routes to incoming datagrams.
+//!
+//! # Architecture
+//!
+//! Control and routing decisions happen in the upper half. Packet loops execute them in the lower half against UDP datagrams.
 //!
 //! ```text
 //!     +---------------------+   +---------------------------+
@@ -42,58 +54,47 @@
 //!  UDP Socket IN ----->  RTP fanout ------>  relays / sinks / UDP socket OUT
 //! ```
 //!
-//! The upper half is the control plane. [`core::server::room::Room`] and its
-//! [`o_sfu_router::Router`] commit membership plus routed-media relationships.
-//! [`core::server::transport::MediaTransport`] projects those decisions into
-//! worker-local route tables.
+//! # Admission Edge
 //!
-//! The lower half is the packet plane. Workers apply the projected routes to
-//! incoming datagrams without reopening room policy for every packet.
-//!
-//! follow the steps through [`Runtime`],
-//! [`core::server::room::RoomManager`], [`core::prelude::MediaSession`],
-//! [`core::server::room::Room`], [`o_sfu_router::Router`]
-//! and [`core::server::transport::MediaTransport`]
-//!
-//! room media control reaches `MediaTransport` as one semantic plan, then runs
-//! through bounded receiver-BWE, producer, source-gate and consumer follow-up
-//! worker phases while relay control and resolved teardown keep separate paths
-//!
-//! ## sub crates
-//!
-//! | crate | role |
-//! | --- | --- |
-//! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC consts/types |
-//! | `o-sfu-model` | shared call data surfaced through [`o_sfu_protocol::wire::UserId`], [`o_sfu_protocol::wire::StreamType`], [`o_sfu_protocol::wire::RecordingState`] and [`o_sfu_protocol::wire::WebSocketCloseCode`] |
-//! | [`o_sfu_router`] | sans-I/O [`o_sfu_router::Router`] facade for room placement and routed media lifetimes |
-//! | [`o_sfu_core`] | room engine, [`core::prelude::SourcePolicy`], recording taps, resolved teardown effects and [`core::server::transport::MediaTransport`] projection |
-//! | [`o_sfu_protocol`] | sans-I/O [`o_sfu_protocol::host::ProtocolCore`] and typed [`o_sfu_protocol::host::Command`] values |
-//! | [`o_sfu_telemetry`] | tracing setup, [`o_sfu_telemetry::metrics::RuntimeMetrics`], diagnostics response types, [`o_sfu_telemetry::prometheus::render_prometheus`] and graph payloads |
-//!
-//! ## client bundle
-//!
-//! The server that implements the call (like odoo) imports the generated browser bundle from `crates/client` (part of the release artifacts)
-//! and implements the calls features with `SfuClient`.
-//!
-//! `SfuClient` exposes a small and simple API with `connect`, `publish`, `subscribe`,
-//! recording, stats and update events.
-//! signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and returns
-//! ordered [`o_sfu_protocol::host::CommandBatch`] values. The WASM bridge
-//! projects each batch into [`o_sfu_protocol::host::HostCommand`] values.
-//! `BrowserRuntime` executes those commands against browser `WebSocket`,
-//! `RTCPeerConnection` and timer APIs then feeds browser events back into the
-//! next protocol transition.
+//! Applications provision rooms via HTTP, while clients join via WebSocket. Both paths require JWT authentication before admission.
 //!
 //! ```text
-//! SfuClient public API
-//!   connect, disconnect, updateUpload, updateDownload, updateInfo
+//! App HTTP POST /room/create -> verify auth -> [RoomManager] -> alloc Room
+//! WebSocket Client Connect -> verify auth -> [Room] -> admit User
+//! ```
+//!
+//! - **HTTP**: Parses server-to-server requests using [`http::CreateRoomQuery`]. Verifies [`auth::HttpRoomClaims`]. The first verified request for an issuer fixes the room's signing key.
+//! - **WebSocket**: Client connection frames are decoded by [`websocket::decode_auth_payload_text`]. A hint selects a candidate key. Claims are verified, normalized into [`auth::WebSocketConnectClaims`] and trusted for access.
+//!
+//! # Room and Router Ownership
+//!
+//! Room transitions are planned while holding short exclusive room state locks. Async transport and diagnostics work is executed later through effect plans.
+//!
+//! ```text
+//! room state lock held                  lock released
+//! +--------------------------------+    +------------------------------+
+//! | validate user and connection   |    | MediaTransport commands      |
+//! | commit room topology           |    | diagnostics and metrics      |
+//! | capture RoomEffects            |--->| websocket output             |
+//! |                                |    | idempotent teardown          |
+//! +--------------------------------+    +------------------------------+
+//! ```
+//!
+//! [`o_sfu_router::Router`] owns exact user-to-connection placement. Receiver shadows are foreign local sessions derived from active consumer dependencies, disappearing with their final consumer.
+//!
+//! # Signaling and Client Bundle
+//!
+//! Browsers interact with `o-sfu` through a minimal `SfuClient` API (`connect`, `publish`, `subscribe`).
+//! Signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and yields ordered [`o_sfu_protocol::host::CommandBatch`] values. The WASM bridge projects these into `HostCommand` values to drive browser `WebSocket` and `RTCPeerConnection` APIs.
+//!
+//! ```text
+//! SfuClient (public API)
 //!        |
 //!        v
 //! BrowserRuntime
 //!        |
 //!        v
-//! ProtocolCore
-//!   input envelope -> CommandBatch
+//! ProtocolCore (sans-I/O) -> CommandBatch
 //!        |
 //!        v
 //! WASM projection -> HostCommand
@@ -104,130 +105,15 @@
 //!        +--------------- browser events ---------+
 //! ```
 //!
-//! read `crates/client/API.md` for the public TypeScript surface and
-//! `crates/client/README.md` for the client file map
+//! # Packet Path
 //!
-//! # runtime
-//!
-//! [`Runtime`] manages the full process lifecycle,
-//! request handlers receive a smaller internal state handle so HTTP extractors
-//! and WebSocket loops cannot depend on boot details or shutdown ownership
-//!
-//! # shutdown and teardown
-//!
-//! [`Runtime::serve_listener`] stops listener acceptance when its shutdown
-//! future resolves. It then closes the session tracker, sends close code 1001,
-//! drains every tracked WebSocket and stops background tasks plus RTC workers within
-//! [`config::HttpConfig::shutdown_timeout_ms`].
-//!
-//! ```text
-//! Runtime::serve_listener
-//!     |
-//!     +-> stop listener
-//!     +-> close tracker and cancel sessions
-//!     +-> wait for tracker emptiness
-//!     +-> stop source-policy sync and media workers
-//!     |
-//!     +-> return or ServeError::ShutdownIncomplete
-//! ```
-//!
-//! user and media teardown is explicit async work,
-//! closing a WebSocket user awaits resolved teardown through
-//! [`core::server::room::RoomManager`], [`core::server::room::UserCloseReason`]
-//! and [`core::server::transport::MediaTransport`]
-//! the current room is removed immediately once final teardown and its
-//! lifecycle lease finish
-//! drop paths are used to detect missed teardown, not to complete normal media
-//! teardown
-//!
-//! # HTTP and WebSocket admission
-//!
-//! applications create rooms through HTTP while clients join through the
-//! WebSocket. Both paths authenticate before room admission or mutation.
-//!
-//! the HTTP controller parses server-to-server requests using
-//! [`http::CreateRoomQuery`]. The process `AUTH_KEY` verifies
-//! [`auth::HttpRoomClaims`] before the controller returns
-//! [`http::RoomResponse`]. The first verified request for an issuer fixes that
-//! room's signing key and configuration. Later requests reuse the current room.
-//!
-//! the WebSocket client connection frame is parsed by
-//! [`websocket::decode_auth_payload_text`] under bounds such as
-//! [`auth::MAX_JWT_TOKEN_BYTES`]. An unsigned room hint selects only a candidate
-//! key. After verification with that room key, o-sfu normalizes the claims into
-//! [`auth::WebSocketConnectClaims`] and trusts them for identity and access.
-//!
-//! # room, router and transport ownership
-//!
-//! room transitions are planned while holding short exclusive room state locks,
-//! async transport and diagnostics work is executed later through effect plans
-//!
-//! ```text
-//! room state lock held                  lock released
-//! +--------------------------------+    +------------------------------+
-//! | validate user and connection   |    | MediaTransport commands      |
-//! | commit room topology           |    | diagnostics and metrics      |
-//! | capture RoomEffects            |--->| websocket output             |
-//! |                                |    | idempotent teardown           |
-//! +--------------------------------+    +------------------------------+
-//! ```
-//!
-//! [`o_sfu_router::Router`] is the sole pure, sans-I/O, synchronous router facade.
-//! it owns exact user-to-connection placement plus private local-router graphs
-//! keyed by connection and canonical producer or consumer ids. cross-router
-//! receiver shadows are foreign local sessions derived from active consumer
-//! dependencies and disappear with their final consumer.
-//!
-//! [`core::prelude::SfuCore`] owns admitted media-session construction and
-//! [`core::prelude::MediaSession`] owns the bridge from room intent to
-//! transport effects.
-//! [`core::prelude::MediaSession::establish`] lazily creates worker-local RTC
-//! state and the initial offer. Its negotiation phase plus the worker's pending
-//! offer state permit one unanswered offer. Publish intent can wait for one
-//! follow-up offer. Consumer setup can request renegotiation on the same browser
-//! peer connection.
-//!
-//! [`core::prelude::SourcePublishIntent`] starts or reactivates publication
-//! while [`core::prelude::SourceDeactivateIntent`] cancels an uncommitted
-//! publication or makes a committed source inactive without removing its
-//! identity or consumer routes. Session close and replacement perform resolved
-//! publication teardown.
-//!
-//! [`core::server::transport::SessionOffer`],
-//! [`core::server::transport::SessionUploadSlot`] and
-//! [`core::server::transport::SessionUploadEncoding`] are the canonical public
-//! offer family
-//! [`core::prelude::NegotiationOffer`], [`core::prelude::UploadSlot`] and
-//! [`core::prelude::UploadEncoding`] are renamed re-exports of those same types
-//! only `WaitingForAnswer(InFlightOffer)` owns queued publishes plus the
-//! follow-up latch
-//! parsed client capability presence is the direct room publish and consume
-//! readiness fact with its first accepted commit named `became_ready`
-//! `ServerMediaNegotiation`, room-staged reservations and worker-pinned
-//! `SdpPendingOffer` keep their separate failure boundaries
-//!
-//! [`core::server::transport::MediaTransport`] owns final teardown semantics
-//! missing worker-local sessions or media are successful no-ops
-//! unavailable workers or mailboxes, ownership mismatches and invariant
-//! failures are terminal. Media or relay failures trigger an awaited
-//! session-close fallback
-//! no room or runtime teardown retry state exists
-//!
-//! # packet path
-//!
-//! the [`core::server::transport::MediaTransport`] owns worker-local packet loops.
-//! those loops receive UDP datagrams, drive WebRTC state, apply route tables,
-//! forward RTP and publish bounded metrics
+//! [`core::server::transport::MediaTransport`] owns the media workers, which hold the packet loops. These loops receive UDP datagrams, drive WebRTC state (`str0m`), apply route tables and forward RTP.
 //!
 //! ```text
 //! UDP datagram
 //!     |
 //!     v
-//! worker ingress
-//!     |
-//!     +-> remote-address cache
-//!     +-> bounded fallback
-//!     +-> source pin
+//! worker ingress (fallback, source pin)
 //!     |
 //!     v
 //! str0m input and output drain
@@ -235,27 +121,16 @@
 //!     v
 //! RouteTable
 //!     |
-//!     +-> packet gate
-//!     |     +-> RID or layer policy
-//!     |     +-> source activity
+//!     +-> packet gate (RID/layer policy, source activity)
 //!     |
 //!     +-> local fanout
 //!     +-> relay fanout
 //!     +-> packet sinks
 //! ```
 //!
-//! str0m handles ICE, DTLS and SRTP then emits authenticated and decrypted RTP.
-//! o-sfu resolves source facts once then plans origin packet sinks before source
-//! and destination gates. The source gate applies aggregate demand plus source
-//! policy. Receiver and relay gates narrow each destination. Same-process relay
-//! passes shared payload data and resolved source facts to another worker for
-//! local delivery.
+//! `str0m` handles ICE, DTLS and SRTP. `o-sfu` resolves source facts, then plans origin packet sinks before applying aggregate demand and source policy. Receiver and relay gates narrow each destination. Same-process relay passes shared payload data to another worker for local delivery.
 //!
-//! Local egress projects receiver-facing sequence, timestamp and MID. It uses
-//! the negotiated payload type when present or preserves the source value. The
-//! destination str0m stream supplies its SSRC. RID extensions are removed. VP8
-//! `PictureID` and `TL0PICIDX` may be patched to preserve continuity across
-//! source switches.
+//! Worker BWE and audio observations feed into room source policy, which updates route gates for later packets.
 //!
 //! ```text
 //! worker BWE and audio observations
@@ -267,81 +142,59 @@
 //!   route gates for later packets
 //! ```
 //!
-//! RTCP remains in str0m except for selected feedback such as keyframe requests
-//! that o-sfu resolves back to the active producer route.
+//! # Shutdown and Teardown
 //!
-//! packet loops do not own room membership,
-//! they consume stable transport keys and route controls projected from room and router state,
-//! that split keeps hot packet work close to worker-local state while keeping
-//! policy changes in the room engine
+//! Teardown is explicit async work. [`Runtime::serve_listener`] stops listener acceptance, drains tracked web sockets and stops background tasks within [`config::HttpConfig::shutdown_timeout_ms`].
 //!
-//! # observability
+//! ```text
+//! Runtime::serve_listener
+//!     |
+//!     +-> stop listener
+//!     +-> close tracker and cancel sessions
+//!     +-> wait for tracker emptiness
+//!     +-> stop source-policy sync and media workers
+//! ```
 //!
-//! for documentation on the operator-facing telemetry http API, see: [`http::telemetry`]
+//! Missing worker-local sessions or media during teardown are successful no-ops. Unavailable workers or ownership mismatches are terminal.
 //!
-//! managed by the [`o_sfu_telemetry`] sub crate.
+//! # Observability
 //!
-//! the telemetry crate handles:
+//! Monitored through the [`o_sfu_telemetry`] sub-crate. See [`http::telemetry`] for the HTTP contracts.
 //!
-//! - low-cardinality [`o_sfu_telemetry::metrics::RuntimeMetrics`] and
-//!   [`o_sfu_telemetry::prometheus::render_prometheus`]
-//! - structured event names in [`o_sfu_telemetry::schema`] used by tracing
-//! - current room, user, worker and media diagnostics response types
-//! - structured lifecycle events retained by the configured log sink
-//! - [`o_sfu_telemetry::graph`] payloads used by diagnostics consumers
+//! - **Metrics**: [`http::telemetry::metrics`] exposes Prometheus text exposition.
+//! - **Diagnostics**: [`http::telemetry::diagnostics`] exposes JSON state summaries.
 //!
-//! provisioned dashboards and Prometheus rules are maintained in the sibling
-//! `o-sfu-telemetry` repository
-//! terminal teardown observability requires a separate delivery there
+//! # Scaling
 //!
-//! # scaling
+//! Rooms use one [`o_sfu_router::Router`] facade and can opt into additional same-process local routers through [`config::RoomWorkerPolicy`].
+//! Joins stay on an assigned healthy packet loop. When no assigned worker has a
+//! known delay below the configured threshold, a join can attach a healthy
+//! worker not yet assigned to the room.
 //!
-//! rooms use one [`o_sfu_router::Router`] facade and can opt into additional
-//! same-process local routers through [`config::RoomWorkerPolicy`]. joins stay
-//! on an assigned healthy packet loop and can attach a healthy worker not yet
-//! assigned to the room when no assigned worker has a known delay below the
-//! configured threshold
+//! # Feature Flags
 //!
-//! note: it is later possible to extend the SFU for cross server scaling, but it's not a priority.
+//! Core media behavior is configured at runtime through [`config`], not Cargo features.
+//! The default feature `otel-tracing` enables OpenTelemetry tracing support through [`o_sfu_telemetry::TraceExportConfig`]. Other features are used strictly for tests and benchmarking.
 //!
-//! # feature flags
+//! # Sub-crates
 //!
-//! the root package has a small feature surface,
-//! the default feature enables `otel-tracing`, which turns on OpenTelemetry
-//! tracing support through [`o_sfu_telemetry::TraceExportConfig`].
-//! other features are for tests and benchmarking.
-//! core media behavior is configured at runtime through [`config`], not cargo
-//! features
+//! | Crate | Role |
+//! | --- | --- |
+//! | [`o_sfu_rfc`] | RFC-backed JWT, RTP, RTCP, SDP and WebRTC consts/types |
+//! | `o-sfu-model` | Shared call data ([`o_sfu_protocol::wire::UserId`], etc.) |
+//! | [`o_sfu_router`] | Sans-I/O [`o_sfu_router::Router`] facade for room placement and routed media lifetimes |
+//! | [`o_sfu_core`] | Room engine, [`core::prelude::SourcePolicy`], recording taps and [`core::server::transport::MediaTransport`] projection |
+//! | [`o_sfu_protocol`] | Sans-I/O [`o_sfu_protocol::host::ProtocolCore`] and typed commands |
+//! | [`o_sfu_telemetry`] | Tracing setup, metrics, diagnostics response types and graph payloads |
 //!
-//! # reading map
+//! # Reading Map
 //!
-//! - [`run`] and [`Runtime`] own boot, serving, background tasks and shutdown
-//! - [`config`] is the environment-to-runtime boundary
-//!   lower crates receive typed options, not raw environment state
-//! - [`auth`], [`http`] and [`websocket`] are the admission edge
-//!   they bound request shape, frame size and identity before room state is
-//!   touched
-//! - [`crate::core`] turns accepted control-plane intent into room mutations
-//!   and transport effects
-//! - [`o_sfu_protocol::host::ProtocolCore`] keeps browser signaling sans-I/O
-//!   host commands are ordered effects for the browser integration
-//! - [`core::server::transport::MediaTransport`] is the packet boundary
-//!   workers consume route state that room and router state already approved
-//!
-//! start with [`Runtime`] when following process startup, HTTP serving or
-//! shutdown
-//! then read [`http`] for the HTTP control-plane contract and [`websocket`] for
-//! frame decoding
-//!
-//! for media behavior, read [`core::prelude::SfuCore`],
-//! [`core::prelude::MediaSession`], [`core::prelude::SourcePolicy`],
-//! [`core::server::room::RoomManager`] and
-//! [`core::server::transport::MediaTransport`]
-//! for pure routing invariants, read [`o_sfu_router::Router`]
-//! for browser signaling, read [`o_sfu_protocol::host::ProtocolCore`],
-//! [`o_sfu_protocol::host::CommandBatch`] and
-//! [`o_sfu_protocol::host::HostCommand`]
-
+//! - [`run`] and [`Runtime`] own boot, serving, background tasks and shutdown.
+//! - [`config`] is the environment-to-runtime boundary.
+//! - [`auth`], [`http`] and [`websocket`] form the admission edge.
+//! - [`crate::core`] turns accepted control-plane intent into room mutations and transport effects.
+//! - [`o_sfu_protocol::host::ProtocolCore`] keeps browser signaling sans-I/O.
+//! - [`core::server::transport::MediaTransport`] owns the media workers and hides their threading model.
 pub mod config;
 pub mod core {
     pub use o_sfu_core::{prelude, server};
@@ -365,22 +218,22 @@ pub mod http {
         request_origin::{RequestOrigin, resolve_request_origin},
     };
 
-    /// operator-facing metrics and diagnostics contracts.
+    /// Operator-facing metrics and diagnostics contracts.
     pub mod telemetry {
         /// Prometheus metric scrape contract.
         ///
         /// `GET` [`metrics::PATH`] returns `200 OK` Prometheus text exposition
         /// with [`metrics::CONTENT_TYPE`] and requires no application-layer
         /// authentication.
-        /// operators should restrict access in the deployment boundary.
+        /// Operators should restrict access at the deployment boundary.
         ///
-        /// this is a scrape endpoint.
-        /// configure Prometheus to scrape [`metrics::PATH`], then issue `PromQL`
+        /// This is a scrape endpoint.
+        /// Configure Prometheus to scrape [`metrics::PATH`], then issue `PromQL`
         /// queries to Prometheus.
-        /// histogram families render `<name>_bucket` with the additional `le`
+        /// Histogram families render `<name>_bucket` with the additional `le`
         /// label plus `<name>_sum` and `<name>_count`.
         ///
-        /// # scrape and query
+        /// # Scrape and Query
         ///
         /// Prometheus scrapes o-sfu directly.
         ///
@@ -392,7 +245,7 @@ pub mod http {
         ///       - targets: ["o-sfu:8070"]
         /// ```
         ///
-        /// the endpoint returns Prometheus text exposition.
+        /// The endpoint returns Prometheus text exposition.
         ///
         /// ```text
         /// # HELP osfu_rooms_active Current number of active rooms owned by this runtime.
@@ -404,7 +257,7 @@ pub mod http {
         ///
         /// Query clients send `PromQL` to the Prometheus-compatible backend
         /// rather than to o-sfu.
-        /// these examples cover a gauge, counter and histogram.
+        /// These examples cover a gauge, counter and histogram.
         ///
         /// ```promql
         /// sum(osfu_users_active)
@@ -415,9 +268,9 @@ pub mod http {
         /// )
         /// ```
         ///
-        /// read the [`metrics::MetricName`] variants below to find every
+        /// Read the [`metrics::MetricName`] variants below to find every
         /// exported name and its meaning.
-        /// query [`metrics::PATH`] to see each family's `HELP`, `TYPE`, label
+        /// Query [`metrics::PATH`] to see each family's `HELP`, `TYPE`, label
         /// keys and current label values before building selectors.
         pub mod metrics {
             pub use o_sfu_telemetry::{
@@ -429,14 +282,14 @@ pub mod http {
 
         /// JSON diagnostics contract.
         ///
-        /// every constant in [`diagnostics::route`] is a `GET` endpoint.
-        /// when a diagnostics token is configured, requests must send it as an
+        /// Every constant in [`diagnostics::route`] is a `GET` endpoint.
+        /// When a diagnostics token is configured, requests must send it as an
         /// `Authorization: Bearer <token>` header.
-        /// without a configured token, the server permits access only when its
+        /// Without a configured token, the server permits access only when its
         /// HTTP listener is bound to a loopback address.
-        /// successful requests return `200 OK` JSON.
+        /// Successful requests return `200 OK` JSON.
         ///
-        /// # routes and parameters
+        /// # Routes and Parameters
         ///
         /// | request | JSON response | parameter source |
         /// | --- | --- | --- |
@@ -453,7 +306,7 @@ pub mod http {
         /// `userKey` is always the string to put into `{id}`.
         /// URL-encode both path values before substitution.
         ///
-        /// # summary request and response
+        /// # Summary Request and Response
         ///
         /// ```text
         /// GET /internal/diagnostics/summary HTTP/1.1
@@ -479,7 +332,7 @@ pub mod http {
         /// }
         /// ```
         ///
-        /// # JavaScript fetch example
+        /// # JavaScript Fetch Example
         ///
         /// ```javascript
         /// const origin = "http://o-sfu:8070";
@@ -515,7 +368,7 @@ pub mod http {
         /// });
         /// ```
         ///
-        /// the rooms response has this shape.
+        /// The rooms response has this shape.
         ///
         /// ```json
         /// [
@@ -545,7 +398,7 @@ pub mod http {
         /// ]
         /// ```
         ///
-        /// the room users response has this shape.
+        /// The room users response has this shape.
         ///
         /// ```json
         /// [
@@ -566,8 +419,8 @@ pub mod http {
         /// ]
         /// ```
         ///
-        /// the response structs below list every field in each payload.
-        /// wire names are `camelCase`, unless a field documents an exception.
+        /// The response structs below list every field in each payload.
+        /// Wire names are `camelCase` unless a field documents an exception.
         ///
         /// User detail is room-scoped because the same user key can be active
         /// in several rooms.
