@@ -452,7 +452,7 @@ pub mod vp8 {
     /// Start of VP8 partition bit in the payload descriptor.
     pub const S_BIT: u8 = 0b0001_0000;
 
-    const PARTITION_ID_MASK: u8 = 0b0000_1111;
+    const PARTITION_ID_MASK: u8 = 0b0000_0111;
 
     /// `PictureID` present bit in the extended VP8 payload descriptor.
     pub const I_BIT: u8 = 0b1000_0000;
@@ -471,6 +471,15 @@ pub mod vp8 {
     /// VP8 payload-header P bit set for interframes.
     pub const INTERFRAME_BIT: u8 = 0b0000_0001;
 
+    /// Bytes in the VP8 uncompressed keyframe chunk.
+    pub const KEYFRAME_PREFIX_LEN: usize = 10;
+
+    const VERSION_MASK: u8 = 0b0000_1110;
+    const VERSION_SHIFT: u32 = 1;
+    const MAX_DEFINED_VERSION: u8 = 3;
+    const DIMENSION_MASK: u16 = 0x3fff;
+    const KEYFRAME_SYNC_CODE: [u8; 3] = [0x9d, 0x01, 0x2a];
+
     /// value mask for the 7-bit VP8 short `PictureID` field
     pub const SHORT_PICTURE_ID_MASK: u16 = 0x7f;
 
@@ -483,56 +492,114 @@ pub mod vp8 {
     /// Value mask for the two-bit VP8 temporal-layer identity.
     pub const TEMPORAL_LAYER_ID_MASK: u8 = 0b0000_0011;
 
-    /// Detects the first RTP packet of a VP8 keyframe.
-    ///
-    /// RFC 7741 section 4.2 defines the VP8 payload descriptor. A decodable
-    /// keyframe starts at partition 0 (`S=1`, `PartID=0`) and the VP8 payload
-    /// header starts with `P=0`. The input must be the RTP codec payload. It is
-    /// not a complete RTP packet.
-    ///
-    /// Truncated descriptors, missing payload headers and non-start partitions
-    /// return `false`. The helper performs only the cheap
-    /// keyframe probe needed by packet gates and decoder-refresh detection.
-    #[must_use]
-    pub fn payload_starts_keyframe(payload: &[u8]) -> bool {
-        let Some((&descriptor, rest)) = payload.split_first() else {
-            return false;
-        };
-        if descriptor & S_BIT == 0 || descriptor & PARTITION_ID_MASK != 0 {
-            return false;
-        }
-        let payload_header = if descriptor & X_BIT == 0 {
-            rest.first()
-        } else {
-            extended_payload_header(rest)
-        };
-        payload_header.is_some_and(|header| header & INTERFRAME_BIT == 0)
+    /// Parsed boundary between the VP8 RTP payload descriptor and frame bytes.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PayloadDescriptor {
+        payload_offset: usize,
+        starts_frame: bool,
     }
 
-    /// Locates the VP8 payload header after an extended descriptor.
-    ///
-    /// `None` means the extension bits advertise fields that are not present in
-    /// the slice. The keyframe probe treats that as "not a keyframe".
-    fn extended_payload_header(payload: &[u8]) -> Option<&u8> {
-        let (&extension, mut rest) = payload.split_first()?;
-        if extension & I_BIT != 0 {
-            let (&picture_id, remaining) = rest.split_first()?;
-            rest = if picture_id & LONG_PICTURE_ID_BIT != 0 {
-                remaining.get(1..)?
-            } else {
-                remaining
-            };
+    impl PayloadDescriptor {
+        /// Whether this packet begins partition zero of a VP8 frame.
+        #[must_use]
+        pub const fn starts_frame(self) -> bool {
+            self.starts_frame
         }
-        if extension & L_BIT != 0 {
-            if extension & T_BIT == 0 {
-                return None;
+
+        /// Returns the frame bytes carried after this packet's descriptor.
+        #[must_use]
+        pub fn frame_payload(self, payload: &[u8]) -> Option<&[u8]> {
+            payload.get(self.payload_offset..)
+        }
+    }
+
+    /// Parses one VP8 RTP payload descriptor.
+    #[must_use]
+    pub fn payload_descriptor(payload: &[u8]) -> Option<PayloadDescriptor> {
+        let (&required, _) = payload.split_first()?;
+        let mut payload_offset = 1;
+        if required & X_BIT != 0 {
+            let extension = *payload.get(payload_offset)?;
+            payload_offset += 1;
+            if extension & I_BIT != 0 {
+                let picture_id = *payload.get(payload_offset)?;
+                payload_offset += 1;
+                if picture_id & LONG_PICTURE_ID_BIT != 0 {
+                    payload.get(payload_offset)?;
+                    payload_offset += 1;
+                }
             }
-            rest = rest.get(1..)?;
+            if extension & L_BIT != 0 {
+                if extension & T_BIT == 0 {
+                    return None;
+                }
+                payload.get(payload_offset)?;
+                payload_offset += 1;
+            }
+            if extension & T_BIT != 0 || extension & K_BIT != 0 {
+                payload.get(payload_offset)?;
+                payload_offset += 1;
+            }
         }
-        if extension & T_BIT != 0 || extension & K_BIT != 0 {
-            rest = rest.get(1..)?;
-        }
-        rest.first()
+        payload.get(payload_offset)?;
+        Some(PayloadDescriptor {
+            payload_offset,
+            starts_frame: required & S_BIT != 0 && required & PARTITION_ID_MASK == 0,
+        })
+    }
+
+    /// Detects a complete VP8 keyframe prefix in the first RTP packet.
+    ///
+    /// RFC 7741 section 4.2 defines the VP8 payload descriptor. A keyframe
+    /// packet starts at partition 0 (`S=1`, `PartID=0`). RFC 6386 section
+    /// 9.1 defines the ten-byte uncompressed keyframe chunk and its sync code.
+    /// The input must be the RTP codec payload. It is not a complete RTP packet.
+    ///
+    /// Truncated descriptors, missing payload headers and non-start partitions
+    /// return `false`. Callers reconstructing a split prefix should use
+    /// [`payload_descriptor`] and validate the reconstructed bytes with
+    /// [`valid_keyframe_prefix`].
+    #[must_use]
+    pub fn payload_starts_keyframe(payload: &[u8]) -> bool {
+        payload_descriptor(payload).is_some_and(|descriptor| {
+            descriptor.starts_frame()
+                && descriptor
+                    .frame_payload(payload)
+                    .is_some_and(valid_keyframe_prefix)
+        })
+    }
+
+    /// Validates the VP8 uncompressed keyframe chunk from RFC 6386 section 9.1.
+    #[must_use]
+    pub fn valid_keyframe_prefix(frame: &[u8]) -> bool {
+        let Some(prefix) = frame.get(..KEYFRAME_PREFIX_LEN) else {
+            return false;
+        };
+        let Ok(
+            [
+                frame_tag,
+                _,
+                _,
+                sync_0,
+                sync_1,
+                sync_2,
+                width_0,
+                width_1,
+                height_0,
+                height_1,
+            ],
+        ) = <[u8; KEYFRAME_PREFIX_LEN]>::try_from(prefix)
+        else {
+            return false;
+        };
+        let version = (frame_tag & VERSION_MASK) >> VERSION_SHIFT;
+        let width = u16::from_le_bytes([width_0, width_1]) & DIMENSION_MASK;
+        let height = u16::from_le_bytes([height_0, height_1]) & DIMENSION_MASK;
+        frame_tag & INTERFRAME_BIT == 0
+            && version <= MAX_DEFINED_VERSION
+            && [sync_0, sync_1, sync_2] == KEYFRAME_SYNC_CODE
+            && width != 0
+            && height != 0
     }
 }
 
