@@ -11,13 +11,18 @@
 
 </div>
 
+### Supported Versions
 
-TODO
+Only latest. Version support is at the Odoo layer.
 
-## Contact
+### SBOM & Attestations
 
-If you find a vulnerability, you can send an explanation of the issue here:
+See the releases pages:
 
-email: s_d_c_397868376@tso-sfu-001.eu
+https://github.com/ThanhDodeurOdoo/o-sfu/releases
 
-PGP: https://keys.openpgp.org/vks/v1/by-fingerprint/D4D4EB8C3566D0DAFDED48C76D775817878B6E94
+### Contact
+
+Please do **not** open public issues or discussions for security vulnerabilities. Instead, use the contact information provided below:
+
+https://www.odoo.com/security-report
