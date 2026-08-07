@@ -66,6 +66,92 @@
 //! - **HTTP**: Parses server-to-server requests using [`http::CreateRoomQuery`]. Verifies [`auth::HttpRoomClaims`]. The first verified request for an issuer fixes the room's signing key.
 //! - **WebSocket**: Client connection frames are decoded by [`websocket::decode_auth_payload_text`]. A hint selects a candidate key. Claims are verified, normalized into [`auth::WebSocketConnectClaims`] and trusted for access.
 //!
+//! # Security Model
+//!
+//! `o-sfu` secures two planes independently. Application-layer JWTs gate room
+//! admission on the control plane. `str0m` encrypts media on the packet plane
+//! with DTLS-SRTP. Signaling transport confidentiality is terminated at the
+//! deployment edge rather than in process.
+//!
+//! ```text
+//! control plane    JWT HS256           admission trust
+//! packet plane     DTLS-SRTP (str0m)   media confidentiality
+//! signaling wire   TLS at edge         transport confidentiality
+//! ```
+//!
+//! ## JWT Admission
+//!
+//! Tokens are `HS256` only. [`auth::verify`] rejects any other `alg`, checks the
+//! HMAC in constant time and enforces `exp`, `nbf` plus an `iat` future-skew
+//! bound. It caps token size at [`auth::MAX_JWT_TOKEN_BYTES`]. Two keys scope
+//! trust:
+//!
+//! - **Server-to-server key**: `AUTH_KEY` (base64, at least 32 bytes) verifies
+//!   the HTTP [`http::CreateRoomQuery`] path through [`auth::HttpRoomClaims`] and
+//!   [`auth::HttpDisconnectClaims`]. See [`config`].
+//! - **Per-room key**: the first verified create-room request pins the room
+//!   signing key from the `key` claim in [`auth::HttpRoomClaims`]. WebSocket
+//!   [`auth::WebSocketConnectClaims`] verify against that room key, never against
+//!   `AUTH_KEY`.
+//!
+//! Token carriage differs per surface: HTTP room creation uses the
+//! `Authorization` header, HTTP disconnect uses the request body and the
+//! WebSocket client sends a first-frame auth envelope decoded by
+//! [`websocket::decode_auth_payload_text`]. An unverified decode selects the
+//! candidate room key, then the same token is re-verified against it. A verified
+//! [`auth::WebSocketConnectClaims`] must carry the `room_id` of its target room,
+//! which blocks replay of a token minted for another room.
+//!
+//! Admission establishes identity and room scope. It does not enforce the
+//! per-user `permissions` claim, which room state collapses to a marker.
+//!
+//! ## Signaling Ingress
+//!
+//! Every authenticated client frame passes through the same decoder as the auth
+//! frame, [`websocket::decode_client_batch`], which bounds parser work with
+//! static caps: [`websocket::MAX_CLIENT_FRAME_BYTES`] per frame and
+//! [`websocket::MAX_CLIENT_BATCH_ENVELOPES`] per batch. The Axum upgrade applies
+//! the frame cap at the socket and the decoder re-checks it. Oversized frames,
+//! oversized batches, malformed JSON, ambiguous routing metadata and unknown
+//! protocol tags reject as [`websocket::ClientBatchDecodeError`] and close the
+//! socket with a protocol-error code.
+//!
+//! Two further bounds guard against resource exhaustion:
+//!
+//! - **Pre-auth admission**: global and per-origin permits cap concurrent
+//!   unauthenticated sockets and return `503` once exhausted. See [`config`].
+//! - **Outbound backpressure**: per-user fanout is a bounded queue by message
+//!   count and by bytes. A consumer that falls behind is closed rather than
+//!   buffered without limit.
+//!
+//! A first-frame auth timeout rejects clients that never authenticate. A
+//! ping/pong health loop closes clients that stop responding. There is no
+//! per-session request-rate budget: the size, count and backpressure caps bound
+//! the work rather than metering a rate.
+//!
+//! ## Media Transport
+//!
+//! `str0m` terminates ICE, DTLS and SRTP over UDP with the `aws-lc-rs` crypto
+//! backend. `o-sfu` builds and drives the `str0m` session but implements no DTLS
+//! or SRTP itself: it forwards already-decrypted RTP between sessions and hands
+//! outbound RTP back to `str0m` for SRTP protection.
+//!
+//! - **Keying**: the DTLS handshake derives SRTP keys per RFC 5764 DTLS-SRTP.
+//! - **Certificate**: `str0m` generates a self-signed certificate at session
+//!   build and advertises `a=fingerprint:sha-256` in the SDP offer. It binds and
+//!   verifies the remote fingerprint when the answer is accepted.
+//! - **ICE**: `o-sfu` runs ICE-lite with `a=setup:actpass` and advertises
+//!   `ANNOUNCED_IP`, so media UDP must reach the host directly.
+//!
+//! ## Signaling Transport
+//!
+//! HTTP and WebSocket are served in plaintext in process. HTTPS and WSS are
+//! terminated by an external reverse proxy, so a forwarded scheme and client
+//! address are trusted only when the proxy is trusted through [`config`]
+//! (`PROXY`). Diagnostics require a bearer token or a loopback listener. The
+//! metrics endpoint carries no application authentication and must be restricted
+//! at the deployment boundary.
+//!
 //! # Room and Router Ownership
 //!
 //! Room transitions are planned while holding short exclusive room state locks. Async transport and diagnostics work is executed later through effect plans.
