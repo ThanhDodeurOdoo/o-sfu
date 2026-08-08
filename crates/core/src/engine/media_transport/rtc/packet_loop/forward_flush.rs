@@ -1,14 +1,14 @@
 //! Packet observation and forwarding flush for the packet loop.
 //!
-//! This module handles packet-derived updates, bounded relay intake and
-//! destination sends during the pump phase. Local session output and relay
-//! packets are batched before planning, packet observations update worker state
-//! before planning, and planned destinations are flushed before the worker
-//! returns to async waiting:
+//! Local session output and relay intake share one batch. Each packet then moves
+//! through observation, planning and destination flush before the next packet
+//! can change route state. This prevents a later decoder refresh from admitting
+//! an earlier delta packet in the same batch.
 //!
 //! - learn producer MID, SSRC and RID bindings from RTP headers
+//! - cache codec-neutral decoder and rewrite facts once per packet
 //! - update active-speaker and incoming bitrate observations
-//! - request first video keyframes when ingress starts
+//! - request recovery keyframes when video ingress starts or resumes
 //! - drain a bounded number of relay packets into the local batch
 //! - send each planned packet to local RTC, packet sink or relay destinations
 //!
@@ -47,12 +47,6 @@ use crate::engine::{
     },
 };
 
-/// observe packet-path metadata before packets are forwarded
-///
-/// This is where producer SSRC bindings, audio activity, RID readiness and
-/// incoming bitrate become worker state or metrics. The function also coalesces
-/// source-policy wakeups so the room layer is notified once per changed room
-/// after the batch has been inspected.
 #[cfg(any(test, feature = "internal-benchmarks"))]
 pub(super) fn record_incoming_stats(
     state: &mut PacketLoopState,
@@ -203,6 +197,8 @@ fn flush_first_video_kfs(
     buffers: &mut PacketLoopBuffers,
 ) {
     for pending in buffers.pending_first_video_keyframes.drain(..) {
+        // `apply_src_decoder_ready` either consumed this packet's refresh or
+        // requested the missing one, so the ingress-start PLI adds no recovery value.
         if buffers
             .rid_readiness_changed_sources
             .contains(&pending.src_media)
@@ -220,12 +216,9 @@ fn flush_first_video_kfs(
     buffers.rid_readiness_changed_sources.clear();
 }
 
-/// Request a keyframe when the first packet for a video producer appears.
-///
-/// First ingress proves the producer is alive, but the first observed packet may
-/// not be decodable by new consumers. Asking for a PLI here helps strict
-/// selected-RID gates and late subscribers converge without making room policy
-/// inspect packet payloads.
+/// The packet opening an ingress window may be a delta frame. A recovery PLI
+/// lets blocked routes and new consumers converge without room policy parsing
+/// codec payloads.
 fn request_first_video_kf(
     state: &mut PacketLoopState,
     metrics: &RtcMetricsRecorder,

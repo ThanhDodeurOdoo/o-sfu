@@ -1,18 +1,41 @@
-//! room state, routing and media transport orchestration
+//! Room state, routing and media transport orchestration.
 //!
-//! `o-sfu-core` is the boundary between the production server crate and the
-//! lower pure or protocol-specific crates
-//! it hqndle room admission, user sessions, media publication state and the
-//! transport facade that hides RTC worker topology from higher layers
+//! `o-sfu-core` bridges the server runtime, the pure `o-sfu-router` state machine
+//! and the `str0m`-backed media transport. It keeps room admission, user media
+//! intent and RTC worker details behind [`SfuCore`](prelude::SfuCore) and
+//! [`MediaSession`](prelude::MediaSession).
 //!
-//! the public surface is split in two:
+//! # Public Surface
 //!
-//! - `prelude` contains application-facing value types and the `SfuCore` facade
-//! - `server` contains construction, diagnostics, metrics and room integration
-//!   types used by the runtime crate
+//! - [`prelude`] contains caller-facing configuration, media intent,
+//!   [`SfuCore`](prelude::SfuCore) and [`MediaSession`](prelude::MediaSession).
+//! - [`server`] contains runtime construction, room integration, transport,
+//!   diagnostics and metrics.
+//! - Fundamental identifiers and [`Bitrate`] remain at the crate root.
 //!
-//! typical server construction gives transport-owned configuration plus shared
-//! process services directly to `server::transport::MediaTransport`
+//! # Architecture
+//!
+//! ```text
+//! server runtime
+//!   -> SfuCore::admit_user
+//!   -> MediaSession
+//!   -> room state and source policy
+//!   -> MediaTransport
+//!   -> RTC workers
+//! ```
+//!
+//! [`MediaTransport`](server::transport::MediaTransport) starts the worker threads
+//! and binds their UDP sockets. Room operations release state locks before awaiting
+//! transport work. Source policy maps layout intent, active-speaker observations
+//! and receiver bandwidth to route activity and packet gates. Worker-local packet
+//! loops then demultiplex UDP and forward RTP through those gates. The private
+//! `rtc::codec` boundary contains capability projection plus codec-specific packet
+//! inspection and rewrite, so source policy does not branch on payload details.
+//!
+//! # Server Construction
+//!
+//! The server builds one [`MediaTransport`](server::transport::MediaTransport)
+//! from owner configuration and shared process services.
 //!
 //! ```no_run
 //! use std::{
@@ -59,11 +82,44 @@
 //! # }
 //! ```
 //!
-//! `MediaTransport::build` returns after every worker runtime has bound its UDP
-//! socket. Session-local RTC state remains lazy.
+//! [`MediaTransport::build`](server::transport::MediaTransport::build) returns
+//! after every worker runtime has bound its UDP socket. Session-local RTC state
+//! remains lazy.
 //!
-//! the example follows the production construction shape without opening a
-//! listener or starting an async server
+//! # Session Negotiation
+//!
+//! Negotiation is serialized through `&mut MediaSession`. A publish received
+//! while an offer is pending is queued. Applying the answer returns a follow-up
+//! offer when that intent needs another SDP round.
+//!
+//! ```no_run
+//! use o_sfu_core::prelude::{
+//!     MediaSession, NegotiationOffer, SessionError, SourcePublishIntent,
+//! };
+//!
+//! # async fn exchange(_: NegotiationOffer) -> String { String::new() }
+//! async fn publish_source(
+//!     mut session: MediaSession,
+//!     intent: SourcePublishIntent,
+//! ) -> Result<(), SessionError> {
+//!     let Some(initial_offer) = session.establish().await? else {
+//!         return Ok(());
+//!     };
+//!     let initial_answer = exchange(initial_offer).await;
+//!
+//!     // Publish before answering so this intent queues behind the in-flight SDP round.
+//!     let _queued_without_offer = session.publish(intent).await?;
+//!
+//!     let Some(follow_up_offer) = session.answer(&initial_answer).await? else {
+//!         return Ok(());
+//!     };
+//!
+//!     let follow_up_answer = exchange(follow_up_offer).await;
+//!
+//!     let _next_offer = session.answer(&follow_up_answer).await?;
+//!     Ok(())
+//! }
+//! ```
 
 use std::fmt::{self, Display, Formatter};
 

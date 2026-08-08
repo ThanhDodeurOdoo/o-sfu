@@ -27,6 +27,8 @@ pub(super) fn apply_receiver_bwe_target(
     }
     let previous = session_state.receiver_bwe_target;
     session_state.receiver_bwe_target = Some(target);
+    // a first-ever zero target carries no send demand, so record it without
+    // seeding the str0m BWE with a zero desired bitrate
     if target == Bitrate::zero() && previous.is_none() {
         return Ok(());
     }

@@ -197,11 +197,9 @@ impl PacketLoopControlInput {
     }
 }
 
-/// Wait on production mailbox inputs.
-///
-/// Shutdown is biased ahead of commands so teardown can interrupt an idle
-/// worker. A closed command receiver is also terminal. A closed relay receiver
-/// is ignored because relay traffic is optional for single-worker rooms.
+/// Shutdown wins ready command or relay input so teardown can interrupt an idle
+/// worker. Command closure is terminal. Relay closure is ignored because relay
+/// traffic does not define worker lifetime.
 async fn recv_production_mailbox(
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
@@ -227,11 +225,8 @@ async fn recv_production_mailbox(
     }
 }
 
-/// Wait on production and probe mailbox inputs in testing builds.
-///
-/// Production commands stay before probes in the biased wait. This
-/// keeps lifecycle and cleanup behavior representative while still allowing
-/// tests to inspect or prepare worker-local state deterministically.
+/// Commands precede probes in the biased wait so testing preserves production
+/// lifecycle and cleanup ordering.
 #[cfg(any(test, feature = "testing-transport"))]
 async fn recv_mailbox_with_probe(
     command_rx: &mut mpsc::Receiver<RtcWorkerCommand>,

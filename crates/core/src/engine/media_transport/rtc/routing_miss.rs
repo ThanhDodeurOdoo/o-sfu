@@ -1,8 +1,8 @@
 //! negative routing memory for packet-loop UDP demux fallback
 //!
 //! `ingress_routing` owns the authoritative demux decision for one datagram. It
-//! first checks pinned source-address state, then probes recovery indexes and
-//! finally asks `str0m::Rtc::accepts()` before feeding a packet into a session
+//! checks source-address pins before recovery indexes. Both paths require
+//! `str0m::Rtc::accepts()` before the packet reaches a session
 //! this module does not decide ownership. It only remembers recent negative
 //! results so the packet loop can avoid repeating expensive fallback work for
 //! traffic that was already proven unrelated to any live session

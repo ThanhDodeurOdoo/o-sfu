@@ -191,6 +191,8 @@ fn push<K: Ord, T>(batches: &mut BTreeMap<K, Vec<T>>, key: K, item: T) {
 
 fn into_batches<T>(mut items: Vec<T>) -> impl Iterator<Item = Vec<T>> {
     let mut batches = Vec::with_capacity(items.len().div_ceil(MAX_MEDIA_CONTROL_BATCH_ITEMS));
+    // Split off the tail so each split_off moves at most one batch. rev() below
+    // restores source order.
     while items.len() > MAX_MEDIA_CONTROL_BATCH_ITEMS {
         let tail_len = (items.len() - 1) % MAX_MEDIA_CONTROL_BATCH_ITEMS + 1;
         batches.push(items.split_off(items.len() - tail_len));
@@ -333,6 +335,7 @@ impl<P, C> MediaControlExecution<P, C> {
 
     async fn apply_consumers(&mut self, transport: &MediaTransport) {
         let results = &self.consumer_results;
+        // A failed gate update aborts later `ConsumerRouteControl` phases for that route.
         for controls in self.consumers.values_mut() {
             controls.retain(
                 |(index, _)| matches!(results.get(*index), Some((_, result)) if result.error().is_none()),

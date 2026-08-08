@@ -197,13 +197,11 @@ pub enum RouteControlRequest {
 /// commands mutate cross-worker fanout and observability commands read
 /// worker-local snapshots
 pub enum RtcWorkerCommand {
-    /// bootstrap a session before any media registration exists
+    /// create the initial capability-probe offer before media registration
     ///
-    /// this may bind the shared UDP socket, allocate the worker-local `Rtc`,
-    /// register session bitrate tracking and stage the initial offer that probes
-    /// browser capabilities
-    /// it fails if an offer is already pending or the session already moved
-    /// past bootstrap
+    /// worker startup binds the shared UDP socket, then this command lazily creates
+    /// session RTC state from its candidate address
+    /// it rejects a pending offer, a committed initial answer or registered media
     CreateInitialSessionOffer {
         room_id: Arc<str>,
         session_key: TransportSessionKey,
@@ -271,11 +269,10 @@ pub enum RtcWorkerCommand {
         transport_media_id: TransportMediaId,
         response: RtcWorkerResponse<RouterRtpParameters>,
     },
-    /// resolve the negotiated MID for one transport media id when it is known
+    /// resolve the MID stored by a registered media handle
     ///
-    /// this is a best-effort lookup for worker API code that relates public
-    /// transport ids back to browser-visible SDP identity
-    /// it returns `None` before negotiation commits or after media removal
+    /// returns `None` when this worker has no current handle for the id, including
+    /// after media removal
     ResolveMediaMid {
         transport_media_id: TransportMediaId,
         response: RtcWorkerResponse<Option<String>>,

@@ -43,6 +43,8 @@ pub(crate) struct RoomUserOperation<'a> {
 pub struct Room {
     pub(super) definition: RoomDefinition,
     pub(super) metrics: Arc<RuntimeMetrics>,
+    /// Serializes publication commits and activity changes with source-policy
+    /// turns so their transport effects cannot overtake each other.
     pub(super) source_policy_turn: AsyncMutex<()>,
     pub(super) state: RwLock<RoomState>,
 }

@@ -502,6 +502,8 @@ async fn wait_for_overflow(
             return overflow;
         }
         if overflow.changed().await.is_err() {
+            // A dropped overflow sender parks this arm forever, avoiding a busy
+            // loop and letting the message arm of the select resolve.
             pending::<()>().await;
         }
     }

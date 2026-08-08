@@ -144,6 +144,8 @@ impl RoomLifecycleLease {
         if should_remove {
             state.closing = true;
         } else if idle_pending_removal {
+            // The final lease either found the room non-empty or supplied no
+            // emptiness proof, so an earlier removal request cannot close it.
             state.remove_when_idle = false;
         }
         drop(state);

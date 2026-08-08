@@ -184,20 +184,21 @@ impl VideoAdaptationTuning {
     pub const DEFAULT_THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
     pub const DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
     pub const DEFAULT_UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
-    /// No headroom is reserved by default, so video is budgeted against the full
-    /// receiver estimate. Deployments that carry audio, retransmission or FEC
-    /// alongside video should raise this.
+    /// Zero applies no percentage headroom. Positive values reduce the portion of
+    /// each receiver estimate available to video before the separate per-route
+    /// audio reserve is subtracted.
     pub const DEFAULT_RECEIVER_BUDGET_HEADROOM_PERCENT: u8 = 0;
     /// No per-speaker audio reserve by default, so the video budget is unchanged.
-    /// Set to the nominal audio bitrate to hold that much bandwidth back from the
-    /// video budget for each admitted audio speaker; the reserve is fixed at this
-    /// rate times the admitted audio speaker count. Zero disables audio
-    /// reservation entirely.
+    /// Set to the nominal audio bitrate to reserve it for each admitted audio
+    /// route a receiver consumes. The reserve reduces its video budget and
+    /// contributes to its receiver BWE target. Deafened receivers reserve
+    /// nothing. Zero disables both adjustments.
     pub const DEFAULT_AUDIO_RESERVE_PER_SPEAKER: Bitrate = Bitrate::zero();
 
     /// # Errors
     ///
-    /// Returns [`VideoAdaptationTuningError`] when an observation knob is zero or
+    /// Returns [`VideoAdaptationTuningError`] when the scalable-video threshold,
+    /// the thumbnail budget divisor or either observation knob is zero, or when
     /// the headroom percent exceeds 100.
     pub const fn try_new(
         multiparty_scalable_video_threshold: usize,

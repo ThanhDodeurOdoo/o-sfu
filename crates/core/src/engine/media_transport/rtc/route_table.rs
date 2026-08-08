@@ -1,9 +1,15 @@
-//! worker-local RTC source route table.
+//! Worker-local RTC source routing and decoder recovery.
 //!
-//! `RouteTable` owns packet-loop route, relay, gate and producer facts keyed by
-//! source transport media id
-//! source route data types live in `source_route`
-//! negotiated browser media lookup remains in `media_registry`
+//! [`RouteTable`] keeps per-source activity, local consumer routes, relay targets,
+//! packet gates, producer packet facts and keyframe retry state. Room policy
+//! projects activity and layer selection into this state through worker commands.
+//!
+//! Packet observations update audio state, producer liveness and decoder-refresh
+//! completion before [`plan_forwards`](super::forwarding_planner::plan_forwards)
+//! reads the resulting gates.
+//!
+//! Route primitives are defined in [`source_route`](super::source_route). Session
+//! media lookup is handled by [`media_registry`](super::media_registry).
 //!
 //! Observable decoder recovery joins destination gates with keyframe retry state:
 //!
@@ -403,6 +409,8 @@ impl RouteTable {
     }
 
     pub(super) fn flush_remote_pkt_gates(&mut self) {
+        // bound this pass to the queue length at entry so a failed retry waits for the
+        // next packet-loop turn instead of being retried immediately
         let count = self.remote_gate_queue.len();
         for _ in 0..count {
             let Some(source_id) = self.remote_gate_queue.pop_front() else {

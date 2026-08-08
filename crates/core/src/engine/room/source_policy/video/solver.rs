@@ -436,10 +436,8 @@ fn cheapest_useful_selector(
         })
 }
 
-/// receiver bandwidth left for video after reserving the configured headroom
-///
-/// the reserve stands in for audio, retransmission, FEC and protocol overhead
-/// that share the same downlink but are not counted in the video budget
+/// Separates configured downlink headroom from audio consumption so receivers
+/// reserve audio only for admitted routes they can hear.
 fn effective_video_budget(
     receiver_bandwidth: Bitrate,
     tuning: VideoAdaptationTuning,
@@ -556,6 +554,7 @@ fn desired_encoding_index(
     } else {
         let divisor = u64::try_from(route.visible_scalable_route_count)
             .unwrap_or(u64::MAX)
+            // Bias secondary routes toward thumbnail quality before aggregate overload handling.
             .saturating_mul(tuning.thumbnail_budget_divisor);
         receiver_bandwidth.divided_by(divisor)
     };
@@ -769,6 +768,8 @@ fn resolve_hysteresis(
     let current_pause_reason = current.policy_pause_reason();
     let selection = route.selection;
     match (selection.policy_pause_reason, current_pause_reason) {
+        // Resume a route newly admitted under the download limit immediately
+        // because recovery hysteresis would leave an available slot unused.
         (None, Some(PolicyPauseReason::VideoDownloadLimit)) => {
             ReceiverRouteSelection::send(selection.selector, AdaptationCounts::reset(), true)
         }
@@ -782,6 +783,8 @@ fn resolve_hysteresis(
             }
         }
         (Some(reason), pause_reason) if pause_reason != Some(reason) => {
+            // Hard download and source-bitrate limits bypass pressure hysteresis
+            // so configuration changes take effect in the same policy turn.
             if matches!(
                 reason,
                 PolicyPauseReason::VideoDownloadLimit | PolicyPauseReason::SourceBitrateLimit

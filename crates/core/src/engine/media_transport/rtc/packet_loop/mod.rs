@@ -1,9 +1,11 @@
 //! Worker-local media packet loop.
 //!
 //! The packet loop is the RTC engine's transport hot path. Each
-//! [`RtcWorker`](super::worker::RtcWorker) starts one Tokio task that holds one mutable
-//! [`PacketLoopState`](super::state::PacketLoopState), drives all [`str0m::Rtc`] instances for that worker and
-//! performs the UDP reads and writes for the shared worker socket.
+//! [`RtcWorker`](super::worker::RtcWorker) runs one packet loop on its worker
+//! thread. The loop holds one mutable
+//! [`PacketLoopState`](super::state::PacketLoopState), drives every [`str0m::Rtc`]
+//! for that worker and sends through the shared socket. A spawned [`UdpIngress`]
+//! task forwards completed receives over mpsc.
 //!
 //! The loop is below room policy and above raw `str0m` I/O. Room
 //! and router code project intent into transport state before packets arrive
@@ -12,10 +14,10 @@
 //! observability.
 //!
 //! Authoritative media state lives in [`PacketLoopState`](super::state::PacketLoopState).
-//! [`RtcSnapshotState`](super::state::RtcSnapshotState), bitrate counters, diagnostics, metrics, packet sinks and
-//! source-policy signals are side channels used to expose observations or
-//! enqueue work without letting external callers mutate the hot-path state
-//! directly. Relay routing state stays in
+//! [`RtcSnapshotState`](super::state::RtcSnapshotState), bitrate counters,
+//! diagnostics, metrics, packet sinks and source-policy signals are side
+//! channels used to expose observations or enqueue work without letting
+//! external callers mutate the hot-path state directly. Relay routing state stays in
 //! [`PacketLoopState`](super::state::PacketLoopState).
 //!
 //! # Packet-loop turn
@@ -42,13 +44,19 @@
 //!   |
 //!   +--> drain bounded relay mailbox
 //!   |
-//!   +--> resolve keyframe requests and pending retries
+//!   +--> resolve keyframe requests
 //!   |
-//!   +--> record ingress stats and source policy dirtiness
+//!   +--> for each staged RTP packet
+//!   |      |
+//!   |      +--> resolve PacketFacts and update observations
+//!   |      |
+//!   |      +--> plan current destinations
+//!   |      |
+//!   |      +--> flush before the next packet can change route state
 //!   |
-//!   +--> populate forwarding destinations
+//!   +--> request ingress recovery keyframes and flush policy wakeups
 //!   |
-//!   +--> flush local RTC, relay and packet-sink destinations
+//!   +--> drain pending keyframe retries
 //!   |
 //!   v
 //! PacketLoopTurn::flush_outputs
@@ -69,8 +77,10 @@
 //! this keeps lifecycle work responsive even when media traffic is heavy
 //! relay packets remain pump-phase media work, with one relay wake allowed to
 //! resume an idle loop
-//! a packet that enters `str0m` marks its session dirty, then the next turn
-//! drains any output produced by that input
+//! a packet that enters `str0m` marks its session dirty and `pump` drains the
+//! resulting output in the same turn
+//! local and relay fanout mark a destination session after draining, so its
+//! output leaves on the next turn
 //!
 //! # Submodules
 //!

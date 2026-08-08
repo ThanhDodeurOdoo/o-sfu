@@ -44,6 +44,8 @@ impl PacketLoopDelaySnapshot {
     }
 
     fn publish(&self, delay_ms: Option<u64>, next_deadline: Instant) {
+        // Publish the delay before the Release deadline so an Acquire reader cannot
+        // observe a new deadline with an older delay.
         self.delay_ms
             .store(delay_ms.unwrap_or(NO_HEARTBEAT), Ordering::Relaxed);
         self.next_deadline_elapsed_ms

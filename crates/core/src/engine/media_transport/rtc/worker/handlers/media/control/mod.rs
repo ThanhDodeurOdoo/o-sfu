@@ -30,10 +30,6 @@
 //! keyframe.rs
 //!   `-- reads the same source-ownership rules for feedback routing
 //! ```
-//!
-//! The `respond_*` functions at the top are command-adapter entry points for the
-//! worker dispatcher. The lower worker functions keep the ownership checks close
-//! to the state they protect.
 
 mod responses;
 mod routes;

@@ -180,7 +180,8 @@ impl MediaTransport {
         for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_source_snapshot().await);
         }
-        // Group by media ID first so dedup_by_key correctly removes all non-adjacent duplicates
+        // Group by media ID with the newest then strongest observation first because
+        // `dedup_by_key` keeps the first entry in each run.
         snapshot.sort_unstable_by_key(|source| {
             (
                 source.transport_media_id().as_u64(),
@@ -245,10 +246,10 @@ impl MediaTransport {
             .await
     }
 
-    /// Returns the negotiated MID for a transport media handle when known.
+    /// Returns the MID stored by the current transport media handle.
     ///
-    /// `None` means the media id is unknown, no MID has been negotiated yet or
-    /// the backend has already removed the handle.
+    /// `None` means `session_key` selects no worker, the worker request failed or
+    /// `transport_media_id` has no registered handle.
     pub(crate) async fn transport_media_mid(
         &self,
         session_key: &TransportSessionKey,

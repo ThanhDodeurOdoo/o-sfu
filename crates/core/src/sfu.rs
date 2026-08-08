@@ -1,52 +1,21 @@
-//! `SfuCore` admits room users into [`MediaSession`] handles
-//! each handle represents one admitted user connection in one room
-//! callers use it to drive the browser offer/answer lifecycle and then express
-//! publish, subscribe, recording and cleanup intent without importing room or
-//! transport internals
+//! [`SfuCore::admit_user`] returns one [`MediaSession`] per admitted room connection.
+//!
+//! The session sequences offer/answer, publication, subscription, recording and
+//! cleanup without exposing room or transport internals.
 //!
 //! ```text
 //! SfuCore::admit_user -> MediaSession
 //!
-//! establish -> send offer -> answer
-//! publish    -> maybe send renegotiation -> answer
-//! deactivate -> suppress forwarding while retaining negotiated publication
-//! subscribe  -> remember intent and reconcile eligible consumer routes
-//! close      -> remove the connection only when current
+//! establish             -> offer -> answer
+//! publish               -> [offer -> answer]?
+//! deactivate_publication -> cancel pending or suppress committed source
+//! subscribe             -> persist intent and reconcile eligible routes
+//! close                 -> remove only the current connection
 //! ```
 //!
-//! negotiation is serialized through `&mut MediaSession`
-//! a new offer is not created while another offer is awaiting an answer
-//! a first publish received during that window is queued
-//! the initial answer may yield the follow-up offer that applies it
-//!
-//! # Examples
-//!
-//! ```no_run
-//! use o_sfu_core::prelude::{
-//!     MediaSession, NegotiationOffer, SessionError, SourcePublishIntent,
-//! };
-//!
-//! # async fn exchange(_: NegotiationOffer) -> String { String::new() }
-//! async fn publish_source(
-//!     mut session: MediaSession,
-//!     intent: SourcePublishIntent,
-//! ) -> Result<(), SessionError> {
-//!     let Some(initial_offer) = session.establish().await? else {
-//!         return Ok(());
-//!     };
-//!     let initial_answer = exchange(initial_offer).await;
-//!
-//!     let _queued_without_offer = session.publish(intent).await?;
-//!     let Some(follow_up_offer) = session.answer(&initial_answer).await? else {
-//!         return Ok(());
-//!     };
-//!     let follow_up_answer = exchange(follow_up_offer).await;
-//!
-//!     let _next_offer = session.answer(&follow_up_answer).await?;
-//!     Ok(())
-//! }
-//! ```
-//!
+//! `&mut MediaSession` serializes negotiation. [`MediaSession::publish`] queues
+//! the first intent for each stream while an offer awaits its answer. A successful
+//! [`MediaSession::answer`] may return the follow-up offer.
 use std::{collections::BTreeMap, mem::replace, sync::Arc};
 
 pub use crate::engine::media_transport::{
@@ -231,23 +200,18 @@ impl SfuCoreError {
     }
 }
 
-/// cloneable core handle used to create room-bound media sessions
-///
-/// it holds the room registry and media transport services that every
-/// [`MediaSession`] uses when a room mutation needs lifecycle or WebRTC work
+/// A cloneable core handle that admits users into room-bound [`MediaSession`]s.
 #[derive(Debug, Clone)]
 pub struct SfuCore {
     media_transport: MediaTransport,
     rooms: Arc<RoomManager>,
 }
 
-/// one user connection in one room
+/// One admitted user connection in one room.
 ///
-/// mutating methods revalidate the connection through `RoomUserOperation`
-/// before committing room state
-/// if another connection replaced the user, negotiation or subscription calls
-/// return client-visible errors and [`close`](Self::close) rolls back staged
-/// media without removing the replacement
+/// Room mutations revalidate the connection before committing room state.
+/// [`close`](Self::close) cannot remove a replacement connection and drains
+/// connection-scoped staged media when this session is current.
 #[derive(Debug)]
 pub struct MediaSession {
     core: SfuCore,

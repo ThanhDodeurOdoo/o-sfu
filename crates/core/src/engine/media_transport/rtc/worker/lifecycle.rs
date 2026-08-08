@@ -183,6 +183,8 @@ impl Drop for RtcWorker {
     fn drop(&mut self) {
         let shutdown_started = self.shutdown.is_cancelled();
         self.shutdown.cancel();
+        // Ordinary destruction joins the worker. After `cancel`, only join an already
+        // finished thread because `MediaTransport::shutdown` is the explicit wait path.
         if let Some(thread) = self.thread.take()
             && (!shutdown_started || thread.is_finished())
         {

@@ -1,4 +1,12 @@
 //! RTC codec policy, negotiation and packet behavior.
+//!
+//! [`profile`] and [`capabilities`] compile configured codecs into `str0m` and
+//! router RTP forms. VP8 and promoted H.264 profiles derive RID simulcast
+//! signaling and upload encodings through [`rid`]. [`rid`] also validates
+//! answer-side send RIDs and selects the initial consumer packet gate.
+//!
+//! [`packet`] keeps codec-specific packet inspection and receiver identity
+//! projection below the room source graph and video policy.
 
 mod capabilities;
 mod h264;

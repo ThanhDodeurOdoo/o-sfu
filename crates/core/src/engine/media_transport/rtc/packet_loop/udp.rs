@@ -286,6 +286,8 @@ async fn ingress_should_stop(
 }
 
 fn udp_wake_addr(bind_addr: SocketAddr) -> SocketAddr {
+    // an unspecified bind address is not a valid datagram destination, so the
+    // wake targets loopback on the same port
     match bind_addr {
         SocketAddr::V4(addr) if addr.ip().is_unspecified() => {
             SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port()))

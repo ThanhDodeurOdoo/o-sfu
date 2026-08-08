@@ -296,5 +296,6 @@ impl<K: Ord + Clone, V, Tag> KeyedSlotStore<K, V, Tag> {
 }
 
 fn next_generation(generation: u64) -> u64 {
+    // keep generation 0 reserved for invalid handles after wraparound
     generation.wrapping_add(1).max(1)
 }

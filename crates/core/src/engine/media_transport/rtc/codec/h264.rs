@@ -1,6 +1,8 @@
-//! H.264 simulcast policy for the promoted Chromium format.
+//! H.264 policy for o-sfu's promoted simulcast matrix.
 //!
-//! Encoded H.264 payloads remain opaque to the packet facade.
+//! Publication parameters promote RID simulcast only for packetization mode 1
+//! with `profile-level-id=42e01f`. Encoded H.264 payloads remain opaque to
+//! [`super::packet`].
 
 use o_sfu_rfc::rtp::{self as rfc_rtp, h264::PacketizationMode};
 use o_sfu_router::rtp::{CodecSetting, MediaFormat, MediaStream};

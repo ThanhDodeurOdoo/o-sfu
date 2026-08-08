@@ -252,6 +252,8 @@ fn worker_is_healthy(delays_ms: &[Option<u64>], worker: MediaWorkerId, threshold
 }
 
 fn worker_delay(delays_ms: &[Option<u64>], worker: MediaWorkerId) -> u64 {
+    // Missing samples cannot qualify a worker as healthy. They retain the worst
+    // rank for the all-unhealthy fallback.
     delays_ms
         .get(worker.as_usize())
         .copied()

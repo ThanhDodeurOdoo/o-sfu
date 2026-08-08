@@ -44,9 +44,10 @@ pub enum SourceModelError {
 ///
 /// # Invariants
 ///
-/// A descriptor must contain at least one encoding and every encoding must point
-/// back to this descriptor's source id. [`Self::new`] validates both rules so
-/// callers do not keep a parallel identity model by accident.
+/// A descriptor must contain at least one encoding, every encoding id must be
+/// unique and every encoding must point back to this descriptor's source id.
+/// [`Self::new`] validates these rules so callers do not keep a parallel
+/// identity model by accident.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishedSourceDescriptor {
     /// Runtime source identity shared by every view of this publication.
@@ -151,8 +152,8 @@ impl PublishedSourceDescriptor {
 
     /// Returns the encodings that receiver video policy may select.
     ///
-    /// Encodings without complete RID coverage are excluded because the
-    /// packet-gate projection cannot address them. Sources with bitrate hints
+    /// Partial RID coverage disables selection because packet-gate projection
+    /// cannot represent every advertised encoding. Sources with bitrate hints
     /// use ascending advertised maximum bitrate order. Sources without bitrate
     /// hints use upload layer policy role order when available, then keep the
     /// publisher-declared order.
@@ -227,6 +228,8 @@ fn selectable_encoding_indices(encodings: &[SourceEncodingDescriptor]) -> Vec<us
     indices
 }
 
+// Keep policy roles low-to-high so rank 0 has the same meaning as in the
+// ascending-bitrate path.
 const fn upload_layer_policy_role_rank(role: UploadLayerPolicyRole) -> u8 {
     match role {
         UploadLayerPolicyRole::DegradedThumbnail => 0,

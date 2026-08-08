@@ -115,6 +115,8 @@ impl RoomState {
             let delivery_active = selection.delivery_active();
             match self.topology.commit_consumer_setup(setup, selection) {
                 Ok(commit) => {
+                    // A consumer on another media worker must be told the source
+                    // activity because that worker does not host the producer.
                     let remote_source_activity =
                         (commit.route.source().session_key().media_worker_id()
                             != commit.route.consumer_session_key().media_worker_id())
@@ -131,6 +133,8 @@ impl RoomState {
                         });
                     let track_snapshot =
                         self.remote_track_snapshot_for_user(commit.target.session.user_id(), true);
+                    // A pending activity correction to active already requests a
+                    // keyframe so avoid a duplicate readiness refresh.
                     let readiness_keyframe = match origin {
                         ConsumerSetupOrigin::Readiness
                             if delivery_active

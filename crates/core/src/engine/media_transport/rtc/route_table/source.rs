@@ -367,6 +367,9 @@ impl RouteSource {
         registration: RemoteSourceRegistration,
     ) -> Result<Option<RemoteSourceRegistration>, TransportAdapterError> {
         let previous = self.remote.register(source, registration)?;
+        // first remote registration starts inactive until a
+        // `SetRemoteSourceActivity` update arrives
+        // re-registration keeps the activity already learned
         if previous.is_none() {
             self.set_source_active(false);
         }
@@ -971,6 +974,8 @@ fn remote_pkt_gate_for_route(
 ) -> PacketLayerGate {
     match (route_entry, local_packet_gate) {
         (Some(_), Some(PacketLayerGate::Open | PacketLayerGate::Rid(_))) => PacketLayerGate::Open,
+        // A pending decoder-refresh gate needs Open upstream so its required
+        // refresh can arrive despite the aggregate Block.
         (Some(route_entry), Some(PacketLayerGate::Block))
             if route_entry
                 .destinations
