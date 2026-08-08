@@ -23,13 +23,11 @@
 //!   `-- session teardown and worker draining
 //! ```
 //!
-//! [`TransportMediaId`](crate::engine::media_transport::TransportMediaId)
-//! values allocated by a worker must stay process-wide distinct
-//! source route maps and relay maps use them as packet-path keys even when a
-//! source is forwarded to another worker
-//! the worker manager assigns each worker a media-id range before the packet
-//! loop starts so the hot path keeps one compact media key instead of carrying
-//! a composite worker key
+//! [`MediaTransport::build`](crate::engine::media_transport::MediaTransport::build)
+//! starts each worker's media-id counter at a fixed stride. The gap keeps IDs
+//! distinct across workers within one transport under realistic lifetime load,
+//! so packet-path maps can use one compact
+//! [`TransportMediaId`](crate::engine::media_transport::TransportMediaId) key.
 
 mod handlers;
 mod lifecycle;

@@ -155,6 +155,8 @@ impl SourceAudioPolicyState {
 
     fn observe_inactive(&mut self, now: Instant, reason: ActiveSpeakerActivityReason) {
         self.reset_fallback_observations();
+        // during the active hold window keep the gate open so a brief pause does
+        // not clip audio forwarding
         if self.active_until.is_some_and(|deadline| now < deadline) {
             self.packet_gate = PacketLayerGate::Open;
             return;

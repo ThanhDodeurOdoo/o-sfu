@@ -1,10 +1,9 @@
 //! async driver for one worker-local packet loop
 //!
-//! this module contains the task that ties the RTC worker together
-//! it is the only packet-loop file that awaits socket I/O or worker-channel
-//! input
-//! the rest of the packet-loop modules are synchronous helpers that run while
-//! the worker owns mutable access to `PacketLoopState`
+//! This module drives one worker thread's turn ordering and waits for the next
+//! event. Socket receives run in the spawned `udp` ingress task. Mailbox waits
+//! stay in `input`. Pump helpers remain synchronous while the worker has mutable
+//! access to `PacketLoopState`.
 //!
 //! the driver preserves the worker ordering contract:
 //!
@@ -136,11 +135,7 @@ impl PacketLoopTurn {
         }
     }
 
-    /// runs the synchronous work for one packet-loop turn
-    ///
-    /// this method is non-async because it holds mutable worker
-    /// state
-    /// it returns only the next deadline needed after that borrow ends
+    /// Keeps pump-phase [`PacketLoopState`] mutation outside every async wait.
     pub fn pump(
         &mut self,
         state: &mut PacketLoopState,
@@ -174,7 +169,7 @@ impl PacketLoopTurn {
         self.packet_sink_cache
             .refresh_from(&config.packet_sink_registry);
         // `record_incoming_packet` must precede `plan_forwards` for each packet.
-        // Otherwise a later keyframe could admit earlier delta packets in the
+        // Otherwise a later decoder refresh could admit earlier delta packets in the
         // same batch.
         let mut pending_packets = take(&mut self.buffers.pending_packets);
         for pkt in &mut pending_packets {
@@ -218,10 +213,8 @@ impl PacketLoopTurn {
         }
     }
 
-    /// flushes the async outputs produced by the pump phase
-    ///
-    /// UDP transmits and delay publication run after mutable worker-state access
-    /// ends
+    /// Must run after [`Self::pump`] so socket I/O never carries a
+    /// [`PacketLoopState`] borrow across `.await`.
     pub(super) async fn flush_outputs(&mut self, socket: &RtcUdpSocket) {
         self.flush_staged_transmits(socket).await;
     }
@@ -327,7 +320,6 @@ impl PacketLoopTurn {
         }
     }
 
-    /// flushes UDP transmits produced by the pump phase
     async fn flush_staged_transmits(&mut self, socket: &RtcUdpSocket) {
         for pending_transmit in self.buffers.pending_transmits_mut() {
             let packet = take(&mut pending_transmit.contents);
@@ -364,10 +356,8 @@ impl PacketLoopTurn {
         }
     }
 
-    /// waits for either completed ingress input or the next internal timeout
-    ///
-    /// ingress owns the socket receive operation, so cancelling this wait cannot
-    /// cancel an in-flight UDP receive
+    /// Cancelling this wait leaves socket receive running because [`UdpIngress`]
+    /// owns the in-flight I/O.
     async fn wait_for_ingress_input(
         &mut self,
         info: &WaitPhaseSnapshot,

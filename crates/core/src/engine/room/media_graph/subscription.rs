@@ -160,6 +160,8 @@ impl RoomState {
         &mut self,
         mut targets: Vec<ConsumerSetupTarget>,
     ) -> Vec<PendingConsumerSetup> {
+        // Initial admission has no active-speaker snapshot. The following
+        // source-policy turn applies the current speaker ranking.
         let active_speakers = BTreeSet::new();
         targets.sort_by_key(|target| self.setup_rank(target, &active_speakers));
         targets

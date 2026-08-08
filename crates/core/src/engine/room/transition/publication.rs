@@ -158,6 +158,8 @@ impl RoomUserOperation<'_> {
         };
         match plan {
             PublishIntentPlan::Activate(commit) => {
+                // Prevent another source-policy turn from interleaving with this
+                // activity commit and its ordered policy and transport effects.
                 self.execute_publication_activity(commit).await;
                 Ok(PublishIntentOutcome::Activated)
             }

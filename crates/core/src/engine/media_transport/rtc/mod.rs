@@ -1,32 +1,29 @@
-//! Private RTC backend for the media transport.
+//! Private WebRTC backend below [`MediaTransport`](super::MediaTransport).
 //!
-//! This module contains the Str0m-backed implementation that turns media transport
-//! intents into actual WebRTC state and packet movement. It sits below
-//! [`crate::engine::media_transport`]: higher layers should not import this
-//! module to create offers, publish media, or inspect transport state unless
-//! they are writing focused RTC backend tests or backend integration code.
+//! Each [`RtcWorker`] runs one packet loop for its assigned `str0m` sessions,
+//! one UDP socket shared by those sessions and command plus relay mailboxes.
+//! [`MediaTransport`](super::MediaTransport) routes sessions to the workers
+//! named by their transport keys and coordinates relay routes between workers.
 //!
-//! The backend is worker-oriented. Each [`RtcWorker`] owns one ready packet
-//! loop, command and relay mailboxes, worker-local relay target state,
-//! diagnostics hooks, packet-sink fanout, bitrate snapshots plus the state machines
-//! needed to drive Str0m. The surrounding media transport worker manager decides
-//! which session belongs to which worker and hides cross-worker relay setup
-//! from room code.
+//! Main boundaries:
 //!
-//! Internal ownership is split by the kind of RTC work being performed:
-//!
-//! - `worker`: worker startup, command handlers and
-//!   production/test support entry points.
-//! - `codec`, `bootstrap`, `commands` and `state`: compiled codec policy,
-//!   offer/answer bootstrap, mailbox contracts and pure RTC session state.
-//! - `packet_loop`, `demux`, `source_route`, `forwarded_packet`, `forwarding_destination`,
-//!   `forwarding_planner` and `local_forwarding`: UDP/RTP
-//!   ingress, source route facts, fanout planning, local sends, recording
-//!   packet sinks and zero-copy payload ownership.
-//! - `media_registry`, `relay_registry`, `route_control`, `routing_miss` and
-//!   `bitrate`: transport media ownership, relay mailbox and target primitives,
-//!   packet gates, active-speaker observations, unknown-source recovery plus
-//!   observability snapshots.
+//! - [`worker`], [`commands`] and [`state`] cover worker startup, mailbox control
+//!   and packet-loop state.
+//! - [`bootstrap`] creates worker sockets and session-local `str0m` state.
+//! - [`codec`] centralizes RTP profiles, negotiated capabilities, negotiated RID
+//!   handling and codec-specific packet inspection plus rewriting.
+//! - [`packet_loop`] owns UDP routing and `str0m` polling. [`demux`] provides
+//!   recovery indexes and [`routing_miss`] bounds repeated fallback work while
+//!   `Rtc::accepts()` remains the session authority.
+//! - [`route_table`], [`source_route`], [`route_control`] and
+//!   [`keyframe_tracker`] keep forwarding routes, packet gates, activity ranking
+//!   and keyframe retry state.
+//! - [`forwarded_packet`], [`forwarding_planner`],
+//!   [`forwarding_destination`], [`local_forwarding`] and [`local_send_rewrite`]
+//!   share payloads across sinks, relays and local RTC destinations. Local RTC
+//!   egress projects receiver RTP identity.
+//! - [`media_registry`], [`relay_registry`] and [`bitrate`] keep media handles,
+//!   relay targets and bitrate observations.
 
 use std::{sync::Arc, time::Duration};
 

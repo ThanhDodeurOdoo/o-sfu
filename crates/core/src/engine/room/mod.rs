@@ -1,3 +1,15 @@
+//! Room lifecycle, membership and media-route orchestration.
+//!
+//! [`RoomManager`] publishes current rooms and coordinates admission, worker
+//! placement and empty-room removal. Each [`Room`] coordinates [`membership`],
+//! the desired [`media_graph`] and per-user [`outbound`] signaling.
+//!
+//! State transitions capture post-lock transport effects. [`source_policy`]
+//! recomputes route activity and packet selection from room and transport
+//! snapshots after state changes or coalesced policy wakeups. [`read_model`]
+//! captures room facts for diagnostics before they are combined with transport
+//! snapshots.
+
 #[cfg(any(test, feature = "testing-transport"))]
 #[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
 pub(crate) mod TESTS;

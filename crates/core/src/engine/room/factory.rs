@@ -6,8 +6,8 @@
 //! entrypoints.
 //!
 //! A factory-created room receives fresh process-local placement, the immutable
-//! runtime policy selected at boot plus shared observability, recording and
-//! metrics services. It does not register the room or emit creation events.
+//! runtime policy selected at boot and the shared runtime metrics catalog. It
+//! does not register the room or emit creation events.
 //!
 //! Same-room worker placement is not decided here. The factory
 //! gives a room its stable instance id and primary router id, while

@@ -41,9 +41,9 @@ jobs:
         with:
           shared-key: rust-1.95-rustdoc
 
-      - name: Build public rustdoc
+      - name: Build rustdoc
         run: >-
-          cargo doc --locked --no-deps
+          cargo doc --locked --no-deps --document-private-items
           -p o-sfu
           -p o-sfu-core
           -p o-sfu-model

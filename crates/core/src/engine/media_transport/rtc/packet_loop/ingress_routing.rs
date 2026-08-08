@@ -8,8 +8,8 @@
 //! # routing strategy
 //!
 //! 1. use the pinned source-address index when a tuple is already known
-//! 2. drop repeated identical misses through the recent-miss cache
-//! 3. rate-limit sustained unknown-source probes
+//! 2. rate-limit sustained unknown-source probes
+//! 3. drop repeated identical misses through the recent-miss cache
 //! 4. probe STUN, DTLS or RTP shape to choose a narrow candidate set
 //! 5. call `Rtc::accepts()` before calling `Rtc::handle_input()`
 //! 6. pin successful source tuples so later packets take the indexed path
@@ -80,7 +80,8 @@ impl fmt::Display for PacketIndexProbe<'_> {
     }
 }
 
-/// fixture-owned datagram input for deterministic ingress benchmarks
+/// Carries caller-supplied receive time so production and deterministic
+/// harnesses use the same demux recovery path.
 #[derive(Clone, Copy)]
 pub struct PacketRouteDatagram<'a> {
     source_addr: SocketAddr,
@@ -363,6 +364,7 @@ fn packet_index_probe(source_addr: SocketAddr, packet: &[u8]) -> Option<PacketIn
         // STUN responses may omit USERNAME, so source address is the only hint
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
+    // DTLS records fall in the RFC 7983 20..64 first-byte range
     if (20..64).contains(&byte0) {
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }

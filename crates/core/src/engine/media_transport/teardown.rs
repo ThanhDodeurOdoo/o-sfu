@@ -76,6 +76,8 @@ impl MediaTransport {
                 ?error,
                 "media transport teardown reached terminal failure"
             );
+            // `RemoveMedia` or `ReleaseRelayRoute` failure may leave worker state behind.
+            // Escalate once to `CloseSession`, whose own failure is already terminal.
             if transport_media_id.is_some()
                 && let Err(fallback_error) = self.close_session(session_key).await
             {

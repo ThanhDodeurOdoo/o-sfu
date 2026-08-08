@@ -242,6 +242,8 @@ where
 {
     let mut output = default;
     let mut len = 0;
+    // `default` must contain every codec exactly once. Once `len == N`, every
+    // remaining item is therefore a duplicate.
     for codec in preferred.iter().copied().chain(default) {
         if contains_codec(&output, len, codec) {
             continue;

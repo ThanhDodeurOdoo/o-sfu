@@ -9,11 +9,9 @@
 //! the local-send path
 //!
 //! source-derived observations live in `PacketFacts`
-//! facts are valid for the current packet-loop turn only because they are
-//! computed against `PacketLoopState`
-//! they let incoming stats, fanout planning and local codec rewriting reuse the
-//! same source media id, RID and codec facts without repeating header
-//! or payload parsing
+//! they are cached after source resolution so incoming stats, fanout planning
+//! and local codec rewriting reuse the same media id, RID and codec inspection
+//! across local and relay fanout
 
 use std::{mem::take, sync::Arc, time::Instant};
 
@@ -49,15 +47,15 @@ pub struct ForwardedPacket {
     source: ForwardedPacketSource,
     /// producer identity resolved from MID, SSRC or relay metadata
     ///
-    /// once this is known it is cached so later state churn during the same
-    /// flush cannot make the packet point at a different source
+    /// once this is known it is cached so later media-registry updates or relay
+    /// delivery cannot bind the packet to a different source
     src_media: Option<TransportMediaId>,
     /// resolved RID recovered from the packet header or from the worker SSRC binding
     ///
     /// relay clones carry this value so a target worker can apply the same
     /// route-control RID without owning the source worker registry
     resolved_source_rid: Option<Rid>,
-    /// turn-local source observations shared by stats, route planning and egress
+    /// packet-scoped source observations shared by stats, route planning and egress
     facts: Option<PacketFacts>,
     /// whether source-worker side effects still belong to this packet
     ///
@@ -94,12 +92,12 @@ impl ForwardedPacketSource {
     }
 }
 
-/// rtp header storage for the two ingress paths handled by the packet loop
+/// RTP header storage for the two ingress paths handled by the packet loop
 ///
 /// local packets keep the full `str0m` packet so browser egress can reuse the
 /// exact source header view
-/// relayed packets only need the header plus the `Arc` payload that already
-/// lives on `ForwardedPacket`
+/// relayed packets retain only the header and extended sequence number because
+/// payload ownership already lives on `ForwardedPacket`
 #[derive(Debug)]
 enum ForwardedPacketData {
     Str0mRtp(ForwardedRtpData),
@@ -120,10 +118,10 @@ pub(super) struct ForwardedRelayRtpData {
     pub(super) sequence_number: SeqNo,
 }
 
-/// source observations that should be computed once per packet-loop turn
+/// Source observations resolved once and preserved across relay fanout.
 ///
-/// facts do not own packet bytes and are valid only for the current batch
-/// because route-control registries can change between turns
+/// Facts do not own packet bytes. Keeping them on the packet avoids resolving
+/// source identity or inspecting codec payloads again after relay delivery.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PacketFacts {
     /// source producer selected by MID, SSRC or relay metadata
@@ -195,17 +193,15 @@ impl ForwardedPacket {
         self.payload.as_ref()
     }
 
-    /// resolves and caches all source observations needed by this packet turn
+    /// Caches one source view for local and relay fanout.
     ///
     /// `None` means the packet cannot currently be attached to a source
     /// transport media id
     /// callers should treat that as a best-effort ingress miss and drop the
     /// packet from stats or fanout for this turn
     ///
-    /// once facts are cached, later calls return the cached value even if source
-    /// registries change before the flush completes
-    /// this keeps one packet internally consistent across observation, planning
-    /// and egress
+    /// Cached facts travel with relay clones and remain the packet's source view
+    /// even if registries change before delivery.
     pub(super) fn resolve_facts(&mut self, state: &PacketLoopState) -> Option<PacketFacts> {
         if let Some(facts) = self.facts {
             return Some(facts);
@@ -231,7 +227,7 @@ impl ForwardedPacket {
         Some(facts)
     }
 
-    /// returns the cached codec facts local egress should use for rewriting
+    /// Reuses source codec inspection across every local destination.
     ///
     /// incoming observation fills `PacketFacts` before route planning and local
     /// forwarding run, so codec inspection remains packet-scoped instead of
@@ -331,11 +327,8 @@ impl ForwardedPacket {
         resolved
     }
 
-    /// exposes a mutable local-send view over this packet
-    ///
-    /// callers should resolve any packet facts they still need before calling
-    /// this method
-    /// local send keeps the `Arc` payload alive while str0m queues the packet
+    /// Avoids payload-byte copies during local fanout by borrowing source headers
+    /// and the shared payload.
     pub(super) fn local_send_packet(&self) -> LocalForwardedRtp<'_> {
         let payload = &self.payload;
         match &self.data {

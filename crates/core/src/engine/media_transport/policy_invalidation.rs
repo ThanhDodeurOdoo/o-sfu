@@ -93,6 +93,8 @@ impl SourcePolicySignal {
             return;
         };
         let mut pending = lock_unpoisoned(&self.0.pending);
+        // The single consumer drains `pending.rooms`, so only its
+        // empty-to-nonempty transition needs a wake.
         let notify = pending.rooms.is_empty();
         if pending.scheduled.is_empty() {
             pending.rooms.insert(first);

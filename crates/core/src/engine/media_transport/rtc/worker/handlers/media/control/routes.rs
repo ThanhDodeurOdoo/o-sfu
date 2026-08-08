@@ -198,6 +198,8 @@ pub(super) fn worker_set_relay_target_active(
     active: bool,
 ) -> Result<(), TransportAdapterError> {
     let src_media = source.transport_media_id();
+    // only activation revalidates the producer, deactivation must still apply
+    // after the source is torn down
     if active {
         ensure_local_producer_mid(state, source.session_key(), src_media)?;
     }

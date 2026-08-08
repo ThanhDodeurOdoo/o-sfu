@@ -1,8 +1,12 @@
-//! Worker-local bitrate accounting for RTC media.
+//! Worker-local RTC payload bitrate observations.
 //!
-//! The packet loop owns the write side and updates counters through atomics. The
-//! shared state lock protects only cold registration and snapshot maps, so
-//! operator polling cannot contend with per-packet writes.
+//! The packet loop records tracked ingress and successful local RTC egress
+//! payload bytes through shared atomic counters. The registry lock is used only
+//! to add or remove counters and collect snapshots, so per-packet updates never
+//! acquire it.
+//!
+//! Snapshots publish the most recently completed window and expire it after one
+//! second without packets.
 
 use std::{
     collections::BTreeMap,
@@ -65,14 +69,11 @@ impl MediaBitrateCounter {
         }
     }
 
-    /// Records one packet-loop-owned byte count into the current bitrate window.
+    /// The packet loop is the only writer. Cross-thread readers consume the
+    /// completed sample and freshness atomics, never the in-progress byte bucket.
     ///
-    /// `MediaBitrateCounter` is shared so diagnostics can snapshot it from
-    /// another thread, but `record` has one writer: the RTC packet loop that
-    /// owns the registered media handle. That makes a release `fetch_add`
-    /// enough for per-packet writes. Exact saturating addition is
-    /// not part of the observable contract because one RTP bitrate window is
-    /// bounded by real transport packet sizes and cannot approach `u64::MAX`.
+    /// Exact saturating addition is not part of the observable contract because
+    /// one RTP bitrate window cannot approach `u64::MAX`.
     pub(super) fn record(&self, now: Instant, payload_bytes: usize) -> IncomingBitrateObservation {
         let now_nanos = self.nanos_since_origin(now);
         let was_observed = self.observed.load(Ordering::Acquire);

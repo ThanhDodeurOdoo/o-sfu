@@ -8,16 +8,11 @@
 //! rooms over HTTP, browsers connect over WebSocket and media travels over UDP
 //! with `str0m` terminating ICE, DTLS and SRTP.
 //!
-//! # High-Level Features
-//!
-//! - **Separation of concerns**: Pure sans-I/O routing policy separated from worker-local packet loops.
-//! - **Robust state management**: Room transitions run under short exclusive locks. Side effects are planned then executed asynchronously.
-//! - **Deterministic signaling**: Browser signaling remains in a sans-I/O `ProtocolCore`, yielding ordered commands for predictable WebRTC orchestration.
-//! - **Predictable teardown**: Explicit async cleanup ensures all resources are released or forcefully drained.
-//!
 //! # Core Concepts
 //!
-//! `o-sfu` is built around a strict separation of three planes: the **control plane** (admission and room policy), the **routing plane** (the placement graph that maps users to connections) and the **packet plane** (RTP forwarding on worker loops).
+//! `o-sfu` separates the **control plane** for admission and room policy, the
+//! **routing plane** for user-to-connection placement and the **packet plane**
+//! for RTP forwarding on worker loops.
 //!
 //! - **[`Runtime`]**: Owns the process lifecycle, the HTTP/WebSocket servers and graceful shutdown.
 //! - **[`core::server::room::Room`]**: The control plane boundary for a set of participants. It commits membership and media relationships.
@@ -27,43 +22,41 @@
 //!
 //! # Architecture
 //!
-//! Control and routing decisions happen in the upper half. Packet loops execute them in the lower half against UDP datagrams.
+//! Control and routing decisions happen above the packet loops, which apply the
+//! resulting transport state to UDP datagrams.
 //!
 //! ```text
-//!     +---------------------+   +---------------------------+
-//!     | HTTP control API    |   |  WebSocket user sessions  |
-//!     +-----------+---------+   +---------+-----------------+
-//!                 |                       |
-//!                 v                       v
-//!            RoomManager          application::User / MediaSession
-//!                 |                       |
-//!                 |                       |
-//!                 |                       |
-//!                 +----------+------------+
-//!                            |
-//!                            v
-//!                       core::Room <--------> router::Router
-//!                            |
-//!                            v
-//!                  core::MediaTransport
-//!                          | | |
-//!                          | | |  (multi-threaded)
-//!                          | | |
-//!                          v v v
-//!                       core::Worker
-//!  UDP Socket IN ----->  RTP fanout ------>  relays / sinks / UDP socket OUT
+//! HTTP control API ----------------------> RoomManager
+//!                                               |
+//! WebSocket session -> SfuCore -> MediaSession  |
+//!                              \                /
+//!                               +----> Room <----+
+//!                                      |
+//!                                      +<----> Router
+//!                                      |
+//!                                      v
+//!                                MediaTransport
+//!                                      |
+//!                                      v
+//!                             RTC worker packet loops
+//!                                      |
+//!                        UDP in -> RTP fanout -> UDP out
 //! ```
 //!
 //! # Admission Edge
 //!
-//! Applications provision rooms via HTTP, while clients join via WebSocket. Both paths require JWT authentication before admission.
+//! Applications provision rooms through
+//! [`RoomManager::serve_room`](core::server::room::RoomManager::serve_room).
+//! WebSocket clients join through
+//! [`SfuCore::admit_user`](core::prelude::SfuCore::admit_user). Both paths require
+//! JWT authentication before admission.
 //!
 //! ```text
-//! App HTTP POST /room/create -> verify auth -> [RoomManager] -> alloc Room
-//! WebSocket Client Connect -> verify auth -> [Room] -> admit User
+//! App GET /v1/channel -> verify auth -> RoomManager::serve_room
+//! WebSocket client connect -> verify auth -> SfuCore::admit_user -> MediaSession
 //! ```
 //!
-//! - **HTTP**: Parses server-to-server requests using [`http::CreateRoomQuery`]. Verifies [`auth::HttpRoomClaims`]. The first verified request for an issuer fixes the room's signing key.
+//! - **HTTP**: Parses server-to-server requests using [`http::CreateRoomQuery`]. Verifies [`auth::HttpRoomClaims`]. The request that creates the current room fixes its signing key.
 //! - **WebSocket**: Client connection frames are decoded by [`websocket::decode_auth_payload_text`]. A hint selects a candidate key. Claims are verified, normalized into [`auth::WebSocketConnectClaims`] and trusted for access.
 //!
 //! # Security Model
@@ -89,18 +82,19 @@
 //! - **Server-to-server key**: `AUTH_KEY` (base64, at least 32 bytes) verifies
 //!   the HTTP [`http::CreateRoomQuery`] path through [`auth::HttpRoomClaims`] and
 //!   [`auth::HttpDisconnectClaims`]. See [`config`].
-//! - **Per-room key**: the first verified create-room request pins the room
-//!   signing key from the `key` claim in [`auth::HttpRoomClaims`]. WebSocket
+//! - **Per-room key**: the request that creates the current room pins the signing
+//!   key from the `key` claim in [`auth::HttpRoomClaims`]. WebSocket
 //!   [`auth::WebSocketConnectClaims`] verify against that room key, never against
 //!   `AUTH_KEY`.
 //!
 //! Token carriage differs per surface: HTTP room creation uses the
 //! `Authorization` header, HTTP disconnect uses the request body and the
 //! WebSocket client sends a first-frame auth envelope decoded by
-//! [`websocket::decode_auth_payload_text`]. An unverified decode selects the
-//! candidate room key, then the same token is re-verified against it. A verified
-//! [`auth::WebSocketConnectClaims`] must carry the `room_id` of its target room,
-//! which blocks replay of a token minted for another room.
+//! [`websocket::decode_auth_payload_text`]. An unverified room id selects only a
+//! candidate key, then the same token is re-verified against it. Modern
+//! [`auth::WebSocketConnectClaims`] must name the selected room. Legacy Odoo
+//! tokens select it through the auth envelope's `channel` and are normalized
+//! only after verification with that room's key.
 //!
 //! Admission establishes identity and room scope. It does not enforce the
 //! per-user `permissions` claim, which room state collapses to a marker.
@@ -137,9 +131,10 @@
 //! outbound RTP back to `str0m` for SRTP protection.
 //!
 //! - **Keying**: the DTLS handshake derives SRTP keys per RFC 5764 DTLS-SRTP.
-//! - **Certificate**: `str0m` generates a self-signed certificate at session
-//!   build and advertises `a=fingerprint:sha-256` in the SDP offer. It binds and
-//!   verifies the remote fingerprint when the answer is accepted.
+//! - **Certificate**: `str0m` generates a self-signed certificate when each RTC
+//!   session is built and advertises its SHA-256 fingerprint in the SDP offer.
+//!   Accepting the answer stores the expected remote fingerprint. The DTLS
+//!   handshake verifies it against the peer certificate.
 //! - **ICE**: `o-sfu` runs ICE-lite with `a=setup:actpass` and advertises
 //!   `ANNOUNCED_IP`, so media UDP must reach the host directly.
 //!
@@ -154,14 +149,16 @@
 //!
 //! # Room and Router Ownership
 //!
-//! Room transitions are planned while holding short exclusive room state locks. Async transport and diagnostics work is executed later through effect plans.
+//! Room transitions produce typed commits while holding short exclusive state
+//! locks. `RoomEffects` consumes deferred transport, source-policy and WebSocket
+//! output work after the lock is released.
 //!
 //! ```text
 //! room state lock held                  lock released
 //! +--------------------------------+    +------------------------------+
 //! | validate user and connection   |    | MediaTransport commands      |
-//! | commit room topology           |    | diagnostics and metrics      |
-//! | capture RoomEffects            |--->| websocket output             |
+//! | commit room topology           |    | source-policy turn           |
+//! | capture transition commit      |--->| websocket output             |
 //! |                                |    | idempotent teardown          |
 //! +--------------------------------+    +------------------------------+
 //! ```
@@ -170,8 +167,11 @@
 //!
 //! # Signaling and Client Bundle
 //!
-//! Browsers interact with `o-sfu` through a minimal `SfuClient` API (`connect`, `publish`, `subscribe`).
-//! Signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and yields ordered [`o_sfu_protocol::host::CommandBatch`] values. The WASM bridge projects these into `HostCommand` values to drive browser `WebSocket` and `RTCPeerConnection` APIs.
+//! Browsers use `SfuClient` for connection, publication, subscription and room
+//! control. Signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and
+//! yields ordered [`o_sfu_protocol::host::CommandBatch`] values. The WASM bridge
+//! projects these into [`o_sfu_protocol::host::HostCommand`] values that drive
+//! browser `WebSocket`, `RTCPeerConnection` and timer APIs.
 //!
 //! ```text
 //! SfuClient (public API)
@@ -199,22 +199,24 @@
 //! UDP datagram
 //!     |
 //!     v
-//! worker ingress (fallback, source pin)
+//! worker ingress and `str0m` drain
 //!     |
 //!     v
-//! str0m input and output drain
+//! packet facts (source, RID and codec)
 //!     |
-//!     v
-//! RouteTable
+//!     +-> origin packet sinks
 //!     |
-//!     +-> packet gate (RID/layer policy, source activity)
-//!     |
-//!     +-> local fanout
-//!     +-> relay fanout
-//!     +-> packet sinks
+//!     +-> source and destination packet gates
+//!              |
+//!              +-> relay fanout
+//!              +-> local RTC -> RTP identity and codec rewrite
 //! ```
 //!
-//! `str0m` handles ICE, DTLS and SRTP. `o-sfu` resolves source facts, then plans origin packet sinks before applying aggregate demand and source policy. Receiver and relay gates narrow each destination. Same-process relay passes shared payload data to another worker for local delivery.
+//! `str0m` handles ICE, DTLS and SRTP. The private `rtc::codec` boundary keeps
+//! codec branching out of route planning. Origin packet sinks precede route
+//! gates so recording can observe a publisher without active receivers. Source,
+//! relay and receiver gates then narrow routed fanout. Same-process relays share
+//! payload data with another worker for local delivery.
 //!
 //! Worker BWE and audio observations feed into room source policy, which updates route gates for later packets.
 //!

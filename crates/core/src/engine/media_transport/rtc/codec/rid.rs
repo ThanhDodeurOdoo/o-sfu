@@ -181,6 +181,8 @@ fn find_next_media_section_start(sdp: &str, start: usize, media_prefix: &str) ->
     if remaining.starts_with(webrtc::sdp::MEDIA_PREFIX) {
         return Some(start);
     }
+    // `media_prefix` is "\nm=" so the match anchors `m=` to a line start.
+    // `+ 1` moves past the newline to the section start.
     remaining
         .find(media_prefix)
         .map(|offset| start + offset + 1)

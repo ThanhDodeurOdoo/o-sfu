@@ -47,6 +47,8 @@ pub(super) fn consumer_packet_selection_update(
     };
     let route_activity_changed =
         selection.policy_pause_reason != current_selection.policy_pause_reason();
+    // selector changes and resumed delivery need a keyframe because the receiver
+    // cannot continue the previous video reference chain
     let request_keyframe = selection.policy_pause_reason.is_none()
         && (selection.request_keyframe
             || selection.selector != current_selection.selector()

@@ -128,6 +128,9 @@ impl RoomPacketSinkRegistry {
     }
 
     fn snapshot(&self) -> PacketSinkRegistrySnapshot {
+        // Generation is read outside the lock, so retry until it is unchanged
+        // across the locked clone. Writers bump it under the write lock, which
+        // pairs each snapshot map with its own generation.
         loop {
             let generation = self.generation();
             let active_rooms = read_unpoisoned(&self.active_rooms).clone();
