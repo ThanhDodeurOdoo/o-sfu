@@ -199,9 +199,9 @@ impl LocalRtcPacketDestination {
                 route_destination.dest_mid,
                 route_destination.dest_payload_type,
             );
-            let vp8_payload = packet.local_vp8_payload();
+            let codec_packet = packet.local_codec_packet();
             let Some(payload_bytes) =
-                sender.send(session_state, &packet.local_send_packet(), vp8_payload)
+                sender.send(session_state, &packet.local_send_packet(), codec_packet)
             else {
                 return ForwardSendOutcome::LocalRtc {
                     payload_bytes: None,

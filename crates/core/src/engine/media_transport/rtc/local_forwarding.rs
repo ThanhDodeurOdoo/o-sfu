@@ -13,7 +13,7 @@ use str0m::{
 use tracing::debug;
 
 use super::{
-    forwarded_packet::PacketVp8Payload,
+    codec,
     local_send_rewrite::{ProjectedIdentity, SourceTransition},
     slots::ConsumerStreamHandle,
     state::RtcSessionState,
@@ -120,12 +120,11 @@ impl LocalPacketDestination {
         &self,
         session_state: &mut RtcSessionState,
         rtp: &LocalForwardedRtp<'_>,
-        vp8_payload: Option<PacketVp8Payload>,
+        codec_packet: Option<&codec::Packet>,
     ) -> Option<usize> {
         let payload_len = rtp.payload.len();
-        let vp8_identity = vp8_payload
-            .map(|vp8_payload| vp8_payload.identity)
-            .unwrap_or_default();
+        let codec_identity =
+            codec_packet.map_or_else(codec::PacketIdentity::default, codec::Packet::identity);
         let local_send_streams = &mut session_state.consumer_streams;
         let rtc = &mut session_state.rtc;
         {
@@ -138,7 +137,7 @@ impl LocalPacketDestination {
                 header.ssrc,
                 rtp.sequence_number(),
                 header.timestamp,
-                vp8_identity,
+                codec_identity,
             )?;
             if let SourceTransition::Switched { previous_ssrc } = identity.transition {
                 debug!(
@@ -148,12 +147,12 @@ impl LocalPacketDestination {
                     source_ssrc = ?header.ssrc,
                     source_rtp_timestamp = header.timestamp,
                     outbound_rtp_timestamp = identity.rtp_timestamp,
-                    source_vp8_picture_id = ?vp8_identity.picture_id,
-                    outbound_vp8_picture_id = ?identity.vp8_payload.picture_id,
+                    source_codec_identity = ?codec_identity,
+                    outbound_codec_identity = ?identity.codec,
                     "projected consumer RTP identity after producer SSRC switch"
                 );
             }
-            self.write_rtp(stream_tx, rtp, identity, vp8_payload);
+            self.write_rtp(stream_tx, rtp, identity, codec_packet);
         }
         Some(payload_len)
     }
@@ -163,7 +162,7 @@ impl LocalPacketDestination {
         stream_tx: &mut StreamTx,
         rtp: &LocalForwardedRtp<'_>,
         identity: ProjectedIdentity,
-        vp8_payload: Option<PacketVp8Payload>,
+        codec_packet: Option<&codec::Packet>,
     ) {
         let header = rtp.header();
         let payload_type = outbound_payload_type(header, self.payload_type);
@@ -181,8 +180,8 @@ impl LocalPacketDestination {
         if let Some(csrc) = header.csrc.get(..header.csrc_count) {
             write = write.csrc(csrc);
         }
-        if let Some(patch) = vp8_payload.and_then(|packet| packet.patch(identity.vp8_payload)) {
-            write = write.vp8_patch(patch);
+        if let Some(rewrite) = codec_packet.and_then(|packet| packet.rewrite(identity.codec)) {
+            write = rewrite.apply(write);
         }
         stream_tx.write_rtp(write);
     }

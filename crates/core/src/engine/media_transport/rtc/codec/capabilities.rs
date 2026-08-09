@@ -1,19 +1,30 @@
-use o_sfu_rfc::{
-    rtp::{self as rfc_rtp, HeaderExtensionId},
-    webrtc as rfc_webrtc,
-};
+use o_sfu_rfc::{rtp::HeaderExtensionId, webrtc as rfc_webrtc};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{
-        CodecSetting, HeaderExtension as RouterHeaderExtension, MediaCodecCapability,
-        MediaFormat as RouterMediaFormat, PayloadType, RtcpFeedback, RtcpFeedbackKind,
+        HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodec,
+        MediaCodecCapability, MediaFormat as RouterMediaFormat, MediaStream, PayloadType,
+        RtcpFeedback, RtcpFeedbackKind,
     },
 };
-use str0m::{format::PayloadParams, rtp::Extension};
+use str0m::{
+    change::SdpAnswer,
+    format::{Codec, PayloadParams},
+    rtp::Extension,
+};
 
 use crate::engine::media_transport::TransportAdapterError;
 
-pub(super) fn router_payload_type(value: u8) -> Result<PayloadType, TransportAdapterError> {
+pub(super) fn primary_codec(parameters: &MediaStream) -> Option<&MediaCodec> {
+    parameters
+        .formats()
+        .find(|format| !format.codec().is_rtx())
+        .map(RouterMediaFormat::codec)
+}
+
+pub(in crate::engine::media_transport::rtc) fn router_payload_type(
+    value: u8,
+) -> Result<PayloadType, TransportAdapterError> {
     PayloadType::try_new(value).ok_or(TransportAdapterError::InvalidInput)
 }
 
@@ -25,7 +36,7 @@ pub(super) fn media_kind(payload: &PayloadParams) -> RouterMediaKind {
     }
 }
 
-pub(super) fn header_extension(
+pub(in crate::engine::media_transport::rtc) fn header_extension(
     (id, extension): (u8, &Extension),
 ) -> Result<RouterHeaderExtension, TransportAdapterError> {
     let id = HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
@@ -51,7 +62,7 @@ pub(super) fn media_capability(
     ))
 }
 
-pub(super) fn media_format(
+pub(in crate::engine::media_transport::rtc) fn media_format(
     kind: RouterMediaKind,
     payload: &PayloadParams,
 ) -> Result<RouterMediaFormat, TransportAdapterError> {
@@ -64,48 +75,6 @@ pub(super) fn media_format(
         |format, key, value| format.with_parameter(key, value),
         RouterMediaFormat::with_rtcp_feedback,
     ))
-}
-
-pub(super) fn rtx_capability(
-    kind: RouterMediaKind,
-    payload: &PayloadParams,
-) -> Result<Option<MediaCodecCapability>, TransportAdapterError> {
-    Ok(rtx_payload_types(payload)?.map(|(rtx_pt, associated_pt)| {
-        MediaCodecCapability::new(
-            kind,
-            rfc_rtp::CodecName::Rtx,
-            payload.spec().clock_rate.get(),
-        )
-        .with_payload_type(rtx_pt)
-        .with_setting(CodecSetting::RtxAssociation(associated_pt))
-    }))
-}
-
-pub(super) fn rtx_format(
-    kind: RouterMediaKind,
-    payload: &PayloadParams,
-) -> Result<Option<RouterMediaFormat>, TransportAdapterError> {
-    Ok(rtx_payload_types(payload)?.map(|(rtx_pt, associated_pt)| {
-        RouterMediaFormat::new(
-            kind,
-            rfc_rtp::CodecName::Rtx,
-            rtx_pt,
-            payload.spec().clock_rate.get(),
-        )
-        .with_setting(CodecSetting::RtxAssociation(associated_pt))
-    }))
-}
-
-fn rtx_payload_types(
-    payload: &PayloadParams,
-) -> Result<Option<(PayloadType, PayloadType)>, TransportAdapterError> {
-    let Some(rtx_payload_type) = payload.resend() else {
-        return Ok(None);
-    };
-    Ok(Some((
-        router_payload_type(*rtx_payload_type)?,
-        router_payload_type(*payload.pt())?,
-    )))
 }
 
 fn apply_payload_codec_facts<T>(
@@ -140,7 +109,6 @@ fn rtcp_feedback(payload: &PayloadParams) -> impl Iterator<Item = RtcpFeedback> 
         payload
             .fb_transport_cc()
             .then_some(RtcpFeedbackKind::TransportCc),
-        payload.fb_nack().then_some(RtcpFeedbackKind::Nack),
         payload.fb_pli().then_some(RtcpFeedbackKind::NackPli),
         payload.fb_fir().then_some(RtcpFeedbackKind::CcmFir),
         payload.fb_remb().then_some(RtcpFeedbackKind::GoogRemb),
@@ -149,3 +117,60 @@ fn rtcp_feedback(payload: &PayloadParams) -> impl Iterator<Item = RtcpFeedback> 
     .flatten()
     .map(|kind| RtcpFeedback::new(kind, None))
 }
+
+#[must_use]
+#[cfg(any(test, feature = "fuzzing"))]
+pub fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<MediaCapabilities> {
+    let answer = SdpAnswer::from_sdp_string(answer_sdp).ok()?;
+    client_rtp_capabilities_from_sdp_answer(&answer).unwrap_or_default()
+}
+
+pub(in crate::engine::media_transport::rtc) fn client_rtp_capabilities_from_sdp_answer(
+    answer: &SdpAnswer,
+) -> Result<Option<MediaCapabilities>, TransportAdapterError> {
+    let mut codecs = Vec::new();
+    let mut header_extensions = Vec::new();
+
+    for media_line in &answer.media_lines {
+        if media_line.disabled {
+            continue;
+        }
+        let rtp_parameters = media_line.rtp_params();
+        let Some(media_kind) = media_kind_label(&rtp_parameters) else {
+            continue;
+        };
+        for payload in &rtp_parameters {
+            if payload.spec().codec == Codec::Rtx {
+                continue;
+            }
+            let codec = media_capability(media_kind, payload)?;
+            if !codecs.contains(&codec) {
+                codecs.push(codec);
+            }
+        }
+        for (id, extension) in media_line.extmaps() {
+            let header_extension = header_extension((id, extension))?;
+            if !header_extensions.contains(&header_extension) {
+                header_extensions.push(header_extension);
+            }
+        }
+    }
+
+    if codecs.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(MediaCapabilities::new(codecs, header_extensions)))
+}
+
+fn media_kind_label(payloads: &[PayloadParams]) -> Option<RouterMediaKind> {
+    payloads
+        .iter()
+        .find(|payload| payload.spec().codec != Codec::Rtx)
+        .or_else(|| payloads.first())
+        .map(media_kind)
+}
+
+#[cfg(test)]
+#[path = "../TESTS/negotiated_capabilities.rs"]
+mod tests;

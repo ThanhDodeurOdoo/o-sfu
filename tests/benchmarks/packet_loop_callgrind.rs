@@ -104,13 +104,15 @@ fn route_plan_1024(mut topology: FanoutBenchTopology) -> usize {
 }
 
 // measures packet observation over a MID/RID packet followed by an SSRC-only
-// packet that relies on learned producer identity
+// packet that relies on learned producer identity, both with generic payloads
+// and with a negotiated VP8 keyframe/interframe pair
 //
 // this protects the packet-loop phase that learns source metadata, updates
 // active-speaker state, tracks RID liveness and records incoming bitrate before
 // route planning starts
 #[library_benchmark(config = callgrind_config(1.0))]
 #[bench::mid_rid_then_ssrc(IncomingObservationBenchFixture::mid_rid_then_ssrc())]
+#[bench::negotiated_vp8(IncomingObservationBenchFixture::negotiated_vp8())]
 fn incoming_observation_512(mut fixture: IncomingObservationBenchFixture) -> usize {
     black_box(fixture.observe_turns())
 }

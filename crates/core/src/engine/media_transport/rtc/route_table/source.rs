@@ -5,7 +5,7 @@ use std::{
 };
 
 use str0m::{
-    media::{Mid, Pt, Rid},
+    media::{Mid, Rid},
     rtp::Ssrc,
 };
 use tracing::debug;
@@ -15,6 +15,7 @@ use crate::engine::media_transport::{
     SourceActivityUpdate, TransportAdapterError, TransportMediaId, TransportRidActivity,
     TransportSessionKey, TransportSourceActivity, TransportSourceKey,
     rtc::{
+        codec,
         relay_registry::{
             ActiveRelayTarget, RelayPacketMailbox, RelaySourceRegistration, RelayTargetId,
         },
@@ -725,7 +726,7 @@ impl SourcePacketState {
 pub(super) struct ProducerSourceState {
     pub(super) registered: bool,
     pub(super) ssrcs: Vec<Ssrc>,
-    pub(super) vp8_payload_types: Vec<Pt>,
+    pub(super) packet_inspector: codec::PacketInspector,
     last_keyframe: Option<Instant>,
     rids: Vec<ProducerRidLiveness>,
 }
@@ -779,7 +780,7 @@ impl ProducerSourceState {
     pub(super) fn is_empty(&self) -> bool {
         !self.registered
             && self.ssrcs.is_empty()
-            && self.vp8_payload_types.is_empty()
+            && self.packet_inspector.is_empty()
             && self.last_keyframe.is_none()
             && self.rids.is_empty()
     }

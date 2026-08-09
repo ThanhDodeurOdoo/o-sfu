@@ -1068,7 +1068,7 @@ fn selected_rid_keyframe_does_not_admit_an_earlier_delta_from_the_same_batch() {
         4_321,
         Some(selected_rid),
     );
-    harness.state.routes.refresh_vp8_payload_types(
+    harness.state.routes.refresh_packet_inspector(
         src_media,
         &RouterRtpParameters::new(
             vec![MediaFormat::new(
@@ -1167,7 +1167,7 @@ fn inactive_source_ignores_late_rid_readiness_and_first_ingress_feedback() {
         4_321,
         Some(selected_rid),
     );
-    state.routes.refresh_vp8_payload_types(
+    state.routes.refresh_packet_inspector(
         src_media,
         &RouterRtpParameters::new(
             vec![MediaFormat::new(

@@ -3,14 +3,23 @@
     reason = "local send rewrite tests use panic only for mandatory fixture setup failures"
 )]
 
+use o_sfu_rfc::rtp::CodecName;
+use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaFormat, MediaStream, PayloadType},
+};
+use str0m::media::Pt;
+
 use super::*;
+
+const VP8_PAYLOAD_TYPE: u8 = 96;
 
 fn projected(
     streams: &mut ConsumerStreamStore,
     stream_handle: ConsumerStreamHandle,
     source_ssrc: Ssrc,
     source_timestamp: u32,
-    vp8_payload: Vp8PayloadIdentity,
+    codec_packet: codec::Packet,
 ) -> ProjectedIdentity {
     let source_seq_no = streams
         .streams
@@ -24,7 +33,7 @@ fn projected(
         source_ssrc,
         source_seq_no,
         source_timestamp,
-        vp8_payload,
+        codec_packet,
     )
 }
 
@@ -35,7 +44,7 @@ fn projected_packet(
     source_ssrc: Ssrc,
     source_seq_no: SeqNo,
     source_timestamp: u32,
-    vp8_payload: Vp8PayloadIdentity,
+    codec_packet: codec::Packet,
 ) -> ProjectedIdentity {
     let Some(identity) = streams.project_identity(
         stream_handle,
@@ -43,7 +52,7 @@ fn projected_packet(
         source_ssrc,
         source_seq_no,
         source_timestamp,
-        vp8_payload,
+        codec_packet.identity(),
     ) else {
         panic!("consumer stream handle should be live");
     };
@@ -57,11 +66,38 @@ fn allocate_at(streams: &mut ConsumerStreamStore, next_seq_no: u64) -> ConsumerS
     })
 }
 
-fn vp8(picture_id: u16, tl0_pic_idx: u8) -> Vp8PayloadIdentity {
-    Vp8PayloadIdentity {
-        picture_id: Some(picture_id),
-        tl0_pic_idx: Some(tl0_pic_idx),
-    }
+fn vp8_inspector() -> codec::PacketInspector {
+    codec::PacketInspector::from_parameters(&MediaStream::new(
+        vec![MediaFormat::new(
+            MediaKind::Video,
+            CodecName::Vp8,
+            PayloadType::new(VP8_PAYLOAD_TYPE),
+            90_000,
+        )],
+        vec![],
+        vec![],
+    ))
+}
+
+fn vp8_packet(
+    inspector: &codec::PacketInspector,
+    picture_id: u16,
+    tl0_pic_idx: u8,
+) -> codec::Packet {
+    let [picture_id_high, picture_id_low] = (picture_id & 0x7fff).to_be_bytes();
+    inspector.inspect(
+        Pt::from(VP8_PAYLOAD_TYPE),
+        &[
+            0x90,
+            0xe0,
+            0x80 | picture_id_high,
+            picture_id_low,
+            tl0_pic_idx,
+            0,
+            0,
+        ],
+        true,
+    )
 }
 
 #[test]
@@ -74,14 +110,14 @@ fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
         stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     let second = projected(
         &mut streams,
         stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
 
     assert_eq!(first.seq_no.roc(), 0);
@@ -89,10 +125,16 @@ fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
 }
 
 #[test]
-fn projected_sequence_numbers_preserve_source_loss_and_reordering() {
+fn reordered_packets_do_not_move_codec_high_water_before_source_switch() {
     let mut streams = ConsumerStreamStore::default();
     let stream_handle = streams.allocate();
     let source_ssrc = Ssrc::from(111);
+    let switched_ssrc = Ssrc::from(222);
+    let inspector = vp8_inspector();
+    let first_packet = vp8_packet(&inspector, 10, 10);
+    let after_loss_packet = vp8_packet(&inspector, 13, 13);
+    let reordered_packet = vp8_packet(&inspector, 12, 12);
+    let switched_packet = vp8_packet(&inspector, 1, 1);
 
     let first = projected_packet(
         &mut streams,
@@ -101,7 +143,7 @@ fn projected_sequence_numbers_preserve_source_loss_and_reordering() {
         source_ssrc,
         10_u64.into(),
         10_000,
-        Vp8PayloadIdentity::default(),
+        first_packet,
     );
     let after_loss = projected_packet(
         &mut streams,
@@ -110,7 +152,7 @@ fn projected_sequence_numbers_preserve_source_loss_and_reordering() {
         source_ssrc,
         13_u64.into(),
         13_000,
-        Vp8PayloadIdentity::default(),
+        after_loss_packet,
     );
     let reordered = projected_packet(
         &mut streams,
@@ -119,21 +161,47 @@ fn projected_sequence_numbers_preserve_source_loss_and_reordering() {
         source_ssrc,
         12_u64.into(),
         12_000,
-        Vp8PayloadIdentity::default(),
+        reordered_packet,
     );
-    let next = projected_packet(
+    let switched = projected_packet(
         &mut streams,
         stream_handle,
         0,
-        source_ssrc,
-        14_u64.into(),
-        14_000,
-        Vp8PayloadIdentity::default(),
+        switched_ssrc,
+        1_u64.into(),
+        20_000,
+        switched_packet,
     );
 
     assert_eq!(*after_loss.seq_no - *first.seq_no, 3);
     assert_eq!(*reordered.seq_no - *first.seq_no, 2);
-    assert!(after_loss.seq_no.is_next(next.seq_no));
+    assert!(after_loss.seq_no.is_next(switched.seq_no));
+    assert_eq!(
+        switched.transition,
+        SourceTransition::Switched {
+            previous_ssrc: source_ssrc
+        }
+    );
+
+    let mut projection = codec::Projection::default();
+    assert_eq!(
+        first.codec,
+        projection.project(first_packet.identity(), false)
+    );
+    assert_eq!(
+        after_loss.codec,
+        projection.project(after_loss_packet.identity(), false)
+    );
+    let mut reordered_projection = projection;
+    assert_eq!(
+        reordered.codec,
+        reordered_projection.project(reordered_packet.identity(), false)
+    );
+    assert_eq!(
+        switched.codec,
+        codec::Projection::default().project(vp8_packet(&inspector, 14, 14).identity(), false)
+    );
+    assert!(switched_packet.rewrite(switched.codec).is_some());
 }
 
 #[test]
@@ -141,6 +209,9 @@ fn delivery_generation_compacts_only_intentional_gaps() {
     let mut streams = ConsumerStreamStore::default();
     let stream_handle = streams.allocate();
     let source_ssrc = Ssrc::from(111);
+    let inspector = vp8_inspector();
+    let before_pause_packet = vp8_packet(&inspector, 10, 10);
+    let after_resume_packet = vp8_packet(&inspector, 1_000, 200);
 
     let before_pause = projected_packet(
         &mut streams,
@@ -149,7 +220,7 @@ fn delivery_generation_compacts_only_intentional_gaps() {
         source_ssrc,
         10_u64.into(),
         10_000,
-        Vp8PayloadIdentity::default(),
+        before_pause_packet,
     );
     let after_resume = projected_packet(
         &mut streams,
@@ -158,10 +229,19 @@ fn delivery_generation_compacts_only_intentional_gaps() {
         source_ssrc,
         1_000_u64.into(),
         20_000,
-        Vp8PayloadIdentity::default(),
+        after_resume_packet,
     );
 
     assert!(before_pause.seq_no.is_next(after_resume.seq_no));
+    let mut projection = codec::Projection::default();
+    assert_eq!(
+        before_pause.codec,
+        projection.project(before_pause_packet.identity(), false)
+    );
+    assert_eq!(
+        after_resume.codec,
+        projection.project(after_resume_packet.identity(), true)
+    );
     assert!(
         streams
             .project_identity(
@@ -170,7 +250,7 @@ fn delivery_generation_compacts_only_intentional_gaps() {
                 source_ssrc,
                 11_u64.into(),
                 11_000,
-                Vp8PayloadIdentity::default(),
+                vp8_packet(&inspector, 11, 11).identity(),
             )
             .is_none()
     );
@@ -187,21 +267,21 @@ fn projected_sequence_numbers_are_scoped_by_consumer_stream() {
         stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     let second = projected(
         &mut streams,
         stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     let other = projected(
         &mut streams,
         other_stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
 
     assert_eq!(first.seq_no.roc(), 0);
@@ -219,14 +299,14 @@ fn forgetting_transport_media_streams_drops_all_stream_state_for_that_consumer()
         stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     let second = projected(
         &mut streams,
         stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
 
     streams.release(stream_handle);
@@ -237,7 +317,7 @@ fn forgetting_transport_media_streams_drops_all_stream_state_for_that_consumer()
         replacement_stream_handle,
         Ssrc::from(111),
         1234,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     assert!(first.seq_no.is_next(second.seq_no));
     assert_eq!(reset.seq_no, first.seq_no);
@@ -256,7 +336,7 @@ fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
         replacement_handle,
         Ssrc::from(222),
         5678,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
 
     assert!(
@@ -267,7 +347,7 @@ fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
                 Ssrc::from(111),
                 0_u64.into(),
                 1234,
-                Vp8PayloadIdentity::default(),
+                codec::Packet::default().identity(),
             )
             .is_none()
     );
@@ -276,7 +356,7 @@ fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
         replacement_handle,
         Ssrc::from(222),
         5678,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     assert!(replacement.seq_no.is_next(replacement_next.seq_no));
 }
@@ -291,14 +371,14 @@ fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
         stream_handle,
         Ssrc::from(111),
         10_000,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     let second = projected(
         &mut streams,
         stream_handle,
         Ssrc::from(111),
         13_000,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
 
     assert_eq!(first.rtp_timestamp, 10_000);
@@ -317,21 +397,21 @@ fn projected_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
         stream_handle,
         Ssrc::from(111),
         90_000,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     let high = projected(
         &mut streams,
         stream_handle,
         Ssrc::from(222),
         1_000,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
     let high_next = projected(
         &mut streams,
         stream_handle,
         Ssrc::from(222),
         4_000,
-        Vp8PayloadIdentity::default(),
+        codec::Packet::default(),
     );
 
     assert_eq!(low.rtp_timestamp, 90_000);
@@ -345,140 +425,4 @@ fn projected_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
         }
     );
     assert_eq!(high_next.transition, SourceTransition::Unchanged);
-}
-
-#[test]
-fn projected_vp8_identifiers_wrap_across_source_switches() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let low = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        90_000,
-        vp8(32_767, 255),
-    );
-    let high = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        1_000,
-        vp8(12, 4),
-    );
-    let high_next = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        4_000,
-        vp8(14, 6),
-    );
-
-    assert_eq!(low.vp8_payload.picture_id, Some(32_767));
-    assert_eq!(low.vp8_payload.tl0_pic_idx, Some(255));
-    assert_eq!(high.vp8_payload.picture_id, Some(0));
-    assert_eq!(high.vp8_payload.tl0_pic_idx, Some(0));
-    assert_eq!(high_next.vp8_payload.picture_id, Some(2));
-    assert_eq!(high_next.vp8_payload.tl0_pic_idx, Some(2));
-}
-
-#[test]
-fn missing_vp8_fields_preserve_last_projected_identity_across_switches() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let low = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        90_000,
-        vp8(100, 30),
-    );
-    let high_gap = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        1_000,
-        Vp8PayloadIdentity::default(),
-    );
-    let high = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        4_000,
-        vp8(12, 4),
-    );
-
-    assert_eq!(low.vp8_payload.picture_id, Some(100));
-    assert_eq!(low.vp8_payload.tl0_pic_idx, Some(30));
-    assert_eq!(high_gap.vp8_payload, Vp8PayloadIdentity::default());
-    assert_eq!(high.vp8_payload.picture_id, Some(101));
-    assert_eq!(high.vp8_payload.tl0_pic_idx, Some(31));
-}
-
-#[test]
-fn missing_vp8_fields_are_tracked_independently_across_switches() {
-    let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
-
-    let _low = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(111),
-        90_000,
-        vp8(100, 30),
-    );
-    let missing_picture_id = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        1_000,
-        Vp8PayloadIdentity {
-            picture_id: None,
-            tl0_pic_idx: Some(4),
-        },
-    );
-    let picture_id_resumed = projected(
-        &mut streams,
-        stream_handle,
-        Ssrc::from(222),
-        4_000,
-        vp8(12, 5),
-    );
-
-    assert_eq!(missing_picture_id.vp8_payload.picture_id, None);
-    assert_eq!(missing_picture_id.vp8_payload.tl0_pic_idx, Some(31));
-    assert_eq!(picture_id_resumed.vp8_payload.picture_id, Some(101));
-    assert_eq!(picture_id_resumed.vp8_payload.tl0_pic_idx, Some(32));
-
-    let other_stream_handle = streams.allocate();
-    let _low = projected(
-        &mut streams,
-        other_stream_handle,
-        Ssrc::from(333),
-        90_000,
-        vp8(200, 40),
-    );
-    let missing_tl0 = projected(
-        &mut streams,
-        other_stream_handle,
-        Ssrc::from(444),
-        1_000,
-        Vp8PayloadIdentity {
-            picture_id: Some(12),
-            tl0_pic_idx: None,
-        },
-    );
-    let tl0_resumed = projected(
-        &mut streams,
-        other_stream_handle,
-        Ssrc::from(444),
-        4_000,
-        vp8(13, 4),
-    );
-
-    assert_eq!(missing_tl0.vp8_payload.picture_id, Some(201));
-    assert_eq!(missing_tl0.vp8_payload.tl0_pic_idx, None);
-    assert_eq!(tl0_resumed.vp8_payload.picture_id, Some(202));
-    assert_eq!(tl0_resumed.vp8_payload.tl0_pic_idx, Some(41));
 }

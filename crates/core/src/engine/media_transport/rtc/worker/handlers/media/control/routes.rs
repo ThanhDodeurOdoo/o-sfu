@@ -6,13 +6,13 @@ use crate::engine::media_transport::{
     SourceActivityUpdate, TransportAdapterError, TransportConsumerRoute, TransportMediaId,
     TransportResult, TransportSessionKey, TransportSourceKey,
     rtc::{
+        codec,
         commands::RemoteSourceControl,
         media_registry::RegisteredMediaHandle,
         relay_registry::{RelayPacketMailbox, RelayTargetId},
         route_control::PacketLayerGate,
-        simulcast,
         slots::ConsumerStreamHandle,
-        source_route::{MediaRouteDestination, vp8_payload_types},
+        source_route::MediaRouteDestination,
         state::PacketLoopState,
     },
 };
@@ -107,12 +107,11 @@ pub fn register_consumer_route(
         active,
     } = registration;
     let dest_payload_type = consumer_payload_type(consumer_rtp);
-    let requires_decoder_refresh = dest_payload_type
-        .is_some_and(|payload_type| vp8_payload_types(consumer_rtp).any(|pt| pt == payload_type));
+    let requires_decoder_refresh = codec::requires_decoder_refresh(consumer_rtp, dest_payload_type);
     let (packet_gate, pending_gate) = selected_rid::guarded_pkt_gate(
         requires_decoder_refresh,
         src_media,
-        simulcast::initial_consumer_packet_gate(consumer_rtp),
+        codec::initial_consumer_packet_gate(consumer_rtp),
     );
     let dst_idx = state.routes.add_consumer_route(
         src_media,

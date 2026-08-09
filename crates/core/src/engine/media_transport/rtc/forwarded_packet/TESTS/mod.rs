@@ -49,6 +49,10 @@ fn video_format(codec: CodecName, payload_type: u8) -> MediaFormat {
     )
 }
 
+fn project_codec_packet(packet: &codec::Packet) -> codec::ProjectedPacket {
+    codec::Projection::default().project(packet.identity(), false)
+}
+
 #[test]
 fn forwarded_packet_resolves_transport_media_id_through_the_registry() {
     let session_key = test_transport_session_key(41, 0, 9, UserId::Integer(7));
@@ -100,7 +104,7 @@ fn stale_local_forwarded_packet_does_not_resolve_through_reused_slot() {
     let mut packet = sample_local_forwarded_packet(stale_handle, "aud-up", b"payload");
 
     assert!(packet.src_key(&state).is_none());
-    assert_eq!(packet.resolve_facts(&state), None);
+    assert!(packet.resolve_facts(&state).is_none());
     assert!(
         packet
             .share_for_relay(&state, TransportMediaId::new(99))
@@ -127,7 +131,7 @@ fn forwarded_packet_decoder_refresh_follows_the_packet_payload_type() {
     );
     state
         .routes
-        .refresh_vp8_payload_types(transport_media_id, &parameters);
+        .refresh_packet_inspector(transport_media_id, &parameters);
     let mut vp8_packet = sample_forwarded_packet(
         session_key.clone(),
         "cam-up",
@@ -139,7 +143,7 @@ fn forwarded_packet_decoder_refresh_follows_the_packet_payload_type() {
         rtp.header.payload_type = 96.into();
     }
     let vp8_facts = vp8_packet.resolve_facts(&state);
-    assert!(vp8_facts.is_some_and(|facts| facts.decoder_refresh));
+    assert!(vp8_facts.is_some_and(|facts| facts.codec.decoder_refresh()));
 
     let mut h264_packet =
         sample_forwarded_packet_with_rid(session_key, "cam-up", Some("hi"), &[0x65, 0x88]);
@@ -147,7 +151,55 @@ fn forwarded_packet_decoder_refresh_follows_the_packet_payload_type() {
         rtp.header.payload_type = 111.into();
     }
     let h264_facts = h264_packet.resolve_facts(&state);
-    assert!(h264_facts.is_some_and(|facts| !facts.decoder_refresh && facts.vp8_payload.is_none()));
+    assert!(h264_facts.is_some_and(|facts| !facts.codec.decoder_refresh()));
+}
+
+#[test]
+fn producer_packet_inspector_rebuilds_on_renegotiation_and_clear() {
+    let session_key = test_transport_session_key(54, 0, 22, UserId::Integer(20));
+    let producer_mid = Mid::from("cam-up");
+    let payload_type = 96.into();
+    let keyframe = [
+        0x10, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+    ];
+    let mut state = PacketLoopState::default();
+    let source_id = state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: session_key.clone(),
+        mid: producer_mid,
+    });
+    let vp8 = RouterRtpParameters::new(vec![video_format(CodecName::Vp8, 96)], vec![], vec![]);
+    let h264 = RouterRtpParameters::new(vec![video_format(CodecName::H264, 96)], vec![], vec![]);
+
+    state.refresh_producer_ssrcs(&session_key, producer_mid, &vp8);
+    assert!(
+        state
+            .routes
+            .inspect_packet(source_id, payload_type, &keyframe, false)
+            .decoder_refresh()
+    );
+
+    state.refresh_producer_ssrcs(&session_key, producer_mid, &h264);
+    assert!(
+        !state
+            .routes
+            .inspect_packet(source_id, payload_type, &keyframe, true)
+            .decoder_refresh()
+    );
+
+    state.refresh_producer_ssrcs(&session_key, producer_mid, &vp8);
+    assert!(
+        state
+            .routes
+            .inspect_packet(source_id, payload_type, &keyframe, false)
+            .decoder_refresh()
+    );
+    state.clear_producer_ssrcs_for_mid(&session_key, producer_mid);
+    assert!(
+        !state
+            .routes
+            .inspect_packet(source_id, payload_type, &keyframe, true)
+            .decoder_refresh()
+    );
 }
 
 #[test]
@@ -163,7 +215,7 @@ fn forwarded_packet_relay_clone_preserves_source_facts() {
         session_key,
         mid: Mid::from("cam-up"),
     });
-    source_state.routes.refresh_vp8_payload_types(
+    source_state.routes.refresh_packet_inspector(
         src_media,
         &RouterRtpParameters::new(vec![video_format(CodecName::Vp8, 111)], vec![], vec![]),
     );
@@ -171,11 +223,15 @@ fn forwarded_packet_relay_clone_preserves_source_facts() {
         session_handle,
         "cam-up",
         &[
-            0x10, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+            0x90, 0xe0, 0x80, 0x02, 0x09, 0x00, 0x00, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02,
+            0x68, 0x01,
         ],
     );
+    if let ForwardedPacketData::RelayRtp(rtp) = &mut source_packet.data {
+        rtp.header.ext_vals.rid = Some(Rid::from("hi"));
+    }
     let source_facts = source_packet.resolve_facts(&source_state);
-    assert!(source_facts.is_some_and(|facts| facts.decoder_refresh));
+    assert!(source_facts.is_some_and(|facts| facts.codec.decoder_refresh()));
 
     let relay_packet = source_packet.share_for_relay(&source_state, src_media);
     assert!(relay_packet.is_some());
@@ -183,10 +239,20 @@ fn forwarded_packet_relay_clone_preserves_source_facts() {
         return;
     };
 
-    assert_eq!(
-        relay_packet.resolve_facts(&PacketLoopState::default()),
-        source_facts
-    );
+    let relay_facts = relay_packet.resolve_facts(&PacketLoopState::default());
+    assert!(relay_facts.is_some());
+    let (Some(source_facts), Some(relay_facts)) = (source_facts, relay_facts) else {
+        return;
+    };
+    assert_eq!(relay_facts.src_media, source_facts.src_media);
+    assert_eq!(relay_facts.rid, source_facts.rid);
+    assert_eq!(relay_facts.room_instance_id, source_facts.room_instance_id);
+    assert_eq!(relay_facts.voice_activity, source_facts.voice_activity);
+    assert_eq!(relay_facts.audio_level, source_facts.audio_level);
+    assert!(relay_facts.codec.decoder_refresh());
+    let source_codec = project_codec_packet(&source_facts.codec);
+    assert_ne!(source_codec, codec::ProjectedPacket::default());
+    assert_eq!(project_codec_packet(&relay_facts.codec), source_codec);
 }
 
 #[test]
@@ -209,39 +275,36 @@ fn forwarded_packet_relay_clone_keeps_payload_and_explicit_source_media_id() {
 }
 
 #[test]
-fn forwarded_packet_facts_expose_vp8_payload_identity() {
+fn forwarded_packet_facts_carry_codec_packet() {
     let session_key = test_transport_session_key(50, 0, 18, UserId::Integer(16));
     let mut state = PacketLoopState::default();
     let transport_media_id = state.register_media_handle(RegisteredMediaHandle::Producer {
         session_key: session_key.clone(),
         mid: Mid::from("cam-up"),
     });
-    state.routes.refresh_vp8_payload_types(
-        transport_media_id,
-        &RouterRtpParameters::new(vec![video_format(CodecName::Vp8, 111)], vec![], vec![]),
-    );
-    let mut packet = sample_forwarded_packet_with_rid(
-        session_key,
-        "cam-up",
-        Some("hi"),
-        &[0x90, 0xe0, 0x80, 0x02, 0x09, 0x00, 0x00],
-    );
+    let parameters =
+        RouterRtpParameters::new(vec![video_format(CodecName::Vp8, 111)], vec![], vec![]);
+    state
+        .routes
+        .refresh_packet_inspector(transport_media_id, &parameters);
+    let payload = [0x90, 0xe0, 0x80, 0x02, 0x09, 0x00, 0x00];
+    let mut packet = sample_forwarded_packet_with_rid(session_key, "cam-up", Some("hi"), &payload);
     let facts = packet.resolve_facts(&state);
     assert!(facts.is_some());
     let Some(facts) = facts else {
         return;
     };
-    let vp8_payload = facts.vp8_payload;
-    assert!(vp8_payload.is_some());
-    let Some(vp8_payload) = vp8_payload else {
-        return;
-    };
-
     assert_eq!(facts.src_media, transport_media_id);
     assert_eq!(facts.rid, Some(Rid::from("hi")));
-    assert_eq!(vp8_payload.identity.picture_id, Some(2));
-    assert_eq!(vp8_payload.identity.tl0_pic_idx, Some(9));
-    assert_eq!(packet.local_vp8_payload(), Some(vp8_payload));
+    let expected = project_codec_packet(
+        &codec::PacketInspector::from_parameters(&parameters).inspect(111.into(), &payload, true),
+    );
+    assert_ne!(expected, codec::ProjectedPacket::default());
+    assert_eq!(project_codec_packet(&facts.codec), expected);
+    assert_eq!(
+        packet.local_codec_packet().map(project_codec_packet),
+        Some(expected)
+    );
 }
 
 #[test]
@@ -254,21 +317,15 @@ fn forwarded_packet_recovers_rid_from_ssrc_binding_when_extension_is_absent() {
         session_key: session_key.clone(),
         mid: producer_mid,
     });
-    state.refresh_producer_ssrcs(
-        &session_key,
-        producer_mid,
-        &RouterRtpParameters::new(
-            vec![video_format(CodecName::Vp8, 96)],
-            vec![],
-            vec![StreamBinding::new().with_ssrc(producer_ssrc).with_rid("hi")],
-        )
-        .with_mid(producer_mid.to_string()),
-    );
-    let mut packet = sample_forwarded_packet_without_mid(
-        session_key,
-        producer_ssrc,
-        &[0x90, 0xe0, 0x80, 0x02, 0x09, 0x00, 0x00],
-    );
+    let parameters = RouterRtpParameters::new(
+        vec![video_format(CodecName::Vp8, 96)],
+        vec![],
+        vec![StreamBinding::new().with_ssrc(producer_ssrc).with_rid("hi")],
+    )
+    .with_mid(producer_mid.to_string());
+    state.refresh_producer_ssrcs(&session_key, producer_mid, &parameters);
+    let payload = [0x90, 0xe0, 0x80, 0x02, 0x09, 0x00, 0x00];
+    let mut packet = sample_forwarded_packet_without_mid(session_key, producer_ssrc, &payload);
     if let ForwardedPacketData::RelayRtp(rtp) = &mut packet.data {
         rtp.header.payload_type = 96.into();
     }
@@ -280,13 +337,11 @@ fn forwarded_packet_recovers_rid_from_ssrc_binding_when_extension_is_absent() {
     };
 
     assert_eq!(facts.rid, Some(Rid::from("hi")));
-    assert_eq!(
-        facts.vp8_payload.map(|payload| payload.identity),
-        Some(Vp8PayloadIdentity {
-            picture_id: Some(2),
-            tl0_pic_idx: Some(9),
-        })
+    let expected = project_codec_packet(
+        &codec::PacketInspector::from_parameters(&parameters).inspect(96.into(), &payload, true),
     );
+    assert_ne!(expected, codec::ProjectedPacket::default());
+    assert_eq!(project_codec_packet(&facts.codec), expected);
 }
 
 #[test]

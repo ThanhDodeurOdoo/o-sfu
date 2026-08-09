@@ -1,5 +1,8 @@
 use std::{future::Future, pin::Pin};
 
+use o_sfu_router::MediaKind;
+use str0m::rtp::Vp8Descriptor;
+
 use super::support::{self as s, media as m, setup as st};
 
 #[tokio::test]
@@ -13,6 +16,64 @@ async fn fake_rtc_peers_forward_vp8_high_rid_keyframe_without_browsers() -> s::T
         s::FakeMediaSource::vp8_camera_high(),
     ))
     .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_rtc_vp8_ssrc_switch_rewrites_serialized_descriptor() -> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let publisher_id = s::UserId::Integer(74);
+    let st::ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = st::ready_room_fake_integer_peers("issuer-vp8-ssrc-rewrite", 74, 75).await?;
+
+    let mut source = s::FakeMediaSource::vp8_camera_high();
+    m::publish_video_source_and_ready_route(
+        &server,
+        &room,
+        &mut publisher,
+        &mut subscriber,
+        &publisher_id,
+        &source,
+    )
+    .await;
+    m::assert_video_subscription_selected_rid(&server, &room, &subscriber, &publisher_id, "hi")
+        .await;
+
+    let mut clock = s::FakeClock::default();
+    let first_input = s::require_some(
+        publisher.send_rtp_packet(&mut source, &mut clock).await,
+        "first VP8 packet should send",
+    )?;
+    let first_output = s::require_some(
+        subscriber.read_rtp_packet(s::Duration::from_secs(5)).await,
+        "first VP8 packet should arrive",
+    )?;
+
+    assert_eq!(vp8_identity(&first_input), Some((1, 1)));
+    assert_eq!(vp8_identity(&first_output.payload), Some((1, 1)));
+
+    s::require_some(
+        publisher.reset_rtp_ssrc(MediaKind::Video, Some("hi")),
+        "VP8 sender SSRC should reset",
+    )?;
+    let mut restarted_source = s::FakeMediaSource::vp8_camera_high();
+    let restarted_input = s::require_some(
+        publisher
+            .send_rtp_packet(&mut restarted_source, &mut clock)
+            .await,
+        "restarted VP8 packet should send",
+    )?;
+    let restarted_output = s::require_some(
+        subscriber.read_rtp_packet(s::Duration::from_secs(5)).await,
+        "restarted VP8 packet should arrive",
+    )?;
+
+    assert_eq!(vp8_identity(&restarted_input), Some((1, 1)));
+    assert_eq!(vp8_identity(&restarted_output.payload), Some((2, 2)));
     Ok(())
 }
 
@@ -275,4 +336,9 @@ fn h264_config() -> s::Config {
         .with_vp8(false)
         .with_h264(true);
     config
+}
+
+fn vp8_identity(payload: &[u8]) -> Option<(u16, u8)> {
+    let descriptor = Vp8Descriptor::parse(payload).ok()?;
+    Some((descriptor.picture_id()?, descriptor.tl0_pic_idx()?))
 }

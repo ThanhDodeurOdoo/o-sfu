@@ -23,8 +23,7 @@ use tracing::debug;
 
 use super::{
     super::super::{
-        RtpProfile, bitrate::BitrateRegistry, bootstrap, negotiated_capabilities, simulcast,
-        state::PacketLoopState,
+        RtpProfile, bitrate::BitrateRegistry, bootstrap, codec, state::PacketLoopState,
     },
     publication::{answer_producer_projection, refresh_negotiated_producer_parameters},
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
@@ -158,8 +157,7 @@ pub(super) fn worker_apply_session_answer(
     let answer = SdpAnswer::from_sdp_string(answer_sdp)
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
-    let client_capabilities =
-        negotiated_capabilities::client_rtp_capabilities_from_sdp_answer(&answer)?;
+    let client_capabilities = codec::client_rtp_capabilities_from_sdp_answer(&answer)?;
     let producer_answer_projection = answer_producer_projection(&answer, &producer_mids)?;
     let offer_encodings = offer_encodings_by_mid(state, session_key, &producer_mids)?;
     let rids_by_mid = producer_mids
@@ -169,7 +167,7 @@ pub(super) fn worker_apply_session_answer(
                 .get(mid)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            simulcast::send_rids_for_mid(answer_sdp, *mid, encodings)
+            codec::send_rids_for_mid(answer_sdp, *mid, encodings)
                 .map(|rids| (*mid, rids))
                 .map_err(|_error| TransportAdapterError::InvalidInput)
         })
@@ -263,7 +261,7 @@ fn offer_encodings_by_mid(
         let Some(media_kind) = session_state.rtc.media(*mid).map(Media::kind) else {
             continue;
         };
-        let simulcast_encodings = simulcast::publish_upload_encodings(media_kind, rtp_parameters);
+        let simulcast_encodings = codec::publish_upload_encodings(media_kind, rtp_parameters);
         if simulcast_encodings.is_empty() {
             continue;
         }
@@ -275,7 +273,7 @@ fn offer_encodings_by_mid(
 fn upload_encodings_for_mid(
     upload_slots: &[SessionUploadSlot],
     mid: Mid,
-    accepted_rids: &[simulcast::NegotiatedRid],
+    accepted_rids: &[codec::NegotiatedRid],
 ) -> Vec<SessionUploadEncoding> {
     let mid_name: &str = &mid;
     let Some(slot) = upload_slots.iter().find(|slot| slot.mid == mid_name) else {
@@ -389,7 +387,7 @@ fn ensure_initial_negotiation_media(
                 INITIAL_NEGOTIATION_DIRECTION,
                 None,
                 None,
-                simulcast::bootstrap_recv_simulcast(media_kind, profile, video_bitrate_limits),
+                codec::bootstrap_recv_simulcast(media_kind, profile, video_bitrate_limits),
             )
         })
         .collect();
@@ -407,7 +405,7 @@ fn initial_upload_slots(
             mid: mid.to_string(),
             kind: upload_kind(*media_kind),
             codecs: profile.codec_names(*media_kind).to_vec(),
-            simulcast_encodings: simulcast::bootstrap_upload_encodings(
+            simulcast_encodings: codec::bootstrap_upload_encodings(
                 *media_kind,
                 profile,
                 video_bitrate_limits,
