@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use o_sfu_rfc::rtp as rfc_rtp;
-use o_sfu_router::rtp::CodecSetting;
+use o_sfu_router::rtp::{CodecSetting, RtcpFeedbackKind};
 
 use super::client_rtp_capabilities_from_answer;
 
@@ -68,6 +68,16 @@ fn chromium_answer_projection_keeps_optional_video_profiles_without_rtx() {
         BTreeSet::from([Some(String::from("0")), Some(String::from("2"))])
     );
 
+    assert!(projected.codecs().all(|codec| {
+        codec
+            .rtcp_feedback()
+            .all(|feedback| feedback.kind() != &RtcpFeedbackKind::Nack)
+    }));
+    assert!(projected.codecs().any(|codec| {
+        codec
+            .rtcp_feedback()
+            .any(|feedback| feedback.kind() == &RtcpFeedbackKind::NackPli)
+    }));
     assert!(projected.codecs().all(|codec| codec.codec_name() != "rtx"));
 }
 

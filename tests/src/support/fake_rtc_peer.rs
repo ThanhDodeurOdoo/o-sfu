@@ -182,6 +182,15 @@ impl FakeRtcPeer {
         .await
     }
 
+    pub fn reset_rtp_ssrc(&mut self, media_kind: MediaKind, rid: Option<&str>) -> Option<()> {
+        let mid = self.send_paths.get(&media_kind)?.mid;
+        let ssrc = self.next_synthetic_ssrc();
+        self.rtc
+            .direct_api()
+            .reset_stream_tx(mid, rid.map(Rid::from), ssrc, None)?;
+        Some(())
+    }
+
     fn apply_keyframe_requests(&mut self, source: &mut FakeMediaSource) {
         let Some(mid) = self
             .send_paths

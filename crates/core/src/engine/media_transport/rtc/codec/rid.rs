@@ -1,10 +1,8 @@
-//! Shared RID simulcast helpers for RTC-edge codec profiles.
+//! Shared RID and SDP mechanics for codec simulcast profiles.
 
 use o_sfu_rfc::webrtc;
-use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
-use str0m::media::{
-    Mid, Rid as Str0mRid, Simulcast as Str0mSimulcast, SimulcastLayer as Str0mSimulcastLayer,
-};
+use o_sfu_router::rtp::MediaStream;
+use str0m::media::{Mid, Rid, Simulcast, SimulcastLayer};
 
 use crate::{
     Bitrate, VideoBitrateLimits,
@@ -14,54 +12,44 @@ use crate::{
 pub(super) const DEFAULT_LOW_RID: &str = "lo";
 pub(super) const DEFAULT_HIGH_RID: &str = "hi";
 pub(super) const DEFAULT_LOW_MAX_BITRATE: Bitrate = Bitrate::from_kbps(150);
-const DEFAULT_LOW_RESOLUTION_SCALE: u16 = 4;
-const DEFAULT_HIGH_RESOLUTION_SCALE: u16 = 1;
 const MAX_SEND_STREAMS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NegotiatedRid {
-    pub rid: Str0mRid,
-    pub max_bitrate: Option<Bitrate>,
+pub(in crate::engine::media_transport::rtc) struct NegotiatedRid {
+    pub(in crate::engine::media_transport::rtc) rid: Rid,
+    pub(in crate::engine::media_transport::rtc) max_bitrate: Option<Bitrate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SimulcastAnswerError;
+pub(in crate::engine::media_transport::rtc) struct SimulcastAnswerError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SimulcastLayerSpec<'a> {
+pub(super) struct LayerSpec<'a> {
     pub(super) rid: &'a str,
     pub(super) max_bitrate: Option<Bitrate>,
-    pub(super) resolution_scale: u16,
-    pub(super) max_framerate: Option<u16>,
 }
 
-pub(super) fn default_layer_specs(
-    video_bitrate_limits: VideoBitrateLimits,
-) -> [SimulcastLayerSpec<'static>; 2] {
+pub(super) fn default_layers(video_bitrate_limits: VideoBitrateLimits) -> [LayerSpec<'static>; 2] {
     let high_max_bitrate = video_bitrate_limits.max_video_bitrate();
     [
-        SimulcastLayerSpec {
+        LayerSpec {
             rid: DEFAULT_LOW_RID,
             max_bitrate: Some(DEFAULT_LOW_MAX_BITRATE.min(high_max_bitrate)),
-            resolution_scale: DEFAULT_LOW_RESOLUTION_SCALE,
-            max_framerate: None,
         },
-        SimulcastLayerSpec {
+        LayerSpec {
             rid: DEFAULT_HIGH_RID,
             max_bitrate: Some(high_max_bitrate),
-            resolution_scale: DEFAULT_HIGH_RESOLUTION_SCALE,
-            max_framerate: None,
         },
     ]
 }
 
-pub(super) fn recv_simulcast_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> Str0mSimulcast {
-    Str0mSimulcast {
+pub(super) fn recv_simulcast(layers: &[LayerSpec<'_>]) -> Simulcast {
+    Simulcast {
         send: Vec::new(),
         recv: layers
             .iter()
-            .map(|layer| Str0mSimulcastLayer {
-                rid: Str0mRid::from(layer.rid),
+            .map(|layer| SimulcastLayer {
+                rid: Rid::from(layer.rid),
                 attributes: layer.max_bitrate.map(|max_bitrate| {
                     vec![(
                         webrtc::sdp::rid_restriction::MAX_BITRATE.to_owned(),
@@ -73,39 +61,33 @@ pub(super) fn recv_simulcast_from_specs(layers: &[SimulcastLayerSpec<'_>]) -> St
     }
 }
 
-pub(super) fn layers_from_rid_bindings(
-    rtp_parameters: &RouterRtpParameters,
-) -> Option<Vec<SimulcastLayerSpec<'_>>> {
+pub(super) fn layers_from_bindings(parameters: &MediaStream) -> Option<Vec<LayerSpec<'_>>> {
     let mut layers = Vec::new();
-    for encoding in rtp_parameters.bindings() {
+    for encoding in parameters.bindings() {
         let Some(rid) = encoding.rid() else {
             continue;
         };
         if !webrtc::sdp::rid::is_id(rid)
-            || layers
-                .iter()
-                .any(|layer: &SimulcastLayerSpec<'_>| layer.rid == rid)
+            || layers.iter().any(|layer: &LayerSpec<'_>| layer.rid == rid)
         {
             continue;
         }
-        layers.push(SimulcastLayerSpec {
+        layers.push(LayerSpec {
             rid,
             max_bitrate: encoding.max_bitrate().map(Bitrate::from_bps),
-            resolution_scale: resolution_scale_for_index(layers.len()),
-            max_framerate: None,
         });
     }
     (layers.len() >= 2).then_some(layers)
 }
 
-pub(super) fn initial_packet_gate(
-    consumer_rtp_parameters: &RouterRtpParameters,
+pub(in crate::engine::media_transport::rtc) fn initial_packet_gate(
+    parameters: &MediaStream,
 ) -> PacketLayerGate {
     let mut first_rid = None;
     let mut lowest_bitrate_rid = None;
     let mut all_encodings_have_bitrate = true;
-    for encoding in consumer_rtp_parameters.bindings() {
-        let Some(rid) = encoding.rid().map(Str0mRid::from) else {
+    for encoding in parameters.bindings() {
+        let Some(rid) = encoding.rid().map(Rid::from) else {
             return PacketLayerGate::Open;
         };
         if first_rid.is_none() {
@@ -130,7 +112,7 @@ pub(super) fn initial_packet_gate(
     first_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
 }
 
-pub(super) fn send_rids_for_mid(
+pub(in crate::engine::media_transport::rtc) fn send_rids_for_mid(
     answer_sdp: &str,
     mid: Mid,
     offered_encodings: &[SessionUploadEncoding],
@@ -143,7 +125,7 @@ pub(super) fn send_rids_for_mid(
         let declaration = send_rid_declaration(section, rid)?;
         let max_bitrate = negotiated_rid_max_bitrate(declaration, offered_encodings)?;
         rids.push(NegotiatedRid {
-            rid: Str0mRid::from(declaration.rid),
+            rid: Rid::from(declaration.rid),
             max_bitrate,
         });
     }
@@ -364,14 +346,6 @@ fn parse_rid_restrictions(
     Ok(max_bitrate)
 }
 
-fn resolution_scale_for_index(index: usize) -> u16 {
-    if index == 0 {
-        DEFAULT_LOW_RESOLUTION_SCALE
-    } else {
-        DEFAULT_HIGH_RESOLUTION_SCALE
-    }
-}
-
 #[cfg(test)]
-#[path = "TESTS/consumer.rs"]
-mod consumer_tests;
+#[path = "TESTS/rid.rs"]
+mod tests;

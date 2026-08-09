@@ -5,7 +5,7 @@
 //! source route data types live in `source_route`
 //! negotiated browser media lookup remains in `media_registry`
 //!
-//! VP8 decoder recovery joins destination gates with keyframe retry state:
+//! Observable decoder recovery joins destination gates with keyframe retry state:
 //!
 //! ```text
 //! decoder-gated route change or resume        ingress restart
@@ -24,7 +24,7 @@
 //!                                   |
 //!                      +------------+-----------+
 //!                      |                        |
-//!               blocked delta packet       VP8 refresh
+//!               blocked delta packet     decoder refresh
 //!                      |                        |
 //!                     drop            activate pending gate
 //!                                               |
@@ -32,7 +32,7 @@
 //!                                    plan and forward refresh
 //! ```
 //!
-//! This demand-coupled loop applies when VP8 parsing can observe completion.
+//! This demand-coupled loop applies when codec inspection can observe completion.
 //! Consumer feedback and opaque recovery keep bounded retry tails.
 //! `record_incoming_packet` must run before `plan_forwards` for each packet
 //! so the activating refresh is eligible without exposing earlier delta packets
@@ -61,6 +61,7 @@ use tracing::debug;
 
 use super::{
     bitrate::MediaBitrateCounter,
+    codec,
     commands::RemoteSourceControl,
     keyframe_tracker::{
         KeyframeRequestDecision, KeyframeRequestOrigin, KeyframeRequestTracker,
@@ -68,9 +69,7 @@ use super::{
     },
     relay_registry::{ActiveRelayTarget, RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
-    source_route::{
-        MediaRouteDestination, MediaRouteEntry, RemoteSourceRegistration, vp8_payload_types,
-    },
+    source_route::{MediaRouteDestination, MediaRouteEntry, RemoteSourceRegistration},
 };
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityUpdate,
@@ -451,30 +450,36 @@ impl RouteTable {
         }
     }
 
-    pub(super) fn is_vp8_payload(&self, source_id: TransportMediaId, payload_type: Pt) -> bool {
+    pub(super) fn inspect_packet(
+        &self,
+        source_id: TransportMediaId,
+        payload_type: Pt,
+        payload: &[u8],
+        has_rid: bool,
+    ) -> codec::Packet {
         self.sources
             .get(&source_id)
-            .is_some_and(|source| source.producer.vp8_payload_types.contains(&payload_type))
+            .map_or(codec::Packet::default(), |source| {
+                source
+                    .producer
+                    .packet_inspector
+                    .inspect(payload_type, payload, has_rid)
+            })
     }
 
-    pub(super) fn clear_vp8_payload_types(&mut self, source_id: TransportMediaId) {
+    pub(super) fn clear_packet_inspector(&mut self, source_id: TransportMediaId) {
         if let Some(source) = self.sources.get_mut(&source_id) {
-            source.producer.vp8_payload_types.clear();
+            source.producer.packet_inspector = codec::PacketInspector::default();
         }
     }
 
-    /// Refreshes VP8 payload-type classification from negotiated RTP parameters.
-    pub(super) fn refresh_vp8_payload_types(
+    pub(super) fn refresh_packet_inspector(
         &mut self,
         source_id: TransportMediaId,
         parameters: &MediaStream,
     ) {
-        let payload_types = vp8_payload_types(parameters).collect::<Vec<_>>();
-        if payload_types.is_empty() {
-            self.clear_vp8_payload_types(source_id);
-        } else {
-            self.source_mut(source_id).producer.vp8_payload_types = payload_types;
-        }
+        let packet_inspector = codec::PacketInspector::from_parameters(parameters);
+        self.source_mut(source_id).producer.packet_inspector = packet_inspector;
     }
 
     pub(super) fn observe_producer_packet(
@@ -560,9 +565,12 @@ impl RouteTable {
     }
 
     pub(super) fn decoder_refresh_is_observable(&self, source_id: TransportMediaId) -> bool {
-        self.sources
-            .get(&source_id)
-            .is_some_and(|source| !source.producer.vp8_payload_types.is_empty())
+        self.sources.get(&source_id).is_some_and(|source| {
+            source
+                .producer
+                .packet_inspector
+                .decoder_refresh_is_observable()
+        })
     }
 
     pub(super) fn drain_due_kf_reqs(

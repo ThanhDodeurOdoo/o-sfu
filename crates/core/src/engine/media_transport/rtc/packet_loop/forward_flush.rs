@@ -81,6 +81,7 @@ pub(super) fn record_incoming_packet(
     };
     let payload_len = packet.payload().len();
     let transport_media_id = facts.src_media;
+    let decoder_refresh = facts.codec.decoder_refresh();
     if packet.route_control_mid().is_some() {
         state.learn_producer_ssrc_from_pkt(
             packet.source(),
@@ -95,7 +96,7 @@ pub(super) fn record_incoming_packet(
         facts.audio_level,
         packet.received_at(),
     );
-    if facts.decoder_refresh {
+    if decoder_refresh {
         let cleared = state
             .routes
             .observe_decoder_refresh(transport_media_id, facts.rid);
@@ -110,15 +111,15 @@ pub(super) fn record_incoming_packet(
             .push(facts.room_instance_id);
     }
     let packet_rid = facts.rid;
-    if packet_rid.is_some() || facts.decoder_refresh {
+    if packet_rid.is_some() || decoder_refresh {
         state.routes.observe_producer_packet(
             transport_media_id,
             packet_rid,
-            facts.decoder_refresh,
+            decoder_refresh,
             packet.received_at(),
         );
     }
-    if facts.decoder_refresh {
+    if decoder_refresh {
         let scope = if packet_rid.is_some() {
             RtpDecoderRefreshScope::Rid
         } else {
@@ -126,7 +127,7 @@ pub(super) fn record_incoming_packet(
         };
         rtp.record_decoder_refresh(scope);
     }
-    let check_readiness = facts.decoder_refresh
+    let check_readiness = decoder_refresh
         || packet_rid.is_some_and(|rid| buffers.observe_rid_once(transport_media_id, rid));
     if check_readiness {
         let route_changed = packet.src_key(state).cloned().is_some_and(|src_key| {
@@ -136,7 +137,7 @@ pub(super) fn record_incoming_packet(
                 &src_key,
                 transport_media_id,
                 packet_rid,
-                facts.decoder_refresh,
+                decoder_refresh,
                 packet.received_at(),
             )
         });

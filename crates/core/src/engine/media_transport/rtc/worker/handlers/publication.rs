@@ -30,7 +30,7 @@ use {
 
 use super::{
     super::super::{
-        rtp_projection, simulcast,
+        codec,
         state::{PacketLoopState, RtcSessionState},
     },
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
@@ -64,7 +64,7 @@ pub(super) fn answer_producer_projection(
                 header_extensions: media_line
                     .extmaps()
                     .into_iter()
-                    .map(rtp_projection::header_extension)
+                    .map(codec::header_extension)
                     .collect::<Result<Vec<_>, _>>()?,
                 primary_ssrcs: media_line
                     .ssrc_info()
@@ -82,7 +82,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
     session_key: &TransportSessionKey,
     producer_mids: &[Mid],
     answer_projection: Vec<AnswerProducerProjection>,
-    rids_by_mid: &BTreeMap<Mid, Vec<simulcast::NegotiatedRid>>,
+    rids_by_mid: &BTreeMap<Mid, Vec<codec::NegotiatedRid>>,
     max_bitrate_in: Bitrate,
 ) -> Result<Vec<(Mid, RouterRtpParameters)>, TransportAdapterError> {
     let mut refreshed_parameters = Vec::with_capacity(producer_mids.len());
@@ -113,7 +113,7 @@ pub(super) fn refresh_negotiated_producer_parameters(
             let Some(primary_payload) = media_line.payload_params.first() else {
                 continue;
             };
-            let primary_payload_type = rtp_projection::router_payload_type(*primary_payload.pt())?;
+            let primary_payload_type = codec::router_payload_type(*primary_payload.pt())?;
             let formats = project_media_formats(media_kind, &media_line.payload_params)?;
             let rids = rids_by_mid.get(&mid).map(Vec::as_slice).unwrap_or_default();
             let bindings = project_bindings(
@@ -237,21 +237,17 @@ fn project_media_formats(
     media_kind: RouterMediaKind,
     payload_params: &[PayloadParams],
 ) -> Result<Vec<RouterMediaFormat>, TransportAdapterError> {
-    let mut formats = Vec::with_capacity(payload_params.len().saturating_mul(2));
-    for params in payload_params {
-        formats.push(rtp_projection::media_format(media_kind, params)?);
-        if let Some(rtx) = rtp_projection::rtx_format(media_kind, params)? {
-            formats.push(rtx);
-        }
-    }
-    Ok(formats)
+    payload_params
+        .iter()
+        .map(|params| codec::media_format(media_kind, params))
+        .collect()
 }
 
 fn project_bindings(
     session_state: &mut RtcSessionState,
     mid: Mid,
     primary_payload_type: PayloadType,
-    rids: &[simulcast::NegotiatedRid],
+    rids: &[codec::NegotiatedRid],
     primary_ssrcs: &[u32],
 ) -> Vec<StreamBinding> {
     if !rids.is_empty() {

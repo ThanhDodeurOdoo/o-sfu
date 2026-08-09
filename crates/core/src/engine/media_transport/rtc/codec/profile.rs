@@ -7,7 +7,7 @@ use str0m::{
     rtp::Extension,
 };
 
-use super::rtp_projection;
+use super::capabilities;
 use crate::{
     AudioCodecPreference, CodecPreferences, MediaCodecFlags, VideoCodecPreference,
     engine::media_transport::TransportAdapterError,
@@ -78,9 +78,8 @@ impl RtpProfile {
         let mut audio_names = Vec::new();
         let mut video_names = Vec::new();
         for payload in config.codec_config().params() {
-            let kind = rtp_projection::media_kind(payload);
-            router_codecs.push(rtp_projection::media_capability(kind, payload)?);
-            router_codecs.extend(rtp_projection::rtx_capability(kind, payload)?);
+            let kind = capabilities::media_kind(payload);
+            router_codecs.push(capabilities::media_capability(kind, payload)?);
             let names = if kind == RouterMediaKind::Audio {
                 &mut audio_names
             } else {
@@ -94,7 +93,7 @@ impl RtpProfile {
         let header_extensions = config
             .extension_map()
             .iter()
-            .map(rtp_projection::header_extension)
+            .map(capabilities::header_extension)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
@@ -106,7 +105,7 @@ impl RtpProfile {
         })
     }
 
-    pub(super) fn session_config(&self) -> RtcConfig {
+    pub(in crate::engine::media_transport::rtc) fn session_config(&self) -> RtcConfig {
         self.config.clone()
     }
 
@@ -114,7 +113,10 @@ impl RtpProfile {
         self.router_capabilities.clone()
     }
 
-    pub(super) fn codec_names(&self, kind: MediaKind) -> &[String] {
+    pub(in crate::engine::media_transport::rtc) fn codec_names(
+        &self,
+        kind: MediaKind,
+    ) -> &[String] {
         if kind.is_video() {
             &self.video_names
         } else {
@@ -135,7 +137,9 @@ impl RtpProfile {
     ///
     /// Returns [`TransportAdapterError::InvalidInput`] for RTX payloads, `apt`
     /// mappings, repaired RID extensions or FID SSRC groups.
-    pub(super) fn validate_answer_sdp(answer_sdp: &str) -> Result<(), TransportAdapterError> {
+    pub(in crate::engine::media_transport::rtc) fn validate_answer_sdp(
+        answer_sdp: &str,
+    ) -> Result<(), TransportAdapterError> {
         if answer_sdp.lines().any(is_retransmission_attribute) {
             return Err(TransportAdapterError::InvalidInput);
         }
@@ -196,5 +200,5 @@ fn is_retransmission_attribute(line: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "TESTS/profile.rs"]
+#[path = "../TESTS/profile.rs"]
 mod tests;

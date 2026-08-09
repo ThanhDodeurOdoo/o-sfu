@@ -1,6 +1,19 @@
-use str0m::rtp::{SeqNo, Ssrc};
+use std::hint::black_box;
 
-use super::super::local_send_rewrite::{ConsumerStreamStore, SourceTransition, Vp8PayloadIdentity};
+use o_sfu_rfc::rtp::CodecName;
+use o_sfu_router::{
+    MediaKind,
+    rtp::{MediaFormat, MediaStream, PayloadType},
+};
+use str0m::{
+    media::Pt,
+    rtp::{SeqNo, Ssrc},
+};
+
+use super::super::{
+    codec,
+    local_send_rewrite::{ConsumerStreamStore, SourceTransition},
+};
 
 const RTP_REWRITE_PACKETS: usize = 4096;
 
@@ -14,7 +27,7 @@ struct RewriteInput {
     source_ssrc: Ssrc,
     sequence_number: SeqNo,
     timestamp: u32,
-    vp8_payload: Vp8PayloadIdentity,
+    codec_identity: codec::PacketIdentity,
 }
 
 /// fixed RTP identity rewrite fixture for local egress benchmarks
@@ -59,13 +72,11 @@ impl LocalRewriteBenchFixture {
                 input.source_ssrc,
                 input.sequence_number,
                 input.timestamp,
-                input.vp8_payload,
+                input.codec_identity,
             ) {
-                let vp8_payload = identity.vp8_payload;
+                black_box(identity.codec);
                 checksum = checksum
                     .wrapping_add(u64::from(identity.rtp_timestamp))
-                    .wrapping_add(u64::from(vp8_payload.picture_id.unwrap_or_default()))
-                    .wrapping_add(u64::from(vp8_payload.tl0_pic_idx.unwrap_or_default()))
                     .wrapping_add(u64::from(u8::from(matches!(
                         identity.transition,
                         SourceTransition::Switched { .. }
@@ -77,24 +88,42 @@ impl LocalRewriteBenchFixture {
 }
 
 fn rewrite_inputs(mode: RewriteMode) -> Vec<RewriteInput> {
+    let parameters = MediaStream::new(
+        vec![MediaFormat::new(
+            MediaKind::Video,
+            CodecName::Vp8,
+            PayloadType::new(96),
+            90_000,
+        )],
+        vec![],
+        vec![],
+    );
+    let inspector = codec::PacketInspector::from_parameters(&parameters);
     let mut inputs = Vec::with_capacity(RTP_REWRITE_PACKETS);
     for pkt_idx in 0..RTP_REWRITE_PACKETS {
         let pkt_idx_u32 = u32::try_from(pkt_idx).unwrap_or(0);
         let pkt_idx_u16 = u16::try_from(pkt_idx % 1024).unwrap_or(0);
         let pkt_idx_u8 = u8::try_from(pkt_idx % 64).unwrap_or(0);
+        let [picture_id_high, picture_id_low] = pkt_idx_u16.to_be_bytes();
         let source_ssrc = match mode {
             RewriteMode::Steady => Ssrc::from(11),
             RewriteMode::Switching if pkt_idx % 2 == 0 => Ssrc::from(11),
             RewriteMode::Switching => Ssrc::from(12),
         };
+        let payload = [
+            0x90,
+            0xe0,
+            0x80 | picture_id_high,
+            picture_id_low,
+            pkt_idx_u8,
+            0,
+            0,
+        ];
         inputs.push(RewriteInput {
             source_ssrc,
             sequence_number: u64::try_from(pkt_idx).unwrap_or(0).into(),
             timestamp: 90_000_u32.wrapping_add(pkt_idx_u32),
-            vp8_payload: Vp8PayloadIdentity {
-                picture_id: Some(pkt_idx_u16),
-                tl0_pic_idx: Some(pkt_idx_u8),
-            },
+            codec_identity: inspector.inspect(Pt::from(96), &payload, true).identity(),
         });
     }
     inputs

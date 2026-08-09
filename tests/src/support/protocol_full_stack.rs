@@ -11,6 +11,7 @@ use o_sfu_protocol::wire::{
     ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, StreamIntentPayload, StreamType,
     SubscribePayload, UserId, UserInfo, WelcomePayload,
 };
+use o_sfu_router::MediaKind;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 
@@ -271,6 +272,10 @@ impl ProtocolFakePeer {
 
     pub async fn read_rtp_packet(&mut self, timeout_window: Duration) -> Option<ReceivedRtpPacket> {
         self.rtc_peer.read_rtp_packet(timeout_window).await
+    }
+
+    pub fn reset_rtp_ssrc(&mut self, media_kind: MediaKind, rid: Option<&str>) -> Option<()> {
+        self.rtc_peer.reset_rtp_ssrc(media_kind, rid)
     }
 
     pub async fn read_close_code(&mut self) -> Option<CloseCode> {

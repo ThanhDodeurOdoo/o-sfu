@@ -43,7 +43,6 @@ fn all_codec_sets_keep_profile_views_aligned() {
         assert!(
             capabilities
                 .codecs()
-                .filter(|codec| codec.codec_name() != "rtx")
                 .map(|codec| (codec.codec_name().to_owned(), codec.payload_type()))
                 .eq(config
                     .codec_config()

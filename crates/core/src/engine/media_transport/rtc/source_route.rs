@@ -3,8 +3,6 @@
 //! source routes bind one producer media id to local consumer destinations
 //! plus the remote-source and decoder-refresh facts attached to that source
 
-use o_sfu_rfc::rtp::CodecName;
-use o_sfu_router::rtp::MediaStream;
 use str0m::media::{Mid, Pt, Rid};
 
 use super::{
@@ -203,13 +201,6 @@ pub(super) struct RemoteSourceRegistration {
     source: TransportSourceKey,
     source_control: RemoteSourceControl,
     pending_gate: Option<PacketLayerGate>,
-}
-
-pub(super) fn vp8_payload_types(parameters: &MediaStream) -> impl Iterator<Item = Pt> + '_ {
-    parameters
-        .formats()
-        .filter(|format| *format.codec() == CodecName::Vp8)
-        .map(|format| Pt::from(format.payload_type()))
 }
 
 impl RemoteSourceRegistration {

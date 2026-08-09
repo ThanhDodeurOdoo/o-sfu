@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Instant};
 
 use o_sfu_rfc::webrtc;
 use o_sfu_router::{
-    MediaKind as RouterMediaKind, test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
+    MediaKind as RouterMediaKind, rtp::RtcpFeedbackKind,
+    test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
 };
 use str0m::{
     Candidate, Rtc,
@@ -749,11 +750,16 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     assert_eq!(negotiated_parameters.mid(), Some(&*negotiated_mid));
     let formats = negotiated_parameters.formats().collect::<Vec<_>>();
     assert!(!formats.is_empty());
-    assert!(
-        formats
-            .iter()
-            .any(|format| format.rtcp_feedback().next().is_some())
-    );
+    assert!(formats.iter().all(|format| {
+        format
+            .rtcp_feedback()
+            .all(|feedback| feedback.kind() != &RtcpFeedbackKind::Nack)
+    }));
+    assert!(formats.iter().any(|format| {
+        format
+            .rtcp_feedback()
+            .any(|feedback| feedback.kind() == &RtcpFeedbackKind::NackPli)
+    }));
     assert!(
         negotiated_parameters.bindings().next().is_some(),
         "projected producer parameters should include at least one negotiated binding"

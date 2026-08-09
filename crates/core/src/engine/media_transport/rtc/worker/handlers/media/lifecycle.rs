@@ -29,8 +29,8 @@ use super::{
         super::super::{
             RtpProfile,
             bitrate::BitrateRegistry,
+            codec,
             media_registry::RegisteredMediaHandle,
-            simulcast,
             slots::ConsumerStreamHandle,
             source_route::RemoteSourceRegistration,
             state::{PacketLoopState, PendingRecvStream, RtcSessionState},
@@ -356,7 +356,7 @@ fn worker_stage_native_recv_media(
         Direction::RecvOnly,
         None,
         None,
-        simulcast::publish_recv_simulcast_or_default(
+        codec::publish_recv_simulcast_or_default(
             media_kind,
             rtp_parameters,
             profile,
@@ -592,7 +592,7 @@ fn upload_slot(
         mid: mid.to_string(),
         kind: negotiation::upload_kind(media_kind),
         codecs: upload_codecs(media_kind, rtp_parameters, profile),
-        simulcast_encodings: simulcast::publish_upload_encodings_or_default(
+        simulcast_encodings: codec::publish_upload_encodings_or_default(
             media_kind,
             rtp_parameters,
             profile,

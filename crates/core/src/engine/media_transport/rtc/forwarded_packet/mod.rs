@@ -11,21 +11,19 @@
 //! source-derived observations live in `PacketFacts`
 //! facts are valid for the current packet-loop turn only because they are
 //! computed against `PacketLoopState`
-//! they let incoming stats, fanout planning and local VP8 rewriting reuse the
+//! they let incoming stats, fanout planning and local codec rewriting reuse the
 //! same source media id, RID and codec facts without repeating header
 //! or payload parsing
 
 use std::{mem::take, sync::Arc, time::Instant};
 
-use o_sfu_rfc::rtp::vp8;
 use str0m::{
     media::{ExtensionValues, Mid, Rid},
-    rtp::{RtpHeader, RtpPacket, SeqNo, Ssrc, Vp8Descriptor, Vp8Patch, Vp8PatchError},
+    rtp::{RtpHeader, RtpPacket, SeqNo, Ssrc},
 };
 
 use super::{
-    local_forwarding::LocalForwardedRtp, local_send_rewrite::Vp8PayloadIdentity,
-    slots::SessionHandle, state::PacketLoopState,
+    codec, local_forwarding::LocalForwardedRtp, slots::SessionHandle, state::PacketLoopState,
 };
 use crate::engine::{
     RoomInstanceId,
@@ -124,11 +122,9 @@ pub(super) struct ForwardedRelayRtpData {
 
 /// source observations that should be computed once per packet-loop turn
 ///
-/// facts are copied into each caller that needs them
-/// they do not own packet bytes and they must not be treated as durable media
-/// state after the current batch because route-control registries can change
-/// between turns
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// facts do not own packet bytes and are valid only for the current batch
+/// because route-control registries can change between turns
+#[derive(Debug, Clone, Copy)]
 pub(super) struct PacketFacts {
     /// source producer selected by MID, SSRC or relay metadata
     pub(super) src_media: TransportMediaId,
@@ -140,32 +136,9 @@ pub(super) struct PacketFacts {
     pub(super) voice_activity: Option<bool>,
     /// audio level projected from RTP header extensions
     pub(super) audio_level: Option<i8>,
-    /// whether this packet can refresh decoder state for the source codec
-    pub(super) decoder_refresh: bool,
-    /// parsed VP8 descriptor and identity needed by local egress rewrites
-    pub(super) vp8_payload: Option<PacketVp8Payload>,
+    /// source codec observations and private local rewrite state
+    pub(super) codec: codec::Packet,
 }
-
-/// vp8 descriptor data that local egress can reuse for payload patches
-///
-/// local forwarding asks str0m to patch the descriptor during serialization
-/// caching the source descriptor here keeps descriptor parsing source-scoped
-/// instead of destination-scoped
-#[derive(Debug, Clone, Copy)]
-pub(super) struct PacketVp8Payload {
-    /// descriptor parsed from the source payload
-    descriptor: Vp8Descriptor,
-    /// source picture identity used by destination RTP identity projection
-    pub(super) identity: Vp8PayloadIdentity,
-}
-
-impl PartialEq for PacketVp8Payload {
-    fn eq(&self, other: &Self) -> bool {
-        self.identity == other.identity
-    }
-}
-
-impl Eq for PacketVp8Payload {}
 
 impl ForwardedPacket {
     /// stages one packet emitted by a local `str0m` session
@@ -239,15 +212,12 @@ impl ForwardedPacket {
         }
         let src_media = self.resolve_src_media(state)?;
         let rid = self.compute_route_control_rid(state);
-        let is_vp8 = state
-            .routes
-            .is_vp8_payload(src_media, self.rtp_header().payload_type);
-        let decoder_refresh = is_vp8 && vp8::payload_starts_keyframe(self.payload.as_ref());
-        let vp8_payload = if is_vp8 && self.resolved_source_rid.is_some() {
-            PacketVp8Payload::parse(self.payload.as_ref())
-        } else {
-            None
-        };
+        let codec = state.routes.inspect_packet(
+            src_media,
+            self.rtp_header().payload_type,
+            self.payload.as_ref(),
+            rid.is_some(),
+        );
         let extensions = self.route_control_extension_values();
         let facts = PacketFacts {
             src_media,
@@ -255,20 +225,19 @@ impl ForwardedPacket {
             room_instance_id: self.src_key(state)?.room_instance_id(),
             voice_activity: extensions.voice_activity,
             audio_level: extensions.audio_level,
-            decoder_refresh,
-            vp8_payload,
+            codec,
         };
         self.facts = Some(facts);
         Some(facts)
     }
 
-    /// returns the cached VP8 descriptor facts local egress should use for rewriting
+    /// returns the cached codec facts local egress should use for rewriting
     ///
     /// incoming observation fills `PacketFacts` before route planning and local
-    /// forwarding run, so descriptor parsing remains packet-scoped instead of
+    /// forwarding run, so codec inspection remains packet-scoped instead of
     /// destination-scoped
-    pub(super) fn local_vp8_payload(&self) -> Option<PacketVp8Payload> {
-        self.facts.and_then(|facts| facts.vp8_payload)
+    pub(super) fn local_codec_packet(&self) -> Option<&codec::Packet> {
+        self.facts.as_ref().map(|facts| &facts.codec)
     }
 
     fn compute_route_control_rid(&mut self, state: &PacketLoopState) -> Option<Rid> {
@@ -399,48 +368,6 @@ impl ForwardedPacket {
     fn route_control_rid_from_ssrc(&self, state: &PacketLoopState) -> Option<Rid> {
         let src_key = self.source.session_key(state)?;
         state.source_rid_for_ssrc(src_key, self.rtp_header().ssrc)
-    }
-}
-
-impl PacketVp8Payload {
-    fn parse(payload: &[u8]) -> Option<Self> {
-        Vp8Descriptor::parse(payload).ok().map(Self::new)
-    }
-
-    fn new(descriptor: Vp8Descriptor) -> Self {
-        Self {
-            descriptor,
-            identity: Vp8PayloadIdentity {
-                picture_id: descriptor.picture_id(),
-                tl0_pic_idx: descriptor.tl0_pic_idx(),
-            },
-        }
-    }
-
-    pub(super) fn patch(self, identity: Vp8PayloadIdentity) -> Option<Vp8Patch> {
-        match self.build_patch(identity) {
-            Ok(patch) => Some(patch),
-            Err(Vp8PatchError::PictureIdTooLarge) => self
-                .build_patch(Vp8PayloadIdentity {
-                    picture_id: identity
-                        .picture_id
-                        .map(|picture_id| picture_id & vp8::SHORT_PICTURE_ID_MASK),
-                    tl0_pic_idx: identity.tl0_pic_idx,
-                })
-                .ok(),
-            Err(_) => None,
-        }
-    }
-
-    fn build_patch(self, identity: Vp8PayloadIdentity) -> Result<Vp8Patch, Vp8PatchError> {
-        let mut patch = self.descriptor.patch();
-        if let Some(picture_id) = identity.picture_id {
-            patch = patch.picture_id(picture_id);
-        }
-        if let Some(tl0_pic_idx) = identity.tl0_pic_idx {
-            patch = patch.tl0_pic_idx(tl0_pic_idx);
-        }
-        patch.build()
     }
 }
 
