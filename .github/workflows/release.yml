@@ -150,6 +150,8 @@ jobs:
     runs-on: ubuntu-24.04
     environment: release
     permissions:
+      # required to read the release environment approval history
+      actions: read
       attestations: write
       # required to mint the OIDC token used by actions/attest
       id-token: write
@@ -358,9 +360,51 @@ jobs:
           push-to-registry: true
 
       - name: Write release notes
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cat > release/verification.md <<EOF
+          source_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          approvers="$(gh api --method GET \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+            --jq '
+              [
+                .[]
+                | select(.state == "approved")
+                | select(any(.environments[]?; .name == "release"))
+                | select(.user.type == "User")
+                | .user.login
+              ]
+              | unique
+              | sort_by(ascii_downcase)
+              | if length == 0 then "no human approval recorded"
+                else map("\u0060@" + . + "\u0060") | join(", ")
+                end
+            ')"
+          {
+            echo "## Build provenance"
+            echo
+            printf -- "- **Version tag:** \`%s\`\n" "$GITHUB_REF_NAME"
+            printf -- "- **Source commit:** \`%s\`\n" "$source_commit"
+            echo "- **Cargo version:** tag base version matches the workspace root package version"
+            printf -- "- **Default-branch ancestry:** source commit passed the \`%s\` ancestry gate\n" "$DEFAULT_BRANCH"
+            echo "- **Release environment:** \`release\` job gate passed"
+            printf -- "- **Release environment approver accounts:** %s\n" "$approvers"
+            echo "- **Runner OS generation:** \`ubuntu-24.04\`"
+            printf -- "- **Docker Buildx:** \`%s\`\n" "$BUILDX_VERSION"
+            printf -- "- **BuildKit:** \`%s\`\n" "$BUILDKIT_IMAGE"
+            printf -- "- **Rust:** \`%s\`\n" "$RUST_VERSION"
+            printf -- "- **Node.js:** \`%s\`\n" "$NODE_VERSION"
+            printf -- "- **wasm-pack:** \`%s\`\n" "$WASM_PACK_VERSION"
+            while IFS= read -r image
+            do
+              printf -- "- **Docker base:** \`%s\`\n" "$image"
+            done < <(awk '$1 == "FROM" { print $2 }' Dockerfile)
+            cat <<EOF
+
           ## verification
 
           release assets:
@@ -390,6 +434,7 @@ jobs:
           Read the [DEPLOYMENT.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/DEPLOYMENT.md) for more information.
 
           EOF
+          } > release/notes.md
 
       - name: Create GitHub release
         env:
@@ -397,7 +442,7 @@ jobs:
           PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
           set -euo pipefail
-          notes="$(cat release/verification.md)"
+          notes="$(cat release/notes.md)"
           release_flags=(--generate-notes --verify-tag)
           if [[ "$PRERELEASE" == "true" ]]
           then
