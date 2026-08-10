@@ -119,7 +119,7 @@ pub use event_observation::{transport_health_from_event, transport_ice_state};
 
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::engine::media_transport::rtc) use self::forward_flush::flush_packet_forwards;
-#[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
+#[cfg(any(test, feature = "internal-benchmarks", fuzzing))]
 pub use self::ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at};
 #[cfg(feature = "internal-benchmarks")]
 pub use self::{

@@ -21,9 +21,7 @@ use libfuzzer_sys::{
     fuzz_target,
 };
 use o_sfu_protocol::{
-    host::{
-        Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID,
-    },
+    host::{Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID},
     wire::{
         AvailableFeatures, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
         RecordingOptions, RecordingState, RecordingStateUpdate, RequestId, ServerBroadcastPayload,

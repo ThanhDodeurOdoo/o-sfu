@@ -30,7 +30,7 @@ This document explains how to set up the SFU server for development to work with
 2. Navigate to the root of the repository and run the build command:
     ```bash
     cd o-sfu
-    cargo build
+    cargo build -p o-sfu
     ```
 
 ---
@@ -107,14 +107,14 @@ Now that you have your `AUTH_KEY` and `ANNOUNCED_IP`, you need to configure both
 
 1. Start the SFU server (ensure your environment variables are set):
     ```bash
-    cargo run
+    cargo run -p o-sfu
     ```
 2. Start Odoo
 
 > [!TIP]
 > Set the `RUST_LOG` environment variable for more detailed debug logs.
 > ```bash
-> RUST_LOG=debug cargo run
+> RUST_LOG=debug cargo run -p o-sfu
 > ```
 
 ### Testing the Setup

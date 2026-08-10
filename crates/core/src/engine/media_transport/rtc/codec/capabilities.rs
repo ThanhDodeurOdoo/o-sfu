@@ -119,7 +119,7 @@ fn rtcp_feedback(payload: &PayloadParams) -> impl Iterator<Item = RtcpFeedback> 
 }
 
 #[must_use]
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, fuzzing))]
 pub fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<MediaCapabilities> {
     let answer = SdpAnswer::from_sdp_string(answer_sdp).ok()?;
     client_rtp_capabilities_from_sdp_answer(&answer).unwrap_or_default()

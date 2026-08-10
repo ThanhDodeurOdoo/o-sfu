@@ -10,7 +10,6 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-fuzzing = []
 internal-benchmarks = []
 testing-transport = ["o-sfu-router/test-support"]
 worker-benchmarks = ["internal-benchmarks"]

@@ -7,14 +7,11 @@ on:
       - .github/workflows/fuzzing.yml
       - Cargo.lock
       - Cargo.toml
-      - crates/core/src/engine/media_transport/rtc/**
+      - crates/core/**
+      - crates/model/**
       - crates/protocol/**
       - crates/rfc/**
-      - src/application/user_session/**
-      - src/config/**
-      - src/runtime/auth.rs
-      - src/runtime/http_server/**
-      - src/runtime/websocket_server/**
+      - src/**
       - tests/fuzz/**
   schedule:
     - cron: '30 0 * * *'
@@ -28,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fuzz-lockfile:
+  fuzz-build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -51,12 +48,19 @@ jobs:
         with:
           shared-key: nightly-fuzz
 
-      - name: Check fuzz lockfile
-        run: cargo +nightly-2026-04-01 check --manifest-path tests/fuzz/Cargo.toml --locked
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
+
+      - name: Check workspace lockfile
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Check fuzz targets
+        working-directory: tests/fuzz
+        run: cargo +nightly-2026-04-01 fuzz check --features fuzz-targets
 
   fuzz-targets:
     name: fuzz ${{ matrix.target }}
-    needs: fuzz-lockfile
+    needs: fuzz-build
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -100,7 +104,7 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             max_total_time=60
           fi
-          cargo +nightly-2026-04-01 fuzz run "${{ matrix.target }}" -- -max_total_time="$max_total_time"
+          cargo +nightly-2026-04-01 fuzz run --features fuzz-targets "${{ matrix.target }}" -- -max_total_time="$max_total_time"
 
       - name: Upload fuzz artifacts
         if: failure()
