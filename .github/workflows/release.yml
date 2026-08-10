@@ -16,8 +16,121 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  release:
+  preflight:
+    name: Release preflight
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        # actions/checkout v5
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Summarize release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse --is-shallow-repository)" != "false" ]]
+          then
+            echo "Release preflight requires complete Git history" >&2
+            exit 1
+          fi
+          commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          cargo_version="$(python3 - <<'PY'
+          import tomllib
+
+          with open("Cargo.toml", "rb") as handle:
+              manifest = tomllib.load(handle)
+
+          version = manifest["package"]["version"]
+          if isinstance(version, dict) and version.get("workspace") is True:
+              version = manifest["workspace"]["package"]["version"]
+          if not isinstance(version, str):
+              raise SystemExit("workspace root package version not found")
+          print(version)
+          PY
+          )"
+          cargo_base_version="${cargo_version%%[-+]*}"
+          result=FAIL
+          if [[ "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)([._-][A-Za-z0-9._-]+)?$ ]]
+          then
+            tag_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            if [[ "$tag_version" == "$cargo_base_version" ]]
+            then
+              result=PASS
+              version_detail="tag base version matches Cargo package version"
+            else
+              version_detail="tag base version $tag_version does not match Cargo package version"
+            fi
+          else
+            version_detail="tag must use vX.Y.Z with an optional safe suffix"
+          fi
+
+          prior_tag=
+          prior_distance=
+          while IFS= read -r candidate
+          do
+            if [[ "$candidate" == "$TAG" \
+              || ! "$candidate" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([._-][A-Za-z0-9._-]+)?$ ]]
+            then
+              continue
+            fi
+            distance="$(git rev-list --count "${candidate}..${commit}")"
+            if (( distance == 0 ))
+            then
+              continue
+            fi
+            if [[ -z "$prior_distance" ]] || (( distance < prior_distance ))
+            then
+              prior_tag="$candidate"
+              prior_distance="$distance"
+            fi
+          done < <(git tag --merged "$commit" --list "v*" --sort=-version:refname)
+
+          {
+            echo "## Release preflight"
+            echo
+            printf -- "- **Pushed tag:** \`%s\`\n" "$TAG"
+            printf -- "- **Resolved commit:** \`%s\`\n" "$commit"
+            printf -- "- **Cargo package version:** \`%s\`\n" "$cargo_version"
+            printf -- '- **Version consistency:** %s, %s\n' "$result" "$version_detail"
+            if [[ -n "$prior_tag" ]]
+            then
+              range="${prior_tag}..${commit}"
+              count="$(git rev-list --count "$range")"
+              printf -- "- **Prior reachable version tag:** \`%s\`\n" "$prior_tag"
+              printf -- "- **Commit range:** \`%s\` (%s commits)\n" "$range" "$count"
+              echo
+              echo "### Commits since $prior_tag"
+              echo
+              echo "\`\`\`text"
+              git log --format="%h %s" --max-count=20 "$range"
+              echo "\`\`\`"
+              if (( count > 20 ))
+              then
+                echo "Showing the newest 20 of $count commits."
+              fi
+            else
+              echo "- **Prior reachable version tag:** none"
+              echo "- **Commit range:** unavailable without a prior version tag"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$result" != PASS ]]
+          then
+            echo "Release version consistency failed: $version_detail" >&2
+            exit 1
+          fi
+
+  release:
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: release
     permissions:
       attestations: write
       # required to mint the OIDC token used by actions/attest
@@ -32,7 +145,30 @@ jobs:
         # actions/checkout v5
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify tag commit is on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse --is-shallow-repository)" != "false" ]]
+          then
+            echo "Release verification requires complete Git history" >&2
+            exit 1
+          fi
+          default_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          if ! git show-ref --verify --quiet "$default_ref"
+          then
+            echo "Default branch ref is unavailable: $default_ref" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$default_ref"
+          then
+            echo "Release tag commit is not reachable from $default_ref" >&2
+            exit 1
+          fi
 
       - name: Prepare release metadata
         id: release
