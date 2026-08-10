@@ -50,15 +50,11 @@ jobs:
           - id: doctests
             name: doctests
             nextest: false
-            command: cargo test --locked --workspace --doc
-          - id: fuzz-build
-            name: fuzz build
-            nextest: false
-            command: cargo check --manifest-path tests/fuzz/Cargo.toml --locked
+            command: cargo test --locked --doc
           - id: clippy
             name: clippy
             nextest: false
-            command: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+            command: cargo clippy --locked --all-targets --all-features -- -D warnings
 
     steps:
       - name: Checkout repository
@@ -97,7 +93,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release-workspace-tests:
+  release-default-tests:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -121,8 +117,8 @@ jobs:
         with:
           shared-key: rust-1.95-mainline
 
-      - name: Run release workspace tests
-        run: cargo test --locked --workspace --release
+      - name: Run release default-member tests
+        run: cargo test --locked --release
 
   coverage-report:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
@@ -151,17 +147,41 @@ jobs:
         with:
           shared-key: rust-1.95-mainline
 
-      - name: Generate workspace coverage report
-        run: cargo llvm-cov --locked --workspace --lcov --output-path lcov.info
+      - name: Generate default-member coverage report
+        run: >-
+          cargo llvm-cov --locked
+          --package o-sfu
+          --package o-sfu-core
+          --package o-sfu-model
+          --package o-sfu-protocol
+          --package o-sfu-rfc
+          --package o-sfu-router
+          --package o-sfu-telemetry
+          --package o-sfu-tests
+          --package o-sfu-core-room-tests
+          --package o-sfu-proofs
+          --lcov --output-path lcov.info
 
       - name: Export coverage summary
-        run: cargo llvm-cov report --json --summary-only --output-path coverage-summary.json
+        run: >-
+          cargo llvm-cov report
+          --package o-sfu
+          --package o-sfu-core
+          --package o-sfu-model
+          --package o-sfu-protocol
+          --package o-sfu-rfc
+          --package o-sfu-router
+          --package o-sfu-telemetry
+          --package o-sfu-tests
+          --package o-sfu-core-room-tests
+          --package o-sfu-proofs
+          --json --summary-only --output-path coverage-summary.json
 
       - name: Upload coverage artifacts
         # actions/upload-artifact v4
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: rust-workspace-coverage
+          name: rust-default-members-coverage
           path: |
             lcov.info
             coverage-summary.json

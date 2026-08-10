@@ -15,7 +15,7 @@ mod profile;
 mod rid;
 mod vp8;
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, fuzzing))]
 pub use capabilities::client_rtp_capabilities_from_answer;
 pub(super) use capabilities::{
     client_rtp_capabilities_from_sdp_answer, header_extension, media_format, router_payload_type,

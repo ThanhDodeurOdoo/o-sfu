@@ -31,7 +31,7 @@ use crate::{
     Bitrate, RtcPortRange, RtcUdpIoBackend,
     engine::media_transport::{TransportAdapterError, TransportSessionKey},
 };
-#[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
+#[cfg(any(test, feature = "internal-benchmarks", fuzzing))]
 use crate::{CodecPreferences, MediaCodecFlags};
 
 /// bind the shared worker UDP socket and return the advertised candidate tuple
@@ -126,7 +126,7 @@ fn bind_ip_for_announced_ip(announced_ip: IpAddr) -> IpAddr {
 ///
 /// returns `TransportUnavailable` if the local candidate cannot be represented
 /// by str0m or cannot be attached to the newly created rtc state
-#[cfg(any(test, feature = "internal-benchmarks", feature = "fuzzing"))]
+#[cfg(any(test, feature = "internal-benchmarks", fuzzing))]
 pub(super) fn ensure_session_rtc_state(
     users: &mut SessionStore,
     session_key: &TransportSessionKey,

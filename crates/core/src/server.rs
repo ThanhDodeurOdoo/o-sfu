@@ -169,7 +169,7 @@ pub mod transport {
         pub use crate::engine::media_transport::benchmark_support::*;
     }
 
-    #[cfg(any(test, feature = "fuzzing"))]
+    #[cfg(any(test, fuzzing))]
     pub mod fuzz_support {
         pub use crate::engine::media_transport::fuzz_support::{
             client_rtp_capabilities_from_answer, route_packet_loop_ingress_demux,

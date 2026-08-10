@@ -5,22 +5,32 @@ publish = false
 license = "LGPL-3.0-or-later"
 edition = "2024"
 
-[workspace]
-
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+default = []
+fuzz-targets = [
+    "dep:http",
+    "dep:libfuzzer-sys",
+    "dep:o-sfu",
+    "dep:o-sfu-core",
+    "dep:o-sfu-protocol",
+    "dep:serde_json",
+]
+
 [dependencies]
-http = "1"
-libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
-o-sfu = { path = "../.." }
-o-sfu-core = { path = "../../crates/core", features = ["fuzzing"] }
-o-sfu-protocol = { path = "../../crates/protocol" }
-serde_json = "1.0"
+http = { version = "1", optional = true }
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"], optional = true }
+o-sfu = { path = "../..", optional = true }
+o-sfu-core = { workspace = true, optional = true }
+o-sfu-protocol = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [[bin]]
 name = "protocol_decode"
 path = "fuzz_targets/protocol_decode.rs"
+required-features = ["fuzz-targets"]
 test = false
 doc = false
 bench = false
@@ -28,6 +38,7 @@ bench = false
 [[bin]]
 name = "http_disconnect_auth"
 path = "fuzz_targets/http_disconnect_auth.rs"
+required-features = ["fuzz-targets"]
 test = false
 doc = false
 bench = false
@@ -35,6 +46,7 @@ bench = false
 [[bin]]
 name = "protocol_sequence"
 path = "fuzz_targets/protocol_sequence.rs"
+required-features = ["fuzz-targets"]
 test = false
 doc = false
 bench = false
@@ -42,6 +54,7 @@ bench = false
 [[bin]]
 name = "sdp_answer"
 path = "fuzz_targets/sdp_answer.rs"
+required-features = ["fuzz-targets"]
 test = false
 doc = false
 bench = false
@@ -49,6 +62,7 @@ bench = false
 [[bin]]
 name = "packet_loop_ingress_demux"
 path = "fuzz_targets/packet_loop_ingress_demux.rs"
+required-features = ["fuzz-targets"]
 test = false
 doc = false
 bench = false

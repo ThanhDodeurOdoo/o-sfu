@@ -43,7 +43,7 @@ mod demux;
 mod forwarded_packet;
 mod forwarding_destination;
 mod forwarding_planner;
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, fuzzing))]
 #[path = "TESTS/fuzz_support/mod.rs"]
 pub(crate) mod fuzz_support;
 mod keyframe_tracker;
@@ -64,7 +64,7 @@ pub mod test_support;
 mod worker;
 
 pub(super) use codec::RtpProfile;
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, fuzzing))]
 pub use codec::client_rtp_capabilities_from_answer;
 pub use commands::{
     RtcWorkerCommand, RtcWorkerResponse, WorkerMediaControlBatch, WorkerMediaControlBatchOutcome,

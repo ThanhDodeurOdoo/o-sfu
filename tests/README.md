@@ -9,19 +9,41 @@
   - `tests/src/support/`: cross-crate integration harnesses for real server
     entry points, fake peers, websocket clients, and polling predicates
   - `tests/miri/`: UB tests
-  - `tests/fuzz/`: fuzzing
+  - `tests/fuzz/`: opt-in cargo-fuzz targets
   - `tests/proofs/`: formal verification
 
 ## Default
 
-when testing locally, I recommend just doing this, the rest is more combersome and will be ran on github actions
+when testing locally, run the following baseline. GitHub Actions covers the
+remaining checks.
 
 ```bash
-cargo fmt
-cargo check --locked -p o-sfu
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --workspace --release
+cargo +nightly fmt
+cargo check --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --release
 npm --prefix crates/client run verify
+```
+
+## Fuzzing
+
+the fuzz package shares the root `Cargo.lock` but is outside
+`workspace.default-members`. its dependencies and binaries require the
+`fuzz-targets` feature.
+
+use cargo-fuzz for every fuzz target build because it supplies `cfg(fuzzing)`
+to the core dependency graph.
+
+type-check every fuzz target from the repository root:
+
+```bash
+cargo +nightly-2026-04-01 fuzz check --fuzz-dir tests/fuzz --features fuzz-targets
+```
+
+run one target explicitly:
+
+```bash
+cargo +nightly-2026-04-01 fuzz run --fuzz-dir tests/fuzz --features fuzz-targets protocol_decode
 ```
 
 ## Callgrind benchmarks

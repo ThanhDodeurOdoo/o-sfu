@@ -52,7 +52,7 @@ pub(crate) use teardown::TransportTeardown;
 pub mod benchmark_support {
     pub use super::rtc::benchmark_support::*;
 }
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, fuzzing))]
 pub mod fuzz_support {
     pub use super::rtc::{
         client_rtp_capabilities_from_answer, fuzz_support::route_packet_loop_ingress_demux,
