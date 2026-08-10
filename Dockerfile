@@ -1,4 +1,4 @@
-FROM rust:1.95.0-bookworm AS builder
+FROM rust:1.95.0-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
 
 WORKDIR /app
 
@@ -9,11 +9,9 @@ COPY src ./src
 
 RUN cargo build --release --locked -p o-sfu --bin o-sfu
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 RUN useradd --system --create-home --home-dir /srv/o-sfu --shell /usr/sbin/nologin osfu
 

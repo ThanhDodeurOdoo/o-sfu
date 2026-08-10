@@ -117,6 +117,22 @@ updates:
       - "lang-js"
       - "client"
 
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "[IMP] root:"
+      prefix-development: "[IMP] root (dev):"
+    labels:
+      - "dependencies"
+      - "AI"
+      - "security"
+      - "ci"
+      - "API-deployment"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

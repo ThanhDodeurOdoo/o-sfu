@@ -25,6 +25,27 @@ reference and verification commands generated from `GITHUB_REPOSITORY` and
 `GITHUB_REF_NAME`, so the owner and version are not hardcoded in the published
 release text.
 
+## build inputs
+
+the preflight summary records the reviewed Buildx, BuildKit, Rust, Node.js,
+wasm-pack and Docker base-image references from the tagged workflow. Docker
+bases keep readable tags and immutable multi-platform index digests. the runtime
+copies the CA bundle from the pinned builder, so the image build performs no
+operating-system package download.
+
+Dependabot checks the root Dockerfile each week and proposes base tag or digest
+updates as pull requests. review and verify those changes before merging them.
+GitHub Actions updates remain separate Dependabot pull requests. update the
+exact Buildx, Rust, Node.js or wasm-pack selector in `release.yml` through the
+same reviewed pull-request process when a toolchain update is intentional.
+BuildKit updates must change its readable tag and multi-platform index digest
+together against the published `moby/buildkit` image.
+
+`ubuntu-24.04` fixes the release runner OS generation. GitHub still updates the
+hosted image contents and does not expose a content-digest runner selector. the
+exact runner image used by a release remains available in that workflow run's
+setup log.
+
 ## updating the release lockfile
 
 for a release-only version bump, update the root Cargo version and refresh only
