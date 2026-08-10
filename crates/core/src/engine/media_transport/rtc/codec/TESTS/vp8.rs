@@ -3,6 +3,17 @@ use super::*;
 const LONG_DESCRIPTOR: &[u8] = &[0x90, 0xe0, 0x80, 0x02, 0x09, 0x00, 0x00];
 const SWITCHED_LONG_DESCRIPTOR: &[u8] = &[0x90, 0xe0, 0x80, 0x0a, 0x04, 0x00, 0x00];
 const SHORT_DESCRIPTOR: &[u8] = &[0x90, 0xe0, 0x0a, 0x04, 0x00, 0x00];
+const MALFORMED_TL0_PIC_IDX_WITHOUT_TID: &[u8] = &[
+    0x90, 0x40, 0x42, 0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0x68, 0x01,
+];
+
+#[test]
+fn tl0_pic_idx_without_tid_is_not_a_decoder_refresh() {
+    let packet = Packet::inspect(MALFORMED_TL0_PIC_IDX_WITHOUT_TID, true);
+
+    assert!(packet.descriptor.is_none());
+    assert!(!packet.decoder_refresh());
+}
 
 #[test]
 fn packet_parse_and_source_switch_build_projected_patch() {

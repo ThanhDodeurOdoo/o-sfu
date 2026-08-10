@@ -520,8 +520,8 @@ pub mod vp8 {
 
     /// Locates the VP8 frame bytes after an extended descriptor.
     ///
-    /// `None` means the extension bits advertise fields that are not present in
-    /// the slice. The keyframe probe treats that as "not a keyframe".
+    /// `None` means the extension-bit combination is malformed or an advertised
+    /// field is absent. The keyframe probe treats that as "not a keyframe".
     fn extended_frame_payload(payload: &[u8]) -> Option<&[u8]> {
         let (&extension, mut rest) = payload.split_first()?;
         if extension & I_BIT != 0 {
@@ -533,6 +533,9 @@ pub mod vp8 {
             };
         }
         if extension & L_BIT != 0 {
+            if extension & T_BIT == 0 {
+                return None;
+            }
             rest = rest.get(1..)?;
         }
         if extension & T_BIT != 0 || extension & K_BIT != 0 {
