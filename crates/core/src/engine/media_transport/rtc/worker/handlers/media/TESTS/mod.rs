@@ -688,6 +688,45 @@ fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
 }
 
 #[test]
+fn selecting_bootstrap_fallback_clears_pending_gate_without_advancing_delivery() {
+    let mut route = prepare_pending_selected_rid_route();
+    let now = Instant::now();
+    assert!(route.observe_rid_ready(route.fallback_rid, true, now));
+    let Some(destination) = route
+        .state
+        .routes
+        .local_route(route.src_media)
+        .and_then(|entry| entry.destinations.first())
+    else {
+        panic!("pending selected RID fixture must install one local destination");
+    };
+    let delivery_generation = destination.delivery_generation;
+    let consumer_route = TransportConsumerRoute::new(
+        route.consumer_session.clone(),
+        destination.dest_transport_media_id,
+        TransportSourceKey::new(route.source_session.clone(), route.src_media),
+    );
+
+    set_consumer_packet_gate_at(
+        &mut route.state,
+        &consumer_route,
+        PacketLayerGate::Rid(route.fallback_rid),
+        now + Duration::from_millis(10),
+    );
+
+    route.assert_packet_gate(PacketLayerGate::Rid(route.fallback_rid), None);
+    assert_eq!(
+        route
+            .state
+            .routes
+            .local_route(route.src_media)
+            .and_then(|entry| entry.destinations.first())
+            .map(|destination| destination.delivery_generation),
+        Some(delivery_generation)
+    );
+}
+
+#[test]
 fn selected_rid_packet_gate_switches_from_bootstrap_fallback_on_selected_keyframe() {
     let mut route = prepare_pending_selected_rid_route();
     let now = Instant::now();

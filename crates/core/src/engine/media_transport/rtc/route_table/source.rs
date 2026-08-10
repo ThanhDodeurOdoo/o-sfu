@@ -259,8 +259,10 @@ impl RouteSource {
             .as_mut()
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         let dst = validate_destination(route, dst_idx, session_key, media_id)?;
-        let selected_gate = dst.pending_gate.unwrap_or(dst.packet_gate);
-        if selected_gate == packet_gate {
+        if dst.packet_gate == packet_gate {
+            return Ok(dst.pending_gate.take().is_some());
+        }
+        if dst.pending_gate == Some(packet_gate) {
             return Ok(false);
         }
         if dst.requires_decoder_refresh {
