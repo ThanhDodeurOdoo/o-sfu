@@ -13,12 +13,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  BUILDKIT_IMAGE: moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+  BUILDX_VERSION: v0.36.1
+  NODE_VERSION: 22.23.2
   REGISTRY: ghcr.io
+  RUST_VERSION: 1.95.0
+  WASM_PACK_VERSION: 0.15.0
 
 jobs:
   preflight:
     name: Release preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
 
@@ -99,6 +104,19 @@ jobs:
             printf -- "- **Resolved commit:** \`%s\`\n" "$commit"
             printf -- "- **Cargo package version:** \`%s\`\n" "$cargo_version"
             printf -- '- **Version consistency:** %s, %s\n' "$result" "$version_detail"
+            echo
+            echo "### Reviewed build inputs"
+            echo
+            printf -- "- **GitHub-hosted runner:** \`ubuntu-24.04\`\n"
+            printf -- "- **Docker Buildx:** \`%s\`\n" "$BUILDX_VERSION"
+            printf -- "- **BuildKit:** \`%s\`\n" "$BUILDKIT_IMAGE"
+            printf -- "- **Rust:** \`%s\`\n" "$RUST_VERSION"
+            printf -- "- **Node.js:** \`%s\`\n" "$NODE_VERSION"
+            printf -- "- **wasm-pack:** \`%s\`\n" "$WASM_PACK_VERSION"
+            while IFS= read -r image
+            do
+              printf -- "- **Docker base:** \`%s\`\n" "$image"
+            done < <(awk '$1 == "FROM" { print $2 }' Dockerfile)
             if [[ -n "$prior_tag" ]]
             then
               range="${prior_tag}..${commit}"
@@ -129,7 +147,7 @@ jobs:
 
   release:
     needs: preflight
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     permissions:
       attestations: write
@@ -198,7 +216,7 @@ jobs:
         # dtolnay/rust-toolchain master
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
-          toolchain: 1.95.0
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Validate release tag
         run: |
@@ -240,12 +258,16 @@ jobs:
       - name: Set up Docker Buildx
         # docker/setup-buildx-action v4
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+        with:
+          version: ${{ env.BUILDX_VERSION }}
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
+          cache-binary: false
 
       - name: Setup Node.js
         # actions/setup-node v7
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
       - name: Login to GitHub Container Registry
@@ -266,7 +288,7 @@ jobs:
             type=raw,value=${{ steps.release.outputs.safe_tag }}
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack --version 0.15.0 --locked
+        run: cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
 
       - name: Install client dependencies
         run: npm ci
