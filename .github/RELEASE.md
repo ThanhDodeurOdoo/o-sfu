@@ -23,7 +23,8 @@ the GitHub release includes the server tarball, Odoo client bundle, image SBOM
 and checksum manifest. the release notes include the pullable GHCR image
 reference and verification commands generated from `GITHUB_REPOSITORY` and
 `GITHUB_REF_NAME`, so the owner and version are not hardcoded in the published
-release text.
+release text. the deployment guide link uses `GITHUB_SERVER_URL`,
+`GITHUB_REPOSITORY` and `GITHUB_SHA` so it targets the source of that release.
 
 the public release body also records the version tag, source commit, successful
 Cargo base-version and default-branch ancestry checks, completion of the

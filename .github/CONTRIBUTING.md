@@ -1,11 +1,5 @@
 # Contributing
 
-If you want to make a PR that does substantial changes to the codebase, before wasting time writing too much code:
-
-**You work at Odoo**: use our internal means of communication (/contact the `R&D Discuss` team).
-
-**You are an external contributor**: open an [issue](https://github.com/ThanhDodeurOdoo/o-sfu/issues) to talk about it before (to avoid unnecessary work).
-
 > [!WARNING]
 > AI policy
 >
@@ -66,8 +60,8 @@ If you want to make a PR that does substantial changes to the codebase, before w
 > ```
 > rustfmt nightly is only used to format imports nicely, but it is not enforced in the CI.
 
-- **Formatting**: `cargo +nightly fmt`, Always run it before committing (we use nightly for the import ordering). Our rules can be found at [rustfmt.toml](../rustfmt.toml), more information on the defaults can be found at the [rustfmt documentation](https://rust-lang.github.io/rustfmt/).
-- **Linting**: Run `cargo clippy --locked --all-targets --all-features -- -D warnings`. We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](../Cargo.toml). See the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html) for explanations.
+- **Formatting**: `cargo +nightly fmt`, Always run it before committing (we use nightly for the import ordering). Our rules can be found at [rustfmt.toml](/rustfmt.toml), more information on the defaults can be found at the [rustfmt documentation](https://rust-lang.github.io/rustfmt/).
+- **Linting**: Run `cargo clippy --locked --all-targets --all-features -- -D warnings`. We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](/Cargo.toml). See the [Clippy documentation](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html) for explanations.
 - **Justify overrides**: Any override of a rule MUST be justified with a "reason".
 
 ### TypeScript & JavaScript (Bundle)
@@ -79,7 +73,7 @@ If you want to make a PR that does substantial changes to the codebase, before w
 
 ## Verification
 
-Verification commands and the `tests/` layout are at [tests/README.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/tests/README.md).
+Verification commands and the `tests/` layout are at [tests/README.md](/tests/README.md).
 
 ## Deployment
 
