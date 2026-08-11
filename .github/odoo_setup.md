@@ -1,6 +1,6 @@
 # Odoo SFU Dev Deployment Guide
 
-This document explains how to set up the SFU server for development to work with Odoo. It is not intended as a general deployment guide. For general deployment guide, see [DEPLOYMENT](../DEPLOYMENT.md).
+This document explains how to set up the SFU server for development to work with Odoo. It is not intended as a general deployment guide. For general deployment guide, see [DEPLOYMENT](/DEPLOYMENT.md).
 
 ## Prerequisites
 
@@ -22,9 +22,9 @@ This document explains how to set up the SFU server for development to work with
 
 ## Build The SFU Server
 
-1. Clone the repository:
+1. Copy the repository URL from GitHub's Code menu and clone it:
     ```bash
-    git clone git@github.com:ThanhDodeurOdoo/o-sfu.git
+    git clone <repository-url> o-sfu
     ```
 
 2. Navigate to the root of the repository and run the build command:

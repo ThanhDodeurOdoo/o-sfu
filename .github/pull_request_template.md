@@ -3,7 +3,7 @@
 
 #### Guidelines
 <!-- You must check both -->
-- [ ] I read [CONTRIBUTING.md](https://github.com/ThanhDodeurOdoo/o-sfu/blob/master/.github/CONTRIBUTING.md)
+- [ ] I read CONTRIBUTING.md
 - [ ] I will not use AI to fabricate answsers to comments in this PR
 
 #### AI
