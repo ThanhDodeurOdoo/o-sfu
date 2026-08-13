@@ -69,16 +69,10 @@ impl ResolvedKeyframeRoute {
     }
 }
 
-/// resolve and flush every keyframe request staged during the current turn
-pub(super) fn flush_pending_kf_reqs(
-    state: &mut PacketLoopState,
-    metrics: &RtcMetricsRecorder,
-    buffers: &mut PacketLoopBuffers,
-) {
-    flush_pending_kf_reqs_at(state, metrics, buffers, Instant::now());
-}
-
 /// drains turn-local feedback into producer-scoped keyframe requests
+///
+/// `now` is the caller's turn clock, so the retry deadlines armed here sit on
+/// the same timeline as the drain that later reads them
 ///
 /// duplicate feedback for one `(src_media, rid)` sends the strongest request once
 /// distinct rids stay separate so simulcast feedback is not widened

@@ -101,6 +101,11 @@ pub mod room {
         };
     }
 
+    #[cfg(feature = "internal-benchmarks")]
+    pub mod benchmark_support {
+        pub use crate::engine::room::run_source_policy_turn_for_benchmark;
+    }
+
     #[cfg(any(test, feature = "testing-transport"))]
     pub use crate::engine::room::{ConsumerRouteState, JoinPlacementTestGate};
     pub use crate::{

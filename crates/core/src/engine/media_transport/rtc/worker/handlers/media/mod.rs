@@ -42,6 +42,9 @@ pub(in crate::engine::media_transport::rtc) use control::apply_route_control_req
 use control::observe_src_rid_ready;
 pub(super) use control::remove_source_route;
 pub use control::{apply_media_control_batch, apply_src_decoder_ready};
+pub(in crate::engine::media_transport::rtc) use control::{
+    consumer_payload_type, guarded_pkt_gate,
+};
 pub use keyframe::{KeyframeRequestMode, KeyframeRequestTarget, request_kf_for_target};
 pub(super) use lifecycle::{
     RecvMediaPolicy, worker_add_recv_media, worker_add_send_media, worker_remove_media,

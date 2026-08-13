@@ -273,6 +273,25 @@ fn observe_receiver_bandwidth(
     }
 }
 
+#[cfg(feature = "internal-benchmarks")]
+pub fn observe_rtc_event_for_benchmark(
+    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+    metrics: &RuntimeMetrics,
+    source_policy_signal: &SourcePolicySignal,
+    room_id: &str,
+    session_key: &TransportSessionKey,
+    event: &Event,
+) {
+    observe_rtc_event(
+        snapshot_state,
+        metrics,
+        source_policy_signal,
+        room_id,
+        session_key,
+        event,
+    );
+}
+
 /// Convert `str0m` ICE connection state into the metrics enum.
 pub fn transport_ice_state(state: IceConnectionState) -> TransportIceState {
     match state {

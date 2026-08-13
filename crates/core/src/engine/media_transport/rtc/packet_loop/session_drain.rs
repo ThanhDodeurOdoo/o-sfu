@@ -59,7 +59,14 @@ pub fn drain_ready_sessions(
             else {
                 continue;
             };
-            drain_single_session(session_handle, session_key, session_state, context, buffers)
+            drain_single_session(
+                session_handle,
+                session_key,
+                session_state,
+                context,
+                buffers,
+                now,
+            )
         };
         state.update_session_timeout_by_handle(session_handle, session_timeout);
     }
@@ -76,6 +83,11 @@ pub fn drain_ready_sessions(
 /// fed back into `str0m` in the same drain so the session reaches a stable next
 /// deadline before control returns to the driver.
 ///
+/// `now` is the turn's clock, the same one the scheduler used to decide this
+/// session was ready. Re-reading the wall clock here instead would let the time
+/// a drain takes decide how many deadlines it crosses, which makes the work a
+/// turn performs depend on how fast the host is.
+///
 /// Returns the next timeout requested by the session, if any.
 fn drain_single_session(
     session_handle: SessionHandle,
@@ -83,6 +95,7 @@ fn drain_single_session(
     session_state: &mut RtcSessionState,
     context: &SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
+    now: Instant,
 ) -> Option<Instant> {
     loop {
         match session_state.rtc.poll_output() {
@@ -125,7 +138,6 @@ fn drain_single_session(
                 log_rtc_event(session_key, &event);
             }
             Ok(Output::Timeout(timeout_at)) => {
-                let now = Instant::now();
                 if timeout_at <= now {
                     if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
                         warn!(

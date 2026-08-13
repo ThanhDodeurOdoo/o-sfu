@@ -12,6 +12,7 @@ mod fanout;
 mod ingress;
 mod local_rewrite;
 mod local_send;
+mod meeting;
 mod observation;
 mod relay;
 mod remote_gates;
@@ -31,6 +32,11 @@ pub use ingress::{
 };
 pub use local_rewrite::LocalRewriteBenchFixture;
 pub use local_send::LocalSendBenchFixture;
+pub use meeting::{
+    MEETING_ADMITTED_AUDIO_SOURCES, MEETING_LONG_SECONDS, MEETING_PARTICIPANTS,
+    MEETING_SHORT_SECONDS, MEETING_TICK_MS, MEETING_VIDEO_PUBLISHERS, MEETING_VIDEO_SUBSCRIPTIONS,
+    MeetingFlowBenchFixture, MeetingWorkProfile,
+};
 pub use observation::IncomingObservationBenchFixture;
 pub use relay::{RELAY_MAILBOX_ATTEMPTS, RelayPressureBenchFixture};
 pub use remote_gates::{REMOTE_GATE_RETRY_TURNS, RemoteGateRetryBenchFixture};

@@ -41,7 +41,9 @@ pub(super) use {
 #[cfg(feature = "internal-benchmarks")]
 pub(super) use {
     super::forwarded_packet::test_support::{
-        reset_packet_resolution, sample_forwarded_packet_with_rid_and_audio_activity,
+        BenchmarkPacketStaging, BenchmarkStreamIdentity, reset_packet_resolution,
+        restage_packet_for_benchmark, sample_forwarded_packet_with_rid_and_audio_activity,
+        sample_local_forwarded_packet_for_benchmark,
     },
     packets::sample_rtp_packet_with_len,
 };

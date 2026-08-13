@@ -122,8 +122,11 @@ pub(in crate::engine::media_transport::rtc) use self::forward_flush::flush_packe
 #[cfg(any(test, feature = "internal-benchmarks", fuzzing))]
 pub use self::ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at};
 #[cfg(feature = "internal-benchmarks")]
+pub(crate) use self::loop_driver::{BenchmarkTurnInput, PacketLoopTurn};
+#[cfg(feature = "internal-benchmarks")]
 pub use self::{
     buffers::PacketLoopBuffers,
+    event_observation::observe_rtc_event_for_benchmark,
     forward_flush::{drain_relay_packets, record_incoming_stats_for_benchmark},
     keyframe_requests::{PendingKeyframeRequest, flush_pending_kf_reqs_at},
     loop_driver::route_queued_ingress_datagrams_for_benchmark,

@@ -157,7 +157,7 @@ pub fn apply_src_decoder_ready(
 /// non-rid gates pass through unchanged
 /// rid gates become effective immediately only when the producer rid has recent
 /// packet liveness
-pub(super) fn guarded_pkt_gate(
+pub(in crate::engine::media_transport::rtc) fn guarded_pkt_gate(
     requires_decoder_refresh: bool,
     src_media: TransportMediaId,
     packet_gate: PacketLayerGate,

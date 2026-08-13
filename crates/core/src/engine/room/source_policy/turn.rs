@@ -1,6 +1,6 @@
 //! source-policy apply ownership without transport awaits under the room lock
 
-use std::mem;
+use std::{borrow::Cow, mem};
 
 use super::{
     action::{ConsumerPacketSelectionUpdate, FeaturedUserUpdate, RouteBudgetOutcome},
@@ -55,28 +55,54 @@ impl SourcePolicyTurn {
         media_transport: Option<&MediaTransport>,
         active_speaker_sources: Option<&[ActiveSpeakerSource]>,
     ) {
+        self.execute_observed(room, media_transport, active_speaker_sources, None)
+            .await;
+    }
+
+    async fn execute_observed(
+        self,
+        room: &Room,
+        media_transport: Option<&MediaTransport>,
+        active_speaker_sources: Option<&[ActiveSpeakerSource]>,
+        bandwidth: Option<&ReceiverBandwidthSnapshot>,
+    ) -> bool {
         if !self.requested {
-            return;
+            return false;
         }
         let Some(media_transport) = media_transport else {
-            return;
+            return false;
         };
         let transaction = if let Some(sources) = active_speaker_sources {
-            run_packet_selection(room, sources, media_transport).await
+            run_packet_selection(room, sources, media_transport, bandwidth).await
         } else {
             let sources = media_transport.active_speaker_source_snapshot().await;
-            run_packet_selection(room, &sources, media_transport).await
+            run_packet_selection(room, &sources, media_transport, bandwidth).await
         };
-        if let Some(transaction) = transaction {
-            transaction.commit(room, media_transport).await;
-        }
+        let Some(transaction) = transaction else {
+            return false;
+        };
+        transaction.commit(room, media_transport).await;
+        true
     }
+}
+
+#[cfg(feature = "internal-benchmarks")]
+pub async fn run_source_policy_turn_for_benchmark(
+    room: &Room,
+    media_transport: &MediaTransport,
+    bandwidth: &ReceiverBandwidthSnapshot,
+) -> bool {
+    let _guard = room.source_policy_turn.lock().await;
+    SourcePolicyTurn::packet_selection()
+        .execute_observed(room, Some(media_transport), None, Some(bandwidth))
+        .await
 }
 
 async fn run_packet_selection(
     room: &Room,
     active_speakers: &[ActiveSpeakerSource],
     media_transport: &MediaTransport,
+    bandwidth_override: Option<&ReceiverBandwidthSnapshot>,
 ) -> Option<SourcePolicyTransaction> {
     let sessions = {
         let state = room.state.read().await;
@@ -85,7 +111,10 @@ async fn run_packet_selection(
             .map(|(user_id, connection_id)| state.transport_user_key(user_id, connection_id))
             .collect::<Vec<_>>()
     };
-    let receiver_bandwidth = media_transport.receiver_bandwidth_snapshot(&sessions);
+    let receiver_bandwidth = bandwidth_override.map_or_else(
+        || Cow::Owned(media_transport.receiver_bandwidth_snapshot(&sessions)),
+        Cow::Borrowed,
+    );
     let source_bitrate = media_transport.transport_bitrate_snapshot(&sessions);
     let state = room.state.read().await;
     SourcePolicyTransaction::plan(
