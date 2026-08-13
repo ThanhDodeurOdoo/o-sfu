@@ -6,10 +6,11 @@ use axum::{
     http::{HeaderMap, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
+pub use o_sfu_rfc::jwt::RegisteredJwtClaims;
 
 use crate::runtime::{
     MediaTransport, RuntimeMetrics, RuntimeState,
-    auth::{self, HttpDisconnectClaims, HttpRoomClaims},
+    auth::{self, HttpDisconnectClaims, HttpRoomClaims, derive_key_from_seed},
     http_server::contract::CreateRoomQuery,
     request_origin::RequestOrigin,
     room::{RoomConfig, RoomManager},
@@ -99,21 +100,41 @@ impl FromRequestParts<RuntimeState> for VerifiedRoomRequest {
         };
         let claims = auth::verify::<HttpRoomClaims>(token, &state.config.auth.key)
             .map_err(|_error| record_room_rejection(state, StatusCode::UNAUTHORIZED))?;
-        let Some(issuer) = claims.registered.iss else {
-            return Err(record_room_rejection(state, StatusCode::FORBIDDEN));
-        };
-        let Some(room_key) = claims.key else {
-            return Err(record_room_rejection(state, StatusCode::BAD_REQUEST));
-        };
-        Ok(Self {
-            issuer,
-            room_key,
-            config: RoomConfig {
-                web_rtc_enabled: query.web_rtc_enabled(),
-                recording_address: query.recording_address,
-            },
-            origin,
-        })
+        match claims {
+            HttpRoomClaims {
+                registered: RegisteredJwtClaims { iss: None, .. },
+                ..
+            } => Err(record_room_rejection(state, StatusCode::FORBIDDEN)),
+            HttpRoomClaims {
+                registered:
+                    RegisteredJwtClaims {
+                        iss: Some(issuer), ..
+                    },
+                key,
+                key_seed,
+            } => {
+                let room_key = match (key, key_seed) {
+                    (None, None) => {
+                        return Err(record_room_rejection(state, StatusCode::BAD_REQUEST));
+                    }
+                    (Some(key), None) => key,
+                    (_, Some(seed)) if seed.is_empty() => {
+                        return Err(record_room_rejection(state, StatusCode::BAD_REQUEST));
+                    }
+                    (_, Some(seed)) => derive_key_from_seed(&state.config.auth.key, seed.as_ref())
+                        .map_err(|_error| record_room_rejection(state, StatusCode::BAD_REQUEST))?,
+                };
+                Ok(Self {
+                    issuer,
+                    room_key,
+                    config: RoomConfig {
+                        web_rtc_enabled: query.web_rtc_enabled(),
+                        recording_address: query.recording_address,
+                    },
+                    origin,
+                })
+            }
+        }
     }
 }
 

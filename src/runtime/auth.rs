@@ -57,6 +57,8 @@ pub struct HttpRoomClaims {
     pub registered: RegisteredJwtClaims,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    #[serde(rename = "keySeed", skip_serializing_if = "Option::is_none")]
+    pub key_seed: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,6 +265,13 @@ fn pad_base64(input: &str) -> String {
         return input.to_owned();
     }
     format!("{input}{}", "=".repeat(4 - remainder))
+}
+
+pub(crate) fn derive_key_from_seed(key: &str, seed: &str) -> Result<String, AuthenticationError> {
+    let key_bytes = decode_key(key)?;
+    let seed_bytes = decode_key(seed)?;
+    let derived_key = sign_hs256(&seed_bytes, &key_bytes)?;
+    Ok(STANDARD.encode(derived_key))
 }
 
 #[cfg(test)]
