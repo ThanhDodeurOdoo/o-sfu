@@ -49,7 +49,11 @@ pub(super) fn test_state_with_handles() -> RuntimeTestState {
     RuntimeTestBuilder::new().build_state()
 }
 
-pub(super) fn signed_room_claims(issuer: Option<&str>, key: Option<&str>) -> Option<String> {
+pub(super) fn signed_room_claims(
+    issuer: Option<&str>,
+    key: Option<&str>,
+    key_seed: Option<&str>,
+) -> Option<String> {
     auth::sign(
         &HttpRoomClaims {
             registered: RegisteredJwtClaims {
@@ -57,6 +61,7 @@ pub(super) fn signed_room_claims(issuer: Option<&str>, key: Option<&str>) -> Opt
                 ..RegisteredJwtClaims::default()
             },
             key: key.map(str::to_owned),
+            key_seed: key_seed.map(str::to_owned),
         },
         TEST_AUTH_KEY,
     )

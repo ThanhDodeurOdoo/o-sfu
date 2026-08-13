@@ -8,8 +8,8 @@ use serde_json::json;
 
 use super::{
     AuthenticationError, HttpDisconnectClaims, HttpRoomClaims, MAX_JWT_TOKEN_BYTES,
-    RegisteredJwtClaims, WebSocketConnectClaims, decode_key, duration_since_epoch, sign,
-    sign_hs256, validate_registered_claims_at, verify,
+    RegisteredJwtClaims, WebSocketConnectClaims, decode_key, derive_key_from_seed,
+    duration_since_epoch, sign, sign_hs256, validate_registered_claims_at, verify,
 };
 
 const TEST_AUTH_KEY: &str = "u6bsUQEWrHdKIuYplirRnbBmLbrKV5PxKG7DtA71mng=";
@@ -27,6 +27,7 @@ fn jwt_claims_round_trip() -> serde_json::Result<()> {
             ..RegisteredJwtClaims::default()
         },
         key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        key_seed: None,
     };
     let expected_room_claims = json!({
         "iss": "https://odoo.example.com",
@@ -123,6 +124,7 @@ fn sign_and_verify_round_trip() {
             ..RegisteredJwtClaims::default()
         },
         key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        key_seed: None,
     };
     let token = sign(&claims, TEST_AUTH_KEY);
     assert!(token.is_ok());
@@ -145,6 +147,7 @@ fn sign_and_verify_round_trip_with_uuid_like_channel_key() {
             ..RegisteredJwtClaims::default()
         },
         key: Some("123e4567-e89b-12d3-a456-426614174000".to_owned()),
+        key_seed: None,
     };
     let token = sign(&claims, "123e4567-e89b-12d3-a456-426614174000");
     assert!(token.is_ok());
@@ -180,6 +183,7 @@ fn verify_rejects_expired_token() {
             ..RegisteredJwtClaims::default()
         },
         key: None,
+        key_seed: None,
     };
     let token = sign(&claims, TEST_AUTH_KEY);
     assert!(token.is_ok());
@@ -203,6 +207,7 @@ fn verify_rejects_token_when_exp_matches_current_second() {
             ..RegisteredJwtClaims::default()
         },
         key: None,
+        key_seed: None,
     };
     let token = sign(&claims, TEST_AUTH_KEY);
     assert!(token.is_ok());
@@ -263,6 +268,7 @@ fn sign_emits_jose_base64url_segments() {
     let claims = HttpRoomClaims {
         registered: RegisteredJwtClaims::default(),
         key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        key_seed: None,
     };
 
     let token = sign(&claims, TEST_AUTH_KEY);
@@ -284,6 +290,7 @@ fn verify_accepts_jose_base64url_token_without_typ_header() {
     let claims = HttpRoomClaims {
         registered: RegisteredJwtClaims::default(),
         key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        key_seed: None,
     };
 
     let token = sign_token_for_test(&claims, TEST_AUTH_KEY, None, SegmentEncoding::Jose);
@@ -301,6 +308,7 @@ fn verify_accepts_jose_base64url_token_with_typ_header() {
     let claims = HttpRoomClaims {
         registered: RegisteredJwtClaims::default(),
         key: Some("Y2hhbm5lbC1rZXk=".to_owned()),
+        key_seed: None,
     };
 
     let token = sign_token_for_test(&claims, TEST_AUTH_KEY, Some("JWT"), SegmentEncoding::Jose);
@@ -348,6 +356,7 @@ fn verify_does_not_parse_claims_before_signature_verification() {
     let claims = HttpRoomClaims {
         registered: RegisteredJwtClaims::default(),
         key: None,
+        key_seed: None,
     };
     let token = sign(&claims, TEST_AUTH_KEY);
     assert!(token.is_ok());
@@ -438,6 +447,7 @@ fn sign_uses_rfc_header_constants() {
     let claims = HttpRoomClaims {
         registered: RegisteredJwtClaims::default(),
         key: None,
+        key_seed: None,
     };
 
     let token = sign_token_for_test(
@@ -452,4 +462,43 @@ fn sign_uses_rfc_header_constants() {
     };
     let verified = verify::<HttpRoomClaims>(&token, TEST_AUTH_KEY);
     assert_eq!(verified.ok(), Some(claims));
+}
+
+#[test]
+fn derive_key_from_seed_produces_deterministic_key() {
+    let key_b64 = TEST_AUTH_KEY;
+    let seed = "Y2hhbm5lbC1rZXk=";
+    let derived_key = derive_key_from_seed(key_b64, seed).ok();
+    assert!(derived_key.is_some());
+    let Some(derived_key) = derived_key else {
+        return;
+    };
+    assert_ne!(derived_key, key_b64);
+    let derived_key_again = derive_key_from_seed(key_b64, seed).ok();
+    assert_eq!(derived_key_again, Some(derived_key));
+}
+
+#[test]
+fn derive_key_from_seed_works_with_unpadded_seed() {
+    let key_b64 = TEST_AUTH_KEY;
+    let seed = "Y2hhbm5lbC1rZXk=";
+    let seed_unpadded = seed.trim_end_matches('=');
+    let derived_key = derive_key_from_seed(key_b64, seed_unpadded).ok();
+    assert!(derived_key.is_some());
+    let Some(derived_key) = derived_key else {
+        return;
+    };
+    let derived_key_padded = derive_key_from_seed(key_b64, seed).ok();
+    assert_eq!(derived_key_padded, Some(derived_key));
+}
+
+#[test]
+fn derive_key_from_seed_rejects_invalid_base64() {
+    let key_b64 = TEST_AUTH_KEY;
+    let invalid_seed = "invalid-base64!";
+    let derived_key = derive_key_from_seed(key_b64, invalid_seed).err();
+    assert_eq!(
+        derived_key,
+        Some(AuthenticationError::InvalidBase64Encoding)
+    );
 }

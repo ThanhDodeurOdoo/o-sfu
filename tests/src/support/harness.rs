@@ -471,6 +471,7 @@ pub fn signed_room_claims(issuer: &str, key: &str) -> Option<String> {
                 ..RegisteredJwtClaims::default()
             },
             key: Some(key.to_owned()),
+            key_seed: None,
         },
         TEST_AUTH_KEY,
     )

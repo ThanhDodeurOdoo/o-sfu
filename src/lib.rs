@@ -83,9 +83,17 @@
 //!   the HTTP [`http::CreateRoomQuery`] path through [`auth::HttpRoomClaims`] and
 //!   [`auth::HttpDisconnectClaims`]. See [`config`].
 //! - **Per-room key**: the request that creates the current room pins the signing
-//!   key from the `key` claim in [`auth::HttpRoomClaims`]. WebSocket
-//!   [`auth::WebSocketConnectClaims`] verify against that room key, never against
-//!   `AUTH_KEY`.
+//!   key from the `key` or `keySeed` claim in [`auth::HttpRoomClaims`]. For more
+//!   security, prefer the `keySeed` claim, which derives a per-room key with the
+//!   `AUTH_KEY` and provided seed using the following KDF:
+//!   ```text
+//!   room_key = Base64StdPad(HMAC-SHA256(
+//!                  key = Base64Decode(AUTH_KEY),
+//!                  message = Base64Decode(keySeed)
+//!              ))
+//!   ```
+//!   WebSocket [`auth::WebSocketConnectClaims`] verify against that room key,
+//!   never against `AUTH_KEY`.
 //!
 //! Token carriage differs per surface: HTTP room creation uses the
 //! `Authorization` header, HTTP disconnect uses the request body and the
