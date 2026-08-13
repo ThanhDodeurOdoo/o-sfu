@@ -64,7 +64,7 @@ pub struct PacketLoopInputReceivers {
 /// normal commands and cfg-gated probes can change transport topology,
 /// source ownership or demux state. Socket datagrams and timeout wakes stay
 /// outside this enum because they follow different routing rules.
-pub(super) enum PacketLoopControlInput {
+pub(crate) enum PacketLoopControlInput {
     /// Production worker command sent by the RTC transport API.
     Command(RtcWorkerCommand),
     /// Test-support probe used for deterministic route inspection or setup.

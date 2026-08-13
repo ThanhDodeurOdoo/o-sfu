@@ -14,27 +14,15 @@
 
 mod general_call;
 
+#[path = "callgrind_config.rs"]
+mod callgrind_config;
+
 use std::hint::black_box;
 
 use general_call::GeneralCallFixture;
-use gungraun::{
-    Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
-};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 
-const CALLGRIND_CACHE_SIM: &str = "--cache-sim=yes";
-
-fn callgrind_config(soft_limit: f64) -> LibraryBenchmarkConfig {
-    let mut callgrind = Callgrind::with_args([CALLGRIND_CACHE_SIM]);
-    callgrind.soft_limits([
-        (EventKind::Ir, soft_limit),
-        (EventKind::EstimatedCycles, soft_limit),
-    ]);
-    callgrind.fail_fast(false);
-
-    let mut config = LibraryBenchmarkConfig::default();
-    config.tool(callgrind);
-    config
-}
+use callgrind_config::callgrind_config;
 
 #[library_benchmark(config = callgrind_config(2.0))]
 #[bench::mix_10s(GeneralCallFixture::new())]

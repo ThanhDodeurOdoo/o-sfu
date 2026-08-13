@@ -25,4 +25,6 @@ pub(in crate::engine::room) use self::action::ConsumerPacketSelectionUpdate;
 #[cfg(test)]
 pub(super) use self::turn::SourcePolicyTransaction;
 pub(super) use self::turn::SourcePolicyTurn;
+#[cfg(feature = "internal-benchmarks")]
+pub use self::turn::run_source_policy_turn_for_benchmark;
 pub use self::video::VideoAdmissionRank;

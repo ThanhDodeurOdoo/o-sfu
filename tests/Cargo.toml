@@ -55,6 +55,16 @@ path = "benchmarks/packet_loop_callgrind.rs"
 harness = false
 
 [[bench]]
+name = "meeting_flow_callgrind"
+path = "benchmarks/meeting_flow_callgrind.rs"
+harness = false
+
+[[bench]]
+name = "source_policy_callgrind"
+path = "benchmarks/source_policy_callgrind.rs"
+harness = false
+
+[[bench]]
 name = "general_call_callgrind"
 path = "benchmarks/general_call_callgrind.rs"
 harness = false
@@ -64,6 +74,10 @@ name = "packet_loop_worker_callgrind"
 path = "benchmarks/packet_loop_worker_callgrind.rs"
 harness = false
 required-features = ["worker-benchmarks"]
+
+[[test]]
+name = "benchmark_scenarios"
+path = "benchmarks/scenario_self_tests.rs"
 
 [[test]]
 name = "server_smoke"

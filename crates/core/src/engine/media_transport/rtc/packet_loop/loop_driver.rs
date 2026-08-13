@@ -31,6 +31,8 @@ use tokio::{
 };
 use tracing::warn;
 
+#[cfg(feature = "internal-benchmarks")]
+use super::keyframe_requests::PendingKeyframeRequest;
 use super::{
     super::{
         RtcWorkerConfig,
@@ -48,10 +50,12 @@ use super::{
     },
     ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at},
     input::{PacketLoopControlInput, PacketLoopInputReceivers, PacketLoopMailboxInput},
-    keyframe_requests::{drain_due_kf_retries, flush_pending_kf_reqs},
+    keyframe_requests::{drain_due_kf_retries, flush_pending_kf_reqs_at},
     session_drain::{SessionDrainContext, drain_ready_sessions},
     udp::{RtcUdpSocket, UdpDatagram, UdpIngress},
 };
+#[cfg(feature = "internal-benchmarks")]
+use crate::engine::media_transport::TransportSessionKey;
 use crate::engine::{
     media_transport::SourcePolicySignal,
     metrics::{RtcMetricsRecorder, RtpMetricsRecorder, RuntimeMetrics},
@@ -82,15 +86,22 @@ pub struct PacketLoopConfig {
 ///
 /// keeping this type narrow makes it visible when a future change tries to
 /// carry session state or demux recovery state across `.await`
-pub(super) struct WaitPhaseSnapshot {
+pub(crate) struct WaitPhaseSnapshot {
     pub next_timeout: Option<Instant>,
 }
 
-pub(super) enum PacketLoopTurnInput {
+pub(crate) enum PacketLoopTurnInput {
     Timeout,
     Control(PacketLoopControlInput),
     RelayPacket,
     Datagram(UdpDatagram),
+}
+
+#[cfg(feature = "internal-benchmarks")]
+pub(crate) struct BenchmarkTurnInput {
+    pub packets: Vec<ForwardedPacket>,
+    pub keyframe_requests: Vec<(TransportSessionKey, PendingKeyframeRequest)>,
+    pub now: Instant,
 }
 
 /// private contract for one packet-loop turn
@@ -99,20 +110,23 @@ pub(super) enum PacketLoopTurnInput {
 /// used by the driver
 /// durable RTC state stays in `PacketLoopState` while async waits happen only
 /// after the turn has released mutable worker-state borrows
-pub(super) struct PacketLoopTurn {
+pub(crate) struct PacketLoopTurn {
     buffers: PacketLoopBuffers,
     packet_sink_cache: PacketSinkRouteCache,
     staged_relay_packet: Option<ForwardedPacket>,
     delay_publisher: PacketLoopDelayPublisher,
     ready_now_budget: usize,
     udp_burst_budget: usize,
+    /// forwarding destinations planned since the last benchmark read
+    #[cfg(feature = "internal-benchmarks")]
+    planned_forwards: usize,
 }
 
 /// borrowed state needed to apply the input selected by the wait phase
 ///
 /// grouping these borrows keeps the ingress function signatures small while
 /// making it clear that no await happens while the context exists
-pub(super) struct PacketLoopApplyContext<'a> {
+pub(crate) struct PacketLoopApplyContext<'a> {
     pub packet_loop_state: &'a mut PacketLoopState,
     pub bitrate_registry: &'a Arc<Mutex<BitrateRegistry>>,
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
@@ -132,6 +146,8 @@ impl PacketLoopTurn {
             delay_publisher: PacketLoopDelayPublisher::new(started_at),
             ready_now_budget: MAX_READY_NOW_INPUTS_BEFORE_YIELD,
             udp_burst_budget: MAX_UDP_DATAGRAMS_PER_TURN,
+            #[cfg(feature = "internal-benchmarks")]
+            planned_forwards: 0,
         }
     }
 
@@ -143,8 +159,69 @@ impl PacketLoopTurn {
         config: &PacketLoopConfig,
         relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     ) -> WaitPhaseSnapshot {
-        let now = Instant::now();
         self.buffers.clear();
+        self.pump_core(state, snapshot_state, config, relay_rx, Instant::now())
+    }
+
+    /// benchmark variant of [`Self::pump`] that stages synthetic ingress before
+    /// the production phase order runs
+    ///
+    /// scenario benchmarks drive the real turn phases instead of reimplementing
+    /// their order, so the measured sequence cannot drift from production. the
+    /// staged packets and keyframe requests stand in for the ingress and
+    /// consumer feedback that a socket-free fixture cannot produce; they enter
+    /// the same batch the relay mailbox and ready-session drain feed
+    #[cfg(feature = "internal-benchmarks")]
+    pub fn pump_for_benchmark(
+        &mut self,
+        state: &mut PacketLoopState,
+        snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+        config: &PacketLoopConfig,
+        relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+        input: BenchmarkTurnInput,
+    ) {
+        self.buffers.clear();
+        self.buffers.pending_packets.extend(input.packets);
+        self.buffers
+            .pending_keyframe_requests
+            .extend(input.keyframe_requests);
+        let _wait_phase = self.pump_core(state, snapshot_state, config, relay_rx, input.now);
+    }
+
+    /// returns the packets a benchmark turn staged and observed back to the
+    /// fixture
+    ///
+    /// the fixture recycles these into its reusable packet slots for the next
+    /// tick
+    #[cfg(feature = "internal-benchmarks")]
+    pub fn take_packets_for_benchmark(&mut self) -> Vec<ForwardedPacket> {
+        take(&mut self.buffers.pending_packets)
+    }
+
+    /// reports and clears the forwarding destinations planned since the last read
+    ///
+    /// scenario benchmarks use this as an anti-elimination counter. the turn
+    /// plans and flushes one packet at a time and clears the plan in between, so
+    /// the count is accumulated during the turn rather than read off the buffers
+    /// afterwards
+    #[cfg(feature = "internal-benchmarks")]
+    pub fn take_planned_forwards_for_benchmark(&mut self) -> usize {
+        take(&mut self.planned_forwards)
+    }
+
+    /// runs the production turn phases once the buffers hold this turn's
+    /// ingress
+    ///
+    /// `now` is the single clock the whole turn reads, so every deadline the
+    /// turn resolves belongs to the same timeline as the ingress it observes
+    fn pump_core(
+        &mut self,
+        state: &mut PacketLoopState,
+        snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
+        config: &PacketLoopConfig,
+        relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
+        now: Instant,
+    ) -> WaitPhaseSnapshot {
         if let Some(packet) = self.staged_relay_packet.take() {
             // the packet that woke the wait phase enters the same batch as packets
             // drained from the relay mailbox below
@@ -163,7 +240,7 @@ impl PacketLoopTurn {
             &config.rtc_metrics,
         );
         state.routes.flush_remote_pkt_gates();
-        flush_pending_kf_reqs(state, &config.rtc_metrics, &mut self.buffers);
+        flush_pending_kf_reqs_at(state, &config.rtc_metrics, &mut self.buffers, now);
         // sink routes are refreshed once per turn so recording lookups do not take
         // the shared registry lock per packet
         self.packet_sink_cache
@@ -195,6 +272,14 @@ impl PacketLoopTurn {
                 pkt,
                 &self.buffers.forwards,
             );
+            // the plan is cleared per packet, so a scenario benchmark has to
+            // accumulate it here instead of reading the buffer after the turn
+            #[cfg(feature = "internal-benchmarks")]
+            {
+                self.planned_forwards = self
+                    .planned_forwards
+                    .saturating_add(self.buffers.forwards.len());
+            }
             self.buffers.forwards.clear();
         }
         self.buffers.pending_packets = pending_packets;

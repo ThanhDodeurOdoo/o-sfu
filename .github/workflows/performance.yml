@@ -191,6 +191,17 @@ jobs:
           echo "base-ref=${base_ref}" >> "$GITHUB_OUTPUT"
           echo "head-ref=${head_ref}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify the scenarios still exercise the code they measure
+        run: |
+          # a scenario that silently stopped branching would keep reporting stable
+          # instruction counts, so the gate checks its own coverage before measuring
+          #
+          # both scenarios run from one test target rather than from a name filter:
+          # a filter that matches nothing exits zero, so renaming a self-test away
+          # would silently disarm this step
+          git checkout --force "${{ steps.refs.outputs.head-ref }}"
+          cargo test --locked -p o-sfu-tests --test benchmark_scenarios
+
       - name: Save base Callgrind baseline
         run: |
           callgrind_args='${{ steps.investigation.outputs.callgrind-args }}'
@@ -203,10 +214,31 @@ jobs:
           fi
 
           # Gungraun stores the named baseline under target/gungraun for the next step in this same job
+          # a bench target that does not exist on the base ref cannot produce a baseline
+          # the head step then runs it without a comparison instead of failing the job
+          bench_target_present() {
+            cargo metadata --locked --no-deps --format-version 1 \
+              | jq -e --arg target "$1" \
+                '.packages[] | select(.name == "o-sfu-tests") | any(.targets[]; .name == $target and (.kind | index("bench")))' >/dev/null
+          }
+
           git checkout --force "${{ steps.refs.outputs.base-ref }}"
           cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --save-baseline=base --save-summary=json
-          if cargo metadata --locked --no-deps --format-version 1 \
-            | jq -e '.packages[] | select(.name == "o-sfu-tests") | any(.targets[]; .name == "general_call_callgrind" and (.kind | index("bench")))' >/dev/null; then
+          if bench_target_present meeting_flow_callgrind; then
+            cargo bench --locked -p o-sfu-tests --bench meeting_flow_callgrind -- --save-baseline=base --save-summary=json
+            echo "MEETING_FLOW_BASELINE_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "meeting_flow_callgrind is not present on the base ref"
+            echo "MEETING_FLOW_BASELINE_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+          if bench_target_present source_policy_callgrind; then
+            cargo bench --locked -p o-sfu-tests --bench source_policy_callgrind -- --save-baseline=base --save-summary=json
+            echo "SOURCE_POLICY_BASELINE_AVAILABLE=true" >> "$GITHUB_ENV"
+          else
+            echo "source_policy_callgrind is not present on the base ref"
+            echo "SOURCE_POLICY_BASELINE_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+          if bench_target_present general_call_callgrind; then
             cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --save-baseline=base --save-summary=json
             echo "GENERAL_CALL_BASELINE_AVAILABLE=true" >> "$GITHUB_ENV"
           else
@@ -228,6 +260,16 @@ jobs:
           # the head run loads the saved base baseline and emits JSON summaries with base-versus-head deltas
           git checkout --force "${{ steps.refs.outputs.head-ref }}"
           cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=base --save-summary=json
+          if [[ "${MEETING_FLOW_BASELINE_AVAILABLE:-false}" == "true" ]]; then
+            cargo bench --locked -p o-sfu-tests --bench meeting_flow_callgrind -- --baseline=base --save-summary=json
+          else
+            cargo bench --locked -p o-sfu-tests --bench meeting_flow_callgrind -- --save-summary=json
+          fi
+          if [[ "${SOURCE_POLICY_BASELINE_AVAILABLE:-false}" == "true" ]]; then
+            cargo bench --locked -p o-sfu-tests --bench source_policy_callgrind -- --baseline=base --save-summary=json
+          else
+            cargo bench --locked -p o-sfu-tests --bench source_policy_callgrind -- --save-summary=json
+          fi
           if [[ "${GENERAL_CALL_BASELINE_AVAILABLE:-false}" == "true" ]]; then
             cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --baseline=base --save-summary=json
           else

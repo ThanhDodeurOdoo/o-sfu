@@ -47,10 +47,7 @@ use super::{
     },
     ingress_routing::route_pkt_to_session,
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
-    keyframe_requests::{
-        PendingKeyframeRequest, drain_due_kf_retries, flush_pending_kf_reqs,
-        flush_pending_kf_reqs_at,
-    },
+    keyframe_requests::{PendingKeyframeRequest, drain_due_kf_retries, flush_pending_kf_reqs_at},
     loop_driver::{
         PacketLoopApplyContext, PacketLoopConfig, PacketLoopTurn, PacketLoopTurnInput,
         WaitPhaseSnapshot,
@@ -2231,10 +2228,11 @@ fn flush_pending_kf_reqs_follow_route_scoped_feedback() {
             case.kind,
         );
 
-        flush_pending_kf_reqs(
+        flush_pending_kf_reqs_at(
             &mut harness.state,
             harness.rtc_metrics.as_ref(),
             &mut harness.buffers,
+            Instant::now(),
         );
 
         match case.expected {
@@ -2306,10 +2304,11 @@ fn flush_pending_kf_reqs_coalesces_duplicate_remote_requests() {
         KeyframeRequestKind::Fir,
     );
 
-    flush_pending_kf_reqs(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
+        Instant::now(),
     );
 
     assert_remote_keyframe_request(
@@ -2369,10 +2368,11 @@ fn flush_pending_kf_reqs_keeps_distinct_rids_separate() {
         KeyframeRequestKind::Fir,
     );
 
-    flush_pending_kf_reqs(
+    flush_pending_kf_reqs_at(
         &mut harness.state,
         harness.rtc_metrics.as_ref(),
         &mut harness.buffers,
+        Instant::now(),
     );
 
     let mut requests = Vec::new();

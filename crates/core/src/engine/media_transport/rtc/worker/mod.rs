@@ -48,6 +48,10 @@ pub(super) use handlers::{
     KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_decoder_ready,
     handle_worker_command, request_kf_for_target,
 };
+#[cfg(feature = "internal-benchmarks")]
+pub(in crate::engine::media_transport::rtc) use handlers::{
+    consumer_payload_type, guarded_pkt_gate,
+};
 #[cfg(any(test, feature = "internal-benchmarks"))]
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 #[cfg(any(test, feature = "internal-benchmarks"))]

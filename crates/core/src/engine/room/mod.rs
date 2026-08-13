@@ -57,6 +57,8 @@ pub use read_model::{
     IncomingBitrateSnapshot, RoomDetailCapture, RoomOverviewCapture, RoomUserCapture,
     RoomUserStatsSnapshot, RoomUsersCapture,
 };
+#[cfg(feature = "internal-benchmarks")]
+pub use source_policy::run_source_policy_turn_for_benchmark;
 pub(crate) use transition::{DeactivateIntentOutcome, PublishIntentOutcome};
 
 #[cfg(any(test, feature = "testing-transport"))]

@@ -30,7 +30,7 @@ pub enum RtcUdpSocket {
 }
 
 /// Completed UDP datagram ready for one packet-loop turn.
-pub(super) struct UdpDatagram {
+pub(crate) struct UdpDatagram {
     pub(super) source_addr: SocketAddr,
     pub(super) candidate_addr: SocketAddr,
     pub(super) received_at: Instant,

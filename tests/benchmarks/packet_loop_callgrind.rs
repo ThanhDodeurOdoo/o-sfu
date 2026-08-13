@@ -27,9 +27,7 @@
 
 use std::{hint::black_box, mem::drop};
 
-use gungraun::{
-    Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
-};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use o_sfu_core::server::transport::benchmark_support::{
     ActiveSpeakerBenchFixture, ConsumerGateBatchBenchFixture, FanoutBenchTopology,
     IncomingObservationBenchFixture, IngressBurstBenchFixture, IngressRoutingBenchFixture,
@@ -39,22 +37,12 @@ use o_sfu_core::server::transport::benchmark_support::{
     SessionDrainBenchFixture, WorkerPacketCommandMixBenchFixture, routing_miss_packet_fingerprint,
 };
 
+#[path = "callgrind_config.rs"]
+mod callgrind_config;
+
+use callgrind_config::callgrind_config;
+
 const ROUTING_MISS_FINGERPRINT_ATTEMPTS: usize = 4096;
-const CALLGRIND_CACHE_SIM: &str = "--cache-sim=yes";
-
-fn callgrind_config(soft_limit: f64) -> LibraryBenchmarkConfig {
-    let mut callgrind = Callgrind::with_args([CALLGRIND_CACHE_SIM]);
-    callgrind.soft_limits([
-        (EventKind::Ir, soft_limit),
-        (EventKind::EstimatedCycles, soft_limit),
-    ]);
-    callgrind.fail_fast(false);
-
-    let mut config = LibraryBenchmarkConfig::default();
-    config.tool(callgrind);
-    config
-}
-
 fn fanout_topology(destination_count: usize) -> FanoutBenchTopology {
     FanoutBenchTopology::with_local_destinations(destination_count)
 }
