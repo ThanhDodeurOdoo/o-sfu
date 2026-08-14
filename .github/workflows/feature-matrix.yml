@@ -54,7 +54,7 @@ jobs:
           cargo hack --locked --package o-sfu-telemetry --feature-powerset --depth 2 check --all-targets
           cargo check --locked --package o-sfu-telemetry --all-targets --all-features
 
-      - name: Check protocol proof features
+      - name: Check protocol features
         run: cargo hack --locked --package o-sfu-protocol --each-feature check --all-targets
 
       - name: Check router support features

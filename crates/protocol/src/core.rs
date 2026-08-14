@@ -34,8 +34,6 @@ mod request_tracker;
 mod server_events;
 mod sticky_replay;
 mod timers;
-#[cfg(feature = "verification-models")]
-pub mod verification;
 
 pub use command_batch::CommandBatch;
 

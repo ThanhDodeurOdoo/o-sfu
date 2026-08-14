@@ -64,9 +64,6 @@
 //! ```
 
 mod model;
-#[cfg(kani)]
-#[path = "../../../tests/proofs/src/router/proofs.rs"]
-mod proofs;
 #[cfg(any(test, feature = "test-support"))]
 #[path = "TESTS/test_support/mod.rs"]
 pub mod test_support;

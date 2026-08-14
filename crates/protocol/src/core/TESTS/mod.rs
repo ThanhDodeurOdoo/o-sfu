@@ -1,8 +1,8 @@
 use serde_json::json;
 
 pub(super) use super::{
-    Command, ConnectionState, NegotiationKind, PendingRequestKind, ProtocolCore, ProtocolEvent,
-    RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS,
+    BATCH_FLUSH_TIMER_ID, Command, ConnectionState, NegotiationKind, PendingRequestKind,
+    ProtocolCore, ProtocolEvent, RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS, StickyReplayState,
 };
 pub(super) use crate::{
     shared::{

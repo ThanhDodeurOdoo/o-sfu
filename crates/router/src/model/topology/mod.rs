@@ -1,18 +1,17 @@
 //! room-local routed topology
 
-#[cfg(not(kani))]
-use std::collections::{BTreeMap, BTreeSet};
-use std::{iter, mem};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    iter, mem,
+};
 
 use o_sfu_model::UserId;
 
-#[cfg(kani)]
-use crate::model::proof_storage::{BTreeMap, BTreeSet};
 use crate::model::{
     ConnectionId, ConsumerId, MediaCapabilities, MediaWorkerId, ProducerId, RouterError, RouterId,
 };
 
-#[cfg(any(test, kani))]
+#[cfg(test)]
 #[path = "../TESTS/topology_support.rs"]
 pub(crate) mod test_support;
 
@@ -21,7 +20,7 @@ pub(crate) mod test_support;
 pub struct RoutedProducerId(RouterId, ConnectionId, ProducerId);
 
 impl RoutedProducerId {
-    #[cfg(any(test, feature = "test-support", kani))]
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub const fn for_test(
         router: RouterId,
@@ -388,26 +387,12 @@ impl Router {
         }
 
         let routed = RoutedConsumerId(producer.router_id(), receiver.connection, consumer);
-        #[cfg(not(kani))]
         local
             .sessions
             .entry(receiver.connection)
             .or_default()
             .consumers
             .insert(consumer, producer);
-        #[cfg(kani)]
-        {
-            if !local.sessions.contains_key(&receiver.connection) {
-                local
-                    .sessions
-                    .insert(receiver.connection, LocalSession::default());
-            }
-            let receiver_session = local
-                .sessions
-                .get_mut(&receiver.connection)
-                .ok_or_else(|| RouterError::MissingSession(user.clone()))?;
-            receiver_session.consumers.insert(consumer, producer);
-        }
         let producer_session = local
             .sessions
             .get_mut(&producer.connection_id())
@@ -523,13 +508,7 @@ impl Router {
             Some(placements) => placements.upsert(placement),
             None => self.placements = Some(RouterPlacements::new(placement, Vec::new())),
         }
-        #[cfg(not(kani))]
         self.routers.entry(placement.router).or_default();
-        #[cfg(kani)]
-        if !self.routers.contains_key(&placement.router) {
-            self.routers
-                .insert(placement.router, LocalRouter::default());
-        }
     }
 
     fn validate_placement(&self, placement: RouterPlacement) -> Result<(), RouterError> {

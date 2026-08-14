@@ -5,7 +5,7 @@ use super::{
 };
 use crate::model::{ConnectionId, RouterId};
 
-/// verification view over the complete routed graph
+/// Read-only projection for routed graph invariants.
 pub struct InvariantView<'a> {
     router: &'a Router,
 }
@@ -26,7 +26,8 @@ impl<'a> InvariantView<'a> {
         (session.connection == connection).then_some(session)
     }
 
-    #[cfg(test)]
+    /// Returns `true` when placements, session indexes and producer-consumer
+    /// routes form one reciprocal graph.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         if !self.router.routers.contains_key(&self.router.primary) {
@@ -41,6 +42,14 @@ impl<'a> InvariantView<'a> {
                 if !routers.insert(placement.router) {
                     return false;
                 }
+            }
+            if self
+                .router
+                .routers
+                .keys()
+                .any(|router| !routers.contains(router))
+            {
+                return false;
             }
         } else if !self.router.sessions.is_empty() {
             return false;
@@ -215,7 +224,6 @@ impl<'a> InvariantView<'a> {
             .map(|local| local.sessions.len())
     }
 
-    #[cfg(test)]
     #[must_use]
     pub fn home_router(&self, user: &UserId) -> Option<RouterId> {
         self.router

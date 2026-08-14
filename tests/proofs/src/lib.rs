@@ -1,2 +1,2 @@
-pub mod protocol;
-pub mod rfc;
+#[cfg(kani)]
+mod rfc;

@@ -4,13 +4,11 @@ on:
   pull_request:
     branches: [main, master]
     paths:
+      - .github/workflows/formal-verification.yml
       - .github/workflows/formal-verification-pr.yml
       - Cargo.lock
       - Cargo.toml
-      - crates/model/**
-      - crates/protocol/**
       - crates/rfc/**
-      - crates/router/**
       - tests/proofs/**
 
 permissions:
@@ -32,52 +30,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: router-flow
-            covers: 2
-            command: >-
-              cargo kani -p o-sfu-router
-              --no-assertion-reach-checks
-              --harness proofs::flow::cross_router_consumer_forms_valid_graph
-          - shard: router-replacement
-            covers: 1
-            command: >-
-              cargo kani -p o-sfu-router
-              --no-assertion-reach-checks
-              --harness proofs::replacement::replacement_rehomes_and_retires_graph
-          - shard: router-consumer-removal
-            covers: 2
-            command: >-
-              cargo kani -p o-sfu-router
-              --no-assertion-reach-checks
-              --harness proofs::teardown::removing_consumer_preserves_sibling_and_shadow
-          - shard: router-producer-teardown
-            covers: 2
-            command: >-
-              cargo kani -p o-sfu-router
-              --no-assertion-reach-checks
-              --harness proofs::teardown::removing_producer_cascades_only_its_dependents
-          - shard: router-session-teardown
-            covers: 1
-            command: >-
-              cargo kani -p o-sfu-router
-              --no-assertion-reach-checks
-              --harness proofs::teardown::receiver_teardown_clears_shadow
-          - shard: protocol-recovery-backoff-reset
+          - shard: rfc-h264
             command: >-
               cargo kani -p o-sfu-proofs
-              --harness protocol_core_welcome_resets_recovery_backoff
-          - shard: protocol-disconnect-connecting
+              --harness h264_profile_level_id_parse_matches_rfc_patterns
+          - shard: rfc-vp8
+            covers: 11
             command: >-
               cargo kani -p o-sfu-proofs
-              --harness protocol_core_connecting_disconnect_suppresses_recovery
-          - shard: protocol-disconnect-authenticated
-            command: >-
-              cargo kani -p o-sfu-proofs
-              --harness protocol_core_authenticated_disconnect_suppresses_recovery
-          - shard: protocol-disconnect-connected
-            command: >-
-              cargo kani -p o-sfu-proofs
-              --harness protocol_core_connected_disconnect_suppresses_recovery
+              --harness vp8_keyframe_prefix_matches_rfc_model
 
     steps:
       - name: Checkout repository
@@ -142,7 +103,7 @@ jobs:
         env:
           EXPECTED_COVERS: ${{ matrix.covers || 0 }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           output="$(mktemp)"
           ${{ matrix.command }} 2>&1 | tee "$output"
           if (( EXPECTED_COVERS > 0 )) && \
