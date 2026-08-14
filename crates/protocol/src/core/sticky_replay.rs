@@ -5,10 +5,10 @@ use crate::{
     signaling::{ClientEnvelope, ClientMessage, EnvelopeBatch, SubscribePayload},
 };
 
-/// remembers reconnect-safe client intent outside the live socket
+/// Retains client intent across recoverable WebSocket replacement.
 ///
-/// welcome replay sends subscriptions and user info
-/// transport-ready replay sends active publications
+/// Authentication replays subscriptions and user info. Transport readiness
+/// replays active publications.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct StickyReplayState {
     audio_publication_active: bool,
@@ -29,15 +29,6 @@ impl StickyReplayState {
         self.screen_publication_active = false;
         self.desired_subscriptions.clear();
         self.desired_info = None;
-    }
-
-    #[cfg(feature = "verification-models")]
-    pub(super) fn is_empty(&self) -> bool {
-        !self.audio_publication_active
-            && !self.camera_publication_active
-            && !self.screen_publication_active
-            && self.desired_subscriptions.is_empty()
-            && self.desired_info.is_none()
     }
 
     pub(super) fn set_publish_active(&mut self, stream_type: StreamType, active: bool) {

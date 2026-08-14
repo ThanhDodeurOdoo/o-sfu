@@ -6,8 +6,6 @@ mod TESTS;
 pub(crate) mod diagnostic;
 pub(crate) mod error;
 pub(crate) mod ids;
-#[cfg(any(test, kani))]
-mod proof_storage;
 pub(crate) mod rtp;
 pub(crate) mod rtp_negotiation;
 pub(crate) mod topology;

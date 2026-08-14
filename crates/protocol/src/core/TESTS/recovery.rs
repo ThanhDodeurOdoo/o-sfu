@@ -1,7 +1,87 @@
 use super::*;
 
+const ATTEMPT_STAGES: [AttemptStage; 3] = [
+    AttemptStage::Connecting,
+    AttemptStage::Authenticated,
+    AttemptStage::Connected,
+];
+const TERMINAL_CLOSE_CODES: [WebSocketCloseCode; 4] = [
+    WebSocketCloseCode::ProtocolError,
+    WebSocketCloseCode::AuthFailed,
+    WebSocketCloseCode::Kicked,
+    WebSocketCloseCode::RoomFull,
+];
+
+#[derive(Clone, Copy, Debug)]
+enum AttemptStage {
+    Connecting,
+    Authenticated,
+    Connected,
+}
+
+fn core_at(stage: AttemptStage) -> ProtocolCore {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    if matches!(stage, AttemptStage::Authenticated | AttemptStage::Connected) {
+        let _ = core.accept_welcome(sample_welcome_payload());
+    }
+    if matches!(stage, AttemptStage::Connected) {
+        let _ = core.on_transport_ready();
+    }
+    let expected = match stage {
+        AttemptStage::Connecting => ConnectionState::Connecting,
+        AttemptStage::Authenticated => ConnectionState::Authenticated,
+        AttemptStage::Connected => ConnectionState::Connected,
+    };
+    assert_eq!(core.state(), expected);
+    core
+}
+
+fn connect_count(commands: &[Command]) -> usize {
+    commands
+        .iter()
+        .filter(|command| matches!(command, Command::Connect { .. }))
+        .count()
+}
+
+fn recovery_timer_count(commands: &[Command]) -> usize {
+    commands
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                Command::ScheduleTimer {
+                    id: RECOVERY_TIMER_ID,
+                    ..
+                }
+            )
+        })
+        .count()
+}
+
+fn batch_flush_cancel_count(commands: &[Command]) -> usize {
+    commands
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                Command::CancelTimer {
+                    id: BATCH_FLUSH_TIMER_ID,
+                }
+            )
+        })
+        .count()
+}
+
+fn peer_close_count(commands: &[Command]) -> usize {
+    commands
+        .iter()
+        .filter(|command| matches!(command, Command::ClosePeerConnection))
+        .count()
+}
+
 #[test]
-fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
+fn protocol_core_disconnect_cleans_up_connected_session() -> Result<(), String> {
     let mut core = ProtocolCore::new();
     let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
     let _ = core.accept_welcome(sample_welcome_payload());
@@ -44,6 +124,50 @@ fn protocol_core_disconnect_cleans_up_live_session() -> Result<(), String> {
     let recording_state = serde_json::to_value(core.recording_state());
     assert_eq!(recording_state.unwrap_or_default(), empty_recording_json());
     Ok(())
+}
+
+#[test]
+fn protocol_core_disconnect_clears_each_attempt_stage() {
+    for stage in ATTEMPT_STAGES {
+        let mut core = core_at(stage);
+        assert!(
+            core.on_timer(RECOVERY_TIMER_ID).is_empty(),
+            "stale recovery timer was accepted from {stage:?}"
+        );
+        let _ = core.publish(StreamType::Audio, true);
+        let _ = core.publish(StreamType::Camera, true);
+        let _ = core.publish(StreamType::Screen, true);
+        let _ = core.subscribe(
+            "peer-7".into(),
+            DownloadStates {
+                audio: Some(true),
+                ..DownloadStates::default()
+            },
+        );
+        let _ = core.update_info(UserInfo {
+            is_camera_on: Some(true),
+            ..UserInfo::default()
+        });
+        assert_ne!(core.sticky_replay, StickyReplayState::new(), "{stage:?}");
+
+        let commands = core.disconnect();
+
+        assert_eq!(core.state(), ConnectionState::Disconnected, "{stage:?}");
+        assert_eq!(peer_close_count(&commands), 1, "{stage:?}");
+        assert_eq!(
+            batch_flush_cancel_count(&commands),
+            usize::from(matches!(
+                stage,
+                AttemptStage::Authenticated | AttemptStage::Connected
+            )),
+            "{stage:?}"
+        );
+        assert!(core.connect_context.is_none(), "{stage:?}");
+        assert_eq!(core.sticky_replay, StickyReplayState::new(), "{stage:?}");
+        assert!(core.on_timer(RECOVERY_TIMER_ID).is_empty(), "{stage:?}");
+        assert!(core.on_timer(BATCH_FLUSH_TIMER_ID).is_empty(), "{stage:?}");
+        assert!(core.on_ws_close(1011).is_empty(), "{stage:?}");
+    }
 }
 
 #[test]
@@ -131,6 +255,40 @@ fn protocol_core_non_terminal_close_enters_recovering() {
             },
         ]
     );
+}
+
+#[test]
+fn protocol_core_close_policy_is_stage_independent() {
+    for stage in ATTEMPT_STAGES {
+        for close_code in TERMINAL_CLOSE_CODES {
+            let mut core = core_at(stage);
+
+            let commands = core.on_ws_close(u16::from(close_code));
+
+            assert_eq!(core.state(), ConnectionState::Closed, "{stage:?}");
+            assert_eq!(
+                recovery_timer_count(&commands),
+                0,
+                "{stage:?} {close_code:?}"
+            );
+            assert!(core.connect_context.is_none(), "{stage:?} {close_code:?}");
+            assert!(
+                core.on_timer(RECOVERY_TIMER_ID).is_empty(),
+                "{stage:?} {close_code:?}"
+            );
+            let reconnect = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+            assert_eq!(connect_count(&reconnect), 1, "{stage:?} {close_code:?}");
+        }
+
+        let mut core = core_at(stage);
+        let commands = core.on_ws_close(1011);
+        assert_eq!(core.state(), ConnectionState::Recovering, "{stage:?}");
+        assert_eq!(recovery_timer_count(&commands), 1, "{stage:?}");
+        assert_eq!(peer_close_count(&commands), 1, "{stage:?}");
+        let reconnect = core.on_timer(RECOVERY_TIMER_ID);
+        assert_eq!(core.state(), ConnectionState::Connecting, "{stage:?}");
+        assert_eq!(connect_count(&reconnect), 1, "{stage:?}");
+    }
 }
 
 #[test]

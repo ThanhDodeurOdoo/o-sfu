@@ -220,19 +220,23 @@ fn foreign_session_lives_until_its_last_consumer() -> Result<(), RouterError> {
     let receiver = UserId::Integer(20);
     join(&mut router, &publisher, 1, 9, 0);
     join(&mut router, &receiver, 2, 10, 1);
-    let first = router.add_producer(&publisher, ProducerId(7))?;
-    let second = router.add_producer(&publisher, ProducerId(8))?;
-    let first_consumer = router.add_consumer(&receiver, ConsumerId(9), first)?;
-    let second_consumer = router.add_consumer(&receiver, ConsumerId(10), second)?;
+    let producer = router.add_producer(&publisher, ProducerId(7))?;
+    let first_consumer = router.add_consumer(&receiver, ConsumerId(9), producer)?;
+    let second_consumer = router.add_consumer(&receiver, ConsumerId(10), producer)?;
 
-    router.remove_consumer(first_consumer)?;
     assert_eq!(
-        InvariantView::new(&router).session_count(RouterId(9)),
+        InvariantView::new(&router).dependent_count(producer),
         Some(2)
     );
+
+    router.remove_consumer(first_consumer)?;
+    let view = InvariantView::new(&router);
+    assert_eq!(view.dependent_count(producer), Some(1));
+    assert_eq!(view.session_count(RouterId(9)), Some(2));
     router.remove_consumer(second_consumer)?;
 
     let view = InvariantView::new(&router);
+    assert_eq!(view.dependent_count(producer), Some(0));
     assert_eq!(view.session_count(RouterId(9)), Some(1));
     assert_eq!(view.home_router(&receiver), Some(RouterId(10)));
     assert!(view.is_valid());

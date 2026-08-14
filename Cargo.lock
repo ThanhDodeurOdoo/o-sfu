@@ -1420,7 +1420,6 @@ dependencies = [
 name = "o-sfu-proofs"
 version = "0.10.0-rc.2"
 dependencies = [
- "o-sfu-protocol",
  "o-sfu-rfc",
 ]
 

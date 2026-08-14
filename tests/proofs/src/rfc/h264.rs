@@ -2,10 +2,9 @@ use o_sfu_rfc::rtp::h264::{LevelIdc, Profile, ProfileLevelId};
 
 const CONSTRAINT_SET3_FLAG: u8 = 0x10;
 
-// Exhaustively checks the full 24-bit `profile-level-id` space against an
-// independent RFC-shaped spec model. This is worth proving because profile
-// parsing feeds every later H264 compatibility decision and unit tests would
-// only sample a tiny fraction of the accepted and rejected bit patterns.
+/// Proves the full 24-bit `profile-level-id` space against an independent
+/// RFC-shaped model. Profile parsing feeds every later H264 compatibility
+/// decision while unit tests can only sample the accepted and rejected space.
 #[kani::proof]
 fn h264_profile_level_id_parse_matches_rfc_patterns() {
     let raw = kani::any::<u32>() & 0x00FF_FFFF;
