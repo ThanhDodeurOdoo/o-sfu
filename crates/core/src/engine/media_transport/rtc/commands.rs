@@ -9,11 +9,16 @@
 
 use std::sync::Arc;
 
+use o_sfu_rfc::webrtc;
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
-use str0m::media::{KeyframeRequestKind, MediaKind, Rid};
+use str0m::{
+    change::{SdpAnswer, SdpOffer},
+    media::{KeyframeRequestKind, MediaKind, Rid},
+};
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
+    codec::{ParsedAnswerRids, RtpProfile},
     relay_registry::{RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
 };
@@ -21,8 +26,9 @@ use crate::engine::{
     media_transport::{
         ActiveSpeakerSource, AppliedSessionAnswer, ConsumerRouteControl,
         ConsumerRouteControlOutcome, ProducerRouteControl, ReceiverBweTargetUpdate, SessionOffer,
-        SourceActivityUpdate, TransportConsumerRoute, TransportMediaId, TransportResult,
-        TransportSessionKey, TransportSourceDiagnosticsSnapshot, TransportSourceKey,
+        SessionUploadSlot, SourceActivityUpdate, TransportAdapterError, TransportConsumerRoute,
+        TransportMediaId, TransportResult, TransportSessionKey, TransportSourceDiagnosticsSnapshot,
+        TransportSourceKey,
     },
     metrics::{RtcMetricsRecorder, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence},
 };
@@ -141,6 +147,42 @@ impl RemoteSourceControl {
 /// mutation that is already being handled
 pub type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
 
+pub struct ParsedSessionAnswer {
+    pub(super) answer: SdpAnswer,
+    pub(super) rids: ParsedAnswerRids,
+}
+
+impl ParsedSessionAnswer {
+    pub(in crate::engine::media_transport) fn parse(answer_sdp: &str) -> TransportResult<Self> {
+        RtpProfile::validate_answer_sdp(answer_sdp)?;
+        let answer = SdpAnswer::from_sdp_string(answer_sdp)
+            .map_err(|_error| TransportAdapterError::InvalidInput)?;
+        let rids = ParsedAnswerRids::parse(answer_sdp, &answer);
+        Ok(Self { answer, rids })
+    }
+}
+
+pub struct RtcSessionOffer {
+    offer: SdpOffer,
+    upload_slots: Vec<SessionUploadSlot>,
+}
+
+impl RtcSessionOffer {
+    pub(super) fn new(offer: SdpOffer, upload_slots: Vec<SessionUploadSlot>) -> Self {
+        Self {
+            offer,
+            upload_slots,
+        }
+    }
+
+    pub(in crate::engine::media_transport) fn into_session_offer(self) -> SessionOffer {
+        let mut sdp = self.offer.to_sdp_string();
+        let media_line_start = sdp.find("\r\nm=").map_or(sdp.len(), |index| index + 2);
+        sdp.insert_str(media_line_start, webrtc::sdp::END_OF_CANDIDATES_LINE);
+        SessionOffer::new(sdp).with_upload_slots(self.upload_slots)
+    }
+}
+
 #[derive(Debug)]
 pub enum WorkerMediaControlBatch {
     ReceiverBwe(Vec<(usize, ReceiverBweTargetUpdate)>),
@@ -205,7 +247,7 @@ pub enum RtcWorkerCommand {
     CreateInitialSessionOffer {
         room_id: Arc<str>,
         session_key: TransportSessionKey,
-        response: RtcWorkerResponse<SessionOffer>,
+        response: RtcWorkerResponse<RtcSessionOffer>,
     },
     /// drain a staged follow-up offer after media topology changed
     ///
@@ -215,7 +257,7 @@ pub enum RtcWorkerCommand {
     /// one-outstanding-offer rule owned by the worker
     CreateSessionRenegotiationOffer {
         session_key: TransportSessionKey,
-        response: RtcWorkerResponse<SessionOffer>,
+        response: RtcWorkerResponse<RtcSessionOffer>,
     },
     /// read active-speaker sources from worker-local route-control state
     ///
@@ -236,7 +278,7 @@ pub enum RtcWorkerCommand {
     /// and returns the producer details that became usable after the answer
     ApplySessionAnswer {
         session_key: TransportSessionKey,
-        answer_sdp: String,
+        answer: ParsedSessionAnswer,
         response: RtcWorkerResponse<AppliedSessionAnswer>,
     },
     /// remove a session from worker state

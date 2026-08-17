@@ -1,8 +1,13 @@
 //! Shared RID and SDP mechanics for codec simulcast profiles.
 
-use o_sfu_rfc::webrtc;
+use std::collections::BTreeMap;
+
+use o_sfu_rfc::webrtc::{self, sdp::attribute};
 use o_sfu_router::rtp::MediaStream;
-use str0m::media::{Mid, Rid, Simulcast, SimulcastLayer};
+use str0m::{
+    change::SdpAnswer,
+    media::{Mid, Rid, Simulcast, SimulcastLayer},
+};
 
 use crate::{
     Bitrate, VideoBitrateLimits,
@@ -22,6 +27,46 @@ pub(in crate::engine::media_transport::rtc) struct NegotiatedRid {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::engine::media_transport::rtc) struct SimulcastAnswerError;
+
+pub(in crate::engine::media_transport::rtc) struct ParsedAnswerRids {
+    by_mid: BTreeMap<Mid, Result<Vec<AnswerRid>, SimulcastAnswerError>>,
+}
+
+impl ParsedAnswerRids {
+    pub(in crate::engine::media_transport::rtc) fn parse(
+        answer_sdp: &str,
+        answer: &SdpAnswer,
+    ) -> Self {
+        let mut by_mid = BTreeMap::new();
+        // Replacing this raw parsing require an upstream Str0m API that exposes
+        // lossless RID and simulcast declarations through `SdpAnswer`.
+        for (media_line, section) in answer
+            .media_lines
+            .iter()
+            .zip(answer_sdp.split("\nm=").skip(1))
+        {
+            match parse_section_rids(section) {
+                Ok(rids) if rids.is_empty() => {}
+                result => {
+                    by_mid.insert(media_line.mid(), result);
+                }
+            }
+        }
+        Self { by_mid }
+    }
+
+    pub(in crate::engine::media_transport::rtc) fn negotiate(
+        &self,
+        mid: Mid,
+        offered_encodings: &[SessionUploadEncoding],
+    ) -> Result<Vec<NegotiatedRid>, SimulcastAnswerError> {
+        match self.by_mid.get(&mid) {
+            Some(Ok(parsed_rids)) => negotiate_answer_rids(parsed_rids, offered_encodings),
+            Some(Err(error)) => Err(*error),
+            None => Ok(Vec::new()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LayerSpec<'a> {
@@ -112,89 +157,64 @@ pub(in crate::engine::media_transport::rtc) fn initial_packet_gate(
     first_rid.map_or(PacketLayerGate::Open, PacketLayerGate::Rid)
 }
 
-pub(in crate::engine::media_transport::rtc) fn send_rids_for_mid(
-    answer_sdp: &str,
-    mid: Mid,
-    offered_encodings: &[SessionUploadEncoding],
-) -> Result<Vec<NegotiatedRid>, SimulcastAnswerError> {
-    let Some(section) = media_section_for_mid(answer_sdp, mid) else {
-        return Ok(Vec::new());
-    };
-    let mut rids = Vec::with_capacity(MAX_SEND_STREAMS);
-    for rid in accepted_send_simulcast_rids(section)? {
+fn parse_section_rids(section: &str) -> Result<Vec<AnswerRid>, SimulcastAnswerError> {
+    let accepted_rids = accepted_send_simulcast_rids(section)?;
+    let mut rids = Vec::with_capacity(accepted_rids.len());
+    for rid in accepted_rids {
         let declaration = send_rid_declaration(section, rid)?;
-        let max_bitrate = negotiated_rid_max_bitrate(declaration, offered_encodings)?;
-        rids.push(NegotiatedRid {
-            rid: Rid::from(declaration.rid),
-            max_bitrate,
+        rids.push(AnswerRid {
+            rid: declaration.rid.to_owned(),
+            max_bitrate: declaration.max_bitrate,
         });
     }
     Ok(rids)
 }
 
+fn negotiate_answer_rids(
+    answer_rids: &[AnswerRid],
+    offered_encodings: &[SessionUploadEncoding],
+) -> Result<Vec<NegotiatedRid>, SimulcastAnswerError> {
+    answer_rids
+        .iter()
+        .map(|answer_rid| {
+            let max_bitrate = negotiated_rid_max_bitrate(answer_rid, offered_encodings)?;
+            Ok(NegotiatedRid {
+                rid: Rid::from(answer_rid.rid.as_str()),
+                max_bitrate,
+            })
+        })
+        .collect()
+}
+
 fn negotiated_rid_max_bitrate(
-    declaration: SendRidDeclaration<'_>,
+    answer_rid: &AnswerRid,
     offered_encodings: &[SessionUploadEncoding],
 ) -> Result<Option<Bitrate>, SimulcastAnswerError> {
+    let rid = answer_rid.rid.as_str();
     let Some(offered) = offered_encodings
         .iter()
-        .find(|encoding| encoding.rid == declaration.rid)
+        .find(|encoding| encoding.rid == rid)
     else {
         return Err(SimulcastAnswerError);
     };
-    match (declaration.max_bitrate, offered.max_bitrate) {
+    match (answer_rid.max_bitrate, offered.max_bitrate) {
         (RidMaxBitrate::Absent, offered) => Ok(offered),
         (RidMaxBitrate::Value(answer), Some(offer)) if answer <= offer => Ok(Some(answer)),
         (RidMaxBitrate::Value(_) | RidMaxBitrate::Valueless, _) => Err(SimulcastAnswerError),
     }
 }
 
-fn media_section_for_mid(sdp: &str, mid: Mid) -> Option<&str> {
-    let marker = format!(
-        "{}{}:{mid}",
-        webrtc::sdp::ATTRIBUTE_PREFIX,
-        webrtc::sdp::attribute::MID
-    );
-    let media_prefix = format!("\n{}", webrtc::sdp::MEDIA_PREFIX);
-    let mut section_search_start = 0;
-    while let Some(section_start) =
-        find_next_media_section_start(sdp, section_search_start, &media_prefix)
-    {
-        let section_body_start = section_start + webrtc::sdp::MEDIA_PREFIX.len();
-        let section_end = find_next_media_section_start(sdp, section_body_start, &media_prefix)
-            .unwrap_or(sdp.len());
-        let section = &sdp[section_start..section_end];
-        if section
-            .lines()
-            .map(|line| line.trim_end_matches('\r'))
-            .any(|line| line == marker)
-        {
-            return Some(section);
-        }
-        section_search_start = section_end;
-    }
-    None
-}
-
-fn find_next_media_section_start(sdp: &str, start: usize, media_prefix: &str) -> Option<usize> {
-    let remaining = sdp.get(start..)?;
-    if remaining.starts_with(webrtc::sdp::MEDIA_PREFIX) {
-        return Some(start);
-    }
-    // `media_prefix` is "\nm=" so the match anchors `m=` to a line start.
-    // `+ 1` moves past the newline to the section start.
-    remaining
-        .find(media_prefix)
-        .map(|offset| start + offset + 1)
-}
-
-#[derive(Debug, Clone, Copy)]
 struct SendRidDeclaration<'a> {
     rid: &'a str,
     max_bitrate: RidMaxBitrate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnswerRid {
+    rid: String,
+    max_bitrate: RidMaxBitrate,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum RidMaxBitrate {
     Absent,
     Valueless,
@@ -221,12 +241,7 @@ fn send_rid_declaration<'a>(
 }
 
 fn parse_send_rid(line: &str) -> Result<Option<SendRidDeclaration<'_>>, SimulcastAnswerError> {
-    let rid_prefix = format!(
-        "{}{}:",
-        webrtc::sdp::ATTRIBUTE_PREFIX,
-        webrtc::sdp::attribute::RID
-    );
-    let Some(rid_value) = line.strip_prefix(&rid_prefix) else {
+    let Some(rid_value) = sdp_attribute_value(line, attribute::RID) else {
         return Ok(None);
     };
     let mut parts = rid_value.splitn(3, ' ');
@@ -251,7 +266,7 @@ fn parse_send_rid(line: &str) -> Result<Option<SendRidDeclaration<'_>>, Simulcas
 fn accepted_send_simulcast_rids(section: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
     let mut lines = section
         .lines()
-        .filter_map(|line| parse_simulcast_value(line.trim_end_matches('\r')));
+        .filter_map(|line| sdp_attribute_value(line.trim_end_matches('\r'), attribute::SIMULCAST));
     let Some(value) = lines.next() else {
         return Ok(Vec::new());
     };
@@ -261,13 +276,10 @@ fn accepted_send_simulcast_rids(section: &str) -> Result<Vec<&str>, SimulcastAns
     parse_send_simulcast_value(value)
 }
 
-fn parse_simulcast_value(line: &str) -> Option<&str> {
-    let simulcast_prefix = format!(
-        "{}{}:",
-        webrtc::sdp::ATTRIBUTE_PREFIX,
-        webrtc::sdp::attribute::SIMULCAST
-    );
-    line.strip_prefix(&simulcast_prefix)
+fn sdp_attribute_value<'a>(line: &'a str, attribute: &str) -> Option<&'a str> {
+    line.strip_prefix(webrtc::sdp::ATTRIBUTE_PREFIX)?
+        .strip_prefix(attribute)?
+        .strip_prefix(':')
 }
 
 fn parse_send_simulcast_value(value: &str) -> Result<Vec<&str>, SimulcastAnswerError> {

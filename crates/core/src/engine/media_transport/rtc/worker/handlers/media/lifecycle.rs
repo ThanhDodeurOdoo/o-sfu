@@ -220,7 +220,7 @@ fn can_unregister_unnegotiated_producer(
 /// must reject new additions that would need a second concurrent offer
 fn offer_is_awaiting_answer(session_state: &RtcSessionState) -> bool {
     session_state.sdp_negotiation.pending_offer.is_some()
-        && session_state.sdp_negotiation.staged_offer_sdp.is_none()
+        && session_state.sdp_negotiation.staged_offer.is_none()
 }
 
 /// "Removal" for negotiated media means preserving the existing MID and
@@ -253,7 +253,7 @@ fn worker_stage_native_media_removal(
         return Err(TransportAdapterError::InvalidInput);
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
     session_state
         .sdp_negotiation
         .staged_offer_upload_slots
@@ -367,7 +367,7 @@ fn worker_stage_native_recv_media(
         return Err(TransportAdapterError::TransportUnavailable);
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
     session_state.sdp_negotiation.staged_offer_upload_slots = vec![upload_slot(
         mid,
         media_kind,
@@ -531,7 +531,7 @@ fn worker_stage_native_send_media(
         return Err(TransportAdapterError::TransportUnavailable);
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
     session_state
         .sdp_negotiation
         .staged_offer_upload_slots

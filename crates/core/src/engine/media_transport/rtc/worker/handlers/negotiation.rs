@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use o_sfu_rfc::webrtc::{self, MediaKind as ProtocolMediaKind};
+use o_sfu_rfc::webrtc::MediaKind as ProtocolMediaKind;
 use str0m::{
     change::{SdpAnswer, SdpApi},
     media::{Direction, Media, MediaKind, Mid},
@@ -23,7 +23,11 @@ use tracing::debug;
 
 use super::{
     super::super::{
-        RtpProfile, bitrate::BitrateRegistry, bootstrap, codec, state::PacketLoopState,
+        RtpProfile,
+        bitrate::BitrateRegistry,
+        bootstrap, codec,
+        commands::{ParsedSessionAnswer, RtcSessionOffer},
+        state::PacketLoopState,
     },
     publication::{answer_producer_projection, refresh_negotiated_producer_parameters},
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
@@ -32,8 +36,8 @@ use crate::{
     Bitrate, VideoBitrateLimits,
     engine::{
         media_transport::{
-            AppliedProducer, AppliedSessionAnswer, SessionOffer, SessionUploadEncoding,
-            SessionUploadSlot, TransportAdapterError, TransportSessionKey,
+            AppliedProducer, AppliedSessionAnswer, SessionUploadEncoding, SessionUploadSlot,
+            TransportAdapterError, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
     },
@@ -64,7 +68,7 @@ pub(super) fn worker_create_initial_session_offer(
     config: OfferBootstrapConfig<'_>,
     room_id: Arc<str>,
     session_key: &TransportSessionKey,
-) -> Result<SessionOffer, TransportAdapterError> {
+) -> Result<RtcSessionOffer, TransportAdapterError> {
     ensure_session_ready_for_offer(state, bitrate_registry, config, room_id, session_key)?;
     if state.session_has_registered_media(session_key) {
         return Err(TransportAdapterError::UnsupportedFeature);
@@ -94,32 +98,28 @@ pub(super) fn worker_create_initial_session_offer(
     };
 
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer_sdp = None;
+    session_state.sdp_negotiation.staged_offer = None;
     session_state
         .sdp_negotiation
         .staged_offer_upload_slots
         .clear();
-    Ok(
-        SessionOffer::new(offer_sdp_with_end_of_candidates(offer.to_sdp_string()))
-            .with_upload_slots(initial_upload_slots(
-                bootstrap_mids,
-                config.profile,
-                config.video_bitrate_limits,
-            )),
-    )
+    Ok(RtcSessionOffer::new(
+        offer,
+        initial_upload_slots(bootstrap_mids, config.profile, config.video_bitrate_limits),
+    ))
 }
 
 pub(super) fn worker_create_session_renegotiation_offer(
     state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
-) -> Result<SessionOffer, TransportAdapterError> {
+) -> Result<RtcSessionOffer, TransportAdapterError> {
     let Some(session_state) = state.users.get_mut(session_key) else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
     if !session_state.sdp_negotiation.initial_offer_applied {
         return Err(TransportAdapterError::InvalidInput);
     }
-    let Some(offer_sdp) = session_state.sdp_negotiation.staged_offer_sdp.take() else {
+    let Some(offer) = session_state.sdp_negotiation.staged_offer.take() else {
         if session_state.sdp_negotiation.pending_offer.is_some() {
             return Err(TransportAdapterError::InvalidInput);
         }
@@ -129,10 +129,7 @@ pub(super) fn worker_create_session_renegotiation_offer(
         .sdp_negotiation
         .staged_offer_upload_slots
         .clone();
-    Ok(
-        SessionOffer::new(offer_sdp_with_end_of_candidates(offer_sdp))
-            .with_upload_slots(upload_slots),
-    )
+    Ok(RtcSessionOffer::new(*offer, upload_slots))
 }
 
 /// Accept the currently pending local offer and reconcile every worker-local
@@ -146,16 +143,14 @@ pub(super) fn worker_apply_session_answer(
     state: &mut PacketLoopState,
     max_bitrate_in: Bitrate,
     session_key: &TransportSessionKey,
-    answer_sdp: &str,
+    parsed_answer: ParsedSessionAnswer,
 ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-    RtpProfile::validate_answer_sdp(answer_sdp)?;
     let producer_media_snapshot = state.producer_media_snapshot(session_key);
     let producer_mids = producer_media_snapshot
         .iter()
         .map(|(_transport_media_id, mid)| *mid)
         .collect::<Vec<_>>();
-    let answer = SdpAnswer::from_sdp_string(answer_sdp)
-        .map_err(|_error| TransportAdapterError::InvalidInput)?;
+    let ParsedSessionAnswer { answer, rids } = parsed_answer;
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
     let client_capabilities = codec::client_rtp_capabilities_from_sdp_answer(&answer)?;
     let producer_answer_projection = answer_producer_projection(&answer, &producer_mids)?;
@@ -167,7 +162,7 @@ pub(super) fn worker_apply_session_answer(
                 .get(mid)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            codec::send_rids_for_mid(answer_sdp, *mid, encodings)
+            rids.negotiate(*mid, encodings)
                 .map(|rids| (*mid, rids))
                 .map_err(|_error| TransportAdapterError::InvalidInput)
         })
@@ -185,7 +180,7 @@ pub(super) fn worker_apply_session_answer(
             .accept_answer(pending_offer, answer)
             .map_err(|_error| TransportAdapterError::InvalidInput)?;
         session_state.sdp_negotiation.initial_offer_applied = true;
-        session_state.sdp_negotiation.staged_offer_sdp = None;
+        session_state.sdp_negotiation.staged_offer = None;
         let staged_upload_slots =
             mem::take(&mut session_state.sdp_negotiation.staged_offer_upload_slots);
         apply_pending_recv_streams(session_state, max_bitrate_in);
@@ -355,19 +350,11 @@ fn stage_queued_removal_offer(session_state: &mut super::super::super::state::Rt
         return;
     };
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer_sdp = Some(offer.to_sdp_string());
+    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
     session_state
         .sdp_negotiation
         .staged_offer_upload_slots
         .clear();
-}
-
-fn offer_sdp_with_end_of_candidates(mut offer_sdp: String) -> String {
-    let media_line_start = offer_sdp
-        .find("\r\nm=")
-        .map_or(offer_sdp.len(), |index| index + 2);
-    offer_sdp.insert_str(media_line_start, webrtc::sdp::END_OF_CANDIDATES_LINE);
-    offer_sdp
 }
 
 fn ensure_initial_negotiation_media(

@@ -34,7 +34,7 @@ use std::{
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::{
     Rtc,
-    change::SdpPendingOffer,
+    change::{SdpOffer, SdpPendingOffer},
     media::{Mid, Rid},
     rtp::Ssrc,
 };
@@ -154,7 +154,7 @@ pub(super) struct SessionSdpNegotiationState {
     /// `str0m` token that must be accepted by the next remote answer
     pub(super) pending_offer: Option<SdpPendingOffer>,
     /// follow-up local offer prepared by media lifecycle and not yet delivered
-    pub(super) staged_offer_sdp: Option<String>,
+    pub(super) staged_offer: Option<Box<SdpOffer>>,
     pub(super) staged_offer_upload_slots: Vec<SessionUploadSlot>,
     /// whether the remote side has answered the initial transport offer
     pub(super) initial_offer_applied: bool,

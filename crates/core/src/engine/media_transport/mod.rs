@@ -58,7 +58,10 @@ pub mod fuzz_support {
         client_rtp_capabilities_from_answer, fuzz_support::route_packet_loop_ingress_demux,
     };
 }
-use rtc::{RtcWorker, RtcWorkerCommand, RtcWorkerResponse, RtpProfile};
+use rtc::{
+    ParsedSessionAnswer, RtcSessionOffer, RtcWorker, RtcWorkerCommand, RtcWorkerResponse,
+    RtpProfile,
+};
 use tracing::warn;
 pub use types::{
     ActiveSpeakerActivityReason, ActiveSpeakerActivityState, ActiveSpeakerSource,
@@ -191,6 +194,7 @@ impl MediaTransport {
             },
         )
         .await
+        .map(RtcSessionOffer::into_session_offer)
     }
 
     /// Creates a new SDP offer after transport media state changed.
@@ -222,6 +226,7 @@ impl MediaTransport {
             },
         )
         .await
+        .map(RtcSessionOffer::into_session_offer)
     }
 
     /// Applies a browser SDP answer to a pending transport offer.
@@ -239,24 +244,27 @@ impl MediaTransport {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
-        self.request_session_command(
-            session_key,
-            |response| RtcWorkerCommand::ApplySessionAnswer {
-                session_key: session_key.clone(),
-                answer_sdp: answer_sdp.to_owned(),
-                response,
-            },
-            |error| {
-                warn!(
-                    ?session_key,
-                    op = ?TransportCommandOp::ApplySessionAnswer,
-                    answer_len = answer_sdp.len(),
-                    ?error,
-                    "media transport worker command failed"
-                );
-            },
-        )
+        async {
+            let worker = self.require_worker_for_user(session_key)?;
+            let answer = ParsedSessionAnswer::parse(answer_sdp)?;
+            worker
+                .request_worker(|response| RtcWorkerCommand::ApplySessionAnswer {
+                    session_key: session_key.clone(),
+                    answer,
+                    response,
+                })
+                .await
+        }
         .await
+        .inspect_err(|error| {
+            warn!(
+                ?session_key,
+                op = ?TransportCommandOp::ApplySessionAnswer,
+                answer_len = answer_sdp.len(),
+                ?error,
+                "media transport failed to apply session answer"
+            );
+        })
     }
 
     /// Declares a new producer on a transport session.

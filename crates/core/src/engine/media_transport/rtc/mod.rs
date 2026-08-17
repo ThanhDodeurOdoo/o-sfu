@@ -66,6 +66,7 @@ mod worker;
 pub(super) use codec::RtpProfile;
 #[cfg(any(test, fuzzing))]
 pub use codec::client_rtp_capabilities_from_answer;
+pub(super) use commands::{ParsedSessionAnswer, RtcSessionOffer};
 pub use commands::{
     RtcWorkerCommand, RtcWorkerResponse, WorkerMediaControlBatch, WorkerMediaControlBatchOutcome,
 };

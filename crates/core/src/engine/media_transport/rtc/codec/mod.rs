@@ -26,7 +26,7 @@ pub(super) use packet::{
 };
 pub(in crate::engine::media_transport) use profile::RtpProfile;
 pub(super) use rid::{
-    NegotiatedRid, initial_packet_gate as initial_consumer_packet_gate, send_rids_for_mid,
+    NegotiatedRid, ParsedAnswerRids, initial_packet_gate as initial_consumer_packet_gate,
 };
 use str0m::{
     format::Codec,

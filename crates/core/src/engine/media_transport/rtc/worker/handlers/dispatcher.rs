@@ -107,7 +107,7 @@ pub fn handle_worker_command(
         ),
         RtcWorkerCommand::ApplySessionAnswer {
             session_key,
-            answer_sdp,
+            answer,
             response,
         } => respond(
             response,
@@ -115,7 +115,7 @@ pub fn handle_worker_command(
                 state,
                 context.config.bitrate_limits.max_bitrate_in(),
                 &session_key,
-                &answer_sdp,
+                answer,
             ),
         ),
         #[cfg(test)]
