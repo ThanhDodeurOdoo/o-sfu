@@ -287,10 +287,13 @@ fn keyframe_coalesce_512(mut fixture: KeyframeCoalescingBenchFixture) -> usize {
 // side goes through the real worker mailbox
 // this keeps the observation-lock cost visible in the regular base-versus-head
 // Callgrind suite without adding fake peer negotiation to the measured window
-#[library_benchmark(config = callgrind_config(1.0))]
+#[library_benchmark(config = callgrind_config(1.0), teardown = drop)]
 #[bench::packet_cmd_mix(WorkerPacketCommandMixBenchFixture::packet_command_mix_current_thread())]
-fn interleaved_fanout(mut fixture: WorkerPacketCommandMixBenchFixture) -> usize {
-    black_box(fixture.run_packet_command_mix())
+fn interleaved_fanout(
+    mut fixture: WorkerPacketCommandMixBenchFixture,
+) -> WorkerPacketCommandMixBenchFixture {
+    black_box(fixture.run_packet_command_mix());
+    black_box(fixture)
 }
 
 // measures ready session output draining

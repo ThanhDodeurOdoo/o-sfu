@@ -15,7 +15,10 @@ use str0m::media::MediaKind;
 use tokio::runtime::{Builder, Runtime};
 
 use super::{
-    super::{RtcWorker, RtpProfile, test_support::test_transport_session_key},
+    super::{
+        RtcSessionOffer, RtcWorker, RtcWorkerCommand, RtpProfile,
+        test_support::test_transport_session_key,
+    },
     FanoutBenchTopology,
 };
 use crate::{
@@ -153,11 +156,14 @@ impl Drop for WorkerLoopBenchFixture {
 /// each lifecycle burst enters the real worker mailbox and executes the command
 /// sequence affected by observation locking: session creation, receive-media
 /// registration, media removal and session close
+/// typed offer responses remain retained until teardown so their destruction is
+/// outside the measured command mix
 pub struct WorkerPacketCommandMixBenchFixture {
     runtime: Runtime,
     worker: RtcWorker,
     base_session_key: TransportSessionKey,
     fanout: FanoutBenchTopology,
+    retained_offers: Vec<RtcSessionOffer>,
     next_session_id: u64,
 }
 
@@ -187,10 +193,14 @@ impl WorkerPacketCommandMixBenchFixture {
             worker: benchmark_worker(rtc_port_range),
             base_session_key: benchmark_session_key(10_000),
             fanout: FanoutBenchTopology::with_local_destinations(WORKER_PACKET_COMMAND_MIX_FANOUT),
+            retained_offers: Vec::with_capacity(
+                WORKER_PACKET_COMMAND_MIX_PACKETS / PACKETS_PER_LIFECYCLE_BURST,
+            ),
             next_session_id: 10_001,
         };
         fixture.bootstrap_base_session();
         let _ = fixture.run_packet_command_mix();
+        fixture.retained_offers.clear();
         fixture
     }
 
@@ -205,6 +215,7 @@ impl WorkerPacketCommandMixBenchFixture {
         let runtime = &self.runtime;
         let worker = &self.worker;
         let fanout = &mut self.fanout;
+        let retained_offers = &mut self.retained_offers;
         let mut next_session_id = self.next_session_id;
         let observed = runtime.block_on(async {
             let mut observed = 0_usize;
@@ -213,8 +224,9 @@ impl WorkerPacketCommandMixBenchFixture {
                 if (packet_index + 1) % PACKETS_PER_LIFECYCLE_BURST == 0 {
                     let session_key = benchmark_session_key(next_session_id);
                     next_session_id = next_session_id.saturating_add(1);
-                    observed =
-                        observed.saturating_add(run_lifecycle_burst(worker, &session_key).await);
+                    let (lifecycle_work, offer) = run_lifecycle_burst(worker, &session_key).await;
+                    retained_offers.push(offer);
+                    observed = observed.saturating_add(lifecycle_work);
                 }
             }
             observed
@@ -244,10 +256,17 @@ impl Drop for WorkerPacketCommandMixBenchFixture {
     }
 }
 
-async fn run_lifecycle_burst(worker: &RtcWorker, session_key: &TransportSessionKey) -> usize {
-    require_ok(
+async fn run_lifecycle_burst(
+    worker: &RtcWorker,
+    session_key: &TransportSessionKey,
+) -> (usize, RtcSessionOffer) {
+    let offer = require_ok(
         worker
-            .create_initial_session_offer("test-room", session_key)
+            .request_worker(|response| RtcWorkerCommand::CreateInitialSessionOffer {
+                room_id: Arc::from("test-room"),
+                session_key: session_key.clone(),
+                response,
+            })
             .await,
         "temporary session offer failed",
     );
@@ -269,7 +288,7 @@ async fn run_lifecycle_burst(worker: &RtcWorker, session_key: &TransportSessionK
         worker.close_session(session_key).await,
         "temporary session close failed",
     );
-    usize::try_from(media_id.as_u64()).unwrap_or(0)
+    (usize::try_from(media_id.as_u64()).unwrap_or(0), offer)
 }
 
 fn benchmark_session_key(connection_id: u64) -> TransportSessionKey {
