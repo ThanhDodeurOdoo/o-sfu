@@ -59,6 +59,10 @@ use str0m::media::MediaKind;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+use super::commands::ParsedSessionAnswer;
+#[cfg(any(test, feature = "internal-benchmarks"))]
+use super::commands::RtcSessionOffer;
 use super::{
     bitrate::BitrateRegistry,
     commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
@@ -147,6 +151,7 @@ impl RtcWorker {
             },
         )
         .await
+        .map(RtcSessionOffer::into_session_offer)
     }
 
     #[cfg(test)]
@@ -161,6 +166,7 @@ impl RtcWorker {
             },
         )
         .await
+        .map(RtcSessionOffer::into_session_offer)
     }
 
     #[cfg(test)]
@@ -169,9 +175,10 @@ impl RtcWorker {
         session_key: &TransportSessionKey,
         answer_sdp: &str,
     ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
+        let answer = ParsedSessionAnswer::parse(answer_sdp)?;
         self.request_worker(|response| RtcWorkerCommand::ApplySessionAnswer {
             session_key: session_key.clone(),
-            answer_sdp: answer_sdp.to_owned(),
+            answer,
             response,
         })
         .await

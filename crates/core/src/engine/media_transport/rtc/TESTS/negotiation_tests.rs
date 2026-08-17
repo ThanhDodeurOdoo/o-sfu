@@ -581,25 +581,29 @@ async fn rtc_simulcast_answer_rejects_larger_max_br_than_offer() {
         .expect("staged simulcast renegotiation offer should be available")
         .into_parts()
         .0;
-    let answer_sdp = remote
+    let valid_answer_sdp = remote
         .sdp_api()
         .accept_offer(
             SdpOffer::from_sdp_string(&renegotiation_offer).expect("simulcast offer should parse"),
         )
         .expect("remote simulcast answer should build")
         .to_sdp_string();
-    let answer_sdp = answer_with_simulcast_send_rids(
-        &answer_sdp,
+    let invalid_answer_sdp = answer_with_simulcast_send_rids(
+        &valid_answer_sdp,
         &negotiated_mid,
         &[("lo", Some(150_001)), ("hi", Some(900_000))],
     );
 
     assert_eq!(
         adapter
-            .apply_session_answer(&session_key, &answer_sdp)
+            .apply_session_answer(&session_key, &invalid_answer_sdp)
             .await,
         Err(TransportAdapterError::InvalidInput)
     );
+    adapter
+        .apply_session_answer(&session_key, &valid_answer_sdp)
+        .await
+        .expect("rejected answer should preserve the pending offer");
 }
 
 #[tokio::test]

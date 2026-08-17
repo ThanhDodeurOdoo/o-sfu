@@ -220,7 +220,7 @@ pub(super) fn worker_resolve_negotiated_producer_parameters(
             ?mid,
             initial_offer_applied = session_state.sdp_negotiation.initial_offer_applied,
             pending_offer = session_state.sdp_negotiation.pending_offer.is_some(),
-            staged_offer = session_state.sdp_negotiation.staged_offer_sdp.is_some(),
+            staged_offer = session_state.sdp_negotiation.staged_offer.is_some(),
             negotiated_mids = ?session_state
                 .sdp_negotiation
                 .negotiated_producer_parameters
