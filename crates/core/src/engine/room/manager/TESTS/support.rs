@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use o_sfu_router::test_support::rtp_samples::sample_client_rtp_capabilities;
 
@@ -15,6 +15,7 @@ use crate::{
 };
 
 const DEFAULT_TEST_MAX_SESSIONS: usize = 100;
+const DEFAULT_TEST_RESERVATION_TTL: Duration = Duration::from_mins(1);
 
 impl RoomManager {
     #[must_use]
@@ -47,7 +48,48 @@ impl RoomManager {
 
     #[must_use]
     pub fn for_test_with_runtime_policy(runtime_policy: RoomRuntimePolicy) -> Self {
-        Self::new(runtime_policy, Arc::new(RuntimeMetrics::default()))
+        Self::for_test_with_runtime_policy_and_reservation_ttl(
+            runtime_policy,
+            DEFAULT_TEST_RESERVATION_TTL,
+        )
+    }
+
+    /// builds a manager whose new rooms expire after `reservation_ttl`
+    ///
+    /// [`Duration::ZERO`] publishes rooms that are already past their deadline,
+    /// which lets reservation tests exercise expiry without touching a clock
+    #[must_use]
+    pub fn for_test_with_reservation_ttl(reservation_ttl: Duration) -> Self {
+        Self::for_test_with_runtime_policy_and_reservation_ttl(
+            test_runtime_policy(RoomAdmissionPolicy::new(DEFAULT_TEST_MAX_SESSIONS)),
+            reservation_ttl,
+        )
+    }
+
+    #[must_use]
+    pub fn for_test_with_runtime_policy_and_reservation_ttl(
+        runtime_policy: RoomRuntimePolicy,
+        reservation_ttl: Duration,
+    ) -> Self {
+        Self::new(
+            runtime_policy,
+            Arc::new(RuntimeMetrics::default()),
+            reservation_ttl,
+        )
+    }
+
+    pub async fn expire_room_reservation_now_for_test(&self, room_id: &str) -> bool {
+        let Some(entry) = self.entry(room_id).await else {
+            return false;
+        };
+        entry.lifecycle.expire_reservation_now_for_test();
+        true
+    }
+
+    pub async fn has_room_reservation_deadline_for_test(&self, room_id: &str) -> bool {
+        self.entry(room_id)
+            .await
+            .is_some_and(|entry| entry.lifecycle.has_reservation_deadline_for_test())
     }
 
     #[cfg(any(test, feature = "testing-transport"))]

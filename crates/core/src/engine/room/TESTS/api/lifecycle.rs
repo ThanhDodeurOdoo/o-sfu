@@ -4,7 +4,7 @@ use o_sfu_router::{
 
 use super::super::super::{
     JoinUserRequest, Room, RoomEffectContext, RoomJoinError, UserOutboundSender,
-    placement::JoinAdmissionTurn,
+    media_graph::CommittedTransportReceipt, placement::JoinAdmissionTurn,
 };
 use crate::engine::{
     ConnectionId, UserId, UserPermissions,
@@ -55,13 +55,12 @@ impl RoomTestLifecycle<'_> {
             permissions,
             sender,
         };
-        self.room
-            .admit_session(
-                JoinAdmissionTurn::for_test(request, delays_ms, spillover_router_id),
-                RoomEffectContext::state_only(None),
-            )
-            .await
-            .map(|receipt| receipt.connection_id)
+        self.admit_session(
+            JoinAdmissionTurn::for_test(request, delays_ms, spillover_router_id),
+            RoomEffectContext::state_only(None),
+        )
+        .await
+        .map(|receipt| receipt.connection_id)
     }
 
     /// # Errors
@@ -82,17 +81,25 @@ impl RoomTestLifecycle<'_> {
             permissions,
             sender,
         };
-        self.room
-            .admit_session(
-                JoinAdmissionTurn::for_test(
-                    request,
-                    media_transport.packet_loop_delays_ms(),
-                    spillover_router_id,
-                ),
-                RoomEffectContext::state_only(Some(media_transport)),
-            )
-            .await
-            .map(|receipt| receipt.connection_id)
+        self.admit_session(
+            JoinAdmissionTurn::for_test(
+                request,
+                media_transport.packet_loop_delays_ms(),
+                spillover_router_id,
+            ),
+            RoomEffectContext::state_only(Some(media_transport)),
+        )
+        .await
+        .map(|receipt| receipt.connection_id)
+    }
+
+    async fn admit_session(
+        self,
+        admission: JoinAdmissionTurn<'_, impl FnOnce() -> o_sfu_router::RouterId>,
+        context: RoomEffectContext<'_>,
+    ) -> Result<CommittedTransportReceipt, RoomJoinError> {
+        let commit = self.room.commit_admission(admission, context).await?;
+        Ok(self.room.finalize_admission(commit, context).await)
     }
 
     /// # Errors

@@ -14,7 +14,7 @@
 
 #[cfg(any(test, feature = "testing-transport"))]
 use std::sync::Mutex;
-use std::{collections::BTreeSet, future::Future, sync::Arc};
+use std::{collections::BTreeSet, future::Future, sync::Arc, time::Duration};
 
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
@@ -89,6 +89,7 @@ pub struct RuntimeRoomDirectorySnapshot {
 pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
     factory: RoomFactory,
+    reservation_ttl: Duration,
     #[cfg(any(test, feature = "testing-transport"))]
     join_placement_gate: Mutex<Option<Arc<JoinPlacementTestGate>>>,
 }
@@ -97,11 +98,16 @@ impl RoomManager {
     /// builds a room manager with an empty directory
     ///
     #[must_use]
-    pub fn new(runtime_policy: RoomRuntimePolicy, metrics: Arc<RuntimeMetrics>) -> Self {
+    pub fn new(
+        runtime_policy: RoomRuntimePolicy,
+        metrics: Arc<RuntimeMetrics>,
+        reservation_ttl: Duration,
+    ) -> Self {
         let factory = RoomFactory::new(runtime_policy, metrics);
         Self {
             directory: RwLock::new(RoomDirectory::default()),
             factory,
+            reservation_ttl,
             #[cfg(any(test, feature = "testing-transport"))]
             join_placement_gate: Mutex::new(None),
         }
@@ -121,16 +127,18 @@ impl RoomManager {
     ) -> Arc<Room> {
         {
             let directory = self.directory.read().await;
-            if let Some(room) = directory.get_by_issuer(issuer) {
-                return room;
+            if let Some(entry) = directory.entry_by_issuer(issuer) {
+                entry.lifecycle.renew_reservation();
+                return entry.room;
             }
         }
         let mut directory = self.directory.write().await;
-        if let Some(room) = directory.get_by_issuer(issuer) {
-            return room;
+        if let Some(entry) = directory.entry_by_issuer(issuer) {
+            entry.lifecycle.renew_reservation();
+            return entry.room;
         }
         let room = self.factory.create(issuer, key, config);
-        directory.insert(Arc::clone(&room), remote_address);
+        directory.insert(Arc::clone(&room), remote_address, self.reservation_ttl);
         drop(directory);
         info!(
             event = telemetry_event::ROOM_CREATED,
@@ -258,27 +266,34 @@ impl RoomManager {
         request: JoinUserRequest,
         media_transport: &MediaTransport,
     ) -> Result<RoomUserAdmission, RoomManagerJoinError> {
-        let Some((room, join_result)) = self
-            .run_current_room_mutation(
-                room_id,
-                |room| async move {
-                    let admission =
-                        JoinAdmissionTurn::from_factory(request, media_transport, &self.factory);
-                    #[cfg(any(test, feature = "testing-transport"))]
-                    let admission = admission.with_gate(self.join_placement_gate_for_test());
-                    room.admit_session(admission, RoomEffectContext::runtime(media_transport))
-                        .await
-                },
-                false,
-            )
+        let mutation = self
+            .begin_current_room_mutation(room_id)
             .await
-        else {
-            return Err(RoomManagerJoinError::MissingRoom);
+            .ok_or(RoomManagerJoinError::MissingRoom)?;
+        let room = Arc::clone(&mutation.room);
+
+        let admission = JoinAdmissionTurn::from_factory(request, media_transport, &self.factory);
+        #[cfg(any(test, feature = "testing-transport"))]
+        let admission = admission.with_gate(self.join_placement_gate_for_test());
+        let join_commit = match room
+            .commit_admission(admission, RoomEffectContext::runtime(media_transport))
+            .await
+        {
+            Ok(commit) => commit,
+            Err(err) => {
+                self.finish_session_mutation(room_id, mutation, false).await;
+                return Err(match err {
+                    RoomJoinError::RoomFull => RoomManagerJoinError::RoomFull,
+                    RoomJoinError::RouterState => RoomManagerJoinError::RouterState,
+                });
+            }
         };
-        let receipt = join_result.map_err(|error| match error {
-            RoomJoinError::RoomFull => RoomManagerJoinError::RoomFull,
-            RoomJoinError::RouterState => RoomManagerJoinError::RouterState,
-        })?;
+        mutation.lease.clear_expiration();
+        let receipt = room
+            .finalize_admission(join_commit, RoomEffectContext::runtime(media_transport))
+            .await;
+
+        self.finish_session_mutation(room_id, mutation, false).await;
         Ok(RoomUserAdmission {
             room,
             connection_id: receipt.connection_id,
@@ -333,6 +348,21 @@ impl RoomManager {
                 true,
             )
             .await;
+    }
+
+    pub async fn check_expired_room_reservations(&self) {
+        let mut directory = self.directory.write().await;
+        for entry in directory.entries() {
+            if entry.lifecycle.claim_expired_reservation() {
+                directory.remove_if_current(entry.room.uuid(), &entry.room);
+                info!(
+                    event = telemetry_event::ROOM_RESERVATION_EXPIRED,
+                    room_id = entry.room.uuid(),
+                    "room reservation expired"
+                );
+            }
+        }
+        drop(directory);
     }
 
     #[cfg(test)]

@@ -10,14 +10,17 @@ use serde_json::Value;
 use tokio::{sync::Notify, task::yield_now, time::timeout};
 
 use super::{
-    super::manager::JoinPlacementTestGate,
+    super::{RoomManagerJoinError, manager::JoinPlacementTestGate},
     api::NegotiatedPublish,
     fixtures::*,
     tracing::{assert_exact, assert_user_exact, capture},
 };
-use crate::{RoomWorkerPolicy, RuntimeFeatureFlags};
+use crate::{RoomWorkerPolicy, RuntimeFeatureFlags, engine::metrics::RoomGaugeValues};
 
 type TestRoom = super::super::Room;
+
+/// reservation window that no test can reach, so expiry only happens on demand
+const LONG_EXPIRATION: Duration = Duration::from_hours(1);
 
 async fn manager_join_user(
     manager: &RoomManager,
@@ -40,6 +43,28 @@ async fn manager_join_user(
         .await
         .expect("user should join through manager");
     admission.connection_id
+}
+
+async fn try_manager_join_user(
+    manager: &RoomManager,
+    room_id: &str,
+    raw_user_id: i64,
+    media_transport: &MediaTransport,
+) -> Result<ConnectionId, RoomManagerJoinError> {
+    let (sender, _receiver) = test_sender();
+    manager
+        .join_user(
+            room_id,
+            JoinUserRequest {
+                user_id: UserId::Integer(raw_user_id),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender,
+            },
+            media_transport,
+        )
+        .await
+        .map(|admission| admission.connection_id)
 }
 
 fn manager_with_room_worker_policy(room_worker_policy: RoomWorkerPolicy) -> RoomManager {
@@ -450,5 +475,294 @@ async fn spillover_media_diagnostics_use_connection_worker() {
             ("active", Value::from(false)),
             ("stream_id", Value::from(stream_id.to_string())),
         ],
+    );
+}
+
+#[tokio::test]
+async fn expired_reservation_is_reaped_and_frees_the_issuer_alias() {
+    const ISSUER: &str = "issuer-reservation-expiry";
+
+    let manager = RoomManager::for_test_with_reservation_ttl(Duration::ZERO);
+    let room = serve_test_room(&manager, ISSUER).await;
+    let room_id = room.uuid().to_owned();
+
+    // a room is available until it is reaped, so `/v1/channel` keeps serving a
+    // uuid whose deadline has passed. that uuid is still joinable.
+    assert_eq!(serve_test_room(&manager, ISSUER).await.uuid(), room_id);
+
+    manager.check_expired_room_reservations().await;
+
+    assert!(
+        manager.get_by_uuid(&room_id).await.is_none(),
+        "an expired reservation should leave the directory"
+    );
+    assert_eq!(
+        manager.room_gauges().await,
+        RoomGaugeValues::default(),
+        "the reaped room should stop counting towards the active-room gauge"
+    );
+    assert_ne!(
+        serve_test_room(&manager, ISSUER).await.uuid(),
+        room_id,
+        "the issuer alias should be free for a fresh room"
+    );
+}
+
+#[tokio::test]
+async fn serving_an_existing_room_renews_its_reservation() {
+    const ISSUER: &str = "issuer-serve-renews-reservation";
+
+    let manager = RoomManager::for_test_with_reservation_ttl(LONG_EXPIRATION);
+    let room = serve_test_room(&manager, ISSUER).await;
+
+    assert!(
+        manager
+            .expire_room_reservation_now_for_test(room.uuid())
+            .await
+    );
+
+    assert_eq!(
+        serve_test_room(&manager, ISSUER).await.uuid(),
+        room.uuid(),
+        "a second serve for the same issuer should return the same room"
+    );
+
+    // if the second serve had not renewed the reservation, this pass would
+    // reap the room since it was force expired
+    manager.check_expired_room_reservations().await;
+
+    assert!(
+        manager.get_by_uuid(room.uuid()).await.is_some(),
+        "serving the room again should renew its reservation before the reaper runs"
+    );
+}
+
+#[tokio::test]
+async fn serving_a_joined_room_does_not_rearm_its_reservation() {
+    const ISSUER: &str = "issuer-serve-after-join";
+
+    let manager = RoomManager::for_test_with_reservation_ttl(Duration::ZERO);
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, ISSUER).await;
+    manager_join_user(&manager, &room, 1, &media_transport).await;
+
+    // `/v1/channel` keeps serving a room its users are already in, and the
+    // reaper does not check membership, so a deadline re-armed here would reap
+    // an occupied room
+    assert_eq!(serve_test_room(&manager, ISSUER).await.uuid(), room.uuid());
+    assert!(
+        !manager
+            .has_room_reservation_deadline_for_test(room.uuid())
+            .await,
+        "serving a joined room must not rearm the reservation its join retired"
+    );
+
+    manager.check_expired_room_reservations().await;
+
+    assert!(
+        manager.get_by_uuid(room.uuid()).await.is_some(),
+        "an occupied room must survive the reaper"
+    );
+    assert_eq!(
+        manager.room_gauges().await,
+        RoomGaugeValues {
+            rooms: 1,
+            users: 1,
+            ..RoomGaugeValues::default()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_joined_room_has_no_reservation_deadline() {
+    let manager = RoomManager::for_test_with_reservation_ttl(LONG_EXPIRATION);
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-joined-reservation").await;
+    assert!(
+        manager
+            .has_room_reservation_deadline_for_test(room.uuid())
+            .await,
+        "an unjoined room should carry a reservation deadline"
+    );
+
+    let connection_id = manager_join_user(&manager, &room, 1, &media_transport).await;
+
+    assert!(
+        !manager
+            .has_room_reservation_deadline_for_test(room.uuid())
+            .await,
+        "a successful first join should retire the reservation"
+    );
+    manager.check_expired_room_reservations().await;
+    assert_eq!(
+        manager.room_gauges().await,
+        RoomGaugeValues {
+            rooms: 1,
+            users: 1,
+            ..RoomGaugeValues::default()
+        }
+    );
+
+    assert!(
+        manager
+            .close_session(
+                room.uuid(),
+                &UserId::Integer(1),
+                connection_id,
+                &media_transport,
+            )
+            .await
+    );
+    assert!(
+        manager.get_by_uuid(room.uuid()).await.is_none(),
+        "last-user cleanup should stay unchanged by reservations"
+    );
+}
+
+#[tokio::test]
+async fn expiry_loses_to_an_in_flight_first_join() {
+    let manager = Arc::new(RoomManager::for_test_with_reservation_ttl(LONG_EXPIRATION));
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-join-outruns-expiry").await;
+    let gate = Arc::new(JoinPlacementTestGate::new(1));
+    manager.set_join_placement_gate_for_test(Arc::clone(&gate));
+    let pending_join = {
+        let manager = Arc::clone(&manager);
+        let room = Arc::clone(&room);
+        let media_transport = media_transport.clone();
+        tokio::spawn(async move { manager_join_user(&manager, &room, 1, &media_transport).await })
+    };
+
+    timeout(Duration::from_secs(5), gate.hold_all_ready())
+        .await
+        .expect("the join should reach the placement gate");
+    assert!(
+        manager
+            .expire_room_reservation_now_for_test(room.uuid())
+            .await
+    );
+    manager.check_expired_room_reservations().await;
+
+    assert!(
+        manager.get_by_uuid(room.uuid()).await.is_some(),
+        "expiry must not reap a room whose first join already holds a lease"
+    );
+
+    gate.release_all().await;
+    pending_join.await.expect("join task should not panic");
+
+    assert!(
+        !manager
+            .has_room_reservation_deadline_for_test(room.uuid())
+            .await,
+        "the join that outran expiry should retire the reservation"
+    );
+    manager.check_expired_room_reservations().await;
+    assert_eq!(
+        manager.room_gauges().await,
+        RoomGaugeValues {
+            rooms: 1,
+            users: 1,
+            ..RoomGaugeValues::default()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_join_between_the_deadline_and_the_reaper_keeps_the_room() {
+    const ISSUER: &str = "issuer-join-outruns-reaper";
+
+    let manager = RoomManager::for_test_with_reservation_ttl(Duration::ZERO);
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, ISSUER).await;
+    let room_id = room.uuid().to_owned();
+
+    // the deadline has already passed, but no reaper pass has claimed the row,
+    // so the room is still in the directory and still joinable
+    assert!(
+        try_manager_join_user(&manager, &room_id, 1, &media_transport)
+            .await
+            .is_ok(),
+        "a room past its deadline stays joinable until the reaper claims it"
+    );
+
+    assert!(
+        manager
+            .test_api()
+            .has_session(&room_id, &UserId::Integer(1))
+            .await,
+        "the accepted join should leave a room session behind"
+    );
+    assert!(
+        !manager
+            .has_room_reservation_deadline_for_test(&room_id)
+            .await,
+        "the join that outran the reaper should retire the reservation"
+    );
+
+    manager.check_expired_room_reservations().await;
+
+    assert!(
+        manager.get_by_uuid(&room_id).await.is_some(),
+        "a reaper pass after the join must leave the occupied room alone"
+    );
+    assert_eq!(
+        manager.room_gauges().await,
+        RoomGaugeValues {
+            rooms: 1,
+            users: 1,
+            ..RoomGaugeValues::default()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_failed_first_join_does_not_extend_the_reservation() {
+    let manager = RoomManager::for_test_with_runtime_policy_and_reservation_ttl(
+        super::super::RoomRuntimePolicy::new(
+            RoomAdmissionPolicy::new(0),
+            RuntimeFeatureFlags::default(),
+            test_client_rtp_capabilities(),
+        ),
+        LONG_EXPIRATION,
+    );
+    let media_transport = real_adapter();
+    let room = serve_test_room(&manager, "issuer-failed-join-reservation").await;
+
+    assert!(matches!(
+        try_manager_join_user(&manager, room.uuid(), 1, &media_transport).await,
+        Err(RoomManagerJoinError::RoomFull)
+    ));
+
+    assert!(
+        manager
+            .has_room_reservation_deadline_for_test(room.uuid())
+            .await,
+        "only a successful join may retire the reservation"
+    );
+    assert!(
+        manager
+            .expire_room_reservation_now_for_test(room.uuid())
+            .await
+    );
+    manager.check_expired_room_reservations().await;
+
+    assert!(manager.get_by_uuid(room.uuid()).await.is_none());
+    assert_eq!(manager.room_gauges().await, RoomGaugeValues::default());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_reservation_expired_event_preserves_contract_fields() {
+    let _guard = capture().await;
+    let manager = RoomManager::for_test_with_reservation_ttl(Duration::ZERO);
+    let room = serve_test_room(&manager, "issuer-reservation-expiry-events").await;
+
+    // `assert_exact` requires exactly one matching event, so a reaper that re-logged every tick would fail here
+    manager.check_expired_room_reservations().await;
+    manager.check_expired_room_reservations().await;
+
+    assert_exact(
+        telemetry_event::ROOM_RESERVATION_EXPIRED,
+        &[("room_id", Value::from(room.uuid()))],
     );
 }

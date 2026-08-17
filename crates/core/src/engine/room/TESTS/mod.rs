@@ -24,5 +24,8 @@ mod outbound_tests;
 #[path = "producer_tests.rs"]
 mod producer_tests;
 #[cfg(test)]
+#[path = "reservation_tests.rs"]
+mod reservation_tests;
+#[cfg(test)]
 #[path = "tracing.rs"]
 pub(crate) mod tracing;

@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use o_sfu_core::server::room::RoomConfig;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
@@ -21,8 +22,10 @@ use tokio_util::{sync::CancellationToken, task::task_tracker::TaskTrackerToken};
 
 use super::{
     AnyResult, RoomManager, RoomPacketSinkRegistry, Runtime, RuntimeServices, ServeError,
-    serve_http_on, test_support::RuntimeTestBuilder,
+    serve_http_on,
+    test_support::{RuntimeTestBuilder, TEST_ROOM_KEY},
 };
+use crate::runtime::metrics::RoomGaugeValues;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -175,4 +178,44 @@ async fn wait_for_room_manager_drop(rooms: &Weak<RoomManager>) {
     while rooms.upgrade().is_some() {
         sleep(Duration::from_millis(1)).await;
     }
+}
+
+/// reservation window that the wait below clears with room for a reaper tick
+///
+/// reservation orderings are pinned in the room-engine tests. this layer only
+/// owns the wiring: the configured window reaches the manager, and the spawned
+/// reaper keeps ticking
+const RESERVATION_TTL: Duration = Duration::from_secs(30);
+
+#[tokio::test(start_paused = true)]
+async fn expired_room_reservation_is_reaped() -> AnyResult<()> {
+    let builder = RuntimeTestBuilder::new().room_reservation_ttl(RESERVATION_TTL);
+    let runtime = Runtime::new(builder.config())?;
+    let rooms = Arc::clone(&runtime.room_manager);
+    tokio::spawn(runtime.serve(
+        |_state, _listener_shutdown| pending::<io::Result<()>>(),
+        pending::<io::Result<()>>(),
+    ));
+    let config = RoomConfig::default();
+
+    let room = rooms
+        .serve_room("issuer", TEST_ROOM_KEY, &config, None)
+        .await;
+    sleep(RESERVATION_TTL * 2).await;
+
+    assert!(
+        rooms.get_by_uuid(room.uuid()).await.is_none(),
+        "the reaper task should remove the expired directory row"
+    );
+    assert_eq!(rooms.room_gauges().await, RoomGaugeValues::default());
+    let room_again = rooms
+        .serve_room("issuer", TEST_ROOM_KEY, &config, None)
+        .await;
+
+    assert_ne!(
+        room.uuid(),
+        room_again.uuid(),
+        "new room request from same issuer after reservation expiration gives new uuid"
+    );
+    Ok(())
 }

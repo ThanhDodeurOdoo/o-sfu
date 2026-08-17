@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -93,6 +95,7 @@ fn config_uses_defaults_and_explicit_values() -> anyhow::Result<()> {
         config.user.outbound_queue_byte_capacity,
         DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY
     );
+    assert_eq!(config.user.room_reservation_ttl, Duration::from_mins(1));
     assert!(!config.http.trust_proxy_headers);
     assert_eq!(config.features, RuntimeFeatureFlags::default());
     assert_eq!(config.codecs.flags, MediaCodecFlags::default());
@@ -137,6 +140,7 @@ fn config_accepts_explicit_http_auth_and_user_settings() -> anyhow::Result<()> {
         ("PING_INTERVAL_MS", "1000"),
         ("USER_OUTBOUND_QUEUE_CAPACITY", "16"),
         ("USER_OUTBOUND_QUEUE_BYTE_CAPACITY", "8192"),
+        ("ROOM_RESERVATION_TTL", "120"),
     ])?;
     assert_eq!(config.http.bind_address.to_string(), "127.0.0.1:9000");
     assert_eq!(config.http.shutdown_timeout_ms, 2500);
@@ -148,6 +152,7 @@ fn config_accepts_explicit_http_auth_and_user_settings() -> anyhow::Result<()> {
     assert_eq!(config.user.ping_interval_ms, 1000);
     assert_eq!(config.user.outbound_queue_capacity, 16);
     assert_eq!(config.user.outbound_queue_byte_capacity, 8192);
+    assert_eq!(config.user.room_reservation_ttl, Duration::from_mins(2));
     Ok(())
 }
 
