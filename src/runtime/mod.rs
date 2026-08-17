@@ -8,7 +8,13 @@ use anyhow::Result as AnyResult;
 use thiserror::Error;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::{net::TcpListener, runtime::Builder, signal::ctrl_c, task::JoinHandle, time::sleep};
+use tokio::{
+    net::TcpListener,
+    runtime::Builder,
+    signal::ctrl_c,
+    task::JoinHandle,
+    time::{MissedTickBehavior, interval, sleep},
+};
 use tokio_util::{
     sync::CancellationToken,
     task::{AbortOnDropHandle, TaskTracker},
@@ -113,7 +119,11 @@ impl Runtime {
             rtc_udp_io_backend = config.transport.rtc_udp_io_backend.wire_name(),
             "runtime configuration loaded"
         );
-        let room_manager = build_room_manager(room_runtime_policy, &services);
+        let room_manager = build_room_manager(
+            room_runtime_policy,
+            &services,
+            config.user.room_reservation_ttl,
+        );
         Ok(Self {
             config: runtime_config,
             room_manager,
@@ -204,6 +214,7 @@ struct RuntimeTasks {
     session_shutdown: CancellationToken,
     session_tasks: TaskTracker,
     source_packet_policy_sync: AbortOnDropHandle<()>,
+    rooms_reservations_reaper: AbortOnDropHandle<()>,
     media_transport: MediaTransport,
 }
 
@@ -211,15 +222,18 @@ impl RuntimeTasks {
     fn spawn(room_manager: Arc<RoomManager>, media_transport: MediaTransport) -> Self {
         let shutdown_token = CancellationToken::new();
         let source_packet_policy_sync = spawn_source_packet_policy_update_task(
-            room_manager,
+            Arc::clone(&room_manager),
             media_transport.clone(),
             shutdown_token.child_token(),
         );
+        let rooms_reservations_reaper =
+            spawn_room_reservation_expiration_reaper(room_manager, shutdown_token.child_token());
         Self {
             session_shutdown: shutdown_token.child_token(),
             shutdown_token,
             session_tasks: TaskTracker::new(),
             source_packet_policy_sync: AbortOnDropHandle::new(source_packet_policy_sync),
+            rooms_reservations_reaper: AbortOnDropHandle::new(rooms_reservations_reaper),
             media_transport,
         }
     }
@@ -235,6 +249,15 @@ impl RuntimeTasks {
             warn!(
                 ?error,
                 task = "source packet policy update",
+                "runtime background task stopped unexpectedly"
+            );
+        }
+        if let Err(error) = (&mut self.rooms_reservations_reaper).await
+            && !error.is_cancelled()
+        {
+            warn!(
+                ?error,
+                task = "rooms reservation reaper",
                 "runtime background task stopped unexpectedly"
             );
         }
@@ -315,6 +338,25 @@ fn spawn_source_packet_policy_update_task(
     })
 }
 
+fn spawn_room_reservation_expiration_reaper(
+    rooms: Arc<RoomManager>,
+    shutdown_token: CancellationToken,
+) -> JoinHandle<()> {
+    info!("booted room reservation expiration reaper");
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(10));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                biased;
+                () = shutdown_token.cancelled() => return,
+                _ = interval.tick() => {},
+            };
+            rooms.check_expired_room_reservations().await;
+        }
+    })
+}
+
 fn build_media_transport(config: &Config, services: &RuntimeServices) -> AnyResult<MediaTransport> {
     Ok(MediaTransport::build(
         MediaTransportConfig {
@@ -355,10 +397,12 @@ fn build_room_runtime_policy(
 fn build_room_manager(
     runtime_policy: RoomRuntimePolicy,
     services: &RuntimeServices,
+    reservation_ttl: Duration,
 ) -> Arc<RoomManager> {
     Arc::new(RoomManager::new(
         runtime_policy,
         Arc::clone(&services.metrics),
+        reservation_ttl,
     ))
 }
 

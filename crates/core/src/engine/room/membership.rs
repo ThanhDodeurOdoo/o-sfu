@@ -1,6 +1,6 @@
 //! Membership mutations return commits before running their effects.
 //!
-//! [`JoinCommit`](crate::engine::room::state::JoinCommit),
+//! [`JoinCommit`],
 //! [`ConnectionCloseCommit`] and
 //! [`DisconnectCommit`](crate::engine::room::state::DisconnectCommit) are produced
 //! while the `room.state` write guard is held. Each carries the transition outcome
@@ -44,7 +44,8 @@ use super::{
     state::ConnectionCloseCommit,
 };
 use crate::engine::{
-    ConnectionId, MediaWorkerId, UserId, UserInfo, UserPermissions, media_transport::MediaTransport,
+    ConnectionId, MediaWorkerId, UserId, UserInfo, UserPermissions,
+    media_transport::MediaTransport, room::state::JoinCommit,
 };
 
 /// Room-state marker that collapses every authenticated [`UserPermissions`] value.
@@ -74,23 +75,31 @@ pub struct JoinUserRequest {
 }
 
 impl Room {
-    /// Executes context-enabled [`RoomEffects`] before returning the committed receipt.
+    /// Commits the admission turn with the room router.
     ///
     /// # Errors
     ///
     /// Returns [`RoomJoinError::RoomFull`] when a new user exceeds capacity.
     /// Returns [`RoomJoinError::RouterState`] when placement cannot commit.
+    pub(super) async fn commit_admission(
+        &self,
+        admission: JoinAdmissionTurn<'_, impl FnOnce() -> o_sfu_router::RouterId>,
+        context: RoomEffectContext<'_>,
+    ) -> Result<JoinCommit, RoomJoinError> {
+        let joined_fanout = context.user_joined_fanout();
+        admission.commit(self, joined_fanout).await
+    }
+
+    /// Executes context-enabled [`RoomEffects`] before returning the committed receipt
     ///
     /// # Panics
     ///
     /// Panics when existing relay state refers to an uncommitted source placement.
-    pub(super) async fn admit_session(
+    pub(super) async fn finalize_admission(
         &self,
-        admission: JoinAdmissionTurn<'_, impl FnOnce() -> o_sfu_router::RouterId>,
+        commit: JoinCommit,
         context: RoomEffectContext<'_>,
-    ) -> Result<CommittedTransportReceipt, RoomJoinError> {
-        let joined_fanout = context.user_joined_fanout();
-        let commit = admission.commit(self, joined_fanout).await?;
+    ) -> CommittedTransportReceipt {
         let receipt = commit.receipt.clone();
         RoomEffects::from_join(commit).execute(self, context).await;
         let session = &receipt.transport_session_key;
@@ -102,7 +111,7 @@ impl Room {
             media_worker_id = session.media_worker_id().as_usize(),
             "user joined room"
         );
-        Ok(receipt)
+        receipt
     }
 
     /// Returns `true` only when `connection_id` removed the current room user.

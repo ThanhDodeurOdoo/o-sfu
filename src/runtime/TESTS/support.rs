@@ -1,6 +1,7 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -58,6 +59,7 @@ impl RuntimeTestBuilder {
                     ping_interval_ms: 60_000,
                     outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
                     outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
+                    room_reservation_ttl: Duration::from_secs(5),
                 },
                 transport: TransportConfig {
                     announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -106,6 +108,11 @@ impl RuntimeTestBuilder {
         self
     }
 
+    pub(super) fn room_reservation_ttl(mut self, value: Duration) -> Self {
+        self.config.user.room_reservation_ttl = value;
+        self
+    }
+
     pub(super) fn pre_auth_capacity(mut self, total: usize, per_origin: usize) -> Self {
         self.config.auth.max_pre_auth_websocket_sessions = total;
         self.config.auth.max_pre_auth_websocket_sessions_per_origin = per_origin;
@@ -135,6 +142,7 @@ impl RuntimeTestBuilder {
         let room_manager = build_room_manager(
             build_room_runtime_policy(&self.config, &media_transport),
             &services,
+            self.config.user.room_reservation_ttl,
         );
         let runtime_config = RuntimeConfig::from_config(&self.config);
         let state = RuntimeState::from_parts(

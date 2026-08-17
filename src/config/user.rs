@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 
 use super::{
@@ -25,6 +27,9 @@ impl UserConfig {
                 .var("USER_OUTBOUND_QUEUE_BYTE_CAPACITY")
                 .check(positive)
                 .default(DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY)?,
+            room_reservation_ttl: env
+                .var("ROOM_RESERVATION_TTL")
+                .default(Duration::from_mins(1))?,
         })
     }
 }

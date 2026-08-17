@@ -175,5 +175,6 @@ o-sfu-protocol = { workspace = true, features = ["test-support"] }
 o-sfu-telemetry = { workspace = true, features = ["test-support"] }
 o-sfu-router = { workspace = true, features = ["test-support"] }
 str0m.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }

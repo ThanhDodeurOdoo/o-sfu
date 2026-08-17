@@ -424,6 +424,8 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
             ping_interval_ms: 60_000,
             outbound_queue_capacity: DEFAULT_USER_OUTBOUND_QUEUE_CAPACITY,
             outbound_queue_byte_capacity: DEFAULT_USER_OUTBOUND_QUEUE_BYTE_CAPACITY,
+            // this window must stay open far longer than the slowest room-create-to-first-join path
+            room_reservation_ttl: Duration::from_hours(1),
         },
         transport: TransportConfig {
             announced_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),

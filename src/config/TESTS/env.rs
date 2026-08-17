@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::{Env, EnvKey, non_empty, positive};
 
 fn error<T>(result: anyhow::Result<T>) -> Option<String> {
@@ -10,6 +12,7 @@ fn env_loads_required_default_optional_check_and_trimmed_values() {
         "REQUIRED_ENV" => Some("value".to_owned()),
         "COUNT_ENV" => Some("4".to_owned()),
         "TOKEN_ENV" => Some("  token  ".to_owned()),
+        "DURATION_ENV" => Some("90".to_owned()),
         _ => None,
     });
 
@@ -26,6 +29,17 @@ fn env_loads_required_default_optional_check_and_trimmed_values() {
         env.var("TOKEN_ENV").check(non_empty).optional().ok(),
         Some(Some("token".to_owned()))
     );
+    assert_eq!(
+        env.var("DURATION_ENV").default(Duration::from_mins(1)).ok(),
+        Some(Duration::from_secs(90)),
+        "durations are read as whole seconds"
+    );
+    assert_eq!(
+        env.var("MISSING_DURATION_ENV")
+            .default(Duration::from_mins(1))
+            .ok(),
+        Some(Duration::from_mins(1))
+    );
     assert_eq!(env.var::<String>("MISSING_ENV").optional().ok(), Some(None));
 }
 
@@ -36,6 +50,7 @@ fn env_reports_parse_and_validation_errors() {
         "COUNT_ENV" => Some("abc".to_owned()),
         "ZERO_ENV" => Some("0".to_owned()),
         "TOKEN_ENV" => Some("   ".to_owned()),
+        "DURATION_ENV" => Some("-42".to_owned()),
         _ => None,
     });
 
@@ -58,6 +73,10 @@ fn env_reports_parse_and_validation_errors() {
     assert_eq!(
         error(env.var("TOKEN_ENV").check(non_empty).optional()).as_deref(),
         Some("TOKEN_ENV must not be empty")
+    );
+    assert_eq!(
+        error(env.var::<Duration>("DURATION_ENV").optional()).as_deref(),
+        Some("DURATION_ENV must be a valid duration in seconds")
     );
 }
 

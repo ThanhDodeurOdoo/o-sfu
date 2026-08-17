@@ -6,9 +6,11 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::time::Instant;
 
 use super::Room;
 use crate::engine::{RoomInstanceId, sync::lock_unpoisoned};
@@ -35,10 +37,10 @@ pub(crate) struct RoomDirectoryEntry {
 }
 
 impl RoomDirectoryEntry {
-    fn new(room: Arc<Room>, remote_address: Option<&str>) -> Self {
+    fn new(room: Arc<Room>, remote_address: Option<&str>, reservation_ttl: Duration) -> Self {
         Self {
             room,
-            lifecycle: RoomLifecycle::default(),
+            lifecycle: RoomLifecycle::new(reservation_ttl),
             create_date: rfc3339_now(),
             remote_address: remote_address.unwrap_or(UNKNOWN_REMOTE_ADDRESS).to_owned(),
         }
@@ -51,7 +53,7 @@ impl RoomDirectoryEntry {
 /// callers may hold a
 /// [`RoomLifecycleLease`] while awaiting, but this mutex is only held while a
 /// lease is accepted or released
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RoomLifecycleState {
     /// accepted room work that has not finished or been dropped
     active_mutations: usize,
@@ -59,6 +61,22 @@ struct RoomLifecycleState {
     remove_when_idle: bool,
     /// terminal marker set once one finisher wins directory removal
     closing: bool,
+    /// reservation deadline, or `None` once a successful join retired it
+    expires_at: Option<Instant>,
+    /// lease length this reservation was published with and is renewed by
+    reservation_ttl: Duration,
+}
+
+impl RoomLifecycleState {
+    fn new(reservation_ttl: Duration) -> Self {
+        Self {
+            active_mutations: 0,
+            remove_when_idle: false,
+            closing: false,
+            expires_at: Some(Instant::now() + reservation_ttl),
+            reservation_ttl,
+        }
+    }
 }
 
 /// cloneable admission gate for the current room stored in one directory row
@@ -66,12 +84,49 @@ struct RoomLifecycleState {
 /// this type coordinates manager-level liveness only
 /// room membership ordering
 /// remains owned by [`Room`] and its state transition methods
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct RoomLifecycle {
     state: Arc<Mutex<RoomLifecycleState>>,
 }
 
 impl RoomLifecycle {
+    pub(crate) fn new(reservation_ttl: Duration) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RoomLifecycleState::new(reservation_ttl))),
+        }
+    }
+
+    /// atomically claims cleanup responsibility for an expired, idle reservation.
+    pub(crate) fn claim_expired_reservation(&self) -> bool {
+        let mut state = lock_unpoisoned(&self.state);
+        let is_expired = state.expires_at.is_some_and(|t| Instant::now() >= t);
+        if !state.closing && state.active_mutations == 0 && is_expired {
+            state.closing = true;
+            drop(state);
+            return true;
+        }
+        false
+    }
+
+    /// extends a room reservation without rearming it
+    pub(crate) fn renew_reservation(&self) {
+        let mut state = lock_unpoisoned(&self.state);
+        if state.expires_at.is_some() {
+            state.expires_at = Some(Instant::now() + state.reservation_ttl);
+        }
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    pub(crate) fn expire_reservation_now_for_test(&self) {
+        lock_unpoisoned(&self.state).expires_at = Some(Instant::now());
+    }
+
+    #[cfg(any(test, feature = "testing-transport"))]
+    #[must_use]
+    pub(crate) fn has_reservation_deadline_for_test(&self) -> bool {
+        lock_unpoisoned(&self.state).expires_at.is_some()
+    }
+
     /// accept a new current-room operation
     ///
     /// `None` means empty-room removal is pending or already won
@@ -151,6 +206,10 @@ impl RoomLifecycleLease {
         drop(state);
         should_remove
     }
+
+    pub(crate) fn clear_expiration(&self) {
+        lock_unpoisoned(&self.state).expires_at = None;
+    }
 }
 
 impl Drop for RoomLifecycleLease {
@@ -168,12 +227,6 @@ pub(crate) struct RoomDirectory {
 
 impl RoomDirectory {
     #[must_use]
-    pub(crate) fn get_by_issuer(&self, issuer: &str) -> Option<Arc<Room>> {
-        let uuid = self.uuid_by_issuer.get(issuer)?;
-        self.get_by_uuid(uuid)
-    }
-
-    #[must_use]
     pub(crate) fn get_by_uuid(&self, uuid: &str) -> Option<Arc<Room>> {
         self.by_uuid.get(uuid).map(|entry| Arc::clone(&entry.room))
     }
@@ -181,6 +234,12 @@ impl RoomDirectory {
     #[must_use]
     pub(crate) fn entry(&self, uuid: &str) -> Option<RoomDirectoryEntry> {
         self.by_uuid.get(uuid).cloned()
+    }
+
+    #[must_use]
+    pub(crate) fn entry_by_issuer(&self, issuer: &str) -> Option<RoomDirectoryEntry> {
+        let uuid = self.uuid_by_issuer.get(issuer)?;
+        self.entry(uuid)
     }
 
     #[must_use]
@@ -205,14 +264,21 @@ impl RoomDirectory {
             .collect()
     }
 
-    pub(crate) fn insert(&mut self, room: Arc<Room>, remote_address: Option<&str>) {
+    pub(crate) fn insert(
+        &mut self,
+        room: Arc<Room>,
+        remote_address: Option<&str>,
+        reservation_ttl: Duration,
+    ) {
         let room_id = room.uuid().to_owned();
         self.uuid_by_issuer
             .insert(room.issuer().to_owned(), room_id.clone());
         self.uuid_by_instance
             .insert(room.instance_id(), room_id.clone());
-        self.by_uuid
-            .insert(room_id, RoomDirectoryEntry::new(room, remote_address));
+        self.by_uuid.insert(
+            room_id,
+            RoomDirectoryEntry::new(room, remote_address, reservation_ttl),
+        );
     }
 
     #[must_use]

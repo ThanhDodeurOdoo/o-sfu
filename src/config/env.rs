@@ -1,6 +1,7 @@
 use std::{
     fmt,
     net::{IpAddr, SocketAddr},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -169,6 +170,17 @@ impl EnvParse for bool {
 impl EnvParse for String {
     fn parse(value: EnvValue) -> Result<Self> {
         Ok(value.into_raw())
+    }
+}
+
+impl EnvParse for Duration {
+    fn parse(value: EnvValue) -> Result<Self> {
+        let key = value.key();
+        let seconds = value
+            .into_raw()
+            .parse()
+            .map_err(|_error| anyhow!("{key} must be a valid duration in seconds"))?;
+        Ok(Self::from_secs(seconds))
     }
 }
 
