@@ -59,6 +59,7 @@ use crate::{
         ServerEnvelope, StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
         decode_envelope_batch,
     },
+    wire::ServerMessage,
 };
 
 /// host-facing timer id used by the recovery backoff scheduler
@@ -207,6 +208,10 @@ impl ProtocolPhase {
             Self::Recovering => BundleConnectionState::Recovering,
             Self::Closed => BundleConnectionState::Closed,
         }
+    }
+
+    const fn is_awaiting_welcome(&self) -> bool {
+        matches!(self, Self::Connecting | Self::Recovering)
     }
 
     fn apply_lifecycle_state(&mut self, state: ConnectionState) {
@@ -471,19 +476,34 @@ impl ProtocolCore {
         };
         let mut commands = Vec::new();
         for envelope in envelopes {
-            commands.extend(match envelope {
+            match envelope {
                 ServerEnvelope::Message(message) => {
-                    server_events::handle_server_message(self, message)
+                    if self.phase.is_awaiting_welcome()
+                        && !matches!(message, ServerMessage::Welcome(_))
+                    {
+                        return CommandBatch::close_for_protocol_error();
+                    }
+                    commands.extend(server_events::handle_server_message(self, message));
                 }
                 ServerEnvelope::Request {
                     request_id,
                     request,
-                } => request_flow::handle_server_request(self, request_id, request),
+                } => {
+                    commands.extend(request_flow::handle_server_request(
+                        self, request_id, request,
+                    ));
+                }
                 ServerEnvelope::Response {
                     response_to,
                     response,
-                } => request_flow::handle_server_response(self, &response_to, response),
-            });
+                } => {
+                    commands.extend(request_flow::handle_server_response(
+                        self,
+                        &response_to,
+                        response,
+                    ));
+                }
+            }
         }
         command_batch(commands)
     }
