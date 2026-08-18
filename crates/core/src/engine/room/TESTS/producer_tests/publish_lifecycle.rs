@@ -184,7 +184,8 @@ async fn late_join_receives_remote_track_snapshot_from_route_state() {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let adapter = real_adapter();
     let publisher_id = UserId::Integer(1);
     let subscriber_id = UserId::Integer(2);

@@ -18,7 +18,7 @@ use std::{collections::BTreeSet, future::Future, sync::Arc, time::Duration};
 
 use o_sfu_telemetry::schema::event as telemetry_event;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 #[cfg(any(test, feature = "testing-transport"))]
 pub use super::placement::JoinPlacementTestGate;
@@ -36,6 +36,7 @@ use crate::engine::{
     ConnectionId, RoomInstanceId, UserId,
     media_transport::{MediaTransport, TransportSessionKey},
     metrics::{RoomGaugeValues, RuntimeMetrics},
+    room::instance::RoomManagerServeError,
 };
 
 #[cfg(any(test, feature = "testing-transport"))]
@@ -80,6 +81,29 @@ pub struct RuntimeRoomDirectorySnapshot {
     pub remote_address: String,
 }
 
+fn retrieve_room_reservation(
+    directory: &RoomDirectory,
+    issuer: &str,
+    key: &str,
+    config: &RoomConfig,
+) -> Result<Option<Arc<Room>>, RoomManagerServeError> {
+    let Some(entry) = directory.entry_by_issuer(issuer) else {
+        return Ok(None);
+    };
+    if !entry.room.definition.matches_reservation(key, config) {
+        warn!(
+            event = telemetry_event::ROOM_RESERVATION_CONFLICT,
+            room_id = entry.room.uuid(),
+            issuer,
+            config = ?config,
+            "conflicting reservation request"
+        );
+        return Err(RoomManagerServeError::ConflictingReservation);
+    }
+    entry.lifecycle.renew_reservation();
+    Ok(Some(entry.room))
+}
+
 /// current-room registry and lifecycle coordinator
 ///
 /// `RoomManager` exposes only current directory rows. mutating entrypoints
@@ -116,26 +140,30 @@ impl RoomManager {
     /// returns the current room for `issuer`, creating it on the first miss
     ///
     /// only the first create request publishes `key`, `config` and
-    /// `remote_address` into the room. concurrent calls for the same issuer
+    /// `remote_address` into the room. concurrent non-conflicting calls for the same issuer
     /// return the same current room and do not emit duplicate creation events
+    ///
+    /// # Errors
+    ///
+    /// returns:
+    ///
+    /// - [`RoomManagerServeError::ConflictingReservation`] when a room is found with configuration conflicting with the request
     pub async fn serve_room(
         &self,
         issuer: &str,
         key: &str,
         config: &RoomConfig,
         remote_address: Option<&str>,
-    ) -> Arc<Room> {
+    ) -> Result<Arc<Room>, RoomManagerServeError> {
         {
             let directory = self.directory.read().await;
-            if let Some(entry) = directory.entry_by_issuer(issuer) {
-                entry.lifecycle.renew_reservation();
-                return entry.room;
+            if let Some(room) = retrieve_room_reservation(&directory, issuer, key, config)? {
+                return Ok(room);
             }
         }
         let mut directory = self.directory.write().await;
-        if let Some(entry) = directory.entry_by_issuer(issuer) {
-            entry.lifecycle.renew_reservation();
-            return entry.room;
+        if let Some(room) = retrieve_room_reservation(&directory, issuer, key, config)? {
+            return Ok(room);
         }
         let room = self.factory.create(issuer, key, config);
         directory.insert(Arc::clone(&room), remote_address, self.reservation_ttl);
@@ -147,7 +175,7 @@ impl RoomManager {
             web_rtc_enabled = config.web_rtc_enabled,
             "room created"
         );
-        room
+        Ok(room)
     }
 
     /// returns the current room for a public room uuid

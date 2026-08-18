@@ -35,7 +35,10 @@ pub(crate) async fn setup_protocol_peer(
     user_id: UserId,
 ) -> TestResult<ProtocolSinglePeerSetup> {
     let server = TestServerBuilder::new().spawn_required().await?;
-    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, room_name, CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let peer = connect_protocol_peer(&server, &room, user_id).await?;
     Ok((server, room, peer))
 }
@@ -280,7 +283,10 @@ async fn setup_protocol_peers_with(
     mut alice: ProtocolHarnessPeer,
     mut bob: ProtocolHarnessPeer,
 ) -> TestResult<ProtocolPeerSetup> {
-    let room = create_room(&server, room_name, CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, room_name, CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let alice_token = require_some(
         signed_connect_claims(TEST_ROOM_KEY, room.uuid(), alice_user_id),
         "alice protocol peer token should sign",

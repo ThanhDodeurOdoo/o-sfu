@@ -267,7 +267,7 @@ impl SourcePolicyScenario {
                 &RoomConfig::default(),
                 Some("source-policy-benchmark"),
             )
-            .await;
+            .await?;
         let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
         let mut scenario = Self {
             _manager: manager,

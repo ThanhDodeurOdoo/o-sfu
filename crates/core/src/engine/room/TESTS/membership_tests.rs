@@ -5,7 +5,8 @@ async fn join_user_enforces_capacity() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let (tx1, _rx1) = test_sender();
     let result = room
         .test_api()
@@ -28,7 +29,8 @@ async fn reconnection_bypasses_capacity_and_replaces_existing_connection() {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let user_id = UserId::Integer(1);
     let (tx1, mut rx1) = test_sender();
     let first_connection = room
@@ -89,7 +91,8 @@ async fn leave_user_sends_departure_to_remaining_peers() {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let (tx1, mut rx1) = test_sender();
     let (tx2, _rx2) = test_sender();
     join_user_with_sender(&room, UserId::Integer(1), tx1).await;
@@ -117,7 +120,8 @@ async fn negotiated_session_rejects_stale_connection() {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let media_transport = real_adapter();
     let (tx, _rx) = test_sender();
     let connection_id = join_user_with_sender(&room, UserId::Integer(1), tx).await;
@@ -148,7 +152,8 @@ async fn mismatched_stale_close_keeps_other_user_routing() {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let alice_id = UserId::Integer(1);
     let bob_id = UserId::Integer(2);
     let (alice_tx, _alice_rx) = test_sender();
@@ -183,7 +188,8 @@ async fn replacement_join_closes_displaced_transport_user() {
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let media_transport = real_adapter();
     let user_id = UserId::Integer(1);
     let (first_tx, first_rx) = test_sender();

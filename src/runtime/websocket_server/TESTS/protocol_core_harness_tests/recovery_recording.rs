@@ -120,15 +120,18 @@ async fn protocol_core_recording_requests_resolve_as_unsupported_without_backend
         })
         .spawn_required()
         .await?;
-    let room = create_room(
-        &server,
-        "issuer-protocol-recording",
-        CreateRoomQuery {
-            recording_address: Some("https://record.example.com".to_owned()),
-            ..CreateRoomQuery::default()
-        },
-    )
-    .await;
+    let room = require_some(
+        create_room(
+            &server,
+            "issuer-protocol-recording",
+            CreateRoomQuery {
+                recording_address: Some("https://record.example.com".to_owned()),
+                ..CreateRoomQuery::default()
+            },
+        )
+        .await,
+        "test room should be served",
+    )?;
     let mut peer = require_some(
         connect_protocol_recording_peer(&server, &room).await,
         "recording protocol peer should connect",

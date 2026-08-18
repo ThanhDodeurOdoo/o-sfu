@@ -162,6 +162,7 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         http_room_unauthorized => HttpRoomResponsesTotal &[("status", "unauthorized")],
         http_room_forbidden => HttpRoomResponsesTotal &[("status", "forbidden")],
         http_room_bad_request => HttpRoomResponsesTotal &[("status", "bad_request")],
+        http_room_conflict => HttpRoomResponsesTotal &[("status", "conflict")],
         http_disconnect_requests => HttpDisconnectRequestsTotal &[],
         http_disconnect_success => HttpDisconnectResponsesTotal &[("status", "success")],
         http_disconnect_bad_request => HttpDisconnectResponsesTotal &[("status", "bad_request")],

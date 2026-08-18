@@ -60,15 +60,18 @@ async fn disconnect_accepts_valid_jwt() -> TestResult {
 #[tokio::test]
 async fn disconnect_route_kicks_live_users() -> TestResult {
     let test_state = test_state_with_handles();
-    let room = test_state
-        .room_manager
-        .serve_room(
-            "issuer-disconnect",
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            None,
-        )
-        .await;
+    let room = require_ok(
+        test_state
+            .room_manager
+            .serve_room(
+                "issuer-disconnect",
+                TEST_ROOM_KEY,
+                &RoomConfig::default(),
+                None,
+            )
+            .await,
+        "test room should be served",
+    )?;
     let alice_id = UserId::Integer(1);
     let bob_id = UserId::Integer(2);
     let (alice_tx, mut alice_rx) = test_outbound_sender(&test_state.state);

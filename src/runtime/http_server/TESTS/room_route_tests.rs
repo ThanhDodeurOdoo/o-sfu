@@ -290,3 +290,90 @@ async fn room_route_key_seed_claim_takes_precedence_over_key_claim() -> TestResu
     assert_eq!(room.key(), expected_key);
     Ok(())
 }
+
+#[tokio::test]
+async fn room_route_returns_conflict_for_a_reservation_with_another_key() -> TestResult {
+    let state = test_state();
+    let token = room_token(Some("issuer-conflict-key"), Some(TEST_ROOM_KEY), None)?;
+    route_status(
+        &state,
+        room_builder(&token, "Bearer"),
+        Body::empty(),
+        StatusCode::OK,
+        "first room request should complete",
+    )
+    .await?;
+
+    let other_key_token = room_token(Some("issuer-conflict-key"), None, Some("c2VlZC1rZXk="))?;
+    route_status(
+        &state,
+        room_builder(&other_key_token, "Bearer"),
+        Body::empty(),
+        StatusCode::CONFLICT,
+        "a second key for the same issuer should conflict",
+    )
+    .await?;
+
+    let metrics = state.metrics.snapshot();
+    assert_eq!(metrics.http_room_requests(), 2);
+    assert_eq!(metrics.http_room_success(), 1);
+    assert_eq!(metrics.http_room_conflict(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn room_route_returns_conflict_for_a_reservation_with_another_config() -> TestResult {
+    let state = test_state();
+    let token = room_token(Some("issuer-conflict-config"), Some(TEST_ROOM_KEY), None)?;
+    route_status(
+        &state,
+        room_builder(&token, "Bearer"),
+        Body::empty(),
+        StatusCode::OK,
+        "first room request should complete",
+    )
+    .await?;
+
+    route_status(
+        &state,
+        Request::get(format!("{}?webRTC=false", route::v1::CHANNEL))
+            .header(header::HOST, "sfu.example.com")
+            .header(header::AUTHORIZATION, format!("Bearer {token}")),
+        Body::empty(),
+        StatusCode::CONFLICT,
+        "a second config for the same issuer should conflict",
+    )
+    .await?;
+
+    assert_eq!(state.metrics.snapshot().http_room_conflict(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn room_route_reuses_a_reservation_that_repeats_key_and_config() -> TestResult {
+    let test_state = test_state_with_handles();
+    let token = room_token(Some("issuer-repeat"), Some(TEST_ROOM_KEY), None)?;
+    let first: RoomResponse = route_json(
+        &test_state.state,
+        room_builder(&token, "Bearer"),
+        Body::empty(),
+        StatusCode::OK,
+        "first room request should complete",
+    )
+    .await?;
+    let second: RoomResponse = route_json(
+        &test_state.state,
+        room_builder(&token, "Bearer"),
+        Body::empty(),
+        StatusCode::OK,
+        "repeat room request should complete",
+    )
+    .await?;
+
+    assert_eq!(
+        first.uuid, second.uuid,
+        "a repeat request with the same key and config should reuse the reservation"
+    );
+    assert_eq!(test_state.state.metrics.snapshot().http_room_conflict(), 0);
+    Ok(())
+}

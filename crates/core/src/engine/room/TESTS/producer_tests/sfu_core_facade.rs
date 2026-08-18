@@ -385,7 +385,8 @@ async fn build_publisher_fixture(port: u16) -> PublisherFixture {
             &RoomConfig::default(),
             None,
         )
-        .await;
+        .await
+        .expect("test room should be served");
     let media_transport = build_real_rtc_media_transport();
     let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
     let publisher_user_id = UserId::Integer(1);

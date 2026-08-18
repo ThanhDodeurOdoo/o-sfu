@@ -67,18 +67,21 @@ async fn noop_returns_ok_response() -> TestResult {
 async fn stats_returns_live_room_data() -> TestResult {
     let test_state = test_state_with_handles();
     let query = CreateRoomQuery::default();
-    let room = test_state
-        .room_manager
-        .serve_room(
-            "issuer-a",
-            TEST_ROOM_KEY,
-            &RoomConfig {
-                web_rtc_enabled: query.web_rtc_enabled(),
-                recording_address: query.recording_address.clone(),
-            },
-            Some("203.0.113.10"),
-        )
-        .await;
+    let room = require_ok(
+        test_state
+            .room_manager
+            .serve_room(
+                "issuer-a",
+                TEST_ROOM_KEY,
+                &RoomConfig {
+                    web_rtc_enabled: query.web_rtc_enabled(),
+                    recording_address: query.recording_address.clone(),
+                },
+                Some("203.0.113.10"),
+            )
+            .await,
+        "test room should be served",
+    )?;
     let (alice_tx, _alice_rx) = test_outbound_sender(&test_state.state);
     let (bob_tx, _bob_rx) = test_outbound_sender(&test_state.state);
     let alice_join = room

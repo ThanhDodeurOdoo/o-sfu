@@ -77,6 +77,11 @@ impl RoomDefinition {
     }
 
     #[must_use]
+    pub(crate) fn matches_reservation(&self, key: &str, config: &RoomConfig) -> bool {
+        self.identity.key == key && self.config == *config
+    }
+
+    #[must_use]
     pub(crate) fn uuid(&self) -> &str {
         &self.identity.uuid
     }

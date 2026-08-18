@@ -235,7 +235,10 @@ async fn websocket_closes_authenticated_user_when_room_is_full() -> TestResult {
         .room_size(1)
         .spawn_required()
         .await?;
-    let room = create_room(&server, "issuer-full-room", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-full-room", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let alice_id = UserId::Integer(1);
     let bob_id = UserId::Integer(2);
     let alice_token = require_some(
@@ -322,6 +325,10 @@ async fn websocket_pre_auth_permit_is_released_after_auth_success() {
         return;
     };
     let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    assert!(room.is_some(), "test room should be served");
+    let Some(room) = room else {
+        return;
+    };
     let token = signed_connect_claims(TEST_ROOM_KEY, room.uuid(), UserId::Integer(77));
     assert!(token.is_some());
     let Some(token) = token else {
@@ -357,6 +364,10 @@ async fn websocket_startup_send_timeout_releases_room_membership() {
         CreateRoomQuery::default(),
     )
     .await;
+    assert!(room.is_some(), "test room should be served");
+    let Some(room) = room else {
+        return;
+    };
     let mut peer_receivers = Vec::with_capacity(SLOW_READER_PEER_COUNT);
     for index in 0..SLOW_READER_PEER_COUNT {
         let joined = join_large_snapshot_peer(&server, &room, index, &mut peer_receivers).await;
@@ -420,6 +431,10 @@ async fn websocket_authenticates_legacy_room_scoped_token_with_explicit_room_id(
         return;
     };
     let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    assert!(room.is_some(), "test room should be served");
+    let Some(room) = room else {
+        return;
+    };
     let token =
         signed_legacy_channel_scoped_connect_claims(TEST_ROOM_KEY, UserId::Integer(17), None);
     assert!(token.is_some());
@@ -445,6 +460,13 @@ async fn websocket_rejects_explicit_room_id_that_disagrees_with_claims() {
     };
     let first_room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
     let second_room = create_room(&server, "issuer-b", CreateRoomQuery::default()).await;
+    assert!(
+        first_room.is_some() && second_room.is_some(),
+        "test rooms should be served"
+    );
+    let (Some(first_room), Some(second_room)) = (first_room, second_room) else {
+        return;
+    };
     let token = signed_connect_claims(TEST_ROOM_KEY, first_room.uuid(), UserId::Integer(8));
     assert!(token.is_some());
     let Some(token) = token else {
@@ -470,6 +492,10 @@ async fn websocket_rejects_explicit_room_token_signed_with_another_key() {
         return;
     };
     let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    assert!(room.is_some(), "test room should be served");
+    let Some(room) = room else {
+        return;
+    };
     let token = signed_connect_claims(OTHER_ROOM_KEY, room.uuid(), UserId::Integer(19));
     assert!(token.is_some());
     let Some(token) = token else {
@@ -495,6 +521,10 @@ async fn websocket_rejects_oversized_auth_token_with_auth_failure() {
         return;
     };
     let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    assert!(room.is_some(), "test room should be served");
+    let Some(room) = room else {
+        return;
+    };
     let token = "a".repeat(MAX_JWT_TOKEN_BYTES + 1);
     let authenticated = authenticate_with_room(&server, &token, Some(room.uuid())).await;
     assert!(authenticated.is_some());

@@ -87,6 +87,7 @@ pub(super) enum HttpRoomResponseStatus {
     Unauthorized,
     Forbidden,
     BadRequest,
+    Conflict,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +325,7 @@ impl_exported_metric_label!(HttpRoomResponseStatus {
     Unauthorized => (1, "unauthorized"),
     Forbidden => (2, "forbidden"),
     BadRequest => (3, "bad_request"),
+    Conflict => (4, "conflict"),
 });
 
 impl_exported_metric_label!(HttpDisconnectResponseStatus {

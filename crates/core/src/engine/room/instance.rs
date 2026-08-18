@@ -13,17 +13,28 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RoomJoinError {
+    #[error("room is full")]
     RoomFull,
+    #[error("router state error")]
     RouterState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RoomManagerJoinError {
+    #[error("room not found")]
     MissingRoom,
+    #[error("room is full")]
     RoomFull,
+    #[error("router state error")]
     RouterState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RoomManagerServeError {
+    #[error("conflicting room reservation")]
+    ConflictingReservation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

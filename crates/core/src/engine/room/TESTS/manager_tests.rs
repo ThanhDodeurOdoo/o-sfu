@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::{sync::Notify, task::yield_now, time::timeout};
 
 use super::{
-    super::{RoomManagerJoinError, manager::JoinPlacementTestGate},
+    super::{RoomManagerJoinError, RoomManagerServeError, manager::JoinPlacementTestGate},
     api::NegotiatedPublish,
     fixtures::*,
     tracing::{assert_exact, assert_user_exact, capture},
@@ -82,6 +82,7 @@ async fn serve_test_room(manager: &RoomManager, issuer: &str) -> Arc<TestRoom> {
     manager
         .serve_room(issuer, TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await
+        .expect("test room should be served")
 }
 
 fn spillover_policy(max_local_routers: usize) -> RoomWorkerPolicy {
@@ -118,7 +119,8 @@ async fn room_and_user_lifecycle_events_preserve_contract_fields() {
             &RoomConfig::default(),
             Some("203.0.113.1"),
         )
-        .await;
+        .await
+        .expect("test room should be served");
     let closed_user = UserId::Integer(1);
     let disconnected_user = UserId::Integer(2);
     let closed_connection = manager_join_user(&manager, &room, 1, &media_transport).await;
@@ -193,6 +195,8 @@ async fn room_manager_concurrent_create_and_cleanup_are_idempotent() {
         manager.serve_room("issuer-a", TEST_ROOM_KEY, &config, None),
     );
 
+    let first = first.expect("test room should be served");
+    let second = second.expect("test room should be served");
     assert_eq!(first.uuid(), second.uuid());
     let media_transport = real_adapter();
     manager_join_user(&manager, &first, 1, &media_transport).await;
@@ -215,7 +219,8 @@ async fn manager_lifecycle_future_does_not_block_empty_cleanup() {
     let media_transport = real_adapter();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let room_id = room.uuid().to_owned();
     let first_user = UserId::Integer(1);
     let (first_tx, _first_rx) = test_sender();
@@ -764,5 +769,67 @@ async fn room_reservation_expired_event_preserves_contract_fields() {
     assert_exact(
         telemetry_event::ROOM_RESERVATION_EXPIRED,
         &[("room_id", Value::from(room.uuid()))],
+    );
+}
+
+#[tokio::test]
+async fn a_conflicting_reservation_leaves_the_current_room_in_place() {
+    let manager = RoomManager::for_test();
+    let room = serve_test_room(&manager, "issuer-conflicting-reservation").await;
+
+    assert!(matches!(
+        manager
+            .serve_room(
+                "issuer-conflicting-reservation",
+                "other-key",
+                &RoomConfig::default(),
+                None,
+            )
+            .await,
+        Err(RoomManagerServeError::ConflictingReservation)
+    ));
+
+    assert!(
+        manager.get_by_uuid(room.uuid()).await.is_some(),
+        "a rejected request must not retire the current room"
+    );
+    assert_eq!(
+        serve_test_room(&manager, "issuer-conflicting-reservation")
+            .await
+            .uuid(),
+        room.uuid(),
+        "the issuer alias should still resolve to the room it reserved"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_reservation_conflict_event_preserves_contract_fields() {
+    let _guard = capture().await;
+    let manager = RoomManager::for_test();
+    let room = serve_test_room(&manager, "issuer-reservation-conflict-events").await;
+    let conflicting_config = RoomConfig {
+        web_rtc_enabled: false,
+        ..RoomConfig::default()
+    };
+
+    assert!(matches!(
+        manager
+            .serve_room(
+                "issuer-reservation-conflict-events",
+                TEST_ROOM_KEY,
+                &conflicting_config,
+                None,
+            )
+            .await,
+        Err(RoomManagerServeError::ConflictingReservation)
+    ));
+
+    assert_exact(
+        telemetry_event::ROOM_RESERVATION_CONFLICT,
+        &[
+            ("room_id", Value::from(room.uuid())),
+            ("issuer", Value::from("issuer-reservation-conflict-events")),
+            ("config", Value::from(format!("{conflicting_config:?}"))),
+        ],
     );
 }

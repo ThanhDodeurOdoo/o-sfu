@@ -68,20 +68,29 @@ async fn update_subscription(
 }
 
 #[tokio::test]
-async fn room_manager_is_idempotent_by_issuer() {
+async fn room_manager_is_idempotent_by_issuer_key_and_config() -> Result<()> {
     let manager = RoomManager::for_test();
     let config = RoomConfig::default();
     let first = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &config, None)
-        .await;
+        .await?;
     let second = manager
-        .serve_room("issuer-a", "ignored", &config, None)
-        .await;
+        .serve_room("issuer-a", TEST_ROOM_KEY, &config, None)
+        .await?;
     let third = manager
         .serve_room("issuer-b", TEST_ROOM_KEY, &config, None)
-        .await;
-    assert_eq!(first.uuid(), second.uuid());
-    assert_ne!(first.uuid(), third.uuid());
+        .await?;
+    assert_eq!(
+        first.uuid(),
+        second.uuid(),
+        "a repeat request with the same key and config should reuse the reservation"
+    );
+    assert_ne!(
+        first.uuid(),
+        third.uuid(),
+        "a different issuer should get its own room"
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -109,7 +118,7 @@ async fn room_manager_join_user_reports_missing_room() -> Result<()> {
 async fn manager_leave_user_removes_empty_room() -> Result<()> {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-leave-empty").await;
+    let room = serve_room(&manager, "issuer-leave-empty").await?;
     let room_id = room.uuid();
     let connection_id = join_user(&manager, &room, 1, &media_transport).await?;
     let user_id = UserId::Integer(1);
@@ -149,7 +158,7 @@ async fn manager_leave_user_removes_empty_room() -> Result<()> {
 async fn manager_disconnect_users_removes_empty_room() -> Result<()> {
     let manager = RoomManager::for_test_with_admission_policy(RoomAdmissionPolicy::new(1));
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-disconnect-empty").await;
+    let room = serve_room(&manager, "issuer-disconnect-empty").await?;
     let room_id = room.uuid();
     join_user(&manager, &room, 1, &media_transport).await?;
 
@@ -168,7 +177,7 @@ async fn healthy_room_stays_on_its_primary_worker() -> Result<()> {
     media_transport
         .test_api()
         .set_packet_loop_delays_ms(vec![Some(0); 4]);
-    let room = serve_room(&manager, "issuer-healthy-room").await;
+    let room = serve_room(&manager, "issuer-healthy-room").await?;
 
     for user_id in 1..=64 {
         join_user(&manager, &room, user_id, &media_transport).await?;
@@ -192,7 +201,7 @@ async fn new_rooms_cycle_across_healthy_workers() -> Result<()> {
     let mut room_count_by_worker = [0; 4];
 
     for room_index in 0..8 {
-        let room = serve_room(&manager, &format!("issuer-cyclic-{room_index}")).await;
+        let room = serve_room(&manager, &format!("issuer-cyclic-{room_index}")).await?;
         join_user(&manager, &room, 1, &media_transport).await?;
         let worker = home_worker(&room, 1)
             .await
@@ -211,7 +220,7 @@ async fn overloaded_room_reaches_but_does_not_exceed_local_router_cap() -> Resul
     const LOCAL_ROUTER_CAP: usize = 4;
     let manager = manager_with_policy(spillover_policy(LOCAL_ROUTER_CAP)?);
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-overloaded-room-cap").await;
+    let room = serve_room(&manager, "issuer-overloaded-room-cap").await?;
 
     media_transport
         .test_api()
@@ -255,7 +264,7 @@ async fn overloaded_room_reaches_but_does_not_exceed_local_router_cap() -> Resul
 async fn next_join_uses_spillover_worker_after_leave() -> Result<()> {
     let manager = manager_with_policy(spillover_policy(2)?);
     let media_transport = media_transport()?;
-    let room = serve_room(&manager, "issuer-overload-reuse").await;
+    let room = serve_room(&manager, "issuer-overload-reuse").await?;
     media_transport
         .test_api()
         .set_packet_loop_delays_ms(vec![Some(0), None, None, None]);

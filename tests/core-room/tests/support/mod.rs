@@ -91,10 +91,10 @@ pub fn spillover_policy(max_local_routers: usize) -> Result<RoomWorkerPolicy> {
     Ok(RoomWorkerPolicy::new(max_local_routers, delay_threshold))
 }
 
-pub async fn serve_room(manager: &RoomManager, issuer: &str) -> Arc<Room> {
-    manager
+pub async fn serve_room(manager: &RoomManager, issuer: &str) -> Result<Arc<Room>> {
+    Ok(manager
         .serve_room(issuer, TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await
+        .await?)
 }
 
 pub async fn join_user(
@@ -179,7 +179,7 @@ impl ReadyRoom {
 
 pub async fn join_ready_users(user_ids: &[i64]) -> Result<ReadyRoom> {
     let manager = Arc::new(RoomManager::for_test());
-    let room = serve_room(&manager, "issuer-core-room-ready").await;
+    let room = serve_room(&manager, "issuer-core-room-ready").await?;
     let media_transport = media_transport()?;
     let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
     let mut receivers = BTreeMap::new();
