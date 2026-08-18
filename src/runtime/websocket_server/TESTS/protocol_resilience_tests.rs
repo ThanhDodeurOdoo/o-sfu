@@ -38,7 +38,10 @@ async fn authenticated_protocol_websocket(
         TestServerBuilder::new().spawn().await,
         "test websocket server should start",
     );
-    let room = create_room(&server, issuer, CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, issuer, CreateRoomQuery::default()).await,
+        "test room should be served",
+    );
     let token = require_some(
         signed_connect_claims(TEST_ROOM_KEY, room.uuid(), user_id),
         "connect JWT should sign",

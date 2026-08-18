@@ -131,16 +131,19 @@ async fn serve_diagnostics_room(
     test_state: &RuntimeTestState,
     issuer: &str,
     remote_address: &str,
-) -> Arc<Room> {
-    test_state
-        .room_manager
-        .serve_room(
-            issuer,
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            Some(remote_address),
-        )
-        .await
+) -> TestResult<Arc<Room>> {
+    require_ok(
+        test_state
+            .room_manager
+            .serve_room(
+                issuer,
+                TEST_ROOM_KEY,
+                &RoomConfig::default(),
+                Some(remote_address),
+            )
+            .await,
+        "test room should be served",
+    )
 }
 
 async fn join_room_user(
@@ -254,7 +257,7 @@ async fn diagnostics_routes_require_the_configured_bearer_token() -> TestResult 
 #[tokio::test]
 async fn diagnostics_routes_return_current_room_and_user_details() -> TestResult {
     let test_state = test_state_with_handles();
-    let room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await;
+    let room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await?;
     let alice_user_id = UserId::Integer(1);
     let bob_user_id = UserId::Integer(2);
     let carol_user_id = UserId::Integer(3);
@@ -533,8 +536,8 @@ async fn diagnostics_routes_return_current_room_and_user_details() -> TestResult
 #[tokio::test]
 async fn diagnostics_user_details_are_scoped_to_the_requested_room() -> TestResult {
     let test_state = test_state_with_handles();
-    let first_room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await;
-    let second_room = serve_diagnostics_room(&test_state, "issuer-b", "203.0.113.11").await;
+    let first_room = serve_diagnostics_room(&test_state, "issuer-a", "203.0.113.10").await?;
+    let second_room = serve_diagnostics_room(&test_state, "issuer-b", "203.0.113.11").await?;
     assert_ne!(first_room.uuid(), second_room.uuid());
     let (_, first_rx) = join_room_user(&test_state.state, &first_room, UserId::Integer(7)).await?;
     let (_, second_rx) =
@@ -571,7 +574,7 @@ async fn diagnostics_user_details_are_scoped_to_the_requested_room() -> TestResu
 #[tokio::test]
 async fn diagnostics_user_detail_tracks_replacement_and_teardown() -> TestResult {
     let test_state = test_state_with_handles();
-    let room = serve_diagnostics_room(&test_state, "issuer-replacement", "203.0.113.12").await;
+    let room = serve_diagnostics_room(&test_state, "issuer-replacement", "203.0.113.12").await?;
     let user_id = UserId::Integer(9);
     let (_, _first_rx) = join_room_user(&test_state.state, &room, user_id.clone()).await?;
     let (replacement_tx, _replacement_rx) = test_outbound_sender(&test_state.state);

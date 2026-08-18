@@ -204,7 +204,7 @@ impl GeneralCallScenario {
                 &RoomConfig::default(),
                 Some("general-call-benchmark"),
             )
-            .await;
+            .await?;
         let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
         Ok(Self {
             core,

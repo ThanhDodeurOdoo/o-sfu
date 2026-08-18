@@ -183,10 +183,13 @@ async fn metrics_route_completes_during_room_mutations() -> TestResult {
     timeout(Duration::from_secs(10), async {
         start.wait().await;
         for raw_user_id in 0..32 {
-            let room = test_state
-                .room_manager
-                .serve_room("metrics", TEST_ROOM_KEY, &RoomConfig::default(), None)
-                .await;
+            let room = require_ok(
+                test_state
+                    .room_manager
+                    .serve_room("metrics", TEST_ROOM_KEY, &RoomConfig::default(), None)
+                    .await,
+                "test room should be served",
+            )?;
             let user_id = UserId::Integer(raw_user_id);
             let (sender, _receiver) = test_outbound_sender(&test_state.state);
             assert!(

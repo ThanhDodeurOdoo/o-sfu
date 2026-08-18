@@ -8,6 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use o_sfu_core::server::room::RoomManagerServeError;
 use o_sfu_protocol::wire::StreamType;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -166,7 +167,7 @@ async fn metrics(State(services): State<MetricsServices>) -> impl IntoResponse {
 /// `VerifiedRoomRequest` owns JWT verification and request-origin projection
 async fn room(State(services): State<RoomServices>, request: VerifiedRoomRequest) -> Response {
     async {
-        let room = services
+        let serve_result = services
             .room_manager
             .serve_room(
                 &request.issuer,
@@ -175,15 +176,23 @@ async fn room(State(services): State<RoomServices>, request: VerifiedRoomRequest
                 Some(request.origin.remote_address.as_str()),
             )
             .await;
-        services.metrics.record_http_room_success();
-        (
-            StatusCode::OK,
-            axum::Json(RoomResponse {
-                uuid: room.uuid().to_owned(),
-                url: request.origin.base_url,
-            }),
-        )
-            .into_response()
+        match serve_result {
+            Ok(room) => {
+                services.metrics.record_http_room_success();
+                (
+                    StatusCode::OK,
+                    axum::Json(RoomResponse {
+                        uuid: room.uuid().to_owned(),
+                        url: request.origin.base_url,
+                    }),
+                )
+                    .into_response()
+            }
+            Err(RoomManagerServeError::ConflictingReservation) => {
+                services.metrics.record_http_room_conflict();
+                StatusCode::CONFLICT.into_response()
+            }
+        }
     }
     .instrument(telemetry::http_request_span("room"))
     .await

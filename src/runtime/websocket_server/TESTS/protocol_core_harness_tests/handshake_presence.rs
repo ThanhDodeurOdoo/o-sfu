@@ -3,7 +3,10 @@ use super::support::*;
 #[tokio::test]
 async fn protocol_core_replays_real_server_welcome_peer_snapshot() -> TestResult {
     let server = TestServerBuilder::new().spawn_required().await?;
-    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-a", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let _existing = connect_until_welcome(&server, &room, UserId::Integer(31)).await?;
     let peer = connect_until_welcome(&server, &room, UserId::Integer(32)).await?;
 
@@ -52,7 +55,10 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() -> TestResult
 #[tokio::test]
 async fn protocol_core_maps_real_server_auth_failure_to_closed_state() -> TestResult {
     let server = TestServerBuilder::new().spawn_required().await?;
-    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-a", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
 
     let mut peer = ProtocolHarnessPeer::default();
     require_some(

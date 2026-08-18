@@ -301,7 +301,8 @@ async fn setup_ready_room_fixture_with_adapter(
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let (first_tx, first_rx) = test_sender();
     let (second_tx, second_rx) = test_sender();
     join_user_with_sender(&room, UserId::Integer(1), first_tx).await;
@@ -393,7 +394,8 @@ pub(super) async fn setup_ready_users_with_transport_and_media_limits(
     let manager = RoomManager::for_test_with_media_limits(media_limits);
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let adapter = real_adapter();
     for &raw_user_id in user_ids {
         let (sender, _receiver) = test_sender();
@@ -411,7 +413,8 @@ pub(super) async fn setup_ready_users_with_transport_and_tuning(
     let manager = RoomManager::for_test_with_video_adaptation_tuning(tuning);
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let adapter = real_adapter();
     for &raw_user_id in user_ids {
         let (sender, _receiver) = test_sender();
@@ -432,7 +435,8 @@ pub(super) async fn setup_ready_users_with_transport_receivers(
     let manager = RoomManager::for_test();
     let room = manager
         .serve_room("issuer-a", TEST_ROOM_KEY, &RoomConfig::default(), None)
-        .await;
+        .await
+        .expect("test room should be served");
     let adapter = real_adapter();
     let mut receivers = Vec::with_capacity(user_ids.len());
     for &raw_user_id in user_ids {

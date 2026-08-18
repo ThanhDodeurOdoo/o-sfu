@@ -12,6 +12,7 @@ pub mod event {
     pub const RUNTIME_TELEMETRY_INITIALIZED: &str = "runtime.telemetry_initialized";
     pub const ROOM_CREATED: &str = "room.created";
     pub const ROOM_RESERVATION_EXPIRED: &str = "room.reservation.expired";
+    pub const ROOM_RESERVATION_CONFLICT: &str = "room.reservation_conflict";
     pub const USER_JOINED: &str = "user.joined";
     pub const USER_CLOSED: &str = "user.closed";
     pub const USER_DISCONNECTED: &str = "user.disconnected";

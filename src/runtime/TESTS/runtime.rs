@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::anyhow;
 use o_sfu_core::server::room::RoomConfig;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -200,7 +201,8 @@ async fn expired_room_reservation_is_reaped() -> AnyResult<()> {
 
     let room = rooms
         .serve_room("issuer", TEST_ROOM_KEY, &config, None)
-        .await;
+        .await
+        .map_err(|error| anyhow!("test room should be served: {error:?}"))?;
     sleep(RESERVATION_TTL * 2).await;
 
     assert!(
@@ -210,7 +212,8 @@ async fn expired_room_reservation_is_reaped() -> AnyResult<()> {
     assert_eq!(rooms.room_gauges().await, RoomGaugeValues::default());
     let room_again = rooms
         .serve_room("issuer", TEST_ROOM_KEY, &config, None)
-        .await;
+        .await
+        .map_err(|error| anyhow!("test room should be served: {error:?}"))?;
 
     assert_ne!(
         room.uuid(),

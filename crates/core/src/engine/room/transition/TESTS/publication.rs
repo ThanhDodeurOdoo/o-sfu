@@ -77,7 +77,8 @@ async fn staged_room() -> (Arc<Room>, MediaTransport, UserId, ConnectionId) {
             &RoomConfig::default(),
             None,
         )
-        .await;
+        .await
+        .expect("test room should be served");
     let media_transport = media_transport();
     let user_id = UserId::Integer(1);
     let connection_id = prepare_publish_session(&room, &media_transport, &user_id).await;

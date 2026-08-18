@@ -123,6 +123,11 @@ impl RuntimeMetrics {
             .increment(HttpRoomResponseStatus::BadRequest);
     }
 
+    pub fn record_http_room_conflict(&self) {
+        self.http_room_responses
+            .increment(HttpRoomResponseStatus::Conflict);
+    }
+
     pub fn record_http_disconnect_success(&self) {
         self.http_disconnect_responses
             .increment(HttpDisconnectResponseStatus::Success);

@@ -354,11 +354,12 @@ pub(super) async fn create_room(
     server: &TestServer,
     issuer: &str,
     config: RoomConfig,
-) -> Arc<Room> {
+) -> Option<Arc<Room>> {
     server
         .room_manager
         .serve_room(issuer, TEST_ROOM_KEY, &config, None)
         .await
+        .ok()
 }
 
 pub(super) async fn authenticate_with_jwt(

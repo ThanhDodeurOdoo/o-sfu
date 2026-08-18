@@ -8,7 +8,10 @@ async fn websocket_sends_ping_frames_and_accepts_pongs() -> TestResult {
         .ping_interval_ms(20)
         .spawn_required()
         .await?;
-    let room = create_room(&server, "issuer-ping", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-ping", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let user_id = UserId::Integer(410);
     let token = room_token(&room, user_id.clone())?;
     let (mut websocket, _welcome) = require_some(
@@ -48,7 +51,10 @@ async fn websocket_closes_when_pong_times_out() -> TestResult {
         .ping_interval_ms(15)
         .spawn_required()
         .await?;
-    let room = create_room(&server, "issuer-ping-timeout", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-ping-timeout", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let user_id = UserId::Integer(411);
     let token = room_token(&room, user_id.clone())?;
     let mut websocket = require_some(
@@ -90,7 +96,10 @@ async fn shutdown_waits_for_in_flight_mutations_and_retires_sessions_once() -> T
         .room_size(1)
         .spawn_required()
         .await?;
-    let room = create_room(&server, "issuer-shutdown", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-shutdown", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let admitted_id = UserId::Integer(414);
     let admitted_token = room_token(&room, admitted_id.clone())?;
     let (mut admitted, _welcome) = require_some(
@@ -194,7 +203,10 @@ async fn websocket_closes_when_rtc_transport_disconnects() -> TestResult {
         .ping_interval_ms(20)
         .spawn_required()
         .await?;
-    let room = create_room(&server, "issuer-rtc-disconnect", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-rtc-disconnect", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let user_id = UserId::Integer(412);
     let mut websocket = require_some(
         setup_negotiated_session(&server, &room, user_id.clone()).await,
@@ -211,12 +223,15 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
         .ping_interval_ms(20)
         .spawn_required()
         .await?;
-    let room = create_room(
-        &server,
-        "issuer-rtc-disconnect-negotiating",
-        CreateRoomQuery::default(),
-    )
-    .await;
+    let room = require_some(
+        create_room(
+            &server,
+            "issuer-rtc-disconnect-negotiating",
+            CreateRoomQuery::default(),
+        )
+        .await,
+        "test room should be served",
+    )?;
     let user_id = UserId::Integer(413);
     let token = room_token(&room, user_id.clone())?;
     let mut websocket = require_some(
@@ -234,7 +249,10 @@ async fn websocket_closes_when_rtc_transport_disconnects_during_initial_negotiat
 #[tokio::test]
 async fn stale_replaced_socket_close_cleans_only_the_stale_transport_user() -> TestResult {
     let server = TestServerBuilder::new().spawn_required().await?;
-    let room = create_room(&server, "issuer-a", CreateRoomQuery::default()).await;
+    let room = require_some(
+        create_room(&server, "issuer-a", CreateRoomQuery::default()).await,
+        "test room should be served",
+    )?;
     let user_id = UserId::Integer(260);
     let mut first_socket = require_some(
         setup_negotiated_session(&server, &room, user_id.clone()).await,
