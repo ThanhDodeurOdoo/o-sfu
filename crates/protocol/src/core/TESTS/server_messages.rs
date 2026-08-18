@@ -244,3 +244,93 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
         }]
     );
 }
+
+#[test]
+fn protocol_core_rejects_state_updates_before_welcome() -> serde_json::Result<()> {
+    let messages = vec![
+        ServerMessage::Tracks(vec![]),
+        ServerMessage::Sources(vec![]),
+        ServerMessage::PeerInfo(PeerInfoPayload {
+            user_id: 1.into(),
+            info: UserInfo::default(),
+        }),
+        ServerMessage::PeerJoined(PeerInfoPayload {
+            user_id: 1.into(),
+            info: UserInfo::default(),
+        }),
+        ServerMessage::PeerLeft(PeerLeftPayload { user_id: 1.into() }),
+        ServerMessage::Broadcast(ServerBroadcastPayload {
+            sender_id: 1.into(),
+            message: serde_json::json!({}),
+        }),
+        ServerMessage::RecordingChange(RecordingStateUpdate {
+            state: RecordingState::default(),
+            stop_code: None,
+        }),
+    ];
+    for message in messages {
+        let mut core = ProtocolCore::new();
+        let _ = core.connect("wss://sfu.example.com", "token", None);
+        let envelope = ServerEnvelope::Message(message).into_envelope()?;
+        let batch = serde_json::to_string(&[&envelope])?;
+        let commands = core.on_ws_message(&batch);
+        assert_eq!(
+            commands.as_slice(),
+            &[Command::CloseWebSocket { code: 1002 }]
+        );
+        assert_eq!(core.state(), ConnectionState::Connecting);
+    }
+    Ok(())
+}
+
+#[test]
+fn protocol_core_accepts_state_updates_after_welcome_in_same_batch() -> serde_json::Result<()> {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com/socket", "signed-token", None);
+    let welcome_message = ServerEnvelope::Message(ServerMessage::Welcome(sample_welcome_payload()))
+        .into_envelope()?;
+    let track_message = ServerEnvelope::Message(ServerMessage::Tracks(vec![TrackBinding {
+        mid: String::from("0"),
+        user_id: String::from("peer-1").into(),
+        stream_type: StreamType::Audio,
+        active: true,
+    }]))
+    .into_envelope()?;
+    // batch where Welcome arrives BEFORE Tracks (Valid)
+    let batch = serde_json::to_string(&[&welcome_message, &track_message])?;
+    let commands = core.on_ws_message(&batch);
+    // verify it transitioned to Authenticated and didn't close
+    assert_eq!(core.state(), ConnectionState::Authenticated);
+    assert!(
+        !commands
+            .iter()
+            .any(|c| matches!(c, Command::CloseWebSocket { .. }))
+    );
+    // verify the Tracks update emitted its event
+    assert!(commands.iter().any(|c| matches!(
+        c,
+        Command::EmitEvent {
+            event: ProtocolEvent::TrackSnapshot { .. }
+        }
+    )));
+    Ok(())
+}
+
+#[test]
+fn protocol_core_rejects_updates_during_recovery_phase() -> serde_json::Result<()> {
+    let mut core = ProtocolCore::new();
+    let _ = core.connect("wss://sfu.example.com", "token", None);
+    let _ = core.accept_welcome(sample_welcome_payload());
+    let _ = core.on_transport_ready();
+    // simulate a socket drop to trigger Recovery phase
+    let _ = core.on_ws_close(1006);
+    assert_eq!(core.state(), ConnectionState::Recovering);
+    // verify it rejects updates
+    let tracks_message = ServerEnvelope::Message(ServerMessage::Tracks(vec![])).into_envelope()?;
+    let batch = serde_json::to_string(&[&tracks_message])?;
+    assert_eq!(
+        core.on_ws_message(&batch).as_slice(),
+        &[Command::CloseWebSocket { code: 1002 }]
+    );
+    Ok(())
+}
