@@ -20,7 +20,10 @@ use crate::engine::{
     },
 };
 
-/// deferred source-policy turn executed after route effects and pre-policy output
+/// Deferred request to recompute one room's source policy.
+///
+/// `RoomEffects` decides whether the turn runs before or after its transport
+/// work. [`Self::execute`] serializes it with publication activity.
 #[derive(Debug, Default)]
 pub struct SourcePolicyTurn {
     requested: bool,
@@ -168,12 +171,16 @@ impl SourcePolicyTransaction {
     async fn commit(self, room: &Room, media_transport: &MediaTransport) {
         let mut state_updates = self.state_updates;
         if !self.route_effects.is_empty() {
+            // Only accepted transport controls join state-only updates. Room
+            // state must not claim a selection that its worker rejected.
             state_updates.extend(
                 self.route_effects
                     .execute(room.uuid(), media_transport)
                     .await,
             );
         }
+        // Only committed nonzero counters schedule another observation. Rejected
+        // or topology-stale work must not advance adaptation hysteresis.
         if commit_accepted_updates(room, &state_updates, &self.featured_users).await {
             media_transport.schedule_source_policy_follow_up(room.instance_id());
         }

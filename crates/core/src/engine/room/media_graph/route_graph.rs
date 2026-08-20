@@ -1,3 +1,14 @@
+//! Logical subscriptions and their transport realization.
+//!
+//! Explicit receiver intent survives while no publication is attached. A
+//! current publication realizes as `Absent -> Pending -> Committed`. Rejected
+//! declarations and receiver replacement return realization to `Absent`.
+//! Reservation IDs reject async completion after source detach or replacement.
+//!
+//! Cross-worker relays are shared by subscriptions with the same source and
+//! target worker. A relay remains active while any owner has active receiver
+//! intent.
+
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     mem,
@@ -225,6 +236,8 @@ impl RouteGraph {
         selection: ConsumerSourceSelection,
         accept: impl FnOnce() -> bool,
     ) -> Result<(), Vec<RelayRouteEffect>> {
+        // Consume the reservation before router acceptance so every async
+        // completion is terminal and cannot reuse its identity after failure.
         let pending = self.take_pending(&reservation);
         let ConsumerRouteReservation { key, source_id, .. } = reservation;
         let Some(TakenPending { relay }) = pending else {

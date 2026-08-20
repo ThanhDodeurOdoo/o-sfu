@@ -12,12 +12,12 @@ use thiserror::Error;
 
 use crate::{Bitrate, ConnectionId, MediaWorkerId, RoomInstanceId, engine::UserId};
 
-/// room-scoped media-transport user identity
+/// Exact identity of one committed transport session.
 ///
-/// a `UserId` alone is not unique across the server
-/// the same id can appear in different rooms simultaneously
-/// this composite key includes room instance, media worker, signaling
-/// connection and user id
+/// `room_instance` isolates consecutive lifecycles of the same application room.
+/// `connection` rejects work for a replaced session and `media_worker` selects
+/// the worker that owns the RTC state. `UserId` alone provides none of these
+/// guarantees.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TransportSessionKey {
     room_instance: RoomInstanceId,
@@ -107,6 +107,11 @@ impl ProducerActivity {
     }
 }
 
+/// Room-authored order for producer activity effects.
+///
+/// Transport effects run after the room lock is released and can reach worker
+/// replicas out of order. Workers ignore older revisions so delayed effects
+/// cannot restore superseded activity.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd)]
 pub(crate) struct SourceActivityRevision(u64);
 
@@ -413,7 +418,11 @@ pub struct TransportWorkerPressureSnapshot {
     pub worker_pressure_score: u8,
 }
 
-/// Opaque identifier for a media line allocated by the media transport.
+/// Worker-allocated key for one media realization.
+///
+/// Relay and diagnostics paths carry this key across workers. It is not a room
+/// publication identity and callers must retain its [`TransportSourceKey`] or
+/// [`TransportSessionKey`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub struct TransportMediaId(u64);
 

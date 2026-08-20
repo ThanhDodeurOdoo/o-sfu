@@ -128,10 +128,10 @@ impl RtpProfile {
         self.simulcast_codec
     }
 
-    /// Rejects SDP answers that reintroduce unsupported repair streams.
+    /// Rejects answer attributes that would recreate an unsupported repair leg.
     ///
-    /// Callers must run this before `accept_answer` so unsupported repair state
-    /// cannot enter the pending offer.
+    /// Bare Generic NACK is feedback rather than an RTX identity, so only RTX
+    /// payloads, `apt`, repaired RID and FID topology are rejected.
     ///
     /// # Errors
     ///
@@ -147,11 +147,19 @@ impl RtpProfile {
     }
 }
 
-/// Removes retransmission while preserving congestion and decoder-refresh
-/// feedback.
+/// Projects str0m's default video profile onto o-sfu's forwarding model.
 ///
-/// Local egress keeps `RtpWrite::nackable` false, so the offer must omit
-/// retransmission.
+/// Generic NACK identifies missing RTP packets. O-sfu does not retain forwarded
+/// packets in a retransmission cache and local `RtpWrite`s stay non-nackable, so
+/// advertising RTX would promise repair that cannot be produced. PLI and FIR
+/// remain because they ask the encoder for decoder resynchronization instead.
+/// Generic NACK and PLI follow
+/// [RFC 4585 section 6.2.1](https://www.rfc-editor.org/rfc/rfc4585.html#section-6.2.1),
+/// [RFC 4585 section 6.3.1](https://www.rfc-editor.org/rfc/rfc4585.html#section-6.3.1).
+/// FIR follows
+/// [RFC 5104 section 4.3.1](https://www.rfc-editor.org/rfc/rfc5104.html#section-4.3.1).
+/// RTX negotiation follows
+/// [RFC 4588 section 8.1](https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1).
 fn without_retransmission(payload: &PayloadParams) -> PayloadParams {
     let mut projected = PayloadParams::new(payload.pt(), None, payload.spec());
     projected.set_fb_transport_cc(payload.fb_transport_cc());

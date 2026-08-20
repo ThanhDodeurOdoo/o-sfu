@@ -974,6 +974,9 @@ fn remote_pkt_gate_for_route(
     route_entry: Option<&MediaRouteEntry>,
     local_packet_gate: Option<PacketLayerGate>,
 ) -> PacketLayerGate {
+    // Keep the upstream relay open while a local route can receive. The consumer
+    // worker needs every RID to detect a stale selection and admit a decodable
+    // fallback.
     match (route_entry, local_packet_gate) {
         (Some(_), Some(PacketLayerGate::Open | PacketLayerGate::Rid(_))) => PacketLayerGate::Open,
         // A pending decoder-refresh gate needs Open upstream so its required

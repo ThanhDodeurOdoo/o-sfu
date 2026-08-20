@@ -5,6 +5,8 @@ use crate::engine::media_transport::TransportMediaId;
 
 #[derive(Debug, Default)]
 pub(super) struct ActiveSpeakerRank {
+    // Ranked newest first. Equal hold windows make expired entries a suffix so
+    // deadline and expiry work can inspect the rank tail.
     entries: Vec<ActiveSpeakerRankEntry>,
     by_src: BTreeMap<TransportMediaId, usize>,
 }

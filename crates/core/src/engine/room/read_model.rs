@@ -1,3 +1,10 @@
+//! Two-phase room diagnostics.
+//!
+//! Capture methods copy room facts and transport keys under the room read guard.
+//! Callers collect transport snapshots after releasing that guard, then
+//! projection methods combine both views. The result is not an atomic room and
+//! transport snapshot.
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,

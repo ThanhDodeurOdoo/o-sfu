@@ -23,6 +23,11 @@ use crate::engine::{
     metrics::{self, RuntimeMetrics},
 };
 
+/// Removes every worker-owned entry for `session_key`.
+///
+/// Missing `RtcSessionState` is not an error. Scheduler, demux, media, route,
+/// snapshot and bitrate cleanup still runs so repeated close and teardown
+/// fallback cannot retain stale indexes.
 pub(super) fn worker_close_session(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,

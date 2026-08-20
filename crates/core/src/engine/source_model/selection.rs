@@ -34,11 +34,15 @@ impl SourceSelector {
     }
 }
 
-/// Consumer-side desired state for one published source.
+/// Receiver-side policy state for one attached publication.
 ///
-/// The active flag is the compatibility-level subscription decision. The
-/// selector is the source-level quality intent that later adaptation and
-/// layout policy can resolve into a transport-native gate.
+/// `active` preserves stored subscription intent while `policy_pause_reason`
+/// may withhold delivery without erasing that intent. `selector` is a resolved
+/// room choice that projection maps to a transport packet gate.
+///
+/// `ConsumerSourceSelection` carries no publication or route identity. Async
+/// updates must still match the current `PublishedSourceId` and exact consumer
+/// route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConsumerSourceSelection {
     active: bool,

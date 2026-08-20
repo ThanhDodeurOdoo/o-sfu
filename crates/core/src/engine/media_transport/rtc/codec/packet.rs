@@ -42,6 +42,12 @@ impl PacketInspector {
     }
 }
 
+/// Returns whether a destination may wait for an observable refresh.
+///
+/// Only negotiated VP8 is gated. Opaque codecs must forward immediately and use
+/// keyframe requests as bounded hints because the packet path cannot prove their
+/// completion. VP8 refresh detection follows
+/// [RFC 7741 section 4.3](https://www.rfc-editor.org/rfc/rfc7741.html#section-4.3).
 pub(in crate::engine::media_transport::rtc) fn requires_decoder_refresh(
     parameters: &MediaStream,
     payload_type: Option<Pt>,

@@ -1,8 +1,8 @@
-//! server-runtime integration surface for `o-sfu-core`
+//! Server-runtime integration surface.
 //!
-//! this module exposes the pieces the top-level runtime needs to assemble a
-//! process: diagnostics response types, metric catalogs, room managers, packet
-//! sink registries plus the media transport
+//! The top-level runtime uses these facades for diagnostics, metrics, room
+//! management, transport construction and packet sinks. The caller-facing
+//! session API remains under [`crate::prelude`].
 
 /// diagnostics response types used by runtime inspection endpoints
 pub mod diagnostics {

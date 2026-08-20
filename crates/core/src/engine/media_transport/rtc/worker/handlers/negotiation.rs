@@ -109,6 +109,18 @@ pub(super) fn worker_create_initial_session_offer(
     ))
 }
 
+/// Returns the one staged follow-up offer for `session_key`.
+///
+/// Delivery consumes `staged_offer` but retains `pending_offer` until answer
+/// application. The same offer cannot be requested twice.
+///
+/// # Errors
+///
+/// Returns [`TransportAdapterError::TransportUnavailable`] when the session is
+/// absent. Returns [`TransportAdapterError::InvalidInput`] before the initial
+/// answer or while another answer is pending. Returns
+/// [`TransportAdapterError::UnsupportedFeature`] when no media change staged an
+/// offer.
 pub(super) fn worker_create_session_renegotiation_offer(
     state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
@@ -151,6 +163,11 @@ pub(super) fn worker_apply_session_answer(
         .map(|(_transport_media_id, mid)| *mid)
         .collect::<Vec<_>>();
     let ParsedSessionAnswer { answer, rids } = parsed_answer;
+    // Derive every fallible answer view available before `accept_answer`.
+    // str0m 0.21 mutates ICE, DTLS and session state in place, so a later RID
+    // or router-projection rejection could not restore the pending offer.
+    // https://github.com/algesten/str0m/blob/0.21.0/src/change/sdp.rs#L158-L208
+    // https://github.com/algesten/str0m/blob/0.21.0/src/change/sdp.rs#L961-L981
     let remote_candidate_addrs = answer_remote_candidate_addrs(&answer);
     let client_capabilities = codec::client_rtp_capabilities_from_sdp_answer(&answer)?;
     let producer_answer_projection = answer_producer_projection(&answer, &producer_mids)?;

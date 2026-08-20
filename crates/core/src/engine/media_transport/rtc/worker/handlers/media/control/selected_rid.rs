@@ -1,22 +1,14 @@
-//! selected-rid readiness and retry scheduling for route packet gates
+//! Decoder-safe packet-gate transitions.
 //!
-//! selected-rid gates are stricter than ordinary packet gates because the
-//! receiver must not be switched to a simulcast layer until that layer is fresh
-//! enough to decode
-//! this module keeps the room-selected gate in `pending_gate` while the
-//! packet loop waits for recent rtp and a keyframe on that rid
+//! Room policy chooses a requested gate. Worker-local readiness state decides
+//! when that gate can become effective without stranding the decoder. Until a
+//! keyframe arrives, the route retains the request in `pending_gate` and
+//! enforces `Block`. A RID gate may use another recently decodable RID as a
+//! temporary fallback while refreshing the selected RID.
 //!
-//! the effective gate is allowed to differ from the selected gate during
-//! bootstrap:
-//! - `Block` means the selected rid has not produced a fresh packet yet
-//! - a fallback `Rid` means another live rid has produced a keyframe and can
-//!   keep the receiver decodable while the selected rid is requested again
-//! - the pending gate becomes effective only when the selected rid produces a
-//!   keyframe
-//!
-//! all state here is worker-local transport state
-//! room policy still owns which rid should be selected, while this file decides
-//! when that selected rid is safe to enforce on the packet path
+//! Packet liveness and decoder readiness are distinct. Delta packets refresh
+//! RID liveness but do not activate a pending gate. A RID-less keyframe may
+//! activate a pending `Open` gate.
 
 use std::{
     mem::take,
@@ -53,8 +45,6 @@ const SELECTED_RID_READY_MAX_AGE: Duration = Duration::from_secs(2);
 ///
 /// this test helper mirrors the packet-loop sequence by recording liveness
 /// before applying readiness work
-/// production packet-loop batches record liveness per packet and then call
-/// [`apply_src_decoder_ready`] once per unique source/rid
 ///
 /// returns `true` when an effective packet gate changed
 #[cfg(test)]
@@ -80,6 +70,8 @@ pub fn observe_src_rid_ready(
             "observed first live RTP for producer RID"
         );
     }
+    // Readiness uses the freshness set to detect stale RIDs. Include the packet
+    // that triggered this transition before querying that set.
     apply_src_decoder_ready(
         state,
         metrics,
@@ -91,7 +83,7 @@ pub fn observe_src_rid_ready(
     )
 }
 
-/// applies decoder readiness for one packet after liveness observation
+/// Applies one producer packet's decoder readiness to its consumer routes.
 pub fn apply_src_decoder_ready(
     state: &mut PacketLoopState,
     metrics: &RtcMetricsRecorder,
@@ -147,16 +139,11 @@ pub fn apply_src_decoder_ready(
     route_update.changed_gate()
 }
 
-/// splits a selected-rid gate into effective and pending transport state
+/// Defers a decoder-sensitive gate until a keyframe makes the destination decodable.
 ///
-/// the effective gate is what the packet loop enforces now
-/// the pending gate is the target selected by room policy
-/// keeping both lets bootstrap forwarding stay decodable without losing the
-/// receiver's intended layer
-///
-/// non-rid gates pass through unchanged
-/// rid gates become effective immediately only when the producer rid has recent
-/// packet liveness
+/// When no decoder refresh is required the requested gate takes effect directly.
+/// Otherwise `Block` remains effective while the requested gate stays pending.
+/// Recent packet liveness alone cannot restore the decoder reference chain.
 pub(in crate::engine::media_transport::rtc) fn guarded_pkt_gate(
     requires_decoder_refresh: bool,
     src_media: TransportMediaId,

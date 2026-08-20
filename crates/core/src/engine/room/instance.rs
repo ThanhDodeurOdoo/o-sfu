@@ -139,6 +139,12 @@ impl Room {
         self.definition.web_rtc_enabled()
     }
 
+    /// Returns the transport key for an exact committed router placement.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `user_id` and `connection_id` have no committed router
+    /// placement.
     #[must_use]
     pub async fn transport_user_key(
         &self,

@@ -92,12 +92,6 @@ impl ForwardedPacketSource {
     }
 }
 
-/// RTP header storage for the two ingress paths handled by the packet loop
-///
-/// local packets keep the full `str0m` packet so browser egress can reuse the
-/// exact source header view
-/// relayed packets retain only the header and extended sequence number because
-/// payload ownership already lives on `ForwardedPacket`
 #[derive(Debug)]
 enum ForwardedPacketData {
     Str0mRtp(ForwardedRtpData),

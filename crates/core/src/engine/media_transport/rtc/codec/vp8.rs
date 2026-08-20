@@ -131,6 +131,10 @@ impl Packet {
         let descriptor = self.descriptor?;
         match Self::build_patch(descriptor, identity) {
             Ok(patch) => Some(patch),
+            // str0m preserves the source descriptor width. RFC 7741 section
+            // 4.2 permits 7-bit PictureID wrap, so reduce a projected identity
+            // that the short descriptor cannot encode.
+            // https://www.rfc-editor.org/rfc/rfc7741.html#section-4.2
             Err(Vp8PatchError::PictureIdTooLarge) => Self::build_patch(
                 descriptor,
                 Identity {
@@ -168,6 +172,12 @@ impl Rewrite {
     }
 }
 
+/// Projects source-local VP8 counters into the receiver's single stream.
+///
+/// A source switch must not expose another RID's unrelated `PictureID` or
+/// `TL0PICIDX`. `reanchor` emits the next receiver value then preserves that
+/// source's modulo deltas. The moduli follow
+/// [RFC 7741 section 4.2](https://www.rfc-editor.org/rfc/rfc7741.html#section-4.2).
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct Projection {
     picture_id: CounterProjection<u16>,

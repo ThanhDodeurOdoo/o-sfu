@@ -613,8 +613,7 @@ impl RoomTopology {
             .collect()
     }
 
-    /// Uses `session_key` for displaced-source effects because current lookup
-    /// resolves the replacement.
+    /// Resolves relay effects while retaining a displaced source's transport key.
     ///
     /// # Panics
     ///
@@ -632,6 +631,8 @@ impl RoomTopology {
                 let source_session_key = if route.source_user == *user_id
                     && route.source_connection == session_key.connection_id()
                 {
+                    // Current lookup now resolves the replacement. Use the key
+                    // captured before displacement for this source's cleanup.
                     session_key.clone()
                 } else {
                     self.transport_user_key(route.source_user, route.source_connection)
@@ -844,6 +845,9 @@ impl RoomTopology {
         rtp: RouterRtpParameters,
     ) -> Option<PendingConsumerSetup> {
         let key = target.subscription_key();
+        // Relay activity follows receiver intent rather than policy-gated delivery.
+        // A temporary policy pause must remain resumable without rebuilding the
+        // shared cross-worker source path.
         let relay_active = selection.active();
         let reservation =
             self.route_graph

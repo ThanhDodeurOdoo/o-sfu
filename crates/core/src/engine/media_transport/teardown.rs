@@ -35,6 +35,11 @@ impl TransportTeardown {
 }
 
 impl MediaTransport {
+    /// Runs teardown idempotently and continues after terminal failures.
+    ///
+    /// Each failed media or relay item escalates once to its session because
+    /// partial worker state may remain. Errors are consumed so one failure cannot
+    /// suppress later cleanup.
     pub(crate) async fn teardown(&self, teardowns: impl IntoIterator<Item = TransportTeardown>) {
         for teardown in teardowns {
             let (session_key, result, transport_media_id, target_media_worker_id) = match &teardown

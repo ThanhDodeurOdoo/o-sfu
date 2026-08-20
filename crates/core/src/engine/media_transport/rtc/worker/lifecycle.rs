@@ -1,24 +1,9 @@
-//! construction and mailbox runtime for one RTC transport worker
+//! RTC worker thread startup and terminal shutdown.
 //!
-//! [`RtcWorker::start`] returns only after its packet-loop runtime has bound the
-//! worker socket
-//! callers can therefore use one direct handle without a start slot or missing
-//! worker state
-//!
-//! command dispatch follows one pattern:
-//!
-//! ```text
-//! transport command port
-//!   |
-//!   v
-//! build RtcWorkerCommand with oneshot response
-//!   |
-//!   v
-//! send through worker command mailbox
-//!   |
-//!   v
-//! await worker response
-//! ```
+//! [`RtcWorker::start`] publishes a worker only after its UDP socket is bound.
+//! [`RtcWorker::cancel`] is terminal and does not promise to drain queued command
+//! or relay mailboxes. [`RtcWorker::wait_for_shutdown`] keeps the blocking thread
+//! join out of the caller's async executor.
 #[cfg(target_os = "linux")]
 use std::{
     any::Any,
@@ -88,6 +73,8 @@ impl PacketLoopStartup {
             }
         };
         if startup_tx.send(Ok(())).is_err() {
+            // No `RtcWorker` can own this thread after the startup waiter
+            // disappears. Returning releases the socket and packet-loop inputs.
             return;
         }
         packet_loop::run_packet_loop(
@@ -137,6 +124,8 @@ fn spawn_io_uring_packet_loop(
         .name(thread_name)
         .spawn(move || {
             let startup_err_tx = startup_tx.clone();
+            // `tokio_uring::start` unwraps runtime creation. Catch that panic in
+            // the worker thread so startup can report failure and join the thread.
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                 tokio_uring::start(startup.run(RtcUdpIoBackend::IoUring, startup_tx));
             })) {
@@ -183,8 +172,9 @@ impl Drop for RtcWorker {
     fn drop(&mut self) {
         let shutdown_started = self.shutdown.is_cancelled();
         self.shutdown.cancel();
-        // Ordinary destruction joins the worker. After `cancel`, only join an already
-        // finished thread because `MediaTransport::shutdown` is the explicit wait path.
+        // A drop that initiates shutdown owns the blocking join. After `cancel`,
+        // Drop must stay nonblocking and joins only an already-finished thread.
+        // `MediaTransport::shutdown` waits asynchronously before final drop.
         if let Some(thread) = self.thread.take()
             && (!shutdown_started || thread.is_finished())
         {
@@ -194,12 +184,13 @@ impl Drop for RtcWorker {
 }
 
 impl RtcWorker {
-    /// starts one packet-loop worker and binds its socket before returning
+    /// Starts a worker on a dedicated OS thread and returns after its UDP socket binds.
     ///
     /// # Errors
     ///
-    /// returns [`TransportAdapterError::TransportUnavailable`] when runtime
-    /// creation, socket binding or packet-loop thread startup fails
+    /// Returns [`TransportAdapterError::TransportUnavailable`] when thread or
+    /// runtime creation fails, the selected backend is unavailable or no socket
+    /// can bind in `rtc_port_range`.
     pub(crate) fn start(
         config: &MediaTransportConfig,
         profile: Arc<RtpProfile>,
@@ -298,10 +289,20 @@ impl RtcWorker {
         })
     }
 
+    /// Signals terminal shutdown without waiting.
+    ///
+    /// An input already selected for the current turn may finish. At the next
+    /// wait boundary cancellation wins over commands and relay packets still
+    /// queued, so [`Self::cancel`] does not drain either mailbox.
     pub(in crate::engine::media_transport) fn cancel(&self) {
         self.shutdown.cancel();
     }
 
+    /// Waits until the packet loop drops its command receiver and its OS thread exits.
+    ///
+    /// [`Self::cancel`] must run first during normal operation. The finished
+    /// [`thread::JoinHandle`] remains owned by [`Drop`] so this async wait never
+    /// blocks the caller's executor.
     pub(in crate::engine::media_transport) async fn wait_for_shutdown(&self) {
         self.handle.command_tx.closed().await;
         if let Some(thread) = &self.thread {
@@ -311,13 +312,18 @@ impl RtcWorker {
         }
     }
 
-    /// sends a request command to the ready worker
+    /// Enqueues one bounded-mailbox command and waits for its oneshot result.
+    ///
+    /// Dropping this request future before mailbox delivery completes does not
+    /// enqueue the command. Dropping it after enqueue drops only the response
+    /// receiver. The packet loop can still apply the command unless worker
+    /// cancellation wins first.
     ///
     /// # Errors
     ///
-    /// returns the command handler error, or
+    /// Returns the command handler error or
     /// [`TransportAdapterError::TransportUnavailable`] when command delivery or
-    /// response receipt fails
+    /// response receipt fails.
     pub async fn request_worker<T, F>(&self, build_command: F) -> Result<T, TransportAdapterError>
     where
         F: FnOnce(RtcWorkerResponse<T>) -> RtcWorkerCommand,

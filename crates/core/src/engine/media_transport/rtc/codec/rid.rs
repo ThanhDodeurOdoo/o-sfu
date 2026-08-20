@@ -38,8 +38,11 @@ impl ParsedAnswerRids {
         answer: &SdpAnswer,
     ) -> Self {
         let mut by_mid = BTreeMap::new();
-        // Replacing this raw parsing require an upstream Str0m API that exposes
-        // lossless RID and simulcast declarations through `SdpAnswer`.
+        // str0m 0.21's public answer view drops RID restrictions and all but
+        // the first RID alternative. Keep the original media section until
+        // upstream exposes those declarations without loss.
+        // https://github.com/algesten/str0m/blob/0.21.0/src/sdp/data.rs#L557-L593
+        // https://github.com/algesten/str0m/blob/0.21.0/src/sdp/parser.rs#L682-L700
         for (media_line, section) in answer
             .media_lines
             .iter()
@@ -125,6 +128,12 @@ pub(super) fn layers_from_bindings(parameters: &MediaStream) -> Option<Vec<Layer
     (layers.len() >= 2).then_some(layers)
 }
 
+/// Chooses the conservative layer used until route policy selects one.
+///
+/// A complete bitrate ladder starts on the cheapest RID to avoid an unsolicited
+/// high-rate burst. Without complete bitrate metadata the negotiated binding
+/// order is the only deterministic signal. Any RID-less binding keeps the gate
+/// open because an RID gate would make it unreachable.
 pub(in crate::engine::media_transport::rtc) fn initial_packet_gate(
     parameters: &MediaStream,
 ) -> PacketLayerGate {
@@ -197,6 +206,11 @@ fn negotiated_rid_max_bitrate(
     else {
         return Err(SimulcastAnswerError);
     };
+    // RFC 8851 sections 6.3 and 6.4 let an answer tighten an offered
+    // restriction but never relax it or introduce a new one. Omission keeps
+    // the offered ceiling instead of removing it.
+    // https://www.rfc-editor.org/rfc/rfc8851.html#section-6.3
+    // https://www.rfc-editor.org/rfc/rfc8851.html#section-6.4
     match (answer_rid.max_bitrate, offered.max_bitrate) {
         (RidMaxBitrate::Absent, offered) => Ok(offered),
         (RidMaxBitrate::Value(answer), Some(offer)) if answer <= offer => Ok(Some(answer)),
@@ -311,6 +325,10 @@ fn parse_simulcast_rid_list(value: &str) -> Result<Vec<&str>, SimulcastAnswerErr
     let mut rids = Vec::new();
     for stream in value.split(webrtc::sdp::simulcast::STREAM_SEPARATOR) {
         if stream.contains(webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR) {
+            // RFC 8853 alternatives describe formats for one simulcast position,
+            // not extra layers. `SessionUploadEncoding` models one RID per
+            // position, so reject the group instead of silently selecting one.
+            // https://www.rfc-editor.org/rfc/rfc8853.html#section-5.2
             return Err(SimulcastAnswerError);
         }
         let rid = webrtc::sdp::simulcast::strip_initial_pause_prefix(stream).unwrap_or(stream);

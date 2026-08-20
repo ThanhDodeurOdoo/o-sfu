@@ -1,14 +1,12 @@
-//! Draining ready RTC engine sessions into packet-loop buffers.
+//! str0m's Sans-I/O drain boundary for ready RTC sessions.
 //!
-//! `str0m` is Sans-I/O. It produces transmits, RTP packets, feedback events,
-//! transport events and timeout deadlines only when the host polls it. This
-//! module contains that polling for sessions that are dirty or whose timeout has
-//! elapsed.
+//! A successful ready-session drain polls [`str0m::Rtc`] until
+//! [`Output::Timeout`]. That timeout proves queued output is exhausted and
+//! supplies the next host-driven deadline.
 //!
-//! The scheduler lives in `PacketLoopState`. This file only consumes the
-//! ready set returned by that scheduler and writes newly produced work into
-//! `PacketLoopBuffers`. It avoids scanning all sessions on every
-//! turn.
+//! [`PacketLoopState`] merges dirty marks with due deadlines so the worker does
+//! not scan every session. Work that needs socket I/O or worker-wide route state
+//! stays in [`PacketLoopBuffers`] until the mutable session borrow ends.
 
 use std::{
     mem::take,
@@ -33,32 +31,37 @@ use crate::engine::{
     metrics::RuntimeMetrics,
 };
 
+/// Non-authoritative observation and policy-wakeup side channels kept outside
+/// [`PacketLoopState`].
 pub struct SessionDrainContext<'a> {
     pub snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
     pub metrics: &'a RuntimeMetrics,
     pub source_policy_signal: &'a SourcePolicySignal,
 }
 
-/// Poll every session that the scheduler reports as ready.
-///
-/// Readiness comes from dirty-session marks and exact timeout deadlines stored
-/// in `PacketLoopState`. Sessions that disappeared before the drain are
-/// ignored, which keeps teardown races harmless for already queued wakeups.
+/// Drains each session selected by a dirty mark or due deadline once.
 pub fn drain_ready_sessions(
     state: &mut PacketLoopState,
     context: &SessionDrainContext<'_>,
     buffers: &mut PacketLoopBuffers,
     now: Instant,
 ) {
+    // Resolve every due deadline against one turn clock. Resampling per session
+    // would make iteration order and host speed change this turn's work.
     state.collect_ready_sessions(now, &mut buffers.ready_sessions);
     let mut ready_sessions = take(&mut buffers.ready_sessions);
     for session_handle in ready_sessions.drain(..) {
         let session_timeout = {
+            // The handle carries the slot generation, so a stale ready entry
+            // cannot poll a later occupant.
             let Some((session_key, session_state)) =
                 state.users.get_key_value_mut_by_handle(session_handle)
             else {
                 continue;
             };
+            // Keep a successful drain indivisible and on the turn's fixed `now`.
+            // Returning before a future `Output::Timeout` would let the next
+            // packet-loop mutation overtake queued str0m output.
             drain_single_session(
                 session_handle,
                 session_key,
@@ -73,22 +76,10 @@ pub fn drain_ready_sessions(
     buffers.ready_sessions = ready_sessions;
 }
 
-/// Drain all ready outputs from one session's `Rtc` instance.
+/// Drains one [`str0m::Rtc`] and stages its output.
 ///
-/// # Output contract
-///
-/// `Output::Transmit` is staged for UDP send, RTP packets are staged for
-/// forwarding, keyframe requests are staged for source resolution and selected
-/// transport events update observability side channels. Immediate timeouts are
-/// fed back into `str0m` in the same drain so the session reaches a stable next
-/// deadline before control returns to the driver.
-///
-/// `now` is the turn's clock, the same one the scheduler used to decide this
-/// session was ready. Re-reading the wall clock here instead would let the time
-/// a drain takes decide how many deadlines it crosses, which makes the work a
-/// turn performs depend on how fast the host is.
-///
-/// Returns the next timeout requested by the session, if any.
+/// Returns the next future deadline or `None` after a poll or timeout-input
+/// error.
 fn drain_single_session(
     session_handle: SessionHandle,
     session_key: &TransportSessionKey,
@@ -114,6 +105,8 @@ fn drain_single_session(
                 );
             }
             Ok(Output::Event(Event::KeyframeRequest(request))) => {
+                // Consumer MID/RID names the receiving leg. Preserve `session_key`
+                // so route state can resolve its current producer after this borrow.
                 buffers
                     .pending_keyframe_requests
                     .push((session_key.clone(), PendingKeyframeRequest::new(request)));
@@ -138,6 +131,9 @@ fn drain_single_session(
                 log_rtc_event(session_key, &event);
             }
             Ok(Output::Timeout(timeout_at)) => {
+                // `Output::Timeout` marks current output exhausted. Elapsed host
+                // time alone does not advance str0m's clock, so feed an already-due
+                // deadline back and drain again.
                 if timeout_at <= now {
                     if session_state.rtc.handle_input(Input::Timeout(now)).is_err() {
                         warn!(
@@ -152,6 +148,8 @@ fn drain_single_session(
                 return Some(timeout_at);
             }
             Err(error) => {
+                // A failed poll yields no replacement deadline. Returning `None`
+                // removes the schedule rather than retrying an unclassified `RtcError`.
                 warn!(
                     user_id = ?session_key.user_id(),
                     media_worker_id = session_key.media_worker_id().as_usize(),

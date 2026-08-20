@@ -47,7 +47,10 @@ impl SourcePolicyUpdates {
     }
 }
 
-/// Receiver for coalesced room source-policy updates.
+/// Shared drain for coalesced room source-policy invalidations.
+///
+/// Clones share one drain. The runtime must assign all clones to a single
+/// consumer task.
 #[derive(Debug, Clone)]
 pub struct SourcePolicyUpdateSubscription(Arc<SourcePolicyUpdates>);
 
@@ -135,7 +138,10 @@ impl SourcePolicySignal {
 }
 
 impl MediaTransport {
+    /// Schedules another policy pass when adaptation hysteresis remains unresolved.
     pub(in crate::engine) fn schedule_source_policy_follow_up(&self, room: RoomInstanceId) {
+        // Delay prevents one transport wake from consuming several consecutive
+        // observation thresholds. Per-room follow-ups coalesce.
         self.source_policy_signal
             .mark_dirty_after(room, SOURCE_POLICY_FOLLOW_UP_DELAY);
     }

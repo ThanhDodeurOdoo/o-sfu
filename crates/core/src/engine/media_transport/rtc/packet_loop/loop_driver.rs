@@ -232,7 +232,11 @@ impl PacketLoopTurn {
             metrics: &config.metrics,
             source_policy_signal: &config.source_policy_signal,
         };
+        // Drain output from prior inputs before forwarding this batch. Local RTC
+        // writes later in the pump requeue their sessions for the next turn.
         drain_ready_sessions(state, &session_drain_context, &mut self.buffers, now);
+        // Cap relay work so sustained cross-worker fanout cannot delay control,
+        // timeout or UDP input indefinitely.
         drain_relay_packets(
             relay_rx,
             &mut self.buffers.pending_packets,
@@ -245,11 +249,11 @@ impl PacketLoopTurn {
         // the shared registry lock per packet
         self.packet_sink_cache
             .refresh_from(&config.packet_sink_registry);
-        // `record_incoming_packet` must precede `plan_forwards` for each packet.
-        // Otherwise a later decoder refresh could admit earlier delta packets in the
-        // same batch.
         let mut pending_packets = take(&mut self.buffers.pending_packets);
         for pkt in &mut pending_packets {
+            // Complete observation, planning and flush before observing the next
+            // packet. Otherwise a later decoder refresh could admit an earlier
+            // delta packet through a selected-RID gate.
             record_incoming_packet(
                 state,
                 &config.rtc_metrics,
@@ -264,6 +268,9 @@ impl PacketLoopTurn {
                 pkt,
                 &mut self.buffers.forwards,
             );
+            // Execute the plan unchanged so origin sinks run before relays and
+            // local RTC. Successful local writes requeue their sessions because
+            // session draining already ran above.
             flush_packet_forwards(
                 state,
                 &config.metrics,
@@ -283,6 +290,9 @@ impl PacketLoopTurn {
             self.buffers.forwards.clear();
         }
         self.buffers.pending_packets = pending_packets;
+        // Finish after every packet has updated RID readiness. Gate transitions
+        // can now suppress broad ingress PLIs and room wakeups can coalesce across
+        // the batch.
         finish_incoming_stats(
             state,
             &config.source_policy_signal,
@@ -298,8 +308,7 @@ impl PacketLoopTurn {
         }
     }
 
-    /// Must run after [`Self::pump`] so socket I/O never carries a
-    /// [`PacketLoopState`] borrow across `.await`.
+    /// Sends UDP transmits staged during the pump phase.
     pub(super) async fn flush_outputs(&mut self, socket: &RtcUdpSocket) {
         self.flush_staged_transmits(socket).await;
     }
@@ -388,6 +397,8 @@ impl PacketLoopTurn {
                         rtc_metrics: &context.config.rtc_metrics,
                     },
                 );
+                // Control can change session or ICE ownership. Clear misses before
+                // a queued datagram is routed against the new topology.
                 context.demux.clear_on_topology_change();
             }
             PacketLoopTurnInput::RelayPacket => {
@@ -540,6 +551,8 @@ pub async fn run_packet_loop(
             inputs.relay_rx(),
         );
 
+        // Await socket I/O only after `pump` releases its mutable
+        // `PacketLoopState` borrow.
         turn.flush_outputs(&shared_socket.socket).await;
 
         let input = turn

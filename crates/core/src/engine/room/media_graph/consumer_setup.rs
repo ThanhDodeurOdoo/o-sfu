@@ -34,7 +34,10 @@ pub struct ConsumerSetupTarget {
     pub routed: RoutedProducerId,
 }
 
-/// pending consumer route transaction between room reservation and transport declaration
+/// Consumer-route reservation awaiting transport declaration.
+///
+/// It carries graph and optional relay ownership across work performed without
+/// the room lock. Callers must commit or release it after declaration.
 #[derive(Debug)]
 #[must_use = "pending consumer setups reserve route graph state and must be committed or released"]
 pub struct PendingConsumerSetup {
@@ -95,6 +98,10 @@ impl ConsumerSetupOrigin {
 }
 
 impl RoomState {
+    /// Commits a transport-declared consumer route.
+    ///
+    /// Returns [`ConsumerSetupOutcome::Released`] when receiver or source
+    /// identity changed during declaration or the router rejects the dependency.
     pub fn commit_declared_consumer_setup(
         &mut self,
         setup: DeclaredConsumerSetup,
@@ -111,6 +118,8 @@ impl RoomState {
                 .filter(|source| target.matches_identity(source))
                 .map(|source| (source.active, source.activity_revision))
         {
+            // Transport declaration ran without the room lock. Recompute from
+            // current intent and policy before committing the pending route.
             let selection = self.setup_selection(target, source_active);
             let delivery_active = selection.delivery_active();
             match self.topology.commit_consumer_setup(setup, selection) {

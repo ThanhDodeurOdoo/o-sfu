@@ -1,8 +1,8 @@
-//! subscription transitions bind receiver intent to negotiated consumer routes
+//! Receiver intent and consumer-route realization.
 //!
-//! receiver intent stays remembered even when no producer is routable
-//! the readiness transition owns missing consumer setup plus active video
-//! keyframe refresh once the accepted answer makes the receiver consumable
+//! Intent survives a missing publication or unready receiver. Readiness reserves
+//! routes under the room lock, declares transport without it and commits only if
+//! the reservation still matches the publication and receiver connection.
 
 use std::collections::BTreeMap;
 

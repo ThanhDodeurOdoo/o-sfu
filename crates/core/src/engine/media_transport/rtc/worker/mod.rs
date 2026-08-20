@@ -1,33 +1,10 @@
-//! RTC worker state and mailbox access for media transport
+//! Each [`RtcWorker`] creates a private current-thread executor inside a dedicated
+//! OS thread. UDP ingress, relay packets and command APIs therefore mutate RTC
+//! state in the same packet-loop task instead of entering the process-wide
+//! work-stealing runtime.
 //!
-//! this module owns the ready packet-loop handle, relay request construction,
-//! remote-source control handles and observability reads
-//!
-//! production transport operations enter through `MediaTransport` and enqueue
-//! worker commands through lifecycle helpers
-//! packet-loop command handling remains explicit inside `handlers::dispatcher`
-//!
-//! cfg-gated tests and benchmarks keep a small direct worker harness for setup
-//! paths that would be less readable through the full transport facade
-//!
-//! ```text
-//! MediaTransport
-//!   |
-//!   v
-//! RtcWorker mailbox
-//!   |
-//!   v
-//! packet-loop dispatcher
-//!   |-- offer and answer state
-//!   |-- producer, consumer and relay mutations
-//!   `-- session teardown and worker draining
-//! ```
-//!
-//! [`MediaTransport::build`](crate::engine::media_transport::MediaTransport::build)
-//! starts each worker's media-id counter at a fixed stride. The gap keeps IDs
-//! distinct across workers within one transport under realistic lifetime load,
-//! so packet-path maps can use one compact
-//! [`TransportMediaId`](crate::engine::media_transport::TransportMediaId) key.
+//! Read-side snapshots remain observational. They may race packet processing or
+//! teardown and cannot authorize room state.
 
 mod handlers;
 mod lifecycle;
@@ -85,10 +62,6 @@ use crate::engine::{
 
 static NEXT_RELAY_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 
-/// command and observation handle for a ready packet-loop worker
-///
-/// it contains command channels plus the read-mostly snapshot state that can be
-/// observed without entering the packet-loop task
 pub(super) struct RtcWorkerHandle {
     pub(super) command_tx: mpsc::Sender<RtcWorkerCommand>,
     #[cfg(any(test, feature = "testing-transport"))]
@@ -110,19 +83,7 @@ impl fmt::Debug for RtcWorkerHandle {
     }
 }
 
-/// worker-local RTC transport API
-///
-/// a worker owns one packet loop plus the process-local services that feed it
-/// the surrounding worker manager decides which transport sessions live here
-/// this type keeps worker state hidden behind mailbox-backed methods
-///
-/// all mutation methods eventually enter the same worker mailbox
-/// that means the packet-loop task serializes WebRTC, media registry and route
-/// state updates without exposing a shared mutable state lock to room code
-///
-/// observability reads are best-effort by design
-/// snapshots may race with packet processing or teardown and must not be used
-/// as room-membership authority
+/// Worker-local RTC transport API.
 pub struct RtcWorker {
     relay_target_id: RelayTargetId,
     handle: RtcWorkerHandle,
@@ -261,10 +222,10 @@ impl RtcWorker {
         .await
     }
 
-    /// builds the control handle a consumer worker stores for a remote source
+    /// Builds the handle `consumer` stores for a producer owned by `self`.
     ///
-    /// the returned handle lets the consumer worker send best-effort keyframe
-    /// and packet-gate updates back to the worker that owns the producer
+    /// The returned handle lets the consumer worker send best-effort keyframe
+    /// and packet-gate updates back to the worker that owns the producer.
     pub fn remote_source_control(&self, consumer: &Self) -> RemoteSourceControl {
         RemoteSourceControl::new(
             self.handle.command_tx.clone(),
@@ -273,6 +234,10 @@ impl RtcWorker {
         )
     }
 
+    /// Builds source-worker route control for `self` as the relay target.
+    ///
+    /// Dispatch the request to the worker that owns `source`. Install requests
+    /// carry `self`'s relay mailbox and every action carries `self`'s target ID.
     pub fn relay_route_request(
         &self,
         source: TransportSourceKey,

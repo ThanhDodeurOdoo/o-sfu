@@ -1,9 +1,8 @@
-//! command dispatcher for worker-local RTC state.
+//! Mailbox command projection into worker-local RTC handlers.
 //!
-//! This module exists to keep the mailbox match in one place while the actual
-//! state mutation lives in focused submodules. It should stay simple:
-//!  decode one worker command, forward it to the owning module, and pass
-//! through the immutable runtime context that those handlers need.
+//! [`handle_worker_command`] owns the exhaustive command projection while
+//! focused modules own each state transition. [`WorkerCommandContext`] carries
+//! immutable services without broadening access to worker state.
 
 use std::{
     net::SocketAddr,
@@ -62,10 +61,7 @@ impl WorkerCommandContext<'_> {
     }
 }
 
-/// Dispatch one production worker command against the worker-local RTC state.
-///
-/// Callers must already serialize access to `state`, this function assumes it
-/// runs on the packet-loop task that owns the worker.
+/// Applies one production command to worker-local RTC state.
 #[allow(
     clippy::too_many_lines,
     reason = "one exhaustive command match keeps dispatch compiler checked and auditable"
@@ -221,6 +217,8 @@ pub fn handle_worker_command(
 }
 
 fn respond<T>(response: oneshot::Sender<TransportResult<T>>, result: TransportResult<T>) {
+    // Handler completion is independent of result delivery. A dropped request
+    // future only makes this send fail.
     let _ = response.send(result);
 }
 

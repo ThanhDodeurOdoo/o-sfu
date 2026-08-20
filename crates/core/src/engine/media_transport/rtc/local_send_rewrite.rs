@@ -163,6 +163,8 @@ impl ConsumerStream {
         codec_identity: codec::PacketIdentity,
     ) -> Option<ProjectedIdentity> {
         let generation_delta = delivery_generation.wrapping_sub(self.delivery_generation);
+        // Compare wrapping generations as serial numbers. A delta in the upper half
+        // of `u64` is older and must not roll receiver identity back after route resume.
         if generation_delta > u64::MAX / 2 {
             return None;
         }

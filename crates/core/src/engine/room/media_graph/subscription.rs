@@ -341,6 +341,8 @@ impl RoomState {
             .filter(|route| route.source.active)
             .filter(|route| route.selection.delivery_active())
             .count();
+        // Delivery-active reservations already claim download capacity. Counting
+        // them prevents concurrent setup from oversubscribing the receiver cap.
         let pending = self
             .topology
             .pending_consumer_routes_for_user(consumer_user_id)

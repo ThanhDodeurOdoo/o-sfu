@@ -2,8 +2,13 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 /// Same-room router cap and packet-loop health threshold.
 ///
-/// A room can attach another worker only after every assigned packet loop
-/// reaches the delay threshold.
+/// A room's first join selects the first healthy worker in its cyclic search
+/// order or the least-delayed worker when none qualify. With more than one local
+/// router allowed, later joins prefer the least-delayed healthy assigned worker.
+/// If none qualifies, another router may be allocated on an unused healthy
+/// worker up to `max_local_routers` and the worker count. Missing delay samples
+/// and values at or above `packet_loop_delay_threshold_ms` are unhealthy. If no
+/// healthy placement exists, the least-delayed assigned worker is reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoomWorkerPolicy {
     max_local_routers: usize,

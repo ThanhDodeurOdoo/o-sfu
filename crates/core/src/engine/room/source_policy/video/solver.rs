@@ -237,6 +237,9 @@ pub(in crate::engine::room::source_policy) fn append_receiver_video_policy(
     let routes = receiver_video_routes(state, input);
     let max_video_downloads_per_receiver = input.media_limits.max_video_downloads_per_receiver();
     let tuning = input.video_adaptation_tuning;
+    // `committed_consumer_routes` is ordered by `SubscriptionKey` with
+    // `receiver` first. Preserve that order so `chunk_by` sees each complete
+    // receiver allocation.
     for receiver_routes in routes.chunk_by(|left, right| left.key.receiver == right.key.receiver) {
         let Some(first_route) = receiver_routes.first() else {
             continue;
@@ -277,6 +280,8 @@ fn append_receiver_policy_updates<'a>(
             route_plan(route, tuning).map(|selection| PlannedReceiverRoute::new(route, selection))
         })
         .collect::<Vec<_>>();
+    // Apply the hard route count before sharing bandwidth. Rejected routes must
+    // not consume receiver budget or force admitted routes down.
     apply_video_download_limit(&mut planned_routes, max_video_downloads_per_receiver);
     if let Some(video_budget) = video_budget {
         apply_overload_policy(&mut planned_routes, video_budget);
@@ -353,6 +358,8 @@ fn source_exceeds_bitrate_cap(route: &ReceiverVideoRouteInput<'_>, cap: Bitrate)
     if route.source.selectable_encoding_count() > 1 {
         return false;
     }
+    // Missing data cannot prove recovery from a cap violation. Keep the route
+    // paused until a measured source rate is at or below the cap.
     route.source_bitrate.map_or_else(
         || {
             route.current_selection.policy_pause_reason()
@@ -381,6 +388,8 @@ fn selector_bitrate(
                 .and_then(SourceEncodingDescriptor::max_bitrate)
         },
     );
+    // A per-media observation aggregates every RID. Use it only when policy has
+    // at most one selectable encoding and needs no per-RID estimate.
     let observed = route
         .source_bitrate
         .filter(|_| source.selectable_encoding_count() <= 1);
@@ -671,8 +680,8 @@ fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], video_budget: 
         route.pause(PolicyPauseReason::MissingUsableLayer, RouteOutcome::Neutral);
         total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
     }
-    // Step the highest-consuming downgradable route down one layer at a time,
-    // stopping as soon as the budget is met so mid-tier layers survive.
+    // Step the least important downgradable route down one layer at a time.
+    // Preserve intermediate layers and stop as soon as aggregate demand fits.
     while total_bitrate > video_budget {
         let Some((route, selector, bitrate)) = routes
             .iter_mut()
@@ -783,8 +792,9 @@ fn resolve_hysteresis(
             }
         }
         (Some(reason), pause_reason) if pause_reason != Some(reason) => {
-            // Hard download and source-bitrate limits bypass pressure hysteresis
-            // so configuration changes take effect in the same policy turn.
+            // Per-receiver download count and source bitrate caps are hard
+            // constraints. Holding current state would exceed the admission
+            // limit or source ceiling.
             if matches!(
                 reason,
                 PolicyPauseReason::VideoDownloadLimit | PolicyPauseReason::SourceBitrateLimit

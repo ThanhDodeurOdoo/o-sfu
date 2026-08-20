@@ -11,10 +11,11 @@ use super::{
 };
 use crate::{MediaWorkerId, RtcUdpIoBackend};
 
-/// distance between worker media-id allocation ranges
+/// Per-worker [`TransportMediaId`](crate::engine::media_transport::TransportMediaId)
+/// allocation stride.
 ///
-/// the fixed gap keeps worker media-id ranges disjoint under realistic lifetime
-/// load because cross-worker routes use transport media ids as keys
+/// IDs have no worker namespace. Each `RtcWorker` may allocate at most this
+/// many IDs during its lifetime within one `MediaTransport`.
 const MEDIA_ID_STRIDE: u64 = 1_000_000_000;
 
 impl MediaTransport {
@@ -55,6 +56,8 @@ impl MediaTransport {
         let workers: Arc<[_]> = (0_u16..u16::MAX)
             .zip(worker_ranges)
             .map(|(worker_index, range)| {
+                // `start` returns only after socket binding, so the completed
+                // transport cannot publish a worker whose first command races I/O setup.
                 RtcWorker::start(
                     &config,
                     Arc::clone(&profile),

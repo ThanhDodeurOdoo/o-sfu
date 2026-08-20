@@ -260,6 +260,8 @@ impl PacketLoopState {
     ) {
         for session_handle in self.dirty_sessions.drain(..) {
             if let Some(session_state) = self.users.get_mut_by_handle(session_handle) {
+                // Clear before polling. A later mutation in this turn must be able
+                // to enqueue the session again instead of being hidden by this mark.
                 session_state.packet_loop_dirty = false;
                 ready_sessions.push(session_handle);
             }
