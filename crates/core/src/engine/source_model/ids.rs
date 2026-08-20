@@ -120,7 +120,7 @@ impl Display for SourceEncodingId {
     }
 }
 
-/// Publishing user authority attached to a source descriptor.
+/// Logical publishing user attached to a source descriptor.
 ///
 /// The user identifies the logical owner visible to room policy. Connection
 /// freshness is tracked by producer and transport indexes, because source

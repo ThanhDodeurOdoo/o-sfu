@@ -1,4 +1,13 @@
-//! UDP I/O boundary for the RTC packet loop.
+//! The receive task spawned by [`UdpIngress`] owns backend I/O while the packet
+//! loop selects on a bounded completed-datagram queue. The packet loop can cancel
+//! its channel wait for control or deadlines without restarting a receive. Once
+//! the queue is full, the receive task waits for capacity instead of growing
+//! user-space backlog.
+//!
+//! The task runs on the worker's current-thread runtime rather than a separate
+//! I/O thread. Tokio borrows receive storage while `tokio-uring` owns it until
+//! completion. Processed buffers return through a second bounded queue so reuse
+//! never blocks the packet loop.
 
 #[cfg(target_os = "linux")]
 use std::rc::Rc;
@@ -21,7 +30,10 @@ use crate::RtcUdpIoBackend;
 const INGRESS_QUEUE_CAPACITY: usize = 32;
 const RECEIVE_BUFFER_POOL_CAPACITY: usize = 32;
 
-/// Shared worker UDP socket.
+/// Worker socket shared by packet-loop egress and one receive task.
+///
+/// Tokio uses [`Arc`] because `tokio::spawn` requires `Send`. `tokio-uring` uses
+/// [`std::rc::Rc`] because its task stays on the worker's local runtime.
 #[derive(Clone)]
 pub enum RtcUdpSocket {
     Tokio(Arc<TokioUdpSocket>),
@@ -29,10 +41,16 @@ pub enum RtcUdpSocket {
     IoUring(Rc<TokioUringUdpSocket>),
 }
 
-/// Completed UDP datagram ready for one packet-loop turn.
+/// Completed receive annotated with the local address expected by str0m.
+///
+/// The backend receive APIs supply only the peer address. `candidate_addr`
+/// preserves the local candidate identity needed by [`str0m::Input::Receive`].
 pub(crate) struct UdpDatagram {
     pub(super) source_addr: SocketAddr,
     pub(super) candidate_addr: SocketAddr,
+    /// Socket-completion time captured before ingress-queue backpressure.
+    ///
+    /// str0m uses this clock for jitter and bandwidth timing.
     pub(super) received_at: Instant,
     pub(super) packet: Vec<u8>,
 }
@@ -53,6 +71,19 @@ pub struct UdpIngressBenchHarness {
 }
 
 impl RtcUdpSocket {
+    /// Wraps a bound nonblocking socket for the selected worker runtime.
+    ///
+    /// The caller must configure `socket` as nonblocking before selecting Tokio.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unsupported` for `io_uring` outside Linux. Tokio socket-inspection
+    /// or runtime-registration errors are forwarded.
+    ///
+    /// # Panics
+    ///
+    /// The Tokio backend may panic when `socket` is blocking or no Tokio runtime
+    /// is entered.
     pub fn from_std(socket: StdUdpSocket, backend: RtcUdpIoBackend) -> io::Result<Self> {
         match backend {
             RtcUdpIoBackend::Tokio => TokioUdpSocket::from_std(socket)
@@ -77,6 +108,7 @@ impl RtcUdpSocket {
         }
     }
 
+    /// Sends one datagram to `destination`.
     pub(super) async fn send_to(
         &self,
         packet: Vec<u8>,
@@ -86,6 +118,8 @@ impl RtcUdpSocket {
             Self::Tokio(socket) => socket.send_to(packet.as_slice(), destination).await,
             #[cfg(target_os = "linux")]
             Self::IoUring(socket) => {
+                // io_uring retains the buffer until completion, so this wrapper
+                // takes `Vec<u8>` by value.
                 let (result, _packet) = socket.send_to(packet, destination).await;
                 result
             }
@@ -94,6 +128,14 @@ impl RtcUdpSocket {
 }
 
 impl UdpIngress {
+    /// Starts receive ingress on the current worker runtime.
+    ///
+    /// `bind_addr` supplies the address family and port used to wake shutdown.
+    /// `candidate_addr` becomes the local address passed to str0m.
+    ///
+    /// # Panics
+    ///
+    /// Panics outside the runtime required by the selected socket backend.
     pub fn new(socket: RtcUdpSocket, bind_addr: SocketAddr, candidate_addr: SocketAddr) -> Self {
         let (tx, rx) = mpsc::channel(INGRESS_QUEUE_CAPACITY);
         let (recycle_tx, recycle_rx) = mpsc::channel(RECEIVE_BUFFER_POOL_CAPACITY);
@@ -116,6 +158,10 @@ impl UdpIngress {
         self.rx.recv().await
     }
 
+    /// Returns reusable receive storage without backpressuring the packet loop.
+    ///
+    /// Only buffers retaining [`RECEIVE_BUFFER_LEN`] capacity enter the bounded
+    /// pool. A full pool drops the buffer because reuse is opportunistic.
     pub(super) fn recycle(&self, mut packet: Vec<u8>) {
         if packet.capacity() < RECEIVE_BUFFER_LEN {
             return;
@@ -167,13 +213,11 @@ impl UdpIngressBenchHarness {
     }
 }
 
-/// drop cancels the ingress pump and wakes the blocking socket receive
-///
-/// the wake datagram is only a shutdown nudge
-/// the receive task checks the token again before enqueueing a packet
 impl Drop for UdpIngress {
     fn drop(&mut self) {
         self.shutdown.cancel();
+        // The token cannot wake a task pending on socket I/O. Send a best-effort
+        // datagram only after cancellation so the post-I/O check discards it.
         wake_udp_receiver(self.wake_addr);
     }
 }
@@ -272,6 +316,8 @@ async fn ingress_should_stop(
                 received_at,
                 packet,
             };
+            // If queue backpressure suspends `send`, ready cancellation wins when
+            // both branches are polled again. The losing send drops the datagram.
             tokio::select! {
                 biased;
                 () = shutdown.cancelled() => true,
@@ -286,8 +332,8 @@ async fn ingress_should_stop(
 }
 
 fn udp_wake_addr(bind_addr: SocketAddr) -> SocketAddr {
-    // an unspecified bind address is not a valid datagram destination, so the
-    // wake targets loopback on the same port
+    // A wildcard bind has the right port and address family but no concrete
+    // destination, so target the matching loopback address.
     match bind_addr {
         SocketAddr::V4(addr) if addr.ip().is_unspecified() => {
             SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port()))

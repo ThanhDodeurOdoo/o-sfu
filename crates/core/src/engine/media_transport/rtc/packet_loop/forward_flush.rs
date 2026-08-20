@@ -60,9 +60,16 @@ pub(super) fn record_incoming_stats(
         record_incoming_packet(state, control, rtp, buffers, packet);
     }
     buffers.pending_packets = pending_packets;
+    // Finish only after every packet has updated RID readiness. Gate transitions
+    // can then suppress the broad ingress PLI and coalesce source-policy wakeups.
     finish_incoming_stats(state, source_policy_signal, control, buffers);
 }
 
+/// Records source identity, activity, decoder readiness and bitrate for one
+/// incoming packet.
+///
+/// Packets without a resolvable source are ignored. Recovery and source-policy
+/// work is staged in `buffers`.
 pub(super) fn record_incoming_packet(
     state: &mut PacketLoopState,
     control: &RtcMetricsRecorder,
@@ -77,6 +84,8 @@ pub(super) fn record_incoming_packet(
     let transport_media_id = facts.src_media;
     let decoder_refresh = facts.codec.decoder_refresh();
     if packet.route_control_mid().is_some() {
+        // Persist the session-checked SSRC/RID binding while MID is present.
+        // Later packets can omit MID and RID without losing their source identity.
         state.learn_producer_ssrc_from_pkt(
             packet.source(),
             transport_media_id,
@@ -121,6 +130,9 @@ pub(super) fn record_incoming_packet(
         };
         rtp.record_decoder_refresh(scope);
     }
+    // Readiness scans every destination for the source. Delta packets cannot open
+    // a gate, so one scan per source/RID per turn is enough. Decoder refreshes
+    // remain uncoalesced because they can activate pending gates.
     let check_readiness = decoder_refresh
         || packet_rid.is_some_and(|rid| buffers.observe_rid_once(transport_media_id, rid));
     if check_readiness {
@@ -161,6 +173,9 @@ pub(super) fn record_incoming_packet(
             payload_bytes = payload_len,
             "observed RTP ingress for published media"
         );
+        // A later packet in this turn may change a RID gate by supplying its
+        // refresh or triggering RID-specific recovery. Defer the broad ingress
+        // PLI until the batch is fully observed.
         buffers.push_first_video_keyframe(
             packet.source(),
             transport_media_id,
@@ -170,6 +185,8 @@ pub(super) fn record_incoming_packet(
     rtp.record_ingress(payload_len);
 }
 
+/// Flushes deferred keyframe recovery and source-policy wakeups for one
+/// observed packet batch.
 pub(super) fn finish_incoming_stats(
     state: &mut PacketLoopState,
     source_policy_signal: &SourcePolicySignal,
@@ -197,14 +214,17 @@ fn flush_first_video_kfs(
     buffers: &mut PacketLoopBuffers,
 ) {
     for pending in buffers.pending_first_video_keyframes.drain(..) {
-        // `apply_src_decoder_ready` either consumed this packet's refresh or
-        // requested the missing one, so the ingress-start PLI adds no recovery value.
+        // A gate transition consumed a refresh or scheduled RID-specific
+        // recovery. The source-wide ingress PLI would duplicate that work.
         if buffers
             .rid_readiness_changed_sources
             .contains(&pending.src_media)
         {
             continue;
         }
+        // The first packet after registration or a full idle window may be a
+        // delta. A RID-unspecified PLI tells the producer that receiver
+        // prediction may be broken.
         request_first_video_kf(
             state,
             metrics,
@@ -216,9 +236,7 @@ fn flush_first_video_kfs(
     buffers.rid_readiness_changed_sources.clear();
 }
 
-/// The packet opening an ingress window may be a delta frame. A recovery PLI
-/// lets blocked routes and new consumers converge without room policy parsing
-/// codec payloads.
+/// Requests source-wide recovery when active video ingress starts or resumes.
 fn request_first_video_kf(
     state: &mut PacketLoopState,
     metrics: &RtcMetricsRecorder,
@@ -278,11 +296,9 @@ fn source_is_video(
         .is_some_and(|media| matches!(media.kind(), MediaKind::Video))
 }
 
-/// Drain relay packets without letting relay bursts monopolize one loop turn.
+/// Drains at most `max_packets` from the relay mailbox.
 ///
-/// Relay messages are already decoded as `ForwardedPacket` values by their
-/// source worker. The cap keeps command handling and UDP receive responsive
-/// under cross-worker fanout spikes.
+/// Returns the number of packets appended to `pending_packets`.
 pub fn drain_relay_packets(
     relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     pending_packets: &mut Vec<ForwardedPacket>,
@@ -308,8 +324,11 @@ pub fn drain_relay_packets(
     drained_packets
 }
 
-/// Executes the destinations planned for one packet before another packet can
-/// change route delivery state.
+/// Executes the forwarding destinations planned for one packet.
+///
+/// Stale local routes and failed relay enqueues are isolated to their
+/// destination. Local RTC destinations enqueue into str0m and mark the session
+/// dirty.
 pub(in crate::engine::media_transport::rtc) fn flush_packet_forwards(
     state: &mut PacketLoopState,
     metrics: &RuntimeMetrics,

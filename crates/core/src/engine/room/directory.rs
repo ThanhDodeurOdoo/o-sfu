@@ -1,7 +1,9 @@
-//! current-room directory indexes and lifecycle lease state
+//! Current-room indexes and lifecycle leases.
 //!
-//! the directory owns process-local lookup aliases for live rooms plus the
-//! lease state that prevents empty-room removal from racing accepted work
+//! [`RoomDirectory`] indexes one current room by UUID, issuer and instance ID.
+//! Each entry shares a [`RoomLifecycle`] gate. Accepted leases defer empty-room
+//! removal until the final mutation finishes. Reservation expiry removes only
+//! idle entries claimed by that gate.
 
 use std::{
     collections::BTreeMap,
@@ -170,12 +172,7 @@ impl RoomLifecycleLease {
         let _ = self.release(false, false);
     }
 
-    /// release a lease after the accepted operation has finished
-    ///
-    /// returns `true` for the single caller that should remove the directory
-    /// entry
-    /// `room_can_be_removed` must be computed after the caller future finishes
-    /// because room membership can change while work is running
+    /// Releases the lease and returns whether this caller claimed directory removal.
     #[must_use]
     pub(crate) fn finish(mut self, remove_if_empty: bool, room_can_be_removed: bool) -> bool {
         self.release(remove_if_empty, room_can_be_removed)

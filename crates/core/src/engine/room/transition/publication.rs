@@ -121,6 +121,8 @@ impl RoomUserOperation<'_> {
         let reserved_publish = StagedPublish::new(validated_descriptor, media);
         let duplicate = {
             let mut state = self.room.state.write().await;
+            // `publish_media` ran without the room lock. Revalidate connection
+            // identity and stream uniqueness before room state accepts it.
             if state
                 .validate_publish_commit(&reserved_publish.descriptor, reserved_publish.media)
                 .is_some()
@@ -202,6 +204,8 @@ impl RoomUserOperation<'_> {
         if self.rollback_staged_publish(intent.stream_id()).await {
             return DeactivateIntentOutcome::RolledBack;
         }
+        // Keep publication activity and its policy effects in one serialized
+        // turn so policy cannot observe the state change without its transport work.
         let _source_policy_guard = self.room.source_policy_turn.lock().await;
         let commit = {
             let mut state = self.room.state.write().await;
@@ -220,7 +224,11 @@ impl RoomUserOperation<'_> {
         DeactivateIntentOutcome::Deactivated
     }
 
+    /// Resolves this connection's staged publishes against an accepted answer.
     pub(crate) async fn commit_staged_publishes(self, applied_answer: &AppliedSessionAnswer) {
+        // Hold one source-policy turn across the answer batch. Policy must not
+        // observe a committed prefix while later answer-proven publishes remain
+        // outside the room graph.
         let _source_policy_guard = self.room.source_policy_turn.lock().await;
         let staged = {
             let mut state = self.room.state.write().await;

@@ -37,7 +37,7 @@ pub enum SourceModelError {
 
 /// Authoritative room-domain description of one published source.
 ///
-/// The descriptor groups the stable source id, publishing authority, caller
+/// The descriptor groups the stable source id, logical publishing user, caller
 /// stream id, media kind, source policy and negotiated source facts required by
 /// recording, diagnostics and transport projection. It deliberately excludes
 /// router producer state, socket state and packet-loop routing tables.
@@ -52,7 +52,10 @@ pub enum SourceModelError {
 pub struct PublishedSourceDescriptor {
     /// Runtime source identity shared by every view of this publication.
     source_id: PublishedSourceId,
-    /// Live publishing authority used to reject stale commit or cleanup work.
+    /// Logical publishing user used by room policy and owner indexes.
+    ///
+    /// Stale connection checks use the source transport session key because
+    /// `PublishedSourceOwner` does not carry a `ConnectionId`.
     owner: PublishedSourceOwner,
     /// User-scoped stream identity supplied with the publish intent.
     stream_id: UserStreamId,
@@ -150,13 +153,13 @@ impl PublishedSourceDescriptor {
         self.encodings.iter()
     }
 
-    /// Returns the encodings that receiver video policy may select.
+    /// Returns encodings in receiver-policy rank order.
     ///
-    /// Partial RID coverage disables selection because packet-gate projection
-    /// cannot represent every advertised encoding. Sources with bitrate hints
-    /// use ascending advertised maximum bitrate order. Sources without bitrate
-    /// hints use upload layer policy role order when available, then keep the
-    /// publisher-declared order.
+    /// Selection is disabled unless every encoding has a RID because packet-gate
+    /// projection cannot represent the full ladder otherwise. If any maximum
+    /// bitrate is known, known values sort first in ascending order. Otherwise
+    /// known upload roles sort first from `DegradedThumbnail` to `Featured`.
+    /// Missing sort keys and ties preserve publisher order.
     pub fn selectable_encodings(&self) -> impl Iterator<Item = &SourceEncodingDescriptor> {
         self.selectable_encoding_indices
             .iter()
@@ -247,7 +250,8 @@ const fn upload_layer_policy_role_rank(role: UploadLayerPolicyRole) -> u8 {
 pub struct PublishedSourceDescriptorParts {
     /// Stable source id allocated by the room-domain registry.
     pub source_id: PublishedSourceId,
-    /// Publishing user authority for stale-work checks.
+    /// Logical publishing user. Connection identity is carried separately by
+    /// `TransportSessionKey`.
     pub owner: PublishedSourceOwner,
     /// User-scoped stream identity supplied with the publish intent.
     pub stream_id: UserStreamId,

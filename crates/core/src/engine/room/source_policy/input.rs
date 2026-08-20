@@ -64,6 +64,8 @@ impl<'a> SourcePolicySnapshot<'a> {
             featured_source_owner_for_active_speaker_source(room, source.transport_media_id())
         });
         let featured_user_updates = featured_user_updates(room, desired_featured_user_id.as_ref());
+        // Include policy-paused routes so later turns can resume them. Filtering
+        // on `delivery_active()` would make a policy pause self-perpetuating.
         let routes = room
             .committed_consumer_routes()
             .filter(|route| route.source.active && route.selection.active())
@@ -136,6 +138,8 @@ fn receiver_bwe_targets(
     room: &RoomState,
     audio_reserve_by_connection: &BTreeMap<ConnectionId, Bitrate>,
 ) -> BTreeMap<UserId, ReceiverBweTargetUpdate> {
+    // Seed every receiver, including one with no selected media. Otherwise a
+    // previous nonzero desired bitrate remains installed in str0m's BWE controller.
     room.transport_user_entries()
         .map(|(user_id, connection_id)| {
             let session = room.transport_user_key(user_id, connection_id);

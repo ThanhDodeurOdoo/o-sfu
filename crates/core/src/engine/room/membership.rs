@@ -1,35 +1,9 @@
-//! Membership mutations return commits before running their effects.
+//! Membership commit and effect boundary.
 //!
-//! [`JoinCommit`],
-//! [`ConnectionCloseCommit`] and
-//! [`DisconnectCommit`](crate::engine::room::state::DisconnectCommit) are produced
-//! while the `room.state` write guard is held. Each carries the transition outcome
-//! plus deferred work derived from the same mutation. The state is authoritative
-//! when the commit returns. [`RoomEffects`] then consumes it outside the guard.
-//!
-//! This split:
-//!
-//! - derives the state mutation and its deferred work under one write guard
-//! - preserves transition-specific connection, sender and route identities
-//! - keeps transport awaits outside the write critical section
-//! - lets effect paths re-enter `room.state` without deadlocking on the write guard
-//!
-//! A close transition follows the same boundary:
-//!
-//! ```text
-//! // 1. Commit authoritative state and capture its effects.
-//! let commit = {
-//!     let mut state = room.state.write().await;
-//!     state.close_connection(user_id, connection_id)
-//! };
-//!
-//! // 2. Execute only after the write guard is dropped.
-//! if let Some(commit) = commit {
-//!     RoomEffects::from_connection_close(commit)
-//!         .execute(room, context)
-//!         .await;
-//! }
-//! ```
+//! [`JoinCommit`], [`ConnectionCloseCommit`] and
+//! [`DisconnectCommit`](crate::engine::room::state::DisconnectCommit) capture
+//! authoritative membership changes and the work consumed by [`RoomEffects`].
+//! Effects execute after the room-state write guard is released.
 
 #[cfg(any(test, feature = "testing-transport"))]
 use o_sfu_router::rtp::MediaCapabilities;

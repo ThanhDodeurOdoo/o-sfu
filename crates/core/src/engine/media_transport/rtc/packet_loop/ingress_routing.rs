@@ -1,21 +1,17 @@
-//! UDP ingress routing for RTC sessions
+//! Worker-local demultiplexing for the UDP socket shared by RTC sessions.
 //!
-//! the shared UDP socket receives datagrams for every session on a worker
-//! this module decides which `str0m::Rtc` should see one datagram
-//! indexes and caches are performance hints only
-//! `Rtc::accepts()` remains the authoritative ownership check
+//! [`str0m::Rtc::accepts()`] owns the datagram-to-session decision. Learned
+//! source-address pins and ICE indexes only reduce how many sessions reach that
+//! check. Each pin is revalidated because ICE can stop attributing the source
+//! address to the session that first accepted it.
 //!
-//! # routing strategy
+//! Negative results belong to the worker topology that produced them. The
+//! packet-loop driver clears them after control input. The exact-packet cache
+//! avoids repeating a proven miss while the per-source cooldown limits varied
+//! unknown traffic that could otherwise consume packet-loop CPU.
 //!
-//! 1. use the pinned source-address index when a tuple is already known
-//! 2. rate-limit sustained unknown-source probes
-//! 3. drop repeated identical misses through the recent-miss cache
-//! 4. probe STUN, DTLS or RTP shape to choose a narrow candidate set
-//! 5. call `Rtc::accepts()` before calling `Rtc::handle_input()`
-//! 6. pin successful source tuples so later packets take the indexed path
-//!
-//! recovery must stay a subset of `str0m` demux behavior so this module never
-//! recovers traffic that `str0m` would reject downstream
+//! [`str0m::Rtc::handle_input()`] may fail after `Rtc::accepts()` selects a
+//! session. That processing failure does not revoke the learned source pin.
 
 use core::hint::cold_path;
 use std::{fmt, net::SocketAddr, slice::Iter, time::Instant};
@@ -42,11 +38,6 @@ enum CachedRouteOutcome {
     Malformed,
 }
 
-/// outcome of probing the demux indexes for an unknown source tuple
-///
-/// `Matched` means one candidate passed `Rtc::accepts()`
-/// `NoMatch` is a bounded miss that may be cached
-/// `Malformed` means the packet cannot be represented as `str0m` receive input
 enum IndexedSessionRecoveryOutcome {
     Matched {
         session_key: TransportSessionKey,
@@ -58,10 +49,6 @@ enum IndexedSessionRecoveryOutcome {
     Malformed,
 }
 
-/// recovery probe used to choose a bounded candidate session set
-///
-/// classification must stay aligned with `str0m` UDP multiplexing so the
-/// packet loop never recovers traffic that `Rtc::accepts()` rejects
 enum PacketIndexProbe<'a> {
     LocalIceUfrag(&'a str),
     RemoteCandidateAddr(SocketAddr),
@@ -80,8 +67,10 @@ impl fmt::Display for PacketIndexProbe<'_> {
     }
 }
 
-/// Carries caller-supplied receive time so production and deterministic
-/// harnesses use the same demux recovery path.
+/// Preserves the socket receive time through queued ingress.
+///
+/// str0m uses `now` to advance jitter and bandwidth clocks. Sampling it during
+/// routing would include packet-loop queue delay in those measurements.
 #[derive(Clone, Copy)]
 pub struct PacketRouteDatagram<'a> {
     source_addr: SocketAddr,
@@ -122,15 +111,6 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
     }
 }
 
-/// route an incoming UDP datagram to its owning RTC session
-///
-/// # error handling
-///
-/// routing failure is not a transport error
-/// malformed packets, unknown sessions, repeated misses and rate-limited sources
-/// are dropped with metrics
-/// `Rtc::handle_input()` errors are logged but keep the route learned because
-/// ownership and packet validity are separate concerns
 #[cfg(test)]
 pub(super) fn route_pkt_to_session(
     state: &mut PacketLoopState,
@@ -148,10 +128,9 @@ pub(super) fn route_pkt_to_session(
     );
 }
 
-/// routes one UDP datagram without making routing misses caller-visible errors
+/// Routes one datagram against the current worker topology.
 ///
-/// `Rtc::accepts()` is the authority
-/// demux indexes, recent misses and rate limits are bounded recovery hints
+/// Malformed, unowned and throttled datagrams are recorded then dropped.
 pub fn route_pkt_to_session_at(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,
@@ -175,6 +154,9 @@ pub fn route_pkt_to_session_at(
         }
         CachedRouteOutcome::NotMatched => {}
     }
+    // Accepted source pins bypass abuse throttling. For unknown sources, check
+    // the source-keyed cooldown before packet fingerprinting so blocked traffic
+    // avoids fingerprint work and changing packet bytes cannot evade the limit.
     if demux.is_source_blocked(datagram.source_addr, datagram.now) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::SourceRateLimited);
         return;
@@ -184,7 +166,7 @@ pub fn route_pkt_to_session_at(
         datagram.candidate_addr,
         datagram.packet,
     );
-    // recent misses are valid only until topology or ICE indexes change
+    // A negative answer is valid only for the topology that produced it.
     if demux.should_skip_scan(miss_key, datagram.packet) {
         metrics.record_rtc_datagram_drop(RtcDatagramDropReason::RecentMissCache);
         trace!(
@@ -200,7 +182,8 @@ pub fn route_pkt_to_session_at(
         packet: datagram.packet,
         now: datagram.now,
     };
-    // one live session needs no recovery index before the `accepts()` check
+    // With one session, packet shape cannot narrow the candidate set. Calling
+    // `Rtc::accepts()` directly avoids duplicate classification.
     if state.users.len() == 1 {
         route_pkt_by_session(state, demux, miss_key, &route);
         return;
@@ -208,6 +191,7 @@ pub fn route_pkt_to_session_at(
     route_pkt_by_recovery(state, demux, miss_key, &route);
 }
 
+/// Attempts routing through a learned source-address pin.
 fn route_cached_pkt(
     state: &mut PacketLoopState,
     source_addr: SocketAddr,
@@ -230,7 +214,8 @@ fn route_cached_pkt(
         return CachedRouteOutcome::Malformed;
     };
     let input = Input::Receive(now, receive);
-    // cached source-address pins are hints because ICE state can change
+    // A learned pin is only a hint because ICE state can change. Revalidate it
+    // before every use.
     let accepts_input = session_state.rtc.accepts(&input);
     if !accepts_input {
         debug!(
@@ -243,10 +228,11 @@ fn route_cached_pkt(
         state.remote_addr_demux.forget_remote_addr(source_addr);
         return CachedRouteOutcome::NotMatched;
     }
+    // `Rtc::accepts()` owns the demux decision. A later processing error does
+    // not invalidate the learned pin.
     let handle_result = session_state.rtc.handle_input(input);
     if handle_result.is_err() {
         cold_path();
-        // routing answers ownership, not packet validity
         warn!(
             user_id = ?session_key.user_id(),
             media_worker_id = session_key.media_worker_id().as_usize(),
@@ -265,6 +251,7 @@ fn route_cached_pkt(
     CachedRouteOutcome::Routed
 }
 
+/// Searches the recovery index selected by the datagram's multiplex class.
 fn indexed_session_for_pkt(
     state: &mut PacketLoopState,
     source_addr: SocketAddr,
@@ -275,7 +262,6 @@ fn indexed_session_for_pkt(
     let Some(packet_index_probe) = packet_index_probe(source_addr, packet) else {
         return IndexedSessionRecoveryOutcome::Malformed;
     };
-    // the probe only narrows candidates before `Rtc::accepts()` decides ownership
     let candidate_session_keys = match &packet_index_probe {
         PacketIndexProbe::LocalIceUfrag(local_ice_ufrag) => CandidateSessionKeys::Single(
             state
@@ -291,17 +277,20 @@ fn indexed_session_for_pkt(
             ),
     };
     let mut examined_sessions: usize = 0;
+    // `candidate_session_keys` borrows `remote_addr_demux`. Collect stale sessions
+    // then repair their candidate and ufrag indexes even if a later candidate
+    // matches.
     let mut stale_session_keys = Vec::new();
     let matched_session_key = {
         let mut matched_session_key = None;
         for session_key in candidate_session_keys {
             let Some(session_state) = state.users.get(session_key) else {
-                // collect stale demux entries so cleanup runs after the scan
                 stale_session_keys.push(session_key.clone());
                 continue;
             };
             examined_sessions = examined_sessions.saturating_add(1);
-            // `Rtc::accepts()` is the authoritative demux decision
+            // Index membership is only a hint. Candidate addresses can be shared
+            // and ICE indexes can lag, so revalidate ownership here.
             if session_state.rtc.accepts(input) {
                 matched_session_key = Some(session_key.clone());
                 break;
@@ -309,7 +298,6 @@ fn indexed_session_for_pkt(
         }
         matched_session_key
     };
-    // stale-index cleanup must not depend on whether recovery succeeds
     for stale_session_key in &stale_session_keys {
         state
             .remote_addr_demux
@@ -343,14 +331,17 @@ fn indexed_session_for_pkt(
     IndexedSessionRecoveryOutcome::NoMatch { examined_sessions }
 }
 
-/// probe an unknown-source datagram before consulting recovery indexes
-///
-/// STUN username recovery is the strongest signal because it names a local ICE
-/// fragment. DTLS and RTP can only fall back to source-address recovery
+/// Selects the recovery index for a str0m-classifiable datagram.
 fn packet_index_probe(source_addr: SocketAddr, packet: &[u8]) -> Option<PacketIndexProbe<'_>> {
     let byte0 = packet.first().copied()?;
     let packet_len = packet.len();
-    // stay within str0m's RFC 5764 style STUN rule, not the wider RFC 7983 range
+    // Keep these gates aligned with str0m 0.21's `Receive::new` classifier:
+    // https://github.com/algesten/str0m/blob/0.21.0/src/io/mod.rs#L114-L150
+    // It keeps RFC 5764 Section 5.1.2's `0..=1` STUN range rather than RFC 7983
+    // Section 7's `0..=3`. A narrower probe would drop supported unknown-source
+    // traffic before `Rtc::accepts()` can decide ownership.
+    // https://www.rfc-editor.org/rfc/rfc5764.html#section-5.1.2
+    // https://www.rfc-editor.org/rfc/rfc7983.html#section-7
     if byte0 < 2 && packet_len >= 20 {
         let message = StunMessage::parse(packet).ok()?;
         if let Some(local_ice_ufrag) = message
@@ -358,18 +349,20 @@ fn packet_index_probe(source_addr: SocketAddr, packet: &[u8]) -> Option<PacketIn
             .and_then(|username| username.split_once(':'))
             .map(|(local_ice_ufrag, _remote_ice_ufrag)| local_ice_ufrag)
         {
-            // the demux index is keyed by the local USERNAME fragment
+            // RFC 8445 puts the receiving agent's local ufrag before the colon.
+            // https://www.rfc-editor.org/rfc/rfc8445.html#section-7.2.2
             return Some(PacketIndexProbe::LocalIceUfrag(local_ice_ufrag));
         }
-        // STUN responses may omit USERNAME, so source address is the only hint
+        // This layer does not index STUN transaction IDs. Source address narrows
+        // the candidate set before `Rtc::accepts()` applies STUN-specific checks.
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
-    // DTLS records fall in the RFC 7983 20..64 first-byte range
+    // DTLS exposes no ICE ufrag. RTP and RTCP share source-candidate lookup
+    // because `Receive::new` has already applied str0m's second-byte split.
     if (20..64).contains(&byte0) {
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     if (128..192).contains(&byte0) && packet_len > 2 {
-        // RTP and RTCP packets depend on a source tuple learned by ICE
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     None
@@ -413,10 +406,10 @@ struct PacketRouteContext<'a> {
     now: Instant,
 }
 
-/// feed a datagram into a matched session and refresh the source-address pin
+/// Feeds a previously accepted datagram into its session and learns its source
+/// pin.
 ///
-/// ownership must already be proven by `Rtc::accepts()`
-/// a feed failure does not disprove ownership of the tuple
+/// Returns `false` if the session disappeared before delivery.
 fn route_packet_to_session(
     state: &mut PacketLoopState,
     session_key: &TransportSessionKey,
@@ -437,7 +430,8 @@ fn route_packet_to_session(
     } else {
         state.mark_session_dirty(session_key);
     }
-    // the cached path revalidates the tuple before every use
+    // `Rtc::accepts()` already decided ownership. Later input processing does
+    // not revise that decision, so retain the source pin on either result.
     let previous_session_key = state
         .remote_addr_demux
         .session_key_for_remote_addr(route.source_addr)
@@ -477,10 +471,6 @@ fn route_packet_to_session(
     true
 }
 
-/// route an unknown-source datagram when the worker has only one live session
-///
-/// the single-session case still calls `Rtc::accepts()` and records misses
-/// it avoids only the recovery-index probe
 fn route_pkt_by_session(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,
@@ -513,10 +503,6 @@ fn route_pkt_by_session(
     }
 }
 
-/// route an unknown-source datagram through the recovery indexes
-///
-/// multi-session recovery verifies only indexed candidate sessions with
-/// `Rtc::accepts()`
 fn route_pkt_by_recovery(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,

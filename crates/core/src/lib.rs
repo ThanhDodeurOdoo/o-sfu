@@ -186,15 +186,18 @@ impl Bitrate {
     }
 }
 
-/// unique identifier for a running room instance within the server process
+/// Process-local generation tag for one room lifecycle.
 ///
-/// this separates a specific runtime allocation from the overarching application
-/// room identity. it helps telemetry, logging, and underlying components distinguish
-/// between consecutive lifecycles of the same room if it is torn down and recreated
+/// The tag separates one runtime allocation from its application room identity
+/// in transport keys and telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RoomInstanceId(u64);
 
 impl RoomInstanceId {
+    /// Allocates the next room generation tag.
+    ///
+    /// The counter saturates, so repeated calls return `u64::MAX` after
+    /// exhaustion.
     #[must_use]
     pub fn allocate(next_room_instance_id: &mut u64) -> Self {
         let room_instance_id = Self(*next_room_instance_id);

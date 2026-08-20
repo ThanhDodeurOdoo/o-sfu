@@ -1,3 +1,9 @@
+//! Router and packet-worker placement for room admission.
+//!
+//! [`RoomRuntimeContext`] seeds a room with assigned placements or an
+//! unassigned primary router. Admission selects a packet worker from current
+//! delay samples and may add a router within [`RoomWorkerPolicy`].
+
 use o_sfu_router::RouterId;
 pub use o_sfu_router::topology::{
     PlacementSnapshot, RouterPlacement, RouterPlacements, RouterPlacementsError,
@@ -16,6 +22,9 @@ use crate::{
     engine::{MediaWorkerId, RoomInstanceId, media_transport::MediaTransport},
 };
 
+/// Initial router placement context for one room instance.
+///
+/// [`Self::new_unassigned`] defers packet-worker selection until admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomRuntimeContext {
     instance: RoomInstanceId,
@@ -155,6 +164,8 @@ impl<A: FnOnce() -> RouterId> JoinAdmissionTurn<'_, A> {
             gate.wait_before_commit().await;
         }
         let mut state = room.state.write().await;
+        // Sample worker delay after reaching the serialized commit turn. The
+        // state guard makes each join select from placements committed earlier.
         let delays_ms = self.packet_loop_delays.snapshot();
         let worker_count = delays_ms.len().max(1);
         let start_worker = room_worker_start(room.instance_id(), worker_count);

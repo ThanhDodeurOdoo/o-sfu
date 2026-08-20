@@ -15,7 +15,17 @@ use super::{
     sync::{read_unpoisoned, write_unpoisoned},
 };
 
+/// Observes origin-side RTP payloads routed to a room packet sink.
+///
+/// Packet gates do not filter this source-side stream. Relayed packets are not
+/// observed again.
 pub trait PacketSink: Send + Sync {
+    /// Records one source RTP payload.
+    ///
+    /// `session_key` and `transport_media_id` identify the source transport
+    /// media. The RTC engine invokes this synchronously on a packet worker.
+    /// Different workers may invoke the same sink concurrently, so
+    /// implementations must return promptly and must not perform blocking I/O.
     fn record_packet(
         &self,
         session_key: &TransportSessionKey,
@@ -91,6 +101,10 @@ pub struct PacketSinkRouteCache {
 }
 
 impl PacketSinkRouteCache {
+    /// Refreshes the cached room routes to one registry generation.
+    ///
+    /// Later registry changes remain invisible through [`Self::sink_for_room`]
+    /// until `refresh_from` runs again.
     pub fn refresh_from(&mut self, registry: &RoomPacketSinkRegistry) {
         let generation = registry.generation();
         if self.generation == generation {
@@ -128,9 +142,8 @@ impl RoomPacketSinkRegistry {
     }
 
     fn snapshot(&self) -> PacketSinkRegistrySnapshot {
-        // Generation is read outside the lock, so retry until it is unchanged
-        // across the locked clone. Writers bump it under the write lock, which
-        // pairs each snapshot map with its own generation.
+        // Read `generation` before and after the locked clone. Retry if a writer
+        // completes between those reads so the map and generation stay paired.
         loop {
             let generation = self.generation();
             let active_rooms = read_unpoisoned(&self.active_rooms).clone();
@@ -143,6 +156,9 @@ impl RoomPacketSinkRegistry {
         }
     }
 
+    /// Registers `sink` for `room_instance_id`, replacing the current entry.
+    ///
+    /// Previously cloned [`RegisteredPacketSink`] handles are not revoked.
     pub fn register_room(
         &self,
         room_instance_id: RoomInstanceId,
@@ -159,6 +175,10 @@ impl RoomPacketSinkRegistry {
         drop(active_rooms);
     }
 
+    /// Removes the current entry for `room_instance_id`.
+    ///
+    /// Cached or cloned sink handles may still receive packets after
+    /// `unregister_room` returns.
     pub fn unregister_room(&self, room_instance_id: RoomInstanceId) {
         let mut active_rooms = write_unpoisoned(&self.active_rooms);
         active_rooms.remove(&room_instance_id);

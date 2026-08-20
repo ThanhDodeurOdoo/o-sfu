@@ -128,6 +128,10 @@ impl SourceSubscriptionIntent {
         self.active.is_none() && self.layout.is_none()
     }
 
+    /// Applies a sparse subscription update.
+    ///
+    /// `None` preserves the current field so `active` and `layout` can arrive
+    /// independently without resetting the other preference.
     pub const fn merge(&mut self, update: Self) {
         if update.active.is_some() {
             self.active = update.active;

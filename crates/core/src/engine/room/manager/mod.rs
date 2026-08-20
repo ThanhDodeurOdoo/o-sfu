@@ -1,16 +1,9 @@
-//! [`RoomManager`] is the live-room registry used by HTTP, websocket and
-//! background runtime tasks. It manages room publication, current-room
-//! lifecycle leases, worker responsiveness and room removal
+//! Current-room registry and lifecycle coordinator.
 //!
-//! ```text
-//! /v1/channel -> serve_room -> directory
-//! websocket   -> join_user  -> RoomEffects
-//! background  -> source policy
-//! ```
-//!
-//! callers receive cloned [`std::sync::Arc`] handles to [`Room`], but only
-//! directory-current rooms accept manager mutations. empty-room removal waits
-//! for accepted leases to finish before the directory row is forgotten
+//! [`RoomManager`] publishes one current room per issuer, admits WebSocket
+//! sessions and runs background room work. Mutations acquire a lifecycle lease
+//! without holding the directory lock. Empty-room removal waits for every
+//! accepted lease to finish.
 
 #[cfg(any(test, feature = "testing-transport"))]
 use std::sync::Mutex;
@@ -104,11 +97,7 @@ fn retrieve_room_reservation(
     Ok(Some(entry.room))
 }
 
-/// current-room registry and lifecycle coordinator
-///
-/// `RoomManager` exposes only current directory rows. mutating entrypoints
-/// accept a lifecycle lease before awaiting room work, then remove empty rooms
-/// only after the accepted mutation finishes
+/// Coordinates current room admission and lifecycle.
 #[derive(Debug)]
 pub struct RoomManager {
     directory: RwLock<RoomDirectory>,
@@ -137,17 +126,16 @@ impl RoomManager {
         }
     }
 
-    /// returns the current room for `issuer`, creating it on the first miss
+    /// Returns the current room for `issuer` or publishes a new reservation.
     ///
-    /// only the first create request publishes `key`, `config` and
-    /// `remote_address` into the room. concurrent non-conflicting calls for the same issuer
-    /// return the same current room and do not emit duplicate creation events
+    /// The first reservation fixes `key`, `config` and `remote_address`.
+    /// Matching requests return the same room and renew an outstanding
+    /// reservation without rearming one retired by a successful join.
     ///
     /// # Errors
     ///
-    /// returns:
-    ///
-    /// - [`RoomManagerServeError::ConflictingReservation`] when a room is found with configuration conflicting with the request
+    /// Returns [`RoomManagerServeError::ConflictingReservation`] when the
+    /// current room has a different `key` or `config`.
     pub async fn serve_room(
         &self,
         issuer: &str,
@@ -274,20 +262,21 @@ impl RoomManager {
         }
     }
 
-    /// admits one websocket connection into a current room
+    /// Admits one WebSocket connection into a current room.
     ///
-    /// placement keeps the room local while its assigned packet loops meet the
-    /// configured delay threshold. a successful admission has already executed
-    /// join-side room effects before the returned transport key reaches
-    /// [`crate::prelude::SfuCore`]
+    /// Returns after join-side room effects complete.
     ///
     /// # Errors
     ///
-    /// returns:
+    /// Returns [`RoomManagerJoinError::MissingRoom`] when `room_id` is not
+    /// current. Returns [`RoomManagerJoinError::RoomFull`] when a new user
+    /// exceeds room capacity. Returns [`RoomManagerJoinError::RouterState`] when
+    /// router placement cannot commit.
     ///
-    /// - [`RoomManagerJoinError::MissingRoom`] when `room_id` is not current
-    /// - [`RoomManagerJoinError::RoomFull`] when room admission rejects capacity
-    /// - [`RoomManagerJoinError::RouterState`] when routing placement fails
+    /// # Panics
+    ///
+    /// Panics when existing relay state refers to an uncommitted source
+    /// placement.
     pub async fn join_user(
         &self,
         room_id: &str,
@@ -316,6 +305,8 @@ impl RoomManager {
                 });
             }
         };
+        // Retire the reservation only after membership commits. Failed admission
+        // must leave its deadline intact for the reaper.
         mutation.lease.clear_expiration();
         let receipt = room
             .finalize_admission(join_commit, RoomEffectContext::runtime(media_transport))
@@ -378,6 +369,7 @@ impl RoomManager {
             .await;
     }
 
+    /// Claims and removes expired reservations with no active room mutations.
     pub async fn check_expired_room_reservations(&self) {
         let mut directory = self.directory.write().await;
         for entry in directory.entries() {
@@ -404,11 +396,6 @@ impl RoomManager {
             .map(|(_, output)| output)
     }
 
-    /// runs awaited room work under a cancellation-safe lifecycle lease
-    ///
-    /// the directory lock is not held while `action` runs. concurrent teardown
-    /// can finish while another accepted mutation is parked, but directory
-    /// removal waits until all leases drain
     async fn run_current_room_mutation<T, F, Fut>(
         &self,
         room_id: &str,
@@ -427,7 +414,6 @@ impl RoomManager {
         Some((room, output))
     }
 
-    /// releases a current-room mutation and removes the row if this finisher won
     async fn finish_session_mutation(
         &self,
         room_id: &str,
@@ -435,6 +421,9 @@ impl RoomManager {
         remove_if_empty: bool,
     ) {
         let CurrentRoomMutation { room, lease } = mutation;
+        // Read emptiness after this mutation. A later accepted mutation can
+        // supply the final removal proof. Dropping the final lease supplies no
+        // proof and cancels the pending claim.
         if lease.finish(remove_if_empty, room.is_empty().await) {
             self.directory
                 .write()

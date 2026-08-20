@@ -20,6 +20,8 @@ pub(super) fn append_audio_route_activity(
             continue;
         }
         let next_reason = audio_pause_reason(input, route);
+        // Clear only pause reasons owned by audio policy. A refresh must not
+        // resume a route still withheld by another policy.
         if next_reason.is_none() && !owns_pause_reason(route.selection.policy_pause_reason()) {
             continue;
         }
@@ -39,6 +41,8 @@ fn audio_pause_reason(
     input: &SourcePolicySnapshot<'_>,
     route: &ConsumerRouteView<'_>,
 ) -> Option<PolicyPauseReason> {
+    // Deafness dominates speaker admission. Undeafening recomputes the cap
+    // instead of blindly resuming every audio route.
     if input
         .deaf_receiver_connection_ids
         .contains(&route.route.consumer_session_key().connection_id())

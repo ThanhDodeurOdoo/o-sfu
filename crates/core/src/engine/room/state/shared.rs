@@ -144,6 +144,14 @@ impl RoomState {
             .map(|(user_id, user)| (user_id, user.connection_id))
     }
 
+    /// Returns the transport key for an exact committed router placement.
+    ///
+    /// Use [`Self::committed_transport_user_key`] when placement may be stale.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `user_id` and `connection_id` have no committed router
+    /// placement.
     pub fn transport_user_key(
         &self,
         user_id: &UserId,
@@ -158,6 +166,7 @@ impl RoomState {
             .transport_user_key(user_id.clone(), connection_id)
     }
 
+    /// Returns `None` unless the exact router placement remains committed.
     pub fn committed_transport_user_key(
         &self,
         user_id: &UserId,

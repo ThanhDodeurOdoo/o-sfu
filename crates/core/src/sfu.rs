@@ -212,6 +212,19 @@ pub struct SfuCore {
 /// Room mutations revalidate the connection before committing room state.
 /// [`close`](Self::close) cannot remove a replacement connection and drains
 /// connection-scoped staged media when this session is current.
+///
+/// Futures returned by [`establish`](Self::establish), [`answer`](Self::answer),
+/// [`publish`](Self::publish),
+/// [`deactivate_publication`](Self::deactivate_publication),
+/// [`renegotiate`](Self::renegotiate), [`subscribe`](Self::subscribe),
+/// [`update_info`](Self::update_info) and [`close`](Self::close) are not
+/// cancellation safe. Once polled, await them to completion. Negotiation can
+/// otherwise leave room and transport state out of step with the local phase.
+/// Other mutations can leave committed room state without its transport or
+/// output effects.
+///
+/// Call [`close`](Self::close) before dropping the session. `Drop` performs no
+/// room or transport cleanup.
 #[derive(Debug)]
 pub struct MediaSession {
     core: SfuCore,
@@ -230,13 +243,25 @@ impl SfuCore {
         }
     }
 
-    /// admits one room user and returns the media session that owns the
-    /// connection
+    /// Admits one room user and returns its connection-owning media session.
+    ///
+    /// An existing `request.user_id` replaces its current connection.
+    /// Replacement room and transport effects finish before return.
+    /// This future is not cancellation safe. Once polled, await it to completion.
+    /// Dropping it after membership commits can leave room or replacement
+    /// transport effects unfinished.
     ///
     /// # Errors
     ///
-    /// returns [`RoomManagerJoinError`] when the room is missing or admission
-    /// rejects the user
+    /// Returns [`RoomManagerJoinError::MissingRoom`] when `room_id` is not
+    /// current. Returns [`RoomManagerJoinError::RoomFull`] when a new user
+    /// exceeds room capacity. Returns [`RoomManagerJoinError::RouterState`] when
+    /// router placement cannot commit.
+    ///
+    /// # Panics
+    ///
+    /// Panics when existing relay state refers to an uncommitted source
+    /// placement.
     pub async fn admit_user(
         &self,
         room_id: &str,
@@ -506,6 +531,7 @@ impl MediaSession {
         self.room.recording_state().await
     }
 
+    /// Returns snapshots for current room users other than this session's user.
     pub async fn peer_snapshots(&self) -> Vec<PeerSnapshot> {
         self.room.user_snapshots_except(self.user_id()).await
     }
@@ -529,6 +555,11 @@ impl MediaSession {
             .map_err(SfuCoreError::Transport)
     }
 
+    /// Updates user information for this room connection.
+    ///
+    /// Missing or stale connections are ignored. `is_camera_on` and
+    /// `is_screen_sharing_on` are derived from publication state and discarded
+    /// from `info`.
     pub async fn update_info(&self, info: UserInfo) {
         self.room
             .update_user_info(
@@ -540,21 +571,26 @@ impl MediaSession {
             .await;
     }
 
+    /// Broadcasts `message` to every other current room user.
+    ///
+    /// Missing or stale sender connections return `Ok(())` without delivery.
+    ///
     /// # Errors
     ///
-    /// returns [`BroadcastPayloadError`] when the payload exceeds the room
-    /// broadcast byte limit or cannot be measured as serialized JSON
+    /// Returns [`BroadcastPayloadError::TooLarge`] when the serialized payload
+    /// exceeds the room broadcast limit. Returns
+    /// [`BroadcastPayloadError::JsonSerialization`] when JSON serialization
+    /// fails.
     pub async fn broadcast(&self, message: JsonPayload) -> Result<(), BroadcastPayloadError> {
         self.room
             .broadcast(self.user_id(), self.connection_id(), message)
             .await
     }
 
-    /// starts recording if recording is enabled and this connection may control it
+    /// Rejects recording start because no persistent recording backend is enabled.
     ///
-    /// the facade remains async for compatibility with callers that await the
-    /// recording API even when the current implementation rejects recording
-    /// synchronously
+    /// `options` has no effect. The request records a rejection and returns
+    /// `false`.
     #[must_use]
     #[expect(
         clippy::unused_async,
@@ -565,10 +601,9 @@ impl MediaSession {
             .apply_recording_start(self.user_id(), self.connection_id(), options)
     }
 
-    /// stops recording if recording is enabled and this connection may control it
+    /// Rejects recording stop because no persistent recording backend is enabled.
     ///
-    /// returns `false` when recording is disabled or the room rejects the
-    /// control request
+    /// The request records a rejection and returns `false`.
     #[must_use]
     #[expect(
         clippy::unused_async,

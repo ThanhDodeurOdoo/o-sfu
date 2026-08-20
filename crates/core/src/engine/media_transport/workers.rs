@@ -180,8 +180,9 @@ impl MediaTransport {
         for worker in self.workers.iter() {
             snapshot.extend(worker.active_speaker_source_snapshot().await);
         }
-        // Group by media ID with the newest then strongest observation first because
-        // `dedup_by_key` keeps the first entry in each run.
+        // A relayed source is observed on its owner and consumer workers. Keep one
+        // policy fact per media ID, preferring recency then the strongest level as
+        // the deterministic same-timestamp tie-break.
         snapshot.sort_unstable_by_key(|source| {
             (
                 source.transport_media_id().as_u64(),
@@ -199,10 +200,11 @@ impl MediaTransport {
         snapshot
     }
 
-    /// Applies one cross-worker relay-route effect.
+    /// Applies one cross-worker relay mutation on the source worker.
     ///
-    /// Relay installation and subscriber activity address source-worker relay
-    /// state.
+    /// The target worker contributes its relay identity and mailbox. The source
+    /// packet loop owns registration and activity because it decides fanout before
+    /// packets cross workers.
     pub(super) async fn execute_relay_route_effect(
         &self,
         effect: &TransportRelayRouteEffect,
@@ -327,6 +329,10 @@ impl MediaTransport {
         }
     }
 
+    /// Enforces room isolation before worker or media lookup.
+    ///
+    /// `MediaWorkerId` selects execution ownership only. It never authorizes a
+    /// route between room instances.
     pub(super) fn ensure_same_room(
         consumer_session_key: &TransportSessionKey,
         source_session_key: &TransportSessionKey,

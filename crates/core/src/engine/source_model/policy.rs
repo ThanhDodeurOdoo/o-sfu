@@ -87,7 +87,12 @@ impl SourceLayoutPolicy {
         }
     }
 
-    /// Resolves explicit receiver intent before source defaults or speaker state.
+    /// Resolves a receiver-specific layout role.
+    ///
+    /// Explicit [`VideoLayoutIntent`] wins so active-speaker observations cannot
+    /// override that receiver's layout. Without explicit intent, an active speaker
+    /// uses `active_speaker_selector` when configured. If neither explicit intent
+    /// nor active-speaker selection applies, `visible_selector` is used.
     #[must_use]
     pub fn resolve(
         self,

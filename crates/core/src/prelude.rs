@@ -1,3 +1,8 @@
+//! Caller-facing `o-sfu-core` API.
+//!
+//! This facade groups configuration, source intent, [`SfuCore`] and
+//! [`MediaSession`]. Process integration types remain under [`crate::server`].
+
 pub use crate::{
     Bitrate, ConnectionId, RoomInstanceId,
     engine::{

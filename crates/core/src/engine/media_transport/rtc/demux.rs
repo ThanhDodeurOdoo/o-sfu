@@ -1,14 +1,9 @@
-//! packet-loop demux indexes for rtc ingress
+//! Worker-local indexes for UDP ingress routing.
 //!
-//! this module keeps the compact lookup state that the rtc packet loop needs
-//! while it routes UDP datagrams
-//! address demux entries map learned or signaled network hints back to sessions so
-//! ingress recovery can probe a bounded candidate set before `Rtc::accepts()`
-//! makes the final ownership decision
-//!
-//! the indexes are worker-local state
-//! callers must update each demux value through the methods here so forward and
-//! reverse indexes cannot drift apart
+//! Learned source addresses provide fast-path session pins. Local ICE ufrags
+//! and signaled candidate addresses narrow unknown-source recovery while
+//! `Rtc::accepts()` remains the ownership authority. Mutations update forward
+//! and reverse indexes together so session teardown cannot leave routing hints.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -17,18 +12,7 @@ use std::{
 
 use crate::engine::media_transport::TransportSessionKey;
 
-/// bidirectional demux indexes for worker-local UDP ingress recovery
-///
-/// learned remote addresses are the fast path for packets that already passed
-/// `Rtc::accepts()`
-/// local ICE ufrags and remote candidate addresses are recovery hints used for
-/// unknown source tuples
-/// all mappings are non-authoritative because ICE state can change after an
-/// index was written
-///
-/// mutating methods keep reverse indexes in sync so session teardown can remove
-/// every tuple, ufrag and candidate hint owned by one session without scanning
-/// unrelated sessions
+/// Bidirectional demux indexes for worker-local UDP ingress recovery.
 #[derive(Debug, Default)]
 pub struct RemoteAddrDemux {
     /// learned UDP source tuple to session pin
@@ -140,12 +124,11 @@ impl RemoteAddrDemux {
         true
     }
 
-    /// returns sessions whose signaled candidates match the observed source
+    /// Returns sessions whose signaled candidates match the observed source.
     ///
-    /// candidate addresses are weaker than learned source pins because many
-    /// sessions can advertise the same address
-    /// callers must treat the slice as a bounded probe set and let
-    /// `Rtc::accepts()` decide ownership
+    /// Candidate addresses are weaker than learned source pins because every
+    /// session advertising the address remains a candidate. `Rtc::accepts()`
+    /// remains the ownership authority.
     #[must_use]
     pub fn candidates_for_src_addr(
         &self,

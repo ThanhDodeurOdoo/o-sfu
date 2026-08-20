@@ -9,6 +9,9 @@ use crate::engine::{
     source_model::{PublishedSourceDescriptor, ReceiverVideoBudgetDiagnostics, SourceSelector},
 };
 
+/// Projects a room selector into a source-worker packet gate.
+///
+/// Returns `None` when the selected encoding is unknown or has no negotiated RID.
 pub(super) fn source_packet_gate_for_selector(
     source: &PublishedSourceDescriptor,
     selector: SourceSelector,
@@ -16,6 +19,8 @@ pub(super) fn source_packet_gate_for_selector(
     match selector {
         SourceSelector::Open => Some(SourcePacketGate::Open),
         SourceSelector::Encoding(encoding_id) => {
+            // Never fall back to `Open`: it would forward every encoding while
+            // room state records one selected encoding.
             let encoding = source.encoding(encoding_id)?;
             let rid = encoding.rid()?;
             Some(SourcePacketGate::Rid(rid.as_str().to_owned()))
@@ -47,8 +52,8 @@ pub(super) fn consumer_packet_selection_update(
     };
     let route_activity_changed =
         selection.policy_pause_reason != current_selection.policy_pause_reason();
-    // selector changes and resumed delivery need a keyframe because the receiver
-    // cannot continue the previous video reference chain
+    // A newly selected RID or resumed route may not share the receiver's last
+    // decodable reference chain, so request a keyframe for either transition.
     let request_keyframe = selection.policy_pause_reason.is_none()
         && (selection.request_keyframe
             || selection.selector != current_selection.selector()

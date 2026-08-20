@@ -1,25 +1,24 @@
-//! negative routing memory for packet-loop UDP demux fallback
+//! Negative routing memory for packet-loop UDP demux fallback.
 //!
-//! `ingress_routing` owns the authoritative demux decision for one datagram. It
-//! checks source-address pins before recovery indexes. Both paths require
-//! `str0m::Rtc::accepts()` before the packet reaches a session
-//! this module does not decide ownership. It only remembers recent negative
+//! `ingress_routing` owns the demux decision for each datagram and requires
+//! `str0m::Rtc::accepts()` before delivery. This module remembers negative
 //! results so the packet loop can avoid repeating expensive fallback work for
-//! traffic that was already proven unrelated to any live session
+//! traffic already proven unrelated to every candidate session.
 //!
-//! # invalidation contract
+//! # Invalidation
 //!
-//! this state is a performance hint and must be cleared whenever topology, ICE
-//! credentials or candidate indexes can change. a stale negative result could
+//! The cache must be cleared whenever topology, ICE credentials or candidate
+//! indexes can change. A stale negative result could
 //! otherwise hide a packet that becomes valid after a join, answer or
-//! source-address remap
+//! source-address remap.
 //!
-//! # hot-path contract
+//! # Hot path
 //!
-//! repeated unknown-source traffic must not force unbounded scans or allocator
-//! churn. the recent-miss cache is bounded and preserves exact packet bytes, so
-//! it skips only byte-for-byte repeats. the rate limiter is keyed by source
-//! address and bounds varied probe traffic that would bypass the exact cache
+//! Both defensive structures have fixed entry capacities. The recent-miss cache
+//! preserves exact packet bytes, so it skips only byte-for-byte repeats. The
+//! source-address rate limiter throttles varied traffic that bypasses the exact
+//! cache. Neither structure limits how many sessions may share one signaled
+//! candidate address.
 
 mod fingerprint;
 

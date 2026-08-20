@@ -2,6 +2,14 @@ use std::fmt;
 
 use crate::Bitrate;
 
+/// RTC packet-loop UDP I/O backend.
+///
+/// [`IoUring`](Self::IoUring) is available only on Linux. Selecting it on
+/// another target makes transport construction return
+/// [`MediaTransportBuildError::UnsupportedUdpIoBackend`].
+///
+/// [`MediaTransportBuildError::UnsupportedUdpIoBackend`]:
+///     crate::engine::media_transport::MediaTransportBuildError::UnsupportedUdpIoBackend
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RtcUdpIoBackend {
     #[default]
@@ -44,6 +52,7 @@ pub enum RoomMediaLimitsError {
     MaxVideoDownloadsPerReceiverZero,
 }
 
+/// Inclusive UDP port range assigned across RTC workers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RtcPortRange {
     min: u16,
@@ -51,6 +60,11 @@ pub struct RtcPortRange {
 }
 
 impl RtcPortRange {
+    /// Stores an inclusive RTC UDP port range without validation.
+    ///
+    /// Callers of [`Self::port_count`] or [`Self::split_for_workers`] must ensure
+    /// `min <= max` and exclude `0..=u16::MAX`, whose count is not representable
+    /// by `u16`.
     #[must_use]
     pub const fn new(min: u16, max: u16) -> Self {
         Self { min, max }
@@ -66,6 +80,11 @@ impl RtcPortRange {
         self.max
     }
 
+    /// Returns the number of ports in the range.
+    ///
+    /// # Panics
+    ///
+    /// May panic when `min > max` or the range spans every `u16` port.
     #[must_use]
     pub const fn port_count(self) -> u16 {
         self.max - self.min + 1
@@ -75,12 +94,14 @@ impl RtcPortRange {
         self.min..=self.max
     }
 
-    /// Splits a valid caller-provided range into contiguous worker ranges.
+    /// Splits the range into contiguous worker ranges.
     ///
     /// Earlier workers receive one extra port when the range does not divide
-    /// evenly. Callers must provide `min <= max` and exclude `0..=u16::MAX`
-    /// because its 65,536-port count is not representable by `u16`. Returns
-    /// `None` for zero workers or more workers than ports.
+    /// evenly. Returns `None` for zero workers or more workers than ports.
+    ///
+    /// # Panics
+    ///
+    /// May panic when `min > max` or the range spans every `u16` port.
     #[must_use]
     pub fn split_for_workers(self, worker_count: usize) -> Option<Vec<Self>> {
         if worker_count == 0 || worker_count > usize::from(self.port_count()) {
@@ -155,6 +176,16 @@ impl Default for RoomMediaLimits {
     }
 }
 
+/// Room-wide video budget and adaptation hysteresis.
+///
+/// When room membership reaches `multiparty_scalable_video_threshold`,
+/// scalable-video per-route targets use available receiver bandwidth and the
+/// resolved layout role. Pinned, featured, readable-detail and active-speaker
+/// targets use the full receiver budget. When several visible scalable routes
+/// share a receiver, other scalable targets divide that budget by their count and
+/// `thumbnail_budget_divisor`. Observation counts require consecutive policy
+/// turns. Headroom is removed before `audio_reserve_per_speaker` is subtracted
+/// for each admitted audio route the receiver consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoAdaptationTuning {
     pub(crate) multiparty_scalable_video_threshold: usize,
@@ -184,17 +215,11 @@ impl VideoAdaptationTuning {
     pub const DEFAULT_THUMBNAIL_BUDGET_DIVISOR: u64 = 2;
     pub const DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS: u8 = 2;
     pub const DEFAULT_UPSWITCH_STABLE_OBSERVATIONS: u8 = 3;
-    /// Zero applies no percentage headroom. Positive values reduce the portion of
-    /// each receiver estimate available to video before the separate per-route
-    /// audio reserve is subtracted.
     pub const DEFAULT_RECEIVER_BUDGET_HEADROOM_PERCENT: u8 = 0;
-    /// No per-speaker audio reserve by default, so the video budget is unchanged.
-    /// Set to the nominal audio bitrate to reserve it for each admitted audio
-    /// route a receiver consumes. The reserve reduces its video budget and
-    /// contributes to its receiver BWE target. Deafened receivers reserve
-    /// nothing. Zero disables both adjustments.
     pub const DEFAULT_AUDIO_RESERVE_PER_SPEAKER: Bitrate = Bitrate::zero();
 
+    /// Builds validated video adaptation tuning.
+    ///
     /// # Errors
     ///
     /// Returns [`VideoAdaptationTuningError`] when the scalable-video threshold,
@@ -247,6 +272,11 @@ impl Default for VideoAdaptationTuning {
     }
 }
 
+/// Per-session bandwidth policy applied by RTC workers.
+///
+/// `max_bitrate_in` sets REMB requests on producer receive streams.
+/// `max_bitrate_out` seeds str0m send-side BWE and caps room-selected desired
+/// bitrate updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionBitrateLimits {
     max_bitrate_in: Bitrate,
@@ -273,6 +303,10 @@ impl SessionBitrateLimits {
     }
 }
 
+/// Bitrate limit used by generated VP8 and H.264 simulcast upload profiles.
+///
+/// The high RID uses `max_video_bitrate`. The low RID uses the lower of
+/// `max_video_bitrate` and 150 kbps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoBitrateLimits {
     max_video_bitrate: Bitrate,

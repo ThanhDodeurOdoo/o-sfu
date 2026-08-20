@@ -91,8 +91,14 @@ impl RemoteSourceRollback {
     }
 }
 
-/// Remove one registered transport media handle and reconcile every dependent
-/// SDP, route, and remote-source side effect that still points at it.
+/// Removes one registered transport media and its dependent routes.
+///
+/// Missing media is already removed and succeeds.
+///
+/// # Errors
+///
+/// Returns [`TransportAdapterError::InvalidInput`] when the media belongs to a
+/// different session or its negotiated MID removal cannot be staged or queued.
 pub fn worker_remove_media(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
@@ -115,6 +121,8 @@ pub fn worker_remove_media(
         );
         return unregister_media_handle(state, bitrate_registry, transport_media_id);
     }
+    // Record the MID transition before unregistering the handle and routes. An
+    // in-flight offer queues the transition. Otherwise it is staged now.
     if let Err(error) =
         stage_last_mid_removal_before_unregistering_handle(state, transport_media_id, &handle)
     {
@@ -169,11 +177,6 @@ fn unregister_media_handle(
     }
 }
 
-/// Stage or apply removal before the public transport-handle registry changes.
-///
-/// If removal cannot be represented in the user's live or staged SDP, the
-/// caller may only unregister producer media that never gained negotiated RTP
-/// parameters.
 fn stage_last_mid_removal_before_unregistering_handle(
     state: &mut PacketLoopState,
     transport_media_id: TransportMediaId,
@@ -186,6 +189,8 @@ fn stage_last_mid_removal_before_unregistering_handle(
         .get_mut(handle.session_key())
         .ok_or(TransportAdapterError::InvalidInput)?;
     if has_other_mid {
+        // Several handles may share one m-section. Disabling it while a sibling
+        // remains would invalidate that sibling's negotiated media.
         return Ok(());
     }
     if session_state.sdp_negotiation.initial_offer_applied {
@@ -215,10 +220,9 @@ fn can_unregister_unnegotiated_producer(
     }
 }
 
-/// Returns whether the worker already handed out a local offer and is still
-/// waiting for the matching answer. That state accepts queued removals, but it
-/// must reject new additions that would need a second concurrent offer
 fn offer_is_awaiting_answer(session_state: &RtcSessionState) -> bool {
+    // `SdpPendingOffer` exists both before and after handout. Taking
+    // `staged_offer` is what marks the offer as visible to the remote peer.
     session_state.sdp_negotiation.pending_offer.is_some()
         && session_state.sdp_negotiation.staged_offer.is_none()
 }
@@ -265,11 +269,13 @@ fn worker_stage_native_media_removal(
     Ok(())
 }
 
-/// Declare one recv-only media line owned by the publishing user.
+/// Declares one recv-only producer media for a publishing session.
 ///
-/// Before the first answer lands, the RTC state can be updated directly because
-/// there is no committed negotiated description to keep in sync yet. After that
-/// point every addition must stage the next renegotiation offer first.
+/// # Errors
+///
+/// Returns [`TransportAdapterError::TransportUnavailable`] when the session is
+/// missing or str0m cannot stage the offer. Returns
+/// [`TransportAdapterError::InvalidInput`] while another offer awaits its answer.
 pub fn worker_add_recv_media(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
@@ -282,6 +288,8 @@ pub fn worker_add_recv_media(
         return Err(TransportAdapterError::TransportUnavailable);
     };
     let mid = if session_state.sdp_negotiation.initial_offer_applied {
+        // A negotiated description must change through an offer. Before the
+        // first answer there is no remote description to keep in sync.
         worker_stage_native_recv_media(
             session_state,
             media_kind,
@@ -331,10 +339,7 @@ pub fn worker_add_recv_media(
     Ok(transport_media_id)
 }
 
-/// Stage a producer-side recv-only media section inside the next local offer.
-///
-/// The pending receive identity is recorded separately so the worker can bind
-/// the concrete SSRC only once the remote answer commits the negotiation step.
+/// Stages a producer-side recv-only media section in the next local offer.
 fn worker_stage_native_recv_media(
     session_state: &mut RtcSessionState,
     media_kind: MediaKind,
@@ -375,6 +380,8 @@ fn worker_stage_native_recv_media(
         profile,
         video_bitrate_limits,
     )];
+    // `accept_answer` can recreate `StreamRx` bindings. Retain SSRC and RID so
+    // answer application can restore publisher identity and the bitrate cap.
     let pending_streams = recv_encoding_identities(rtp_parameters)
         .into_iter()
         .map(|(ssrc, rid)| PendingRecvStream { ssrc, rid })
@@ -393,13 +400,14 @@ fn worker_stage_native_recv_media(
     Ok(mid)
 }
 
-/// Declare one send-only media line for a consumer route and register the
-/// corresponding route-source ownership in the worker packet-loop state.
+/// Declares one send-only consumer media and installs its source route.
 ///
-/// Remote-source registration, consumer-media declaration, and route creation
-/// form one logical edge. If the consumer user is gone or media staging
-/// fails, any provisional remote-source registration is restored before the
-/// error escapes.
+/// # Errors
+///
+/// Returns [`TransportAdapterError::InvalidInput`] for conflicting source
+/// ownership or an offer already awaiting its answer. Returns
+/// [`TransportAdapterError::TransportUnavailable`] when required session or
+/// source state is missing or str0m cannot stage the offer.
 pub fn worker_add_send_media(
     state: &mut PacketLoopState,
     request: AddSendMediaRequest<'_>,
@@ -414,6 +422,8 @@ pub fn worker_add_send_media(
     } = request;
     let src_key = source.session_key();
     let src_media = source.transport_media_id();
+    // Source registration must precede route creation because the route needs
+    // its control path. Preserve the prior registration for every later error.
     let remote_source_rollback = RemoteSourceRollback::capture(
         state,
         src_key.media_worker_id() != consumer_key.media_worker_id(),
@@ -503,11 +513,16 @@ fn declare_consumer_stream(
     ))
 }
 
-/// Stage one send-only consumer media section in the next local offer.
+/// Stages one send-only consumer media section in the next local offer.
 ///
-/// Additions are rejected while another offer already await an answer because
-/// a new MID canot be committed speculatively against an unresolved remote
-/// description.
+/// # Errors
+///
+/// Returns [`TransportAdapterError::InvalidInput`] after an offer has been
+/// handed out. A new MID cannot be merged into that offer and a second
+/// [`str0m::change::SdpApi::apply`] would invalidate the
+/// [`str0m::change::SdpPendingOffer`] needed by its answer.
+/// Returns [`TransportAdapterError::TransportUnavailable`] when str0m cannot
+/// apply the staged change.
 fn worker_stage_native_send_media(
     session_state: &mut RtcSessionState,
     media_kind: MediaKind,
@@ -539,6 +554,10 @@ fn worker_stage_native_send_media(
     Ok(mid)
 }
 
+/// Declares one RID-less downstream stream for the consumer.
+///
+/// Simulcast selection remains in `packet_gate`. Every selected producer RID is
+/// rewritten onto this one browser-visible RTP identity.
 fn declare_direct_send_media(
     session_state: &mut RtcSessionState,
     mid: Mid,

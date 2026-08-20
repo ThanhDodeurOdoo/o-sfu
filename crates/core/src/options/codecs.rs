@@ -20,10 +20,10 @@ bitflags! {
     }
 }
 
-/// enabling set for codecs that may enter the RTC capability surface
+/// Codec enablement for RTP profile compilation.
 ///
-/// values are copyable so configuration and fixtures can assemble policy
-/// directly before media transport construction compiles the immutable profile
+/// [`Default`] enables Opus and VP8. [`CodecPreferences`] determines their
+/// compilation order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MediaCodecFlags {
     enabled: MediaCodecSet,
@@ -158,11 +158,10 @@ impl VideoCodecPreference {
     }
 }
 
-/// complete audio and video codec ordering for RTP profile compilation
+/// Audio and video codec ordering for RTP profile compilation.
 ///
-/// callers may provide a partial preferred order, [`CodecPreferences`] fills the
-/// remaining codecs with the canonical defaults so downstream code never has to
-/// handle a short or duplicate preference list
+/// Partial orders should use [`Self::with_audio_order`] and
+/// [`Self::with_video_order`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodecPreferences {
     audio: [AudioCodecPreference; 3],
@@ -185,17 +184,19 @@ impl CodecPreferences {
         VideoCodecPreference::Av1,
     ];
 
-    /// builds a full preference set from already-complete audio and video orders
+    /// Stores caller-supplied complete audio and video orders.
+    ///
+    /// Each array must contain every corresponding codec exactly once. This
+    /// constructor does not validate the permutation.
     #[must_use]
     pub const fn new(audio: [AudioCodecPreference; 3], video: [VideoCodecPreference; 5]) -> Self {
         Self { audio, video }
     }
 
-    /// returns a copy where `preferred` codecs lead the audio order
+    /// Places each distinct `preferred` codec first in encounter order.
     ///
-    /// codecs omitted from `preferred` keep their default relative order, caller
-    /// input is expected to be validated by the server config parser before it
-    /// reaches this core value type
+    /// Every omitted codec follows in canonical default order. The previous
+    /// audio order is not used.
     #[must_use]
     pub fn with_audio_order(self, preferred: &[AudioCodecPreference]) -> Self {
         Self {
@@ -204,11 +205,10 @@ impl CodecPreferences {
         }
     }
 
-    /// returns a copy where `preferred` codecs lead the video order
+    /// Places each distinct `preferred` codec first in encounter order.
     ///
-    /// codecs omitted from `preferred` keep their default relative order, caller
-    /// input is expected to be validated by the server config parser before it
-    /// reaches this core value type
+    /// Every omitted codec follows in canonical default order. The previous
+    /// video order is not used.
     #[must_use]
     pub fn with_video_order(self, preferred: &[VideoCodecPreference]) -> Self {
         Self {

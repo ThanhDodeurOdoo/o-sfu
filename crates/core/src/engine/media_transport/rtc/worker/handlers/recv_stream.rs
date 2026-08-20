@@ -8,12 +8,20 @@ use tracing::debug;
 
 use crate::Bitrate;
 
+/// Selects the authoritative SSRC when str0m already has a `(mid, rid)` binding.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum StaleSsrcPolicy {
+    /// Preserves str0m's current binding and refreshes only its REMB cap.
     KeepExisting,
+    /// Replaces a binding that disagrees with the pending receive identity after
+    /// answer application.
     ReplaceStale,
 }
 
+/// Reconciles one receive binding and reapplies its inbound REMB cap.
+///
+/// Answer application can recreate `StreamRx`. Every retained or replaced
+/// binding must therefore receive `max_bitrate_in` in the same pass.
 pub(super) fn apply_recv_stream(
     api: &mut DirectApi<'_>,
     mid: Mid,

@@ -28,6 +28,7 @@ use crate::engine::{
     metrics::{RtcKeyframeRequestOutcome, RtcMetricsRecorder, RtcRouteControlOutcome},
 };
 
+/// Forwards relay feedback to its producer without arming another retry loop.
 pub fn worker_request_remote_kf(
     state: &mut PacketLoopState,
     metrics: &RtcMetricsRecorder,
@@ -37,6 +38,8 @@ pub fn worker_request_remote_kf(
     kind: KeyframeRequestKind,
 ) {
     let src_media = src.transport_media_id();
+    // The consumer worker owns coalescing and retries. Revalidate the relay
+    // target because its command can race route teardown.
     if !state
         .routes
         .source_relay_target_is_active(src_media, target_id)
@@ -44,6 +47,8 @@ pub fn worker_request_remote_kf(
         metrics.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
         return;
     }
+    // A source-wide request can match several RID streams. Resolve the target
+    // against current producer bindings rather than the consumer snapshot.
     request_kf_for_target(
         state,
         metrics,
@@ -103,7 +108,11 @@ pub enum KeyframeRequestMode {
 }
 
 impl KeyframeRequestMode {
-    /// Uses demand-coupled retries only when RTP can prove refresh completion.
+    /// Chooses recovery tracking from packet observability.
+    ///
+    /// `DecoderTransition` is used only when ingress can prove its completion.
+    /// Otherwise `RecoveryHint` bounds retries because no packet can clear the
+    /// request as a proven decoder refresh.
     pub(in crate::engine::media_transport) const fn for_recovery(
         now: Instant,
         observable: bool,
@@ -171,6 +180,8 @@ fn request_local_kf(
     if target_rids.is_empty() {
         return;
     }
+    // A source-wide transition can target several simulcast streams. Track each
+    // RID separately so the first keyframe does not clear recovery for the rest.
     if rid.is_none() && mode.origin() == Some(KeyframeRequestOrigin::DecoderTransition) {
         for target_rid in target_rids {
             if !track_kf_req(state, metrics, src_media, target_rid, kind, mode) {
@@ -219,6 +230,8 @@ fn request_remote_kf(
             metrics.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
             metrics.record_rtc_keyframe_request(mode.outcome());
         }
+        // `Full` does not prove source teardown. Leave any retry state already
+        // rescheduled by the tracker.
         RemoteControlSendOutcome::Full => {}
         RemoteControlSendOutcome::Closed => {
             state.routes.forget_kf_req(src.transport_media_id(), rid);
@@ -322,11 +335,10 @@ pub fn worker_request_consumer_kf(
     Ok(())
 }
 
-/// returns the RID that a route-level keyframe command should refresh
-///
-/// route commands can bootstrap a pending selected RID, so they look at
-/// `pending_gate` before the effective fallback gate
+/// Resolves the producer RID that consumer feedback must refresh.
 fn kf_req_rid(dst: &MediaRouteDestination) -> Option<Rid> {
+    // Feedback during bootstrap must advance the intended layer rather than
+    // refresh the temporary fallback currently being forwarded.
     dst.pending_gate
         .as_ref()
         .and_then(PacketLayerGate::selected_rid)

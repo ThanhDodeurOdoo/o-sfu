@@ -141,18 +141,25 @@ impl RemoteSourceControl {
     }
 }
 
-/// response channel used by request commands that complete on the packet loop
+/// Response channel for a command executed by the packet loop.
 ///
-/// dropping the receiver cancels the API wait but does not cancel the worker
-/// mutation that is already being handled
+/// Dropping the receiver cancels only the API wait and does not retract an
+/// enqueued command. Terminal worker cancellation may still win before dispatch.
 pub type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
 
+/// SDP answer parsed before packet-loop command delivery.
 pub struct ParsedSessionAnswer {
     pub(super) answer: SdpAnswer,
     pub(super) rids: ParsedAnswerRids,
 }
 
 impl ParsedSessionAnswer {
+    /// Validates and parses a remote SDP answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportAdapterError::InvalidInput`] for unsupported repair
+    /// attributes or SDP that str0m cannot parse.
     pub(in crate::engine::media_transport) fn parse(answer_sdp: &str) -> TransportResult<Self> {
         RtpProfile::validate_answer_sdp(answer_sdp)?;
         let answer = SdpAnswer::from_sdp_string(answer_sdp)

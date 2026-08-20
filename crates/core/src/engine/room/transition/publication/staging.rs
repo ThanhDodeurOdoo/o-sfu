@@ -191,6 +191,8 @@ impl StagedPublish {
             );
             return None;
         };
+        // Room topology now owns the transport media. Disarm only after
+        // acceptance so rejected commits still take the explicit teardown path.
         self.commit_reservation();
         let context = RoomEffectContext::runtime(operation.media_transport);
         RoomEffects::from_publish(commit)
@@ -244,6 +246,10 @@ struct Released;
 
 #[derive(Debug)]
 #[must_use = "publish reservations must be committed or released"]
+/// Typestate guard requiring reserved transport media to be committed or released.
+///
+/// Tests and debug builds diagnose an armed reservation on `Drop`. Cleanup
+/// paths must explicitly convert reserved media into [`TransportTeardown`].
 struct PublishReservation<State> {
     guard: PublishReservationGuard,
     _state: PhantomData<fn() -> State>,

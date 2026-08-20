@@ -1,3 +1,10 @@
+//! Bounded per-user room output.
+//!
+//! [`UserOutboundSender::send`] enqueues without waiting and signals
+//! [`UserOutboundEvent::Overflow`] when message-count or byte capacity is
+//! exhausted. [`UserOutboundReceiver::recv_event`] prioritizes that signal over
+//! queued output. User-session loops must stop normal draining after overflow.
+
 use std::{
     collections::BTreeMap,
     future::pending,
@@ -32,10 +39,14 @@ pub struct BroadcastPayload {
 }
 
 impl BroadcastPayload {
+    /// Creates a broadcast payload and records its serialized byte length.
+    ///
     /// # Errors
     ///
-    /// Returns `TooLarge` when the serialized JSON payload exceeds
-    /// [`MAX_BROADCAST_PAYLOAD_BYTES`].
+    /// Returns [`BroadcastPayloadError::TooLarge`] when the serialized JSON
+    /// exceeds [`MAX_BROADCAST_PAYLOAD_BYTES`]. Returns
+    /// [`BroadcastPayloadError::JsonSerialization`] when JSON serialization
+    /// fails.
     pub fn try_new(message: JsonPayload) -> Result<Self, BroadcastPayloadError> {
         let byte_len = serialized_json_len(&message)?;
         if byte_len > MAX_BROADCAST_PAYLOAD_BYTES {
@@ -349,10 +360,16 @@ impl UserOutboundSender {
         )
     }
 
+    /// Enqueues `outbound` without waiting for capacity.
+    ///
+    /// [`UserOutboundSendError::Full`] also signals an overflow event for
+    /// [`UserOutboundReceiver::recv_event`].
+    ///
     /// # Errors
     ///
-    /// returns `Full` when message or byte capacity is exhausted and `Closed`
-    /// when the receiver has gone away
+    /// Returns [`UserOutboundSendError::Full`] when message-count or byte
+    /// capacity is exhausted. Returns [`UserOutboundSendError::Closed`] when the
+    /// receiver has been dropped.
     pub fn send(&self, outbound: UserOutbound) -> Result<(), UserOutboundSendError> {
         let bytes = outbound.queued_bytes();
         self.reserve_bytes(bytes)?;
@@ -435,6 +452,9 @@ impl UserOutboundReceiver {
         self.overflow.borrow().is_some()
     }
 
+    /// Receives queued output without observing overflow.
+    ///
+    /// User-session loops should use [`Self::recv_event`].
     pub async fn recv(&mut self) -> Option<UserOutbound> {
         self.messages
             .recv()
@@ -442,17 +462,21 @@ impl UserOutboundReceiver {
             .map(|message| self.record_received(message))
     }
 
+    /// Attempts to receive queued output without observing overflow.
+    ///
+    /// User-session loops should use [`Self::recv_event`].
+    ///
     /// # Errors
     ///
-    /// returns the underlying non-blocking receive error when the queue is
-    /// empty or closed
+    /// Returns [`mpsc::error::TryRecvError::Empty`] when no output is queued and
+    /// [`mpsc::error::TryRecvError::Disconnected`] when every sender is dropped.
     pub fn try_recv(&mut self) -> Result<UserOutbound, mpsc::error::TryRecvError> {
         self.messages
             .try_recv()
             .map(|message| self.record_received(message))
     }
 
-    /// returns the overflow sentinel before queued output
+    /// Receives the next queue event with overflow prioritized over queued output.
     pub async fn recv_event(&mut self) -> UserOutboundEvent {
         if let Some(overflow) = *self.overflow.borrow_and_update() {
             return UserOutboundEvent::Overflow(overflow);

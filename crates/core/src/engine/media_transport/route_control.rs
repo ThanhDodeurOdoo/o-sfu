@@ -13,6 +13,10 @@ use super::{
 };
 use crate::MediaWorkerId;
 
+/// Maximum mutations in one synchronous worker command.
+///
+/// Larger plans are split so one room effect cannot monopolize control
+/// dispatch. The packet loop runs its pump phase between chunks.
 const MAX_MEDIA_CONTROL_BATCH_ITEMS: usize = 64;
 const UNAVAILABLE: TransportAdapterError = TransportAdapterError::TransportUnavailable;
 
@@ -171,6 +175,10 @@ impl ConsumerRouteControlOutcome {
     }
 }
 
+/// Returns one result per planned item or fails the whole batch.
+///
+/// A mismatched response shape has no safe positional mapping back to room
+/// completions.
 pub(super) fn reconcile_applied(
     response: TransportResult<WorkerBatchOutcome>,
     expected: usize,
@@ -239,6 +247,8 @@ impl<P, C> MediaControlExecution<P, C> {
             push(&mut execution.producers, worker, (index, control));
         }
         for (index, (mut control, finish)) in consumers.into_iter().enumerate() {
+            // Worker placement is not room authority. Reject cross-room controls
+            // before translating them into worker-local mutations.
             if !control.route.is_single_room() {
                 execution
                     .consumer_results
@@ -335,7 +345,8 @@ impl<P, C> MediaControlExecution<P, C> {
 
     async fn apply_consumers(&mut self, transport: &MediaTransport) {
         let results = &self.consumer_results;
-        // A failed gate update aborts later `ConsumerRouteControl` phases for that route.
+        // Room policy cannot commit a selection whose gate was rejected. Skip its
+        // dependent activity and keyframe phases.
         for controls in self.consumers.values_mut() {
             controls.retain(
                 |(index, _)| matches!(results.get(*index), Some((_, result)) if result.error().is_none()),
@@ -393,6 +404,7 @@ impl MediaTransport {
             .await
     }
 
+    /// Applies a media-control plan and returns completions in insertion order.
     pub(crate) async fn apply_media_control<P, C>(
         &self,
         plan: MediaControlPlan<P, C>,
@@ -400,6 +412,8 @@ impl MediaTransport {
         let mut execution = MediaControlExecution::new(plan);
         execution.apply_receiver_bwe(self).await;
         execution.apply_producers(self).await;
+        // Room policy may commit only a selection whose gate and activity reached
+        // worker state. Apply gates before their dependent activity and keyframe work.
         execution.apply_gates(self).await;
         execution.apply_consumers(self).await;
         MediaControlOutcome {

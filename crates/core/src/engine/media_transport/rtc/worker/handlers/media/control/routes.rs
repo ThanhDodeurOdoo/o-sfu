@@ -61,11 +61,10 @@ pub fn ensure_route_src_registered(
     Ok(RouteSourceKind::Remote)
 }
 
-/// validates source ownership for a mutation on an existing route
+/// Validates source ownership without creating remote-source state.
 ///
-/// this is used by active-state, packet-gate and keyframe paths
-/// it never creates remote-source state, so cleanup cannot be undone by a late
-/// command that still carries an old source id
+/// Existing-route commands can lag teardown. They fail after registration
+/// disappears instead of recreating it from stale control input.
 ///
 /// # errors
 ///
@@ -230,6 +229,8 @@ pub fn remove_consumer_route(
         None,
     );
     if let Some(moved) = &removed.moved {
+        // Route removal uses `swap_remove`. Repair the moved destination's
+        // lookup index before later control or keyframe lookup uses it.
         state.set_consumer_dst_idx(
             &moved.session_key,
             moved.mid,

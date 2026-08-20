@@ -438,10 +438,17 @@ impl RoomState {
         }
     }
 
-    /// # errors
+    /// Plans a broadcast to every current user except `user_id`.
     ///
-    /// returns `BroadcastPayloadError` when the payload cannot fit within the
-    /// room broadcast limit
+    /// Returns `Ok(None)` when `connection_id` is missing or stale for
+    /// `user_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BroadcastPayloadError::TooLarge`] when the serialized payload
+    /// exceeds the room broadcast limit. Returns
+    /// [`BroadcastPayloadError::JsonSerialization`] when JSON serialization
+    /// fails.
     pub fn broadcast_fanout(
         &self,
         user_id: &UserId,

@@ -112,10 +112,11 @@ impl LocalPacketDestination {
         }
     }
 
-    /// queues one packet in the destination `Rtc`
+    /// Queues one packet in the destination `Rtc`.
     ///
-    /// returns `None` when no destination [`StreamTx`] exists or the stream was released
-    /// successful sends clone only the `Arc<[u8]>` payload handle
+    /// Returns `None` when no destination [`StreamTx`] exists or RTP identity
+    /// projection rejects a stale handle, older delivery generation or source
+    /// sequence outside its projection range.
     pub(super) fn send(
         &self,
         session_state: &mut RtcSessionState,
@@ -167,6 +168,8 @@ impl LocalPacketDestination {
         let header = rtp.header();
         let payload_type = outbound_payload_type(header, self.payload_type);
         let ext_vals = outbound_extension_values(header, self.mid);
+        // Share payload storage because copying bytes would multiply packet work
+        // by destination fanout.
         let payload = Arc::clone(rtp.payload);
         let mut write = RtpWrite::new(
             payload_type,
@@ -193,6 +196,11 @@ fn outbound_payload_type(header: &RtpHeader, payload_type: Option<Pt>) -> Pt {
 
 fn outbound_extension_values(header: &RtpHeader, mid: Mid) -> ExtensionValues {
     let mut ext_vals = header.ext_vals.clone();
+    // RFC 8843 section 15 binds MID to the consumer media section. RFC 8852
+    // section 3 scopes RID and repaired RID by source and MID, so publisher
+    // encoding identifiers must not leak onto the consumer stream.
+    // https://www.rfc-editor.org/rfc/rfc8843.html#section-15
+    // https://www.rfc-editor.org/rfc/rfc8852.html#section-3
     ext_vals.mid = Some(mid);
     ext_vals.rid = None;
     ext_vals.rid_repair = None;
