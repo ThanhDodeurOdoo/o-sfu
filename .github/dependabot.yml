@@ -12,8 +12,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] root:"
-      prefix-development: "[IMP] root (dev):"
+      prefix: "[DEP] root:"
+      prefix-development: "[DEP] root (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -28,8 +28,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] router:"
-      prefix-development: "[IMP] router (dev):"
+      prefix: "[DEP] router:"
+      prefix-development: "[DEP] router (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -44,8 +44,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] core:"
-      prefix-development: "[IMP] core (dev):"
+      prefix: "[DEP] core:"
+      prefix-development: "[DEP] core (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -60,8 +60,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] telemetry:"
-      prefix-development: "[IMP] telemetry (dev):"
+      prefix: "[DEP] telemetry:"
+      prefix-development: "[DEP] telemetry (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -76,8 +76,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] protocol:"
-      prefix-development: "[IMP] protocol (dev):"
+      prefix: "[DEP] protocol:"
+      prefix-development: "[DEP] protocol (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -92,8 +92,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] tests:"
-      prefix-development: "[IMP] tests (dev):"
+      prefix: "[DEP] tests:"
+      prefix-development: "[DEP] tests (dev):"
     labels:
       - "dependencies"
       - "cargo"
@@ -108,8 +108,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] client:"
-      prefix-development: "[IMP] client (dev):"
+      prefix: "[DEP] client:"
+      prefix-development: "[DEP] client (dev):"
     labels:
       - "dependencies"
       - "npm"
@@ -124,8 +124,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] root:"
-      prefix-development: "[IMP] root (dev):"
+      prefix: "[DEP] root:"
+      prefix-development: "[DEP] root (dev):"
     labels:
       - "dependencies"
       - "AI"
@@ -140,8 +140,8 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: "[IMP] github-actions:"
-      prefix-development: "[IMP] github-actions (dev):"
+      prefix: "[DEP] github-actions:"
+      prefix-development: "[DEP] github-actions (dev):"
     labels:
       - "dependencies"
       - "github-actions"
