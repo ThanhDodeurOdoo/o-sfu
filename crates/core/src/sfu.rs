@@ -342,13 +342,16 @@ impl MediaSession {
                     SfuCoreError::CapabilityProjection(TransportAdapterError::InvalidInput),
                 )?;
                 self.room_operation()
-                    .apply_session_negotiated(client_capabilities)
+                    .apply_session_negotiated(
+                        client_capabilities,
+                        applied_answer.declined_consumers(),
+                    )
                     .await
                     .ok_or(SfuCoreError::SessionNegotiationRejected)?;
             }
             SessionOfferPurpose::RefreshSession => {
                 self.room_operation()
-                    .apply_session_refreshed()
+                    .apply_session_refreshed(applied_answer.declined_consumers())
                     .await
                     .ok_or(SfuCoreError::SessionRefreshRejected)?;
             }

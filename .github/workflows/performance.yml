@@ -259,22 +259,24 @@ jobs:
 
           # the head run loads the saved base baseline and emits JSON summaries with base-versus-head deltas
           git checkout --force "${{ steps.refs.outputs.head-ref }}"
-          cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=base --save-summary=json
+          status=0
+          cargo bench --locked -p o-sfu-tests --bench packet_loop_callgrind -- --baseline=base --save-summary=json || status=1
           if [[ "${MEETING_FLOW_BASELINE_AVAILABLE:-false}" == "true" ]]; then
-            cargo bench --locked -p o-sfu-tests --bench meeting_flow_callgrind -- --baseline=base --save-summary=json
+            cargo bench --locked -p o-sfu-tests --bench meeting_flow_callgrind -- --baseline=base --save-summary=json || status=1
           else
-            cargo bench --locked -p o-sfu-tests --bench meeting_flow_callgrind -- --save-summary=json
+            cargo bench --locked -p o-sfu-tests --bench meeting_flow_callgrind -- --save-summary=json || status=1
           fi
           if [[ "${SOURCE_POLICY_BASELINE_AVAILABLE:-false}" == "true" ]]; then
-            cargo bench --locked -p o-sfu-tests --bench source_policy_callgrind -- --baseline=base --save-summary=json
+            cargo bench --locked -p o-sfu-tests --bench source_policy_callgrind -- --baseline=base --save-summary=json || status=1
           else
-            cargo bench --locked -p o-sfu-tests --bench source_policy_callgrind -- --save-summary=json
+            cargo bench --locked -p o-sfu-tests --bench source_policy_callgrind -- --save-summary=json || status=1
           fi
           if [[ "${GENERAL_CALL_BASELINE_AVAILABLE:-false}" == "true" ]]; then
-            cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --baseline=base --save-summary=json
+            cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --baseline=base --save-summary=json || status=1
           else
-            cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --save-summary=json
+            cargo bench --locked -p o-sfu-tests --bench general_call_callgrind -- --save-summary=json || status=1
           fi
+          exit "$status"
 
       - name: Run manual worker Callgrind investigation
         if: github.event_name == 'workflow_dispatch' && inputs.worker_investigation

@@ -336,6 +336,29 @@ impl RoomTopology {
             .filter_map(|(key, current)| self.consumer_route(key, current))
     }
 
+    pub(super) fn detach_declined_consumers(
+        &mut self,
+        session: &TransportSessionKey,
+        declined: &[TransportMediaId],
+    ) -> (Vec<TransportRelayRouteEffect>, Vec<TransportTeardown>, bool) {
+        let RemovedRoutes {
+            routes,
+            consumers,
+            relays,
+        } = self
+            .route_graph
+            .detach_declined_consumers(session, declined);
+        let detached = !routes.is_empty();
+        let relays = self.resolve_relay_effects(relays);
+        for consumer in consumers {
+            if let Some(error) = self.router.remove_consumer(consumer).err() {
+                error!(?consumer, ?error, "failed to remove declined room consumer");
+            }
+        }
+        let teardown = Self::media_teardowns([], routes).collect();
+        (relays, teardown, detached)
+    }
+
     pub(in crate::engine::room) fn pending_consumer_routes_for_user(
         &self,
         user_id: &UserId,
@@ -736,7 +759,9 @@ impl RoomTopology {
                 // explicit teardown.
                 let (_, removed_sources) = self.detach_user_sources(user_id);
                 let receiver_relays = self.route_graph.reset_receiver_for_replacement(user_id);
-                let RemovedRoutes { routes, mut relays } = removed_sources;
+                let RemovedRoutes {
+                    routes, mut relays, ..
+                } = removed_sources;
                 relays.extend(receiver_relays);
                 let relay_effects = self.resolve_relay_effects_with_displaced(
                     relays,
@@ -802,26 +827,23 @@ impl RoomTopology {
             rtp.mid()
                 .map_or_else(|| consumer.to_string(), ToOwned::to_owned)
         });
-        let (route_graph, router) = (&mut self.route_graph, &mut self.router);
+        let (route_graph, room_router) = (&mut self.route_graph, &mut self.router);
         // Remove pending state first so router rejection cannot strand a reservation.
-        let result = route_graph.commit(
-            reservation,
-            route.clone(),
-            committed_mid,
-            selection,
-            || match router.add_consumer(target.session.user_id(), consumer, target.routed) {
-                Ok(_) => true,
-                Err(error) => {
-                    warn!(
-                        consumer_user_id = ?target.session.user_id(),
-                        source_id = ?target.source_id,
-                        ?error,
-                        "router rejected consumer creation"
-                    );
-                    false
+        let result =
+            route_graph.commit(reservation, route.clone(), committed_mid, selection, || {
+                match room_router.add_consumer(target.session.user_id(), consumer, target.routed) {
+                    Ok(routed_consumer) => Some(routed_consumer),
+                    Err(error) => {
+                        warn!(
+                            consumer_user_id = ?target.session.user_id(),
+                            source_id = ?target.source_id,
+                            ?error,
+                            "router rejected consumer creation"
+                        );
+                        None
+                    }
                 }
-            },
-        );
+            });
         if let Err(relays) = result {
             return Err((route, self.resolve_relay_effects(relays)));
         }

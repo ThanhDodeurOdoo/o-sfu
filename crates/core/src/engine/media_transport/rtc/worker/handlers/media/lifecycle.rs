@@ -39,8 +39,9 @@ use super::{
     },
     AddSendMediaRequest,
     control::{
-        ConsumerRouteRegistration, ensure_route_src_registered, register_consumer_route,
-        remove_consumer_route, remove_source_route,
+        ConsumerRouteRegistration, consumer_payload_type, consumer_repair_enabled,
+        ensure_route_src_registered, register_consumer_route, remove_consumer_route,
+        remove_source_route,
     },
 };
 use crate::{
@@ -147,34 +148,66 @@ fn unregister_media_handle(
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     transport_media_id: TransportMediaId,
 ) -> Result<(), TransportAdapterError> {
+    let Some(registered) = state.media_handle(transport_media_id) else {
+        return Err(TransportAdapterError::InvalidInput);
+    };
+    let session_key = registered.session_key().clone();
+    let mid = registered.mid();
+    let keep_mid = state.session_has_other_media_mid(&session_key, mid, transport_media_id);
+    if matches!(registered, RegisteredMediaHandle::Producer { .. }) {
+        let ssrcs = state
+            .routes
+            .producer_ssrcs(transport_media_id)
+            .unwrap_or_default()
+            .to_vec();
+        if let Some(session_state) = state.users.get_mut(&session_key) {
+            let mut api = session_state.rtc.direct_api();
+            for ssrc in ssrcs {
+                api.remove_stream_rx(ssrc);
+            }
+        }
+    }
     let Some(handle) = state.remove_media_handle(transport_media_id) else {
         return Err(TransportAdapterError::InvalidInput);
     };
     match handle {
-        RegisteredMediaHandle::Producer { session_key, mid } => {
+        RegisteredMediaHandle::Producer {
+            session_key: owner,
+            mid,
+        } => {
             if let Ok(mut bitrate) = bitrate_registry.lock() {
-                bitrate.remove_incoming_media(&session_key, transport_media_id);
+                bitrate.remove_incoming_media(&owner, transport_media_id);
             }
-            if let Some(session_state) = state.users.get_mut(&session_key) {
+            if !keep_mid && let Some(session_state) = state.users.get_mut(&owner) {
                 session_state
                     .sdp_negotiation
                     .negotiated_producer_parameters
                     .remove(&mid);
             }
             remove_source_route(state, transport_media_id);
-            state.mark_session_dirty(&session_key);
-            Ok(())
         }
         RegisteredMediaHandle::Consumer {
-            session_key,
+            session_key: owner,
             src_media,
             ..
         } => {
-            remove_consumer_route(state, &session_key, transport_media_id, src_media);
-            state.mark_session_dirty(&session_key);
-            Ok(())
+            remove_consumer_route(state, &owner, transport_media_id, src_media);
+            if let Some(session_state) = state.users.get_mut(&owner) {
+                if keep_mid {
+                    session_state.purge_removed_rtx_streams();
+                } else {
+                    session_state.remove_consumer_stream_tx(mid);
+                }
+            }
         }
     }
+    if !keep_mid && let Some(session_state) = state.users.get_mut(&session_key) {
+        // A NACK baseline belongs to the MID lifetime. Retire its cumulative
+        // StreamRx or StreamTx before clearing the totals.
+        session_state.nack_totals.remove_mid(mid);
+    }
+    state.mark_session_dirty(&session_key);
+    Ok(())
 }
 
 fn stage_last_mid_removal_before_unregistering_handle(
@@ -243,29 +276,32 @@ fn worker_stage_native_media_removal(
             .insert(mid);
         return Ok(());
     }
-    if session_state.rtc.media(mid).is_none() {
+    let Some(media) = session_state.rtc.media(mid) else {
         return Err(TransportAdapterError::InvalidInput);
+    };
+    if media.direction() == Direction::Inactive {
+        session_state.reset_rtx_streams(mid);
+        return Ok(());
     }
 
     let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
-    let mut sdp_api = session_state.rtc.sdp_api();
-    if let Some(pending_offer) = existing_pending_offer {
-        sdp_api.merge(pending_offer);
-    }
-    sdp_api.set_direction(mid, Direction::Inactive);
-    let Some((offer, pending_offer)) = sdp_api.apply() else {
+    session_state.sdp_negotiation.pending_offer_repair = None;
+    let applied = {
+        let mut sdp_api = session_state.rtc.sdp_api();
+        if let Some(pending_offer) = existing_pending_offer {
+            sdp_api.merge(pending_offer);
+        }
+        sdp_api.set_direction(mid, Direction::Inactive);
+        sdp_api.apply()
+    };
+    session_state.reset_rtx_streams(mid);
+    let Some((offer, pending_offer)) = applied else {
         return Err(TransportAdapterError::InvalidInput);
     };
-    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
-    session_state
-        .sdp_negotiation
-        .staged_offer_upload_slots
-        .clear();
-    session_state
-        .sdp_negotiation
-        .queued_removal_mids
-        .remove(&mid);
+    let negotiation = &mut session_state.sdp_negotiation;
+    negotiation.stage_offer(offer, pending_offer);
+    negotiation.staged_offer_upload_slots.clear();
+    negotiation.queued_removal_mids.remove(&mid);
     Ok(())
 }
 
@@ -300,17 +336,16 @@ pub fn worker_add_recv_media(
     } else {
         let mid = transport_mid(rtp_parameters).unwrap_or_default();
         let has_media = session_state.rtc.media(mid).is_some();
+        let recv_streams = recv_encoding_identities(rtp_parameters);
         {
             let mut api = session_state.rtc.direct_api();
             if !has_media {
                 api.declare_media(mid, media_kind);
             }
-            for (ssrc, rid) in recv_encoding_identities(rtp_parameters) {
-                api.expect_stream_rx(ssrc, None, mid, rid)
-                    .suppress_nack(true);
-                if let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) {
-                    stream_rx.request_remb(Str0mBitrate::bps(policy.max_bitrate_in.as_bps()));
-                }
+            for (ssrc, repair_ssrc, rid) in recv_streams {
+                let stream_rx = api.expect_stream_rx(ssrc, repair_ssrc, mid, rid);
+                stream_rx.suppress_nack(repair_ssrc.is_none());
+                stream_rx.request_remb(Str0mBitrate::bps(policy.max_bitrate_in.as_bps()));
                 #[cfg(test)]
                 {
                     session_state.max_bitrate_in = Some(policy.max_bitrate_in);
@@ -352,6 +387,7 @@ fn worker_stage_native_recv_media(
     }
 
     let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
+    session_state.sdp_negotiation.pending_offer_repair = None;
     let mut sdp_api = session_state.rtc.sdp_api();
     if let Some(pending_offer) = existing_pending_offer {
         sdp_api.merge(pending_offer);
@@ -371,9 +407,9 @@ fn worker_stage_native_recv_media(
     let Some((offer, pending_offer)) = sdp_api.apply() else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
-    session_state.sdp_negotiation.staged_offer_upload_slots = vec![upload_slot(
+    let negotiation = &mut session_state.sdp_negotiation;
+    negotiation.stage_offer(offer, pending_offer);
+    negotiation.staged_offer_upload_slots = vec![upload_slot(
         mid,
         media_kind,
         rtp_parameters,
@@ -384,16 +420,16 @@ fn worker_stage_native_recv_media(
     // answer application can restore publisher identity and the bitrate cap.
     let pending_streams = recv_encoding_identities(rtp_parameters)
         .into_iter()
-        .map(|(ssrc, rid)| PendingRecvStream { ssrc, rid })
+        .map(|(ssrc, repair_ssrc, rid)| PendingRecvStream {
+            ssrc,
+            repair_ssrc,
+            rid,
+        })
         .collect::<Vec<_>>();
     if pending_streams.is_empty() {
-        session_state
-            .sdp_negotiation
-            .pending_recv_streams
-            .remove(&mid);
+        negotiation.pending_recv_streams.remove(&mid);
     } else {
-        session_state
-            .sdp_negotiation
+        negotiation
             .pending_recv_streams
             .insert(mid, pending_streams);
     }
@@ -508,7 +544,7 @@ fn declare_consumer_stream(
     };
     Ok((
         mid,
-        session_state.consumer_streams.allocate(),
+        session_state.consumer_streams.allocate(mid),
         !session_state.sdp_negotiation.initial_offer_applied,
     ))
 }
@@ -537,6 +573,7 @@ fn worker_stage_native_send_media(
     }
 
     let existing_pending_offer = session_state.sdp_negotiation.pending_offer.take();
+    session_state.sdp_negotiation.pending_offer_repair = None;
     let mut sdp_api = session_state.rtc.sdp_api();
     if let Some(pending_offer) = existing_pending_offer {
         sdp_api.merge(pending_offer);
@@ -545,12 +582,9 @@ fn worker_stage_native_send_media(
     let Some((offer, pending_offer)) = sdp_api.apply() else {
         return Err(TransportAdapterError::TransportUnavailable);
     };
-    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
-    session_state
-        .sdp_negotiation
-        .staged_offer_upload_slots
-        .clear();
+    let negotiation = &mut session_state.sdp_negotiation;
+    negotiation.stage_offer(offer, pending_offer);
+    negotiation.staged_offer_upload_slots.clear();
     Ok(mid)
 }
 
@@ -565,21 +599,29 @@ fn declare_direct_send_media(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) {
     let has_media = session_state.rtc.media(mid).is_some();
+    let primary_payload_type = consumer_payload_type(consumer_rtp_parameters);
+    let repair_enabled = consumer_repair_enabled(consumer_rtp_parameters, primary_payload_type);
     let mut api = session_state.rtc.direct_api();
     if !has_media {
         api.declare_media(mid, media_kind);
     }
-    let source_encoding_count = consumer_rtp_parameters.bindings().count();
-    let negotiated_ssrc = consumer_rtp_parameters
-        .bindings()
-        .find_map(|encoding| encoding.ssrc().map(Ssrc::from));
-    let ssrc = negotiated_ssrc.unwrap_or_else(|| api.new_ssrc());
-    api.declare_stream_tx(ssrc, None, mid, None);
+    let ssrc = api.new_ssrc();
+    // SSRC-multiplexed RTX uses a different SSRC from the primary stream.
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-4
+    let repair_ssrc = repair_enabled.then(|| {
+        loop {
+            let repair_ssrc = api.new_ssrc();
+            if repair_ssrc != ssrc {
+                break repair_ssrc;
+            }
+        }
+    });
+    api.declare_stream_tx(ssrc, repair_ssrc, mid, None);
     debug!(
         ?mid,
         ?media_kind,
         ?ssrc,
-        source_encoding_count,
+        ?repair_ssrc,
         downstream_rid_policy = "single_ridless_stream",
         "declared browser consumer RTP stream"
     );
@@ -589,13 +631,19 @@ fn transport_mid(rtp_parameters: &RouterRtpParameters) -> Option<Mid> {
     rtp_parameters.mid().map(Into::into)
 }
 
-fn recv_encoding_identities(rtp_parameters: &RouterRtpParameters) -> Vec<(Ssrc, Option<Rid>)> {
+fn recv_encoding_identities(
+    rtp_parameters: &RouterRtpParameters,
+) -> Vec<(Ssrc, Option<Ssrc>, Option<Rid>)> {
     rtp_parameters
         .bindings()
         .filter_map(|encoding| {
-            encoding
-                .ssrc()
-                .map(|ssrc| (Ssrc::from(ssrc), encoding.rid().map(Into::into)))
+            encoding.ssrc().map(|ssrc| {
+                (
+                    Ssrc::from(ssrc),
+                    encoding.repair_ssrc().map(Ssrc::from),
+                    encoding.rid().map(Into::into),
+                )
+            })
         })
         .collect()
 }

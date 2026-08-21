@@ -172,14 +172,14 @@ impl ConsumerActivity {
 
 /// Transport facts materialized while applying one negotiated SDP answer.
 ///
-/// Producer RTP parameters are answer-derived because the browser owns the
-/// final RTP capability, SSRC and RID acceptance details. Returning them with
-/// the accepted answer lets room state commit negotiated session and producer
-/// facts from the same projection pass.
+/// Producer RTP parameters and declined consumer media are answer-derived.
+/// Returning both lets room state commit or release the corresponding graph
+/// realization from the same accepted answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppliedSessionAnswer {
     client_capabilities: Option<MediaCapabilities>,
     negotiated_producers: BTreeMap<TransportMediaId, AppliedProducer>,
+    declined_consumers: Vec<TransportMediaId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,7 +219,6 @@ impl AppliedSessionAnswer {
         >,
     ) -> Self {
         Self {
-            client_capabilities: None,
             negotiated_producers: negotiated_producer_parameters
                 .into_iter()
                 .map(|(transport_media_id, rtp_parameters)| {
@@ -229,6 +228,7 @@ impl AppliedSessionAnswer {
                     )
                 })
                 .collect(),
+            ..Self::default()
         }
     }
 
@@ -237,9 +237,17 @@ impl AppliedSessionAnswer {
         negotiated_producers: impl IntoIterator<Item = (TransportMediaId, AppliedProducer)>,
     ) -> Self {
         Self {
-            client_capabilities: None,
             negotiated_producers: negotiated_producers.into_iter().collect(),
+            ..Self::default()
         }
+    }
+
+    pub(crate) fn with_declined_consumers(
+        mut self,
+        declined_consumers: Vec<TransportMediaId>,
+    ) -> Self {
+        self.declined_consumers = declined_consumers;
+        self
     }
 
     pub(crate) fn with_client_capabilities(
@@ -252,6 +260,10 @@ impl AppliedSessionAnswer {
 
     pub(crate) const fn client_capabilities(&self) -> Option<&MediaCapabilities> {
         self.client_capabilities.as_ref()
+    }
+
+    pub(crate) fn declined_consumers(&self) -> &[TransportMediaId] {
+        &self.declined_consumers
     }
 
     #[must_use]

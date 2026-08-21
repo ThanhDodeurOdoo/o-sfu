@@ -594,7 +594,7 @@ async fn transport_consume_failure_releases_pending_setup_for_retry() {
 
     assert_eq!(
         room.user_operation(&subscriber_id, subscriber_connection_id, &media_transport)
-            .apply_session_refreshed()
+            .apply_session_refreshed(&[])
             .await,
         Some(())
     );
@@ -648,7 +648,7 @@ async fn relay_setup_failure_releases_pending_setup_for_retry() {
     let release_relays = {
         let mut state = room.state.write().await;
         let mut setups = state
-            .refresh_consumer_readiness(&subscriber_id, subscriber_connection_id)
+            .refresh_consumer_readiness(&subscriber_id, subscriber_connection_id, &[])
             .expect("subscriber session should still be current")
             .work
             .setups;

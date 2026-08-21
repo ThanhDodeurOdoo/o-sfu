@@ -179,6 +179,19 @@ pub enum RtcDatagramDropReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtcNackDirection {
+    SentToPublisher,
+    ReceivedFromSubscriber,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtcOutputBudgetLimit {
+    Packets,
+    PayloadBytes,
+    PacketsAndPayloadBytes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RtcRouteControlOutcome {
     Absorbed,
     Forwarded,
@@ -478,6 +491,17 @@ impl_exported_metric_label!(RtcDatagramDropReason {
     SourceRateLimited => (1, "source_rate_limited"),
     NoUser => (2, "no_user"),
     Malformed => (3, "malformed"),
+});
+
+impl_exported_metric_label!(RtcNackDirection {
+    SentToPublisher => (0, "sent_to_publisher"),
+    ReceivedFromSubscriber => (1, "received_from_subscriber"),
+});
+
+impl_exported_metric_label!(RtcOutputBudgetLimit {
+    Packets => (0, "packets"),
+    PayloadBytes => (1, "payload_bytes"),
+    PacketsAndPayloadBytes => (2, "packets_and_payload_bytes"),
 });
 
 impl_exported_metric_label!(RtcRouteControlOutcome {

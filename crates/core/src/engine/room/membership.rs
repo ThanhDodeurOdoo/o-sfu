@@ -278,7 +278,7 @@ impl Room {
         media_port: &MediaTransport,
     ) -> Option<()> {
         self.user_operation(user_id, connection_id, media_port)
-            .apply_session_negotiated(capabilities)
+            .apply_session_negotiated(capabilities, &[])
             .await
     }
 

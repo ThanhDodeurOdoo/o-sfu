@@ -142,7 +142,7 @@ async fn stale_refresh_does_not_request_replaced_receiver_keyframes() {
                 stale_connection_id,
                 &scenario.media_transport,
             )
-            .apply_session_refreshed()
+            .apply_session_refreshed(&[])
             .await,
         None
     );

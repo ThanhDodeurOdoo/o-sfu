@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use o_sfu_rfc::webrtc::{self, sdp::attribute};
+use o_sfu_rfc::webrtc::{self, sdp};
 use o_sfu_router::rtp::MediaStream;
 use str0m::{
     change::SdpAnswer,
@@ -100,7 +100,7 @@ pub(super) fn recv_simulcast(layers: &[LayerSpec<'_>]) -> Simulcast {
                 rid: Rid::from(layer.rid),
                 attributes: layer.max_bitrate.map(|max_bitrate| {
                     vec![(
-                        webrtc::sdp::rid_restriction::MAX_BITRATE.to_owned(),
+                        sdp::rid_restriction::MAX_BITRATE.to_owned(),
                         max_bitrate.as_bps().to_string(),
                     )]
                 }),
@@ -115,9 +115,7 @@ pub(super) fn layers_from_bindings(parameters: &MediaStream) -> Option<Vec<Layer
         let Some(rid) = encoding.rid() else {
             continue;
         };
-        if !webrtc::sdp::rid::is_id(rid)
-            || layers.iter().any(|layer: &LayerSpec<'_>| layer.rid == rid)
-        {
+        if !sdp::rid::is_id(rid) || layers.iter().any(|layer: &LayerSpec<'_>| layer.rid == rid) {
             continue;
         }
         layers.push(LayerSpec {
@@ -241,7 +239,7 @@ fn send_rid_declaration<'a>(
 ) -> Result<SendRidDeclaration<'a>, SimulcastAnswerError> {
     let mut found = None;
     for line in section.lines() {
-        let Some(declaration) = parse_send_rid(line.trim_end_matches('\r'))? else {
+        let Some(declaration) = parse_send_rid(line.trim_end_matches(sdp::CR))? else {
             continue;
         };
         if declaration.rid != rid {
@@ -255,14 +253,14 @@ fn send_rid_declaration<'a>(
 }
 
 fn parse_send_rid(line: &str) -> Result<Option<SendRidDeclaration<'_>>, SimulcastAnswerError> {
-    let Some(rid_value) = sdp_attribute_value(line, attribute::RID) else {
+    let Some(rid_value) = sdp_attribute_value(line, sdp::attribute::RID) else {
         return Ok(None);
     };
-    let mut parts = rid_value.splitn(3, ' ');
+    let mut parts = rid_value.splitn(3, sdp::SP);
     let Some(rid) = parts.next() else {
         return Ok(None);
     };
-    if !webrtc::sdp::rid::is_id(rid) {
+    if !sdp::rid::is_id(rid) {
         return Ok(None);
     }
     let Some(direction) = parts.next() else {
@@ -278,9 +276,9 @@ fn parse_send_rid(line: &str) -> Result<Option<SendRidDeclaration<'_>>, Simulcas
 }
 
 fn accepted_send_simulcast_rids(section: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
-    let mut lines = section
-        .lines()
-        .filter_map(|line| sdp_attribute_value(line.trim_end_matches('\r'), attribute::SIMULCAST));
+    let mut lines = section.lines().filter_map(|line| {
+        sdp_attribute_value(line.trim_end_matches(sdp::CR), sdp::attribute::SIMULCAST)
+    });
     let Some(value) = lines.next() else {
         return Ok(Vec::new());
     };
@@ -291,9 +289,9 @@ fn accepted_send_simulcast_rids(section: &str) -> Result<Vec<&str>, SimulcastAns
 }
 
 fn sdp_attribute_value<'a>(line: &'a str, attribute: &str) -> Option<&'a str> {
-    line.strip_prefix(webrtc::sdp::ATTRIBUTE_PREFIX)?
+    line.strip_prefix(sdp::ATTR)?
         .strip_prefix(attribute)?
-        .strip_prefix(':')
+        .strip_prefix(sdp::ATTR_SEP)
 }
 
 fn parse_send_simulcast_value(value: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
@@ -306,12 +304,12 @@ fn parse_send_simulcast_value(value: &str) -> Result<Vec<&str>, SimulcastAnswerE
             return Err(SimulcastAnswerError);
         };
         match direction {
-            webrtc::sdp::simulcast::DIRECTION_SEND => {
+            sdp::simulcast::DIRECTION_SEND => {
                 if send.replace(rids).is_some() {
                     return Err(SimulcastAnswerError);
                 }
             }
-            webrtc::sdp::simulcast::DIRECTION_RECV => {}
+            sdp::simulcast::DIRECTION_RECV => {}
             _ => return Err(SimulcastAnswerError),
         }
     }
@@ -321,18 +319,22 @@ fn parse_send_simulcast_value(value: &str) -> Result<Vec<&str>, SimulcastAnswerE
     send.map_or(Ok(Vec::new()), parse_simulcast_rid_list)
 }
 
+pub(super) fn send_simulcast_stream_count(value: &str) -> Result<usize, SimulcastAnswerError> {
+    parse_send_simulcast_value(value).map(|rids| rids.len())
+}
+
 fn parse_simulcast_rid_list(value: &str) -> Result<Vec<&str>, SimulcastAnswerError> {
     let mut rids = Vec::new();
-    for stream in value.split(webrtc::sdp::simulcast::STREAM_SEPARATOR) {
-        if stream.contains(webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR) {
+    for stream in value.split(sdp::simulcast::STREAM_SEPARATOR) {
+        if stream.contains(sdp::simulcast::ALTERNATIVE_SEPARATOR) {
             // RFC 8853 alternatives describe formats for one simulcast position,
             // not extra layers. `SessionUploadEncoding` models one RID per
             // position, so reject the group instead of silently selecting one.
             // https://www.rfc-editor.org/rfc/rfc8853.html#section-5.2
             return Err(SimulcastAnswerError);
         }
-        let rid = webrtc::sdp::simulcast::strip_initial_pause_prefix(stream).unwrap_or(stream);
-        if !webrtc::sdp::rid::is_id(rid) || rids.contains(&rid) {
+        let rid = sdp::simulcast::strip_initial_pause_prefix(stream).unwrap_or(stream);
+        if !sdp::rid::is_id(rid) || rids.contains(&rid) {
             return Err(SimulcastAnswerError);
         }
         rids.push(rid);
@@ -350,18 +352,17 @@ fn parse_rid_restrictions(
         return Ok(RidMaxBitrate::Absent);
     };
     let mut max_bitrate = RidMaxBitrate::Absent;
-    for restriction in restrictions.split(';') {
+    for restriction in restrictions.split(sdp::rid_restriction::PARAMETER_SEPARATOR) {
         let restriction = restriction.trim();
         if restriction.is_empty() {
             return Err(SimulcastAnswerError);
         }
         let (key, value) = restriction
-            .split_once('=')
+            .split_once(sdp::rid_restriction::NAME_VALUE_SEPARATOR)
             .map_or((restriction, None), |(key, value)| {
                 (key.trim(), Some(value.trim()))
             });
-        if key != webrtc::sdp::rid_restriction::MAX_BITRATE || max_bitrate != RidMaxBitrate::Absent
-        {
+        if key != sdp::rid_restriction::MAX_BITRATE || max_bitrate != RidMaxBitrate::Absent {
             return Err(SimulcastAnswerError);
         }
         max_bitrate = match value {

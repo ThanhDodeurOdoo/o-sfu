@@ -33,15 +33,20 @@ pub(super) use o_sfu_tests::support::{
     TEST_ROOM_KEY, TestResult, TestServer, create_room,
     fake_media::{
         FakeClock, FakeMediaSource, SyntheticH264Stream, SyntheticOpusStream, SyntheticVp8Stream,
+        project_synthetic_vp8_payload,
+    },
+    fake_rtc_peer::{
+        DroppedRtpPacket, ReceivedRtpPacket, RtcPeerTrace, RtcTraceDirection, TracedRtpPacket,
     },
     metrics_text,
     protocol_full_stack::{
-        ProtocolFakePeer, connect_fake_peer, connect_two_fake_peers,
-        connect_two_rtc_ready_fake_peers,
+        ProtocolFakePeer, connect_fake_peer, connect_ridless_video_fake_peer,
+        connect_two_fake_peers, connect_two_rtc_ready_fake_peers,
     },
     require_some, spawn_room_server_with_config, spawn_test_server, stats, test_config,
 };
 pub(super) use tokio::{
+    join,
     sync::{Mutex, MutexGuard},
     task::yield_now,
     time::{sleep, timeout},

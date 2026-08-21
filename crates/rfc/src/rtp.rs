@@ -3,6 +3,7 @@
 //! - RTP A/V profile payload assignments: <https://www.rfc-editor.org/rfc/rfc3551>
 //! - RTP header extension framework: <https://www.rfc-editor.org/rfc/rfc8285>
 //! - RTCP feedback profile: <https://www.rfc-editor.org/rfc/rfc4585>
+//! - RTP retransmission payload format: <https://www.rfc-editor.org/rfc/rfc4588>
 //! - RTP stream identifier SDES items: <https://www.rfc-editor.org/rfc/rfc8852>
 //! - Video frame marking RTP header extension: <https://www.rfc-editor.org/rfc/rfc9626>
 //! - Layer Refresh Request feedback: <https://www.rfc-editor.org/rfc/rfc9627>
@@ -28,18 +29,83 @@
 //! |                         codec payload ...                     |
 //! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //! ```
+//!
+//! Generic NACK is RTCP feedback rather than a field in an RTP packet. One
+//! RTPFB packet can carry multiple `PID`/`BLP` entries:
+//!
+//! ```text
+//!  0                   1                   2                   3
+//!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |V=2|P| FMT=1 |    PT=205     |             length              |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                    SSRC of feedback sender                    |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                     SSRC of primary media                     |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |              PID              |              BLP              |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                    more PID/BLP entries ...                   |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! ```
+//!
+//! `PID` names one missing primary RTP sequence number. Zero-based BLP bit `i`
+//! reports `(PID + i + 1) mod 2^16` as missing. See
+//! [RFC 4585 section 6.1](https://www.rfc-editor.org/rfc/rfc4585.html#section-6.1)
+//! and
+//! [RFC 4585 section 6.2.1](https://www.rfc-editor.org/rfc/rfc4585.html#section-6.2.1).
+//!
+//! RTX is a new RTP packet in the repair stream. Its RTP header has the repair
+//! payload type, repair SSRC and an independent repair sequence number. The
+//! payload begins with the original sequence number:
+//!
+//! ```text
+//!  0                   1                   2                   3
+//!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |V=2|P|X|  CC   |M|   RTX PT    |    repair sequence number     |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                    original RTP timestamp                     |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |                          repair SSRC                          |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |         optional CSRC list and RTP header extension ...       |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! |              OSN              |                               |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               |
+//! |                 original RTP packet payload ...               |
+//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//! ```
+//!
+//! `apt` binds the RTX payload type to the primary payload type in SDP. It is
+//! not carried in either packet. See
+//! [RFC 4588 section 4](https://www.rfc-editor.org/rfc/rfc4588.html#section-4)
+//! and
+//! [RFC 4588 section 8.1](https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1).
 
-use std::fmt;
+use std::{fmt, iter, mem};
 
-use crate::webrtc::sdp::rid;
+use crate::webrtc::sdp;
 
 /// RTP version defined by RFC 3550 section 5.1.
 pub const RTP_VERSION: u8 = 2;
+
+/// RTP version bits in the first octet of RTP and RTCP packets.
+///
+/// References:
+/// - <https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1>
+/// - <https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.1>
+const RTP_VERSION_HEADER_BITS: u8 = RTP_VERSION << RTP_VERSION_SHIFT;
 
 /// Fixed RTP header length in bytes with no CSRC and no extension.
 ///
 /// Reference: RFC 3550 section 5.1.
 pub const RTP_FIXED_HEADER_BYTES: usize = 12;
+
+/// Number of values representable by the 7-bit RTP payload type field.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1>
+pub const RTP_PAYLOAD_TYPE_COUNT: usize = 1 << RTP_PAYLOAD_TYPE_BITS;
 
 /// Maximum number of CSRC identifiers in the RTP fixed header.
 ///
@@ -77,6 +143,49 @@ pub const RTP_DYNAMIC_PAYLOAD_TYPE_END: u8 = 127;
 /// Reference: RFC 5761 section 4.
 pub const RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_START: u8 = 64;
 pub const RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_END: u8 = 95;
+
+const RTP_VERSION_SHIFT: u32 = 6;
+const RTP_VERSION_MASK: u8 = 0b1100_0000;
+const RTP_PAYLOAD_TYPE_BITS: u32 = 7;
+const RTP_PAYLOAD_TYPE_MASK: u8 = RTP_PAYLOAD_TYPE_MAX;
+const RTP_PADDING_MASK: u8 = 0b0010_0000;
+const RTP_EXTENSION_MASK: u8 = 0b0001_0000;
+const RTP_CSRC_COUNT_MASK: u8 = 0b0000_1111;
+const RTP_MARKER_MASK: u8 = 0b1000_0000;
+const RTP_SEQUENCE_NUMBER_OFFSET: usize = 2;
+const RTP_TIMESTAMP_OFFSET: usize = 4;
+const RTP_SSRC_OFFSET: usize = 8;
+const RTP_CSRC_BYTES: usize = 4;
+
+/// RTCP common-header length in bytes.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.1>
+const RTCP_COMMON_HEADER_BYTES: usize = 4;
+
+/// SSRC field length in an RTCP packet.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.1>
+const RTCP_SSRC_BYTES: usize = 4;
+
+/// Length of an RTCP Receiver Report with no report blocks.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.2>
+pub const RTCP_RECEIVER_REPORT_WITHOUT_BLOCKS_BYTES: usize =
+    RTCP_COMMON_HEADER_BYTES + RTCP_SSRC_BYTES;
+
+const RTCP_RECEIVER_REPORT_WITHOUT_BLOCKS_LENGTH_WORDS_MINUS_ONE: u16 = 1;
+
+/// Number of octets prepended to an RTX payload for the original sequence
+/// number.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc4588.html#section-4>
+pub const RTX_ORIGINAL_SEQUENCE_NUMBER_BYTES: usize = 2;
+
+/// Number of sequence numbers represented by the Generic NACK BLP field after
+/// its PID.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc4585.html#section-6.2.1>
+const GENERIC_NACK_BITMASK_BITS: u16 = 16;
 
 /// Common static RTP/AVP payload type assignments.
 ///
@@ -170,6 +279,74 @@ impl From<PayloadType> for u8 {
     }
 }
 
+/// RTP or RTCP candidate selected by the RFC 5761 second-octet split.
+///
+/// The result identifies only the mux candidate kind. It does not validate the
+/// complete packet body.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc5761.html#section-4>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtpRtcpMuxPacketKind {
+    Rtp,
+    Rtcp,
+}
+
+/// Parsed fields from an RTP fixed header in an RTP/RTCP muxed session.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RtpFixedHeader {
+    payload_type: u8,
+    sequence_number: u16,
+    timestamp: u32,
+    ssrc: Ssrc,
+    marker: bool,
+    has_padding: bool,
+    has_extension: bool,
+    csrc_count: u8,
+}
+
+impl RtpFixedHeader {
+    #[must_use]
+    pub const fn payload_type(self) -> u8 {
+        self.payload_type
+    }
+
+    #[must_use]
+    pub const fn sequence_number(self) -> u16 {
+        self.sequence_number
+    }
+
+    #[must_use]
+    pub const fn timestamp(self) -> u32 {
+        self.timestamp
+    }
+
+    #[must_use]
+    pub const fn ssrc(self) -> Ssrc {
+        self.ssrc
+    }
+
+    #[must_use]
+    pub const fn marker(self) -> bool {
+        self.marker
+    }
+
+    #[must_use]
+    pub const fn has_padding(self) -> bool {
+        self.has_padding
+    }
+
+    #[must_use]
+    const fn has_extension(self) -> bool {
+        self.has_extension
+    }
+
+    fn extension_offset(self) -> usize {
+        RTP_FIXED_HEADER_BYTES + usize::from(self.csrc_count) * RTP_CSRC_BYTES
+    }
+}
+
 /// Synchronization source identifier for a media stream (RFC 3550).
 ///
 /// Every distinct stream of packets (e.g. one audio track, one camera layer)
@@ -214,7 +391,7 @@ impl Rid {
     #[must_use]
     pub fn try_new(value: impl Into<String>) -> Option<Self> {
         let value = value.into();
-        rid::is_id(value.as_str()).then_some(Self(value))
+        sdp::rid::is_id(value.as_str()).then_some(Self(value))
     }
 
     /// Builds a RID using the RFC 8851 `rid-id` grammar corrected by RFC Editor errata 7132.
@@ -226,7 +403,7 @@ impl Rid {
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         let value = value.into();
-        assert!(rid::is_id(value.as_str()));
+        assert!(sdp::rid::is_id(value.as_str()));
         Self(value)
     }
 
@@ -695,9 +872,19 @@ impl fmt::Display for CodecName {
 
 /// Codec `fmtp` parameter names and canonical valuse
 pub mod fmtp {
+    /// Separator between format-specific parameters used by RTX `fmtp`.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc4588.html#section-8.6>
+    pub const PARAMETER_SEPARATOR: char = ';';
+
+    /// Separator between an RTX `fmtp` parameter name and value.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc4588.html#section-8.6>
+    pub const NAME_VALUE_SEPARATOR: char = '=';
+
     /// RTX associated payload type parameter
     ///
-    /// Reference: RFC 4588 section 8.
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1>
     pub const RTX_ASSOCIATION: &str = "apt";
 
     /// H264 packetization mode parameter.
@@ -1377,6 +1564,137 @@ pub const fn is_rtcp_mux_payload_type(payload_type: u8) -> bool {
             || payload_type > RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_END)
 }
 
+/// Returns whether `payload_type` can be assigned dynamically in an RTP/RTCP
+/// muxed RTP/AVP session.
+///
+/// RFC 3551 reserves 96 through 127 for dynamic assignment and leaves several
+/// lower ranges unassigned. RFC 5761 permits muxed RTP to use values below 64
+/// while excluding 64 through 95 from RTP assignment.
+///
+/// References:
+/// - <https://www.rfc-editor.org/rfc/rfc3551.html#section-6>
+/// - <https://www.rfc-editor.org/rfc/rfc5761.html#section-4>
+#[must_use]
+pub const fn is_rtcp_mux_dynamic_payload_type(payload_type: u8) -> bool {
+    is_dynamic_payload_type(payload_type)
+        || matches!(payload_type, 20..=24 | 27 | 29..=30 | 35..=63)
+}
+
+/// Classifies an RTP or RTCP candidate in an RTP/RTCP muxed datagram.
+///
+/// The packet must contain the first two header octets plus one body octet,
+/// matching the minimum boundary used before complete RTP or RTCP parsing.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc5761.html#section-4>
+#[must_use]
+pub fn classify_rtp_rtcp_mux(packet: &[u8]) -> Option<RtpRtcpMuxPacketKind> {
+    let [first, second, _, ..] = packet else {
+        return None;
+    };
+    if first & RTP_VERSION_MASK != RTP_VERSION_HEADER_BITS {
+        return None;
+    }
+    let payload_type = second & RTP_PAYLOAD_TYPE_MASK;
+    if (RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_START..=RTP_RTCP_MUX_FORBIDDEN_PAYLOAD_TYPE_END)
+        .contains(&payload_type)
+    {
+        Some(RtpRtcpMuxPacketKind::Rtcp)
+    } else {
+        Some(RtpRtcpMuxPacketKind::Rtp)
+    }
+}
+
+/// Parses the fixed RTP header of an RTP candidate in a muxed session.
+///
+/// The parser rejects RTCP candidates, non-RTP versions and packets truncated
+/// within the fixed header or declared CSRC list. Codec payload and padding
+/// validation belong to the payload parser.
+///
+/// References:
+/// - <https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1>
+/// - <https://www.rfc-editor.org/rfc/rfc5761.html#section-4>
+#[must_use]
+pub fn parse_muxed_rtp_fixed_header(packet: &[u8]) -> Option<RtpFixedHeader> {
+    if classify_rtp_rtcp_mux(packet) != Some(RtpRtcpMuxPacketKind::Rtp) {
+        return None;
+    }
+    let first = *packet.first()?;
+    let second = *packet.get(1)?;
+    let header = RtpFixedHeader {
+        payload_type: second & RTP_PAYLOAD_TYPE_MASK,
+        sequence_number: read_u16(packet, RTP_SEQUENCE_NUMBER_OFFSET)?,
+        timestamp: read_u32(packet, RTP_TIMESTAMP_OFFSET)?,
+        ssrc: Ssrc::new(read_u32(packet, RTP_SSRC_OFFSET)?),
+        marker: second & RTP_MARKER_MASK != 0,
+        has_padding: first & RTP_PADDING_MASK != 0,
+        has_extension: first & RTP_EXTENSION_MASK != 0,
+        csrc_count: first & RTP_CSRC_COUNT_MASK,
+    };
+    packet.get(..header.extension_offset())?;
+    Some(header)
+}
+
+/// Expands one Generic NACK PID and bitmask into requested RTP sequence
+/// numbers.
+///
+/// The PID is yielded first. Each set BLP bit yields PID + bit index + 1 with
+/// 16-bit RTP sequence-number rollover.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc4585.html#section-6.2.1>
+pub fn generic_nack_sequence_numbers(pid: u16, blp: u16) -> impl Iterator<Item = u16> {
+    iter::once(pid).chain(
+        (0_u16..GENERIC_NACK_BITMASK_BITS)
+            .filter(move |bit| blp & (1_u16 << bit) != 0)
+            .map(move |bit| pid.wrapping_add(bit + 1)),
+    )
+}
+
+/// Extracts the original RTP sequence number from an RTX payload.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc4588.html#section-4>
+#[must_use]
+pub fn rtx_original_sequence_number(payload: &[u8]) -> Option<u16> {
+    read_u16(payload, 0)
+}
+
+/// Builds an RTCP Receiver Report with no reception report blocks.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.2>
+#[must_use]
+pub fn rtcp_receiver_report_without_report_blocks(
+    sender_ssrc: Ssrc,
+) -> [u8; RTCP_RECEIVER_REPORT_WITHOUT_BLOCKS_BYTES] {
+    let [length_high, length_low] =
+        RTCP_RECEIVER_REPORT_WITHOUT_BLOCKS_LENGTH_WORDS_MINUS_ONE.to_be_bytes();
+    let [ssrc_0, ssrc_1, ssrc_2, ssrc_3] = sender_ssrc.value().to_be_bytes();
+    [
+        RTP_VERSION_HEADER_BITS,
+        rtcp_packet_type::RR,
+        length_high,
+        length_low,
+        ssrc_0,
+        ssrc_1,
+        ssrc_2,
+        ssrc_3,
+    ]
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset.checked_add(mem::size_of::<u16>())?)?
+        .try_into()
+        .ok()
+        .map(u16::from_be_bytes)
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset.checked_add(mem::size_of::<u32>())?)?
+        .try_into()
+        .ok()
+        .map(u32::from_be_bytes)
+}
+
 /// rtcp common-header `PT` value namespace
 ///
 /// reference: RFC 3550 section 12.1 and RFC 4585 section 6.1
@@ -1480,6 +1798,12 @@ pub mod rtcp_feedback_format {
 /// +---------+---------+----------------------+
 /// ```
 pub mod header_extension {
+    const HEADER_BYTES: usize = 4;
+    const WORD_BYTES: usize = 4;
+    const ONE_BYTE_ID_SHIFT: u32 = 4;
+    const ONE_BYTE_LENGTH_MASK: u8 = 0b0000_1111;
+    const ONE_BYTE_LENGTH_OFFSET: usize = 1;
+
     /// RFC 8285 one-byte header extension profile ID.
     pub const ONE_BYTE_PROFILE_ID: u16 = 0xBEDE;
 
@@ -1522,6 +1846,59 @@ pub mod header_extension {
             return None;
         }
         Some(TWO_BYTE_PROFILE_ID_BASE | u16::from(appbits))
+    }
+
+    /// Finds an RFC 8285 one-byte extension element in a complete muxed RTP
+    /// packet.
+    ///
+    /// Zero octets are padding. A nonzero element with ID 0 is malformed and
+    /// ID 15 terminates processing, so neither can expose a later element.
+    /// Packets without the one-byte extension profile return `None`.
+    ///
+    /// References:
+    /// - <https://www.rfc-editor.org/rfc/rfc8285.html#section-4.1.2>
+    /// - <https://www.rfc-editor.org/rfc/rfc8285.html#section-4.2>
+    #[must_use]
+    pub fn find_one_byte_element(packet: &[u8], target_id: u8) -> Option<&[u8]> {
+        if !is_one_byte_id(target_id) {
+            return None;
+        }
+        let header = super::parse_muxed_rtp_fixed_header(packet)?;
+        if !header.has_extension() {
+            return None;
+        }
+        let extension_offset = header.extension_offset();
+        let profile = super::read_u16(packet, extension_offset)?;
+        if profile != ONE_BYTE_PROFILE_ID {
+            return None;
+        }
+        let word_count = super::read_u16(
+            packet,
+            extension_offset.checked_add(super::mem::size_of::<u16>())?,
+        )?;
+        let elements_offset = extension_offset.checked_add(HEADER_BYTES)?;
+        let elements_bytes = usize::from(word_count).checked_mul(WORD_BYTES)?;
+        let mut elements =
+            packet.get(elements_offset..elements_offset.checked_add(elements_bytes)?)?;
+
+        while let Some((&element_header, rest)) = elements.split_first() {
+            elements = rest;
+            if element_header == ONE_BYTE_ID_PAD {
+                continue;
+            }
+            let id = element_header >> ONE_BYTE_ID_SHIFT;
+            if id == ONE_BYTE_ID_PAD || id == ONE_BYTE_ID_RESERVED {
+                return None;
+            }
+            let length = usize::from(element_header & ONE_BYTE_LENGTH_MASK)
+                .checked_add(ONE_BYTE_LENGTH_OFFSET)?;
+            let value = elements.get(..length)?;
+            elements = elements.get(length..)?;
+            if id == target_id {
+                return Some(value);
+            }
+        }
+        None
     }
 }
 

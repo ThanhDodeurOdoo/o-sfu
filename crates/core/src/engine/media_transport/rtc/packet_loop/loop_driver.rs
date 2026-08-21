@@ -155,12 +155,25 @@ impl PacketLoopTurn {
     pub fn pump(
         &mut self,
         state: &mut PacketLoopState,
+        bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
         snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
         config: &PacketLoopConfig,
+        demux: &mut DemuxRecoveryState,
         relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
     ) -> WaitPhaseSnapshot {
         self.buffers.clear();
-        self.pump_core(state, snapshot_state, config, relay_rx, Instant::now())
+        let (snapshot, topology_changed) = self.pump_core(
+            state,
+            bitrate_registry,
+            snapshot_state,
+            config,
+            relay_rx,
+            Instant::now(),
+        );
+        if topology_changed {
+            demux.clear_on_topology_change();
+        }
+        snapshot
     }
 
     /// benchmark variant of [`Self::pump`] that stages synthetic ingress before
@@ -175,6 +188,7 @@ impl PacketLoopTurn {
     pub fn pump_for_benchmark(
         &mut self,
         state: &mut PacketLoopState,
+        bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
         snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
         config: &PacketLoopConfig,
         relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
@@ -185,7 +199,14 @@ impl PacketLoopTurn {
         self.buffers
             .pending_keyframe_requests
             .extend(input.keyframe_requests);
-        let _wait_phase = self.pump_core(state, snapshot_state, config, relay_rx, input.now);
+        let _ = self.pump_core(
+            state,
+            bitrate_registry,
+            snapshot_state,
+            config,
+            relay_rx,
+            input.now,
+        );
     }
 
     /// returns the packets a benchmark turn staged and observed back to the
@@ -217,24 +238,28 @@ impl PacketLoopTurn {
     fn pump_core(
         &mut self,
         state: &mut PacketLoopState,
+        bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
         snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
         config: &PacketLoopConfig,
         relay_rx: &mut mpsc::Receiver<ForwardedPacket>,
         now: Instant,
-    ) -> WaitPhaseSnapshot {
+    ) -> (WaitPhaseSnapshot, bool) {
         if let Some(packet) = self.staged_relay_packet.take() {
             // the packet that woke the wait phase enters the same batch as packets
             // drained from the relay mailbox below
             self.buffers.pending_packets.push(packet);
         }
-        let session_drain_context = SessionDrainContext {
+        let session_drain_context = SessionDrainContext::new(
             snapshot_state,
-            metrics: &config.metrics,
-            source_policy_signal: &config.source_policy_signal,
-        };
+            bitrate_registry,
+            &config.metrics,
+            &config.rtc_metrics,
+            &config.source_policy_signal,
+        );
         // Drain output from prior inputs before forwarding this batch. Local RTC
         // writes later in the pump requeue their sessions for the next turn.
-        drain_ready_sessions(state, &session_drain_context, &mut self.buffers, now);
+        let topology_changed =
+            drain_ready_sessions(state, &session_drain_context, &mut self.buffers, now);
         // Cap relay work so sustained cross-worker fanout cannot delay control,
         // timeout or UDP input indefinitely.
         drain_relay_packets(
@@ -303,9 +328,12 @@ impl PacketLoopTurn {
             .source_policy_signal
             .mark_dirty_rooms(state.take_expired_speaker_rooms(now));
         drain_due_kf_retries(state, &config.rtc_metrics, &mut self.buffers, now);
-        WaitPhaseSnapshot {
-            next_timeout: next_timeout_deadline_at(state, now),
-        }
+        (
+            WaitPhaseSnapshot {
+                next_timeout: next_timeout_deadline_at(state, now),
+            },
+            topology_changed,
+        )
     }
 
     /// Sends UDP transmits staged during the pump phase.
@@ -546,8 +574,10 @@ pub async fn run_packet_loop(
 
         let snapshot = turn.pump(
             &mut packet_loop_state,
+            &bitrate_registry,
             &snapshot_state,
             &config,
+            &mut demux,
             inputs.relay_rx(),
         );
 

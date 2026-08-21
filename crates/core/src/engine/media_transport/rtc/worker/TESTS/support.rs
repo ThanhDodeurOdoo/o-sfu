@@ -189,11 +189,11 @@ impl RtcWorker {
     }
 
     #[cfg(test)]
-    pub async fn debug_session_stream_tx_ssrc(
+    pub async fn debug_session_stream_tx_pair(
         &self,
         session_key: &TransportSessionKey,
         mid: Mid,
-    ) -> Option<u32> {
+    ) -> Option<(u32, Option<u32>)> {
         self.probe_debug_worker(SessionStreamTxSsrcProbe {
             session_key: session_key.clone(),
             mid,

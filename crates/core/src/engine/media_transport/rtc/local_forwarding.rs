@@ -14,7 +14,7 @@ use tracing::debug;
 
 use super::{
     codec,
-    local_send_rewrite::{ProjectedIdentity, SourceTransition},
+    local_send_rewrite::{ProjectedIdentity, SourceRtpIdentity, SourceTransition},
     slots::ConsumerStreamHandle,
     state::RtcSessionState,
 };
@@ -30,12 +30,14 @@ pub(super) struct LocalPacketDestination {
     delivery_generation: u64,
     mid: Mid,
     payload_type: Option<Pt>,
+    repair_enabled: bool,
 }
 
 /// borrowed RTP metadata plus shared payload bytes for local egress
 pub(super) struct LocalForwardedRtp<'a> {
     data: LocalForwardedRtpData<'a>,
     payload: &'a Arc<[u8]>,
+    was_repair: bool,
 }
 
 enum LocalForwardedRtpData<'a> {
@@ -48,10 +50,11 @@ enum LocalForwardedRtpData<'a> {
 }
 
 impl<'a> LocalForwardedRtp<'a> {
-    pub(super) fn new(rtp_packet: &'a RtpPacket, payload: &'a Arc<[u8]>) -> Self {
+    pub(super) fn new(rtp_packet: &'a RtpPacket, payload: &'a Arc<[u8]>, was_repair: bool) -> Self {
         Self {
             data: LocalForwardedRtpData::Str0m(rtp_packet),
             payload,
+            was_repair,
         }
     }
 
@@ -60,6 +63,7 @@ impl<'a> LocalForwardedRtp<'a> {
         sequence_number: SeqNo,
         timestamp: Instant,
         payload: &'a Arc<[u8]>,
+        was_repair: bool,
     ) -> Self {
         Self {
             data: LocalForwardedRtpData::Relay {
@@ -68,6 +72,7 @@ impl<'a> LocalForwardedRtp<'a> {
                 timestamp,
             },
             payload,
+            was_repair,
         }
     }
 
@@ -102,6 +107,7 @@ impl LocalPacketDestination {
         delivery_generation: u64,
         mid: Mid,
         payload_type: Option<Pt>,
+        repair_enabled: bool,
     ) -> Self {
         Self {
             transport_media_id,
@@ -109,6 +115,7 @@ impl LocalPacketDestination {
             delivery_generation,
             mid,
             payload_type,
+            repair_enabled,
         }
     }
 
@@ -123,23 +130,27 @@ impl LocalPacketDestination {
         rtp: &LocalForwardedRtp<'_>,
         codec_packet: Option<&codec::Packet>,
     ) -> Option<usize> {
-        let payload_len = rtp.payload.len();
         let codec_identity =
             codec_packet.map_or_else(codec::PacketIdentity::default, codec::Packet::identity);
-        let local_send_streams = &mut session_state.consumer_streams;
-        let rtc = &mut session_state.rtc;
-        {
+        let header = rtp.header();
+        let (identity, repairable_primary_ssrc) = {
+            let (consumer_streams, rtc) =
+                (&mut session_state.consumer_streams, &mut session_state.rtc);
             let mut direct_api = rtc.direct_api();
             let stream_tx = direct_api.stream_tx_by_mid(self.mid, None)?;
-            let header = rtp.header();
-            let identity = local_send_streams.project_identity(
+            let identity = consumer_streams.project_identity(
                 self.stream_handle,
-                self.delivery_generation,
-                header.ssrc,
-                rtp.sequence_number(),
-                header.timestamp,
+                SourceRtpIdentity {
+                    delivery_generation: self.delivery_generation,
+                    ssrc: header.ssrc,
+                    seq_no: rtp.sequence_number(),
+                    timestamp: header.timestamp,
+                    was_repair: rtp.was_repair,
+                },
                 codec_identity,
             )?;
+            let repairable_primary_ssrc =
+                (self.repair_enabled && stream_tx.rtx().is_some()).then(|| stream_tx.ssrc());
             if let SourceTransition::Switched { previous_ssrc } = identity.transition {
                 debug!(
                     ?self.transport_media_id,
@@ -153,9 +164,31 @@ impl LocalPacketDestination {
                     "projected consumer RTP identity after producer SSRC switch"
                 );
             }
-            self.write_rtp(stream_tx, rtp, identity, codec_packet);
+            self.write_rtp(
+                stream_tx,
+                rtp,
+                identity,
+                codec_packet,
+                repairable_primary_ssrc.is_some(),
+            );
+            (identity, repairable_primary_ssrc)
+        };
+        #[cfg(test)]
+        {
+            session_state.last_local_write = Some((identity.seq_no, Arc::clone(rtp.payload)));
         }
-        Some(payload_len)
+        let Some(primary_ssrc) = repairable_primary_ssrc else {
+            return Some(rtp.payload.len());
+        };
+        if identity.resets_rtx_cache {
+            // str0m caches this queued write only when it is emitted. Rotate the
+            // old cache before tracking the write in the new delivery epoch.
+            session_state.invalidate_rtx_stream(self.stream_handle);
+        }
+        session_state
+            .consumer_streams
+            .queue_repairable_write(self.stream_handle, primary_ssrc);
+        Some(rtp.payload.len())
     }
 
     fn write_rtp(
@@ -164,6 +197,7 @@ impl LocalPacketDestination {
         rtp: &LocalForwardedRtp<'_>,
         identity: ProjectedIdentity,
         codec_packet: Option<&codec::Packet>,
+        nackable: bool,
     ) {
         let header = rtp.header();
         let payload_type = outbound_payload_type(header, self.payload_type);
@@ -186,6 +220,9 @@ impl LocalPacketDestination {
         if let Some(rewrite) = codec_packet.and_then(|packet| packet.rewrite(identity.codec)) {
             write = rewrite.apply(write);
         }
+        if nackable {
+            write = write.nackable(true);
+        }
         stream_tx.write_rtp(write);
     }
 }
@@ -196,10 +233,10 @@ fn outbound_payload_type(header: &RtpHeader, payload_type: Option<Pt>) -> Pt {
 
 fn outbound_extension_values(header: &RtpHeader, mid: Mid) -> ExtensionValues {
     let mut ext_vals = header.ext_vals.clone();
-    // RFC 8843 section 15 binds MID to the consumer media section. RFC 8852
+    // RFC 9143 section 15 binds MID to the consumer media section. RFC 8852
     // section 3 scopes RID and repaired RID by source and MID, so publisher
     // encoding identifiers must not leak onto the consumer stream.
-    // https://www.rfc-editor.org/rfc/rfc8843.html#section-15
+    // https://www.rfc-editor.org/rfc/rfc9143.html#section-15
     // https://www.rfc-editor.org/rfc/rfc8852.html#section-3
     ext_vals.mid = Some(mid);
     ext_vals.rid = None;

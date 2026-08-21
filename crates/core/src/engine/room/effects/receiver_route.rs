@@ -7,7 +7,7 @@ use super::transport::{
 use crate::engine::{
     media_transport::{MediaTransport, TransportTeardown},
     room::{
-        Room, UserOutbound,
+        Room,
         media_graph::{ConsumerSetupOrigin, ConsumerSetupOutcome, PendingConsumerSetup},
     },
 };
@@ -81,7 +81,7 @@ impl ReceiverSetupTurn {
                 if !route_effects.is_empty() {
                     route_effects.execute(room.uuid(), media_transport).await;
                 }
-                let _ = sender.send(UserOutbound::RemoteTracks(track_snapshot));
+                let _ = sender.send_remote_tracks(track_snapshot);
             }
             ConsumerSetupOutcome::Released(route, relays) => {
                 let teardown = [TransportTeardown::RemoveMedia {

@@ -168,6 +168,12 @@ impl<T, Tag> SlotStore<T, Tag> {
             .flatten()
     }
 
+    pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.entries
+            .iter_mut()
+            .filter_map(|entry| entry.value.as_mut())
+    }
+
     /// remove the value only when the handle still names the current generation
     ///
     /// successful removal invalidates every copied handle for the old occupant

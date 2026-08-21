@@ -1,6 +1,9 @@
 use std::{sync::Arc, time::Instant};
 
-use o_sfu_rfc::webrtc;
+use o_sfu_rfc::{
+    rtp as rfc_rtp,
+    webrtc::{self, sdp},
+};
 use o_sfu_router::{
     MediaKind as RouterMediaKind, rtp::RtcpFeedbackKind,
     test_support::rtp_samples::sample_simulcast_video_rtp_parameters,
@@ -110,6 +113,46 @@ async fn rtc_session_answer_rejects_invalid_sdp() {
 }
 
 #[tokio::test]
+async fn rtc_session_answer_rejects_partial_repair_before_mutation() {
+    let adapter = RtcWorker::default();
+    let session_key = transport_key(1, 140, UserId::Integer(140));
+    let offer_sdp = expect_initial_offer(&adapter, &session_key)
+        .await
+        .into_parts()
+        .0;
+    let mut remote = build_remote_rtc(55_140);
+    let valid_answer = remote
+        .sdp_api()
+        .accept_offer(SdpOffer::from_sdp_string(&offer_sdp).expect("initial offer should parse"))
+        .expect("remote answer should build")
+        .to_sdp_string();
+    let invalid_answer = valid_answer.replacen("a=fmtp:97 apt=96\r\n", "", 1);
+    assert_ne!(invalid_answer, valid_answer);
+    let remapped_answer = valid_answer
+        .replacen(" 96 97", " 96 118", 1)
+        .replace("a=rtpmap:97 rtx/90000", "a=rtpmap:118 rtx/90000")
+        .replace("a=fmtp:97 apt=96", "a=fmtp:118 apt=96");
+    assert_ne!(remapped_answer, valid_answer);
+
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &invalid_answer)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &remapped_answer)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+    adapter
+        .apply_session_answer(&session_key, &valid_answer)
+        .await
+        .expect("rejected repair topology should preserve the pending offer");
+}
+
+#[tokio::test]
 async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     let adapter = rtc_with_codec_flags(MediaCodecFlags::default().with_h264(true));
     let session_key = transport_key(1, 134, UserId::Integer(134));
@@ -121,24 +164,20 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
         .into_parts();
 
     assert!(
-        offer_sdp.contains(&sdp_rid_line(
-            "lo",
-            webrtc::sdp::rid::DIRECTION_RECV,
-            Some(150_000)
-        )),
+        offer_sdp.contains(&sdp_rid_line("lo", sdp::rid::DIRECTION_RECV, Some(150_000))),
         "video offers should claim the low receive RID on the production VP8 path"
     );
     assert!(
         offer_sdp.contains(&sdp_rid_line(
             "hi",
-            webrtc::sdp::rid::DIRECTION_RECV,
+            sdp::rid::DIRECTION_RECV,
             Some(4_000_000)
         )),
         "video offers should claim the high receive RID on the production VP8 path"
     );
     assert!(
         offer_sdp.contains(&sdp_simulcast_line(
-            webrtc::sdp::simulcast::DIRECTION_RECV,
+            sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
         "video offers should advertise VP8 RID simulcast receive metadata"
@@ -146,22 +185,26 @@ async fn rtc_initial_session_offer_advertises_vp8_simulcast_receive_surface() {
     assert!(
         offer_sdp.contains(&format!(
             "a={}:96 {} {}",
-            webrtc::sdp::attribute::RTCP_FB,
+            sdp::attribute::RTCP_FB,
             webrtc::rtcp_feedback::kind::NACK,
             webrtc::rtcp_feedback::parameter::PLI
         )),
         "video offers should retain the keyframe feedback surface used after layer switches"
     );
-    assert!(!offer_sdp.contains(" rtx/90000"));
-    assert!(!offer_sdp.contains(" apt="));
-    assert!(!offer_sdp.contains("a=rtcp-fb:96 nack\r\n"));
+    assert!(offer_sdp.contains("a=rtcp-fb:96 nack\r\n"));
+    assert!(offer_sdp.contains("a=rtpmap:97 rtx/90000\r\n"));
+    assert!(offer_sdp.contains("a=fmtp:97 apt=96\r\n"));
+    assert!(offer_sdp.contains(webrtc::rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID));
     let video_slot = upload_slots
         .iter()
         .find(|slot| slot.kind == RouterMediaKind::Video)
         .expect("initial offer should include a video upload slot");
     assert_eq!(
         video_slot.codecs,
-        vec![String::from("VP8"), String::from("H264")]
+        vec![
+            String::from(rfc_rtp::codec_name::VP8),
+            String::from(rfc_rtp::codec_name::H264)
+        ]
     );
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
@@ -193,27 +236,29 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_h264_leads() {
         .into_parts();
 
     assert!(
-        offer_sdp.contains(&sdp_rid_line(
-            "lo",
-            webrtc::sdp::rid::DIRECTION_RECV,
-            Some(150_000)
-        )),
+        offer_sdp.contains(&sdp_rid_line("lo", sdp::rid::DIRECTION_RECV, Some(150_000))),
         "H264-first video offers should claim the low RID on the promoted matrix"
     );
     assert!(
         offer_sdp.contains(&sdp_simulcast_line(
-            webrtc::sdp::simulcast::DIRECTION_RECV,
+            sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
         "H264-first video offers should claim the promoted RID simulcast matrix"
     );
+    assert!(offer_sdp.contains("a=rtcp-fb:127 nack\r\n"));
+    assert!(offer_sdp.contains("a=rtpmap:121 rtx/90000\r\n"));
+    assert!(offer_sdp.contains("a=fmtp:121 apt=127\r\n"));
     let video_slot = upload_slots
         .iter()
         .find(|slot| slot.kind == RouterMediaKind::Video)
         .expect("initial offer should include a video upload slot");
     assert_eq!(
         video_slot.codecs,
-        vec![String::from("H264"), String::from("VP8")]
+        vec![
+            String::from(rfc_rtp::codec_name::H264),
+            String::from(rfc_rtp::codec_name::VP8)
+        ]
     );
     assert_eq!(video_slot.simulcast_encodings.len(), 2);
     assert_eq!(video_slot.simulcast_encodings[0].rid, "lo");
@@ -270,8 +315,26 @@ async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
         .expect("test RTP profile should compile");
     let router_capabilities = profile.router_capabilities();
     for (kind, expected) in [
-        (RouterMediaKind::Audio, "PCMA,PCMU,opus"),
-        (RouterMediaKind::Video, "AV1,VP9,H265,H264,VP8"),
+        (
+            RouterMediaKind::Audio,
+            [
+                rfc_rtp::codec_name::PCMA,
+                rfc_rtp::codec_name::PCMU,
+                rfc_rtp::codec_name::OPUS,
+            ]
+            .join(","),
+        ),
+        (
+            RouterMediaKind::Video,
+            [
+                rfc_rtp::codec_name::AV1,
+                rfc_rtp::codec_name::VP9,
+                rfc_rtp::codec_name::H265,
+                rfc_rtp::codec_name::H264,
+                rfc_rtp::codec_name::VP8,
+            ]
+            .join(","),
+        ),
     ] {
         let video = kind == RouterMediaKind::Video;
         let mut sdp_names = offer
@@ -285,7 +348,9 @@ async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
             .collect::<Vec<_>>();
         let mut router_names = router_capabilities
             .codecs()
-            .filter(|codec| codec.media_kind() == kind && codec.codec_name() != "rtx")
+            .filter(|codec| {
+                codec.media_kind() == kind && codec.codec_name() != rfc_rtp::codec_name::RTX
+            })
             .map(|codec| codec.codec_name().to_owned())
             .collect::<Vec<_>>();
         sdp_names.dedup();
@@ -302,7 +367,7 @@ async fn rtc_initial_session_offer_reports_configured_codec_preferences() {
         }
     }
     assert!(!offer_sdp.contains(&sdp_simulcast_line(
-        webrtc::sdp::simulcast::DIRECTION_RECV,
+        sdp::simulcast::DIRECTION_RECV,
         &["lo", "hi"]
     )));
 }
@@ -319,14 +384,17 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
     let mut remote = reduced_capability_probe_rtc();
     remote
         .add_local_candidate(
-            Candidate::host(SocketAddr::from(([127, 0, 0, 1], 55_038)), "udp")
-                .expect("test host candidate should build"),
+            Candidate::host(
+                SocketAddr::from(([127, 0, 0, 1], 55_038)),
+                webrtc::ice::transport::UDP,
+            )
+            .expect("test host candidate should build"),
         )
         .expect("remote candidate should register");
     let answer = remote
         .sdp_api()
         .accept_offer(
-            SdpOffer::from_sdp_string(&offer_sdp)
+            SdpOffer::from_sdp_string(&without_vp8_repair(&offer_sdp))
                 .expect("adapter should return parseable SDP offer"),
         )
         .expect("remote answer should build")
@@ -346,14 +414,22 @@ async fn rtc_initial_session_offer_projects_client_capabilities_from_answer() {
     assert_eq!(
         codec_names,
         vec![
-            (RouterMediaKind::Audio, String::from("opus")),
-            (RouterMediaKind::Video, String::from("VP8")),
+            (
+                RouterMediaKind::Audio,
+                String::from(rfc_rtp::codec_name::OPUS),
+            ),
+            (
+                RouterMediaKind::Video,
+                String::from(rfc_rtp::codec_name::VP8),
+            ),
         ]
     );
-    assert!(
-        projected.codecs().all(|codec| codec.codec_name() != "H264"),
-        "the projected client capability set must reflect the answer instead of the router default"
-    );
+    assert!(projected.codecs().all(|codec| {
+        !codec.codec().is_rtx()
+            && codec
+                .rtcp_feedback()
+                .all(|feedback| feedback.kind() != &RtcpFeedbackKind::Nack)
+    }));
 }
 
 #[tokio::test]
@@ -370,7 +446,7 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .add_recv_media(
             &session_key,
             Str0mMediaKind::Video,
-            &sample_simulcast_video_rtp_parameters(Some("simulcast-up")),
+            &simulcast_video_rtp_parameters_with_repair(),
         )
         .await
         .expect("simulcast publish intent should stage a renegotiation offer");
@@ -388,26 +464,21 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         .iter()
         .find(|slot| slot.kind == RouterMediaKind::Video)
         .expect("simulcast publish should expose a video slot");
-    assert_eq!(video_slot.codecs, vec![String::from("VP8")]);
+    assert_eq!(
+        video_slot.codecs,
+        vec![String::from(rfc_rtp::codec_name::VP8)]
+    );
     assert!(
-        renegotiation_offer.contains(&sdp_rid_line(
-            "lo",
-            webrtc::sdp::rid::DIRECTION_RECV,
-            Some(150_000)
-        )),
+        renegotiation_offer.contains(&sdp_rid_line("lo", sdp::rid::DIRECTION_RECV, Some(150_000))),
         "simulcast publish offers should expose low RID receive metadata"
     );
     assert!(
-        renegotiation_offer.contains(&sdp_rid_line(
-            "hi",
-            webrtc::sdp::rid::DIRECTION_RECV,
-            Some(900_000)
-        )),
+        renegotiation_offer.contains(&sdp_rid_line("hi", sdp::rid::DIRECTION_RECV, Some(900_000))),
         "simulcast publish offers should expose high RID receive metadata"
     );
     assert!(
         renegotiation_offer.contains(&sdp_simulcast_line(
-            webrtc::sdp::simulcast::DIRECTION_RECV,
+            sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
         "simulcast publish offers should advertise the selected-layer receive ladder"
@@ -420,38 +491,94 @@ async fn rtc_simulcast_publish_intent_preserves_negotiated_encoding_facts() {
         )
         .expect("remote simulcast answer should build")
         .to_sdp_string();
-    let answer_sdp =
-        answer_with_simulcast_send_rids(&answer_sdp, &negotiated_mid, &[("lo", Some(150_000))]);
+    let answer_sdp = answer_with_extmap_id(
+        &answer_sdp,
+        &negotiated_mid,
+        webrtc::rtp_header_extension_uri::RTP_STREAM_ID,
+        5,
+    );
+    let answer_sdp = answer_with_extmap_id(
+        &answer_sdp,
+        &negotiated_mid,
+        webrtc::rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID,
+        6,
+    );
+    let answer_sdp = answer_with_simulcast_send_rids(
+        &answer_sdp,
+        &negotiated_mid,
+        &[("lo", Some(150_000)), ("hi", Some(900_000))],
+    );
+    let answer_sdp = answer_with_leading_fid_pair(&answer_sdp, &negotiated_mid);
     let applied_answer = adapter
         .apply_session_answer(&session_key, &answer_sdp)
         .await
         .expect("simulcast answer should apply");
-    assert!(
-        applied_answer
-            .negotiated_producer_parameters(transport_media_id)
-            .is_some(),
-        "answer application should return the producer parameters projected during the same pass"
-    );
 
     let negotiated_parameters = adapter
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
         .expect("answered simulcast publish should project router RTP parameters");
-    let encodings = negotiated_parameters.bindings().collect::<Vec<_>>();
-    assert_eq!(encodings.len(), 1);
-    assert_eq!(encodings[0].rid(), Some("lo"));
-    assert_eq!(encodings[0].max_bitrate(), Some(150_000));
-    assert!(
-        encodings.iter().any(|encoding| encoding.ssrc().is_some()),
-        "answer projection should preserve at least one browser-owned SSRC for the negotiated RID ladder"
-    );
+    assert_renumbered_simulcast_repair(&negotiated_parameters);
     let upload_encodings = applied_answer.negotiated_producer_upload_encodings(transport_media_id);
-    assert_eq!(upload_encodings.len(), 1);
-    assert_eq!(upload_encodings[0].rid, "lo");
     assert_eq!(
-        upload_encodings[0].max_bitrate,
-        Some(Bitrate::from_bps(150_000))
+        upload_encodings
+            .iter()
+            .map(|encoding| (encoding.rid.as_str(), encoding.max_bitrate))
+            .collect::<Vec<_>>(),
+        vec![
+            ("lo", Some(Bitrate::from_bps(150_000))),
+            ("hi", Some(Bitrate::from_bps(900_000))),
+        ]
     );
+}
+
+fn simulcast_video_rtp_parameters_with_repair() -> RouterRtpParameters {
+    let parameters = sample_simulcast_video_rtp_parameters(Some("simulcast-up"));
+    RouterRtpParameters::new(
+        parameters.formats().cloned().collect(),
+        parameters.header_extensions().cloned().collect(),
+        parameters
+            .bindings()
+            .zip([31_101, 31_102])
+            .map(|(binding, repair_ssrc)| binding.clone().with_repair_ssrc(repair_ssrc))
+            .collect(),
+    )
+    .with_mid("simulcast-up")
+}
+
+fn assert_renumbered_simulcast_repair(parameters: &RouterRtpParameters) {
+    assert_eq!(
+        parameters
+            .bindings()
+            .map(|encoding| {
+                (
+                    encoding.rid(),
+                    encoding.ssrc(),
+                    encoding.repair_ssrc(),
+                    encoding.max_bitrate(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("lo"), Some(31_001), Some(31_101), Some(150_000),),
+            (Some("hi"), Some(31_002), Some(31_102), Some(900_000),),
+        ]
+    );
+    let formats = parameters.formats().collect::<Vec<_>>();
+    let primary = formats
+        .iter()
+        .find(|format| !format.codec().is_rtx())
+        .expect("simulcast answer should retain its primary format");
+    assert!(formats.iter().any(|format| {
+        format.codec().is_rtx()
+            && format.rtx_associated_payload_type() == Some(primary.payload_type())
+    }));
+    let extensions = parameters
+        .header_extensions()
+        .map(|extension| (extension.uri_kind().as_str(), extension.id().value()))
+        .collect::<Vec<_>>();
+    assert!(extensions.contains(&(webrtc::rtp_header_extension_uri::RTP_STREAM_ID, 5)));
+    assert!(extensions.contains(&(webrtc::rtp_header_extension_uri::REPAIRED_RTP_STREAM_ID, 6)));
 }
 
 #[tokio::test]
@@ -485,29 +612,50 @@ async fn rtc_simulcast_answer_rejects_unoffered_rid_alternatives() {
         )
         .expect("remote simulcast answer should build")
         .to_sdp_string();
-    let answer_sdp = answer_with_simulcast_send_rids(
+    let valid_answer_sdp = answer_with_simulcast_send_rids(
         &answer_sdp,
         &negotiated_mid,
         &[("lo", Some(150_000)), ("hi", Some(900_000))],
-    )
-    .replacen(
-        &sdp_simulcast_line(webrtc::sdp::simulcast::DIRECTION_SEND, &["lo", "hi"]),
+    );
+    let lo_declaration = sdp_rid_line("lo", sdp::rid::DIRECTION_SEND, Some(150_000));
+    let lo_declaration = format!("{lo_declaration}{}", sdp::CRLF);
+    let duplicate_rid_answer = valid_answer_sdp.replacen(
+        &lo_declaration,
+        &format!("{lo_declaration}{lo_declaration}"),
+        1,
+    );
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &duplicate_rid_answer)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+
+    let alternative_rid_answer = valid_answer_sdp.replacen(
+        &sdp_simulcast_line(sdp::simulcast::DIRECTION_SEND, &["lo", "hi"]),
         &format!(
-            "a={}:{} lo{}backup{}hi",
-            webrtc::sdp::attribute::SIMULCAST,
-            webrtc::sdp::simulcast::DIRECTION_SEND,
-            webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR,
-            webrtc::sdp::simulcast::STREAM_SEPARATOR
+            "{}{}{}{}{}lo{}backup{}hi",
+            sdp::ATTR,
+            sdp::attribute::SIMULCAST,
+            sdp::ATTR_SEP,
+            sdp::simulcast::DIRECTION_SEND,
+            sdp::SP,
+            sdp::simulcast::ALTERNATIVE_SEPARATOR,
+            sdp::simulcast::STREAM_SEPARATOR
         ),
         1,
     );
 
     assert_eq!(
         adapter
-            .apply_session_answer(&session_key, &answer_sdp)
+            .apply_session_answer(&session_key, &alternative_rid_answer)
             .await,
         Err(TransportAdapterError::InvalidInput)
     );
+    adapter
+        .apply_session_answer(&session_key, &valid_answer_sdp)
+        .await
+        .expect("ambiguous RID answers should preserve the pending offer");
 }
 
 #[tokio::test]
@@ -637,7 +785,12 @@ async fn rtc_producer_answer_rejects_non_one_byte_extmap_id() {
         )
         .expect("remote producer answer should build")
         .to_sdp_string();
-    let answer_sdp = answer_with_extmap_id(&answer_sdp, &negotiated_mid, 15);
+    let answer_sdp = answer_with_extmap_id(
+        &answer_sdp,
+        &negotiated_mid,
+        webrtc::rtp_header_extension_uri::RTP_STREAM_ID,
+        rfc_rtp::header_extension::ONE_BYTE_ID_RESERVED,
+    );
 
     assert_eq!(
         adapter
@@ -732,14 +885,33 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
         .expect("transport media should resolve to the server-assigned mid");
     assert!(renegotiation_sdp.contains(&format!("a=mid:{negotiated_mid}")));
 
-    apply_offer_answer(&adapter, &session_key, &mut remote, renegotiation_sdp).await;
+    let answer_sdp = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&renegotiation_sdp).expect("producer offer should parse"),
+        )
+        .expect("remote producer answer should build")
+        .to_sdp_string();
+    let ambiguous_answer = answer_with_leading_fid_pair(&answer_sdp, &negotiated_mid);
+    assert_eq!(
+        adapter
+            .apply_session_answer(&session_key, &ambiguous_answer)
+            .await,
+        Err(TransportAdapterError::InvalidInput)
+    );
+    let fid_pair = fid_pair_for_mid(&answer_sdp, &negotiated_mid)
+        .expect("RID-less producer answer should signal a FID pair");
+    adapter
+        .apply_session_answer(&session_key, &answer_sdp)
+        .await
+        .expect("RID-less FID answer should apply");
 
     assert_eq!(
         adapter
             .debug_session_stream_rx_ssrc(&session_key, negotiated_mid)
             .await,
-        Some(89_000),
-        "renegotiated recv media should expect the published SSRC once the answer lands"
+        Some(fid_pair.0),
+        "RID-less recv media should use the primary SSRC accepted from the answer"
     );
     assert_eq!(
         adapter.debug_session_max_bitrate_in(&session_key).await,
@@ -754,25 +926,41 @@ async fn rtc_session_renegotiation_offer_stages_protocol_producer_additions() {
     assert_eq!(negotiated_parameters.mid(), Some(&*negotiated_mid));
     let formats = negotiated_parameters.formats().collect::<Vec<_>>();
     assert!(!formats.is_empty());
-    assert!(formats.iter().all(|format| {
-        format
-            .rtcp_feedback()
-            .all(|feedback| feedback.kind() != &RtcpFeedbackKind::Nack)
-    }));
-    assert!(formats.iter().any(|format| {
-        format
-            .rtcp_feedback()
-            .any(|feedback| feedback.kind() == &RtcpFeedbackKind::NackPli)
-    }));
-    assert!(
-        negotiated_parameters.bindings().next().is_some(),
-        "projected producer parameters should include at least one negotiated binding"
+    for primary in formats.iter().filter(|format| !format.codec().is_rtx()) {
+        assert!(
+            primary
+                .rtcp_feedback()
+                .any(|feedback| { feedback.kind() == &RtcpFeedbackKind::Nack })
+        );
+        assert!(
+            primary
+                .rtcp_feedback()
+                .any(|feedback| { feedback.kind() == &RtcpFeedbackKind::NackPli })
+        );
+        assert_eq!(
+            formats
+                .iter()
+                .filter(|format| {
+                    format.codec().is_rtx()
+                        && format.rtx_associated_payload_type() == Some(primary.payload_type())
+                })
+                .count(),
+            1
+        );
+    }
+    let binding = negotiated_parameters
+        .bindings()
+        .next()
+        .expect("RID-less producer should project its signaled binding");
+    assert_eq!(binding.rid(), None);
+    assert_eq!(
+        (binding.ssrc(), binding.repair_ssrc()),
+        (Some(fid_pair.0), Some(fid_pair.1))
     );
 }
 
 #[tokio::test]
-async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish_intent_has_no_ssrc()
- {
+async fn rtc_protocol_publish_projects_rid_bindings_when_publish_intent_is_empty() {
     let adapter = RtcWorker::default();
     let session_key = transport_key(1, 46, UserId::Integer(46));
 
@@ -794,7 +982,7 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
     assert_default_vp8_upload_slot(&upload_slots);
     assert!(
         renegotiation_sdp.contains(&sdp_simulcast_line(
-            webrtc::sdp::simulcast::DIRECTION_RECV,
+            sdp::simulcast::DIRECTION_RECV,
             &["lo", "hi"]
         )),
         "empty protocol publish intents should emit the server-defined RID ladder"
@@ -822,20 +1010,16 @@ async fn rtc_protocol_publish_projects_recv_expectation_from_answer_when_publish
         .await
         .expect("default simulcast answer should apply");
 
-    assert!(
-        adapter
-            .debug_session_stream_rx_ssrc(&session_key, negotiated_mid)
-            .await
-            .is_some(),
-        "answered protocol publish should recover the recv expectation from the negotiated SDP"
-    );
     let negotiated_parameters = adapter
         .negotiated_producer_parameters(&session_key, transport_media_id)
         .await
         .expect("protocol publish should project negotiated RTP parameters");
-    assert!(
-        negotiated_parameters.bindings().next().is_some(),
-        "projected protocol publish parameters should expose at least one binding"
+    assert_eq!(
+        negotiated_parameters
+            .bindings()
+            .map(|binding| binding.rid())
+            .collect::<Vec<_>>(),
+        vec![Some("lo"), Some("hi")]
     );
 }
 
@@ -940,17 +1124,100 @@ async fn rtc_session_renegotiation_offer_stages_protocol_consumer_additions() {
     let consumer_section = media_section_for_mid(&renegotiation_sdp, &renegotiated_mid)
         .expect("consumer offer should contain its send-only media section");
     assert!(consumer_section.contains("a=sendonly"));
-    assert!(!consumer_section.contains(" rtx/90000"));
-    assert!(!consumer_section.contains(" apt="));
+    assert!(consumer_section.contains("a=rtcp-fb:96 nack\r\n"));
+    assert!(consumer_section.contains("a=rtpmap:97 rtx/90000\r\n"));
+    assert!(consumer_section.contains("a=fmtp:97 apt=96\r\n"));
+    let fid_pair = fid_pair_for_mid(&renegotiation_sdp, &renegotiated_mid)
+        .expect("consumer offer should signal the str0m transmit pair");
+    assert_ne!(fid_pair.0, 82_000);
 
     apply_offer_answer(&adapter, &consumer_key, &mut remote, renegotiation_sdp).await;
 
+    assert_eq!(
+        adapter
+            .debug_session_stream_tx_pair(&consumer_key, renegotiated_mid)
+            .await,
+        Some((fid_pair.0, Some(fid_pair.1))),
+        "consumer FID offer should match the str0m transmit stream"
+    );
+}
+
+#[tokio::test]
+async fn rtc_session_answer_releases_declined_consumer_without_follow_up_offer() {
+    let adapter = RtcWorker::default();
+    let src_key = transport_key(1, 49, UserId::Integer(49));
+    let consumer_key = transport_key(1, 50, UserId::Integer(50));
+
     assert!(
         adapter
-            .debug_session_stream_tx_ssrc(&consumer_key, renegotiated_mid)
+            .create_initial_session_offer("test-room", &src_key)
             .await
-            .is_some(),
-        "renegotiated send media should exist after the answer is applied"
+            .is_ok()
+    );
+    let source_media_id = adapter
+        .add_recv_media(
+            &src_key,
+            Str0mMediaKind::Video,
+            &sample_router_rtp_parameters("declined-source", 93_000),
+        )
+        .await
+        .expect("source media should register");
+    let mut remote = complete_initial_offer_answer(&adapter, &consumer_key, 55_010).await;
+    let consumer_media_id = adapter
+        .add_send_media(
+            &consumer_key,
+            Str0mMediaKind::Video,
+            TransportSourceKey::new(src_key, source_media_id),
+            &sample_router_rtp_parameters("declined-consumer", 94_000),
+            true,
+        )
+        .await
+        .expect("consumer media should stage an addition offer");
+    let consumer_mid = adapter
+        .debug_resolve_mid(consumer_media_id)
+        .await
+        .expect("consumer media should expose its staged mid");
+    let addition_offer = adapter
+        .create_session_renegotiation_offer(&consumer_key)
+        .await
+        .expect("addition offer should be available");
+    let answer = remote
+        .sdp_api()
+        .accept_offer(
+            SdpOffer::from_sdp_string(&addition_offer.into_parts().0)
+                .expect("addition offer should parse"),
+        )
+        .expect("remote answer should build")
+        .to_sdp_string();
+    let declined_answer =
+        answer_with_mid_direction(&answer, &consumer_mid, sdp::direction::INACTIVE);
+
+    let applied = adapter
+        .apply_session_answer(&consumer_key, &declined_answer)
+        .await
+        .expect("declined consumer answer should apply");
+    assert_eq!(applied.declined_consumers(), &[consumer_media_id]);
+
+    assert_eq!(
+        adapter.debug_route_entry_by_media_id(source_media_id).await,
+        None
+    );
+    assert_eq!(
+        adapter
+            .debug_session_stream_tx_pair(&consumer_key, consumer_mid)
+            .await,
+        None
+    );
+    assert_eq!(
+        adapter.remove_media(&consumer_key, consumer_media_id).await,
+        Ok(())
+    );
+    assert_eq!(adapter.debug_resolve_mid(consumer_media_id).await, None);
+    assert_eq!(
+        adapter
+            .create_session_renegotiation_offer(&consumer_key)
+            .await,
+        Err(TransportAdapterError::UnsupportedFeature)
     );
 }
 
@@ -1044,7 +1311,7 @@ async fn rtc_session_renegotiation_offer_stages_negotiated_producer_removal() {
         &adapter,
         &session_key,
         "compat-producer-mid-remove",
-        90_000,
+        rfc_rtp::RTP_VIDEO_CLOCK_RATE_HZ,
         &mut remote,
     )
     .await;
@@ -1297,14 +1564,15 @@ async fn rtc_session_renegotiation_offer_stays_blocked_after_initial_answer() {
 }
 
 fn media_section_for_mid<'a>(sdp: &'a str, mid: &str) -> Option<&'a str> {
-    let marker = format!("a=mid:{mid}");
+    let marker = format!("{}{}{}{mid}", sdp::ATTR, sdp::attribute::MID, sdp::ATTR_SEP);
+    let media_boundary = format!("{}{}", sdp::CRLF, sdp::MEDIA);
     let marker_start = sdp.find(&marker)?;
     let section_start = sdp[..marker_start]
-        .rfind("\r\nm=")
-        .map_or(0, |index| index + 2);
+        .rfind(&media_boundary)
+        .map_or(0, |index| index + sdp::CRLF.len());
     let section_end = sdp[marker_start..]
-        .find("\r\nm=")
-        .map_or(sdp.len(), |offset| marker_start + offset + 2);
+        .find(&media_boundary)
+        .map_or(sdp.len(), |offset| marker_start + offset + sdp::CRLF.len());
     Some(&sdp[section_start..section_end])
 }
 
@@ -1312,30 +1580,75 @@ fn answer_with_mid_direction(answer_sdp: &str, mid: &str, direction: &str) -> St
     let Some(section) = media_section_for_mid(answer_sdp, mid) else {
         return answer_sdp.to_owned();
     };
-    let next_direction = format!("a={direction}");
+    let next_direction = format!("{}{direction}", sdp::ATTR);
     let mut updated_section = section.to_owned();
-    for current_direction in ["a=sendrecv", "a=sendonly", "a=recvonly", "a=inactive"] {
-        if updated_section.contains(current_direction) {
-            updated_section = updated_section.replacen(current_direction, &next_direction, 1);
+    for direction in [
+        sdp::direction::SEND_RECV,
+        sdp::direction::SEND_ONLY,
+        sdp::direction::RECV_ONLY,
+        sdp::direction::INACTIVE,
+    ] {
+        let current_direction = format!("{}{direction}", sdp::ATTR);
+        if updated_section.contains(&current_direction) {
+            updated_section = updated_section.replacen(&current_direction, &next_direction, 1);
             break;
         }
     }
     answer_sdp.replacen(section, &updated_section, 1)
 }
 
-fn answer_with_extmap_id(answer_sdp: &str, mid: &str, id: u8) -> String {
+fn answer_with_extmap_id(answer_sdp: &str, mid: &str, uri: &str, id: u8) -> String {
     let section = media_section_for_mid(answer_sdp, mid)
         .expect("test answer should contain the target MID section");
-    let extmap_start = section
-        .find("a=extmap:")
-        .expect("test answer section should contain an extmap line");
-    let id_start = extmap_start + "a=extmap:".len();
-    let id_end_offset = section[id_start..]
-        .find(' ')
+    let extmap_prefix = format!("{}{}{}", sdp::ATTR, sdp::attribute::EXTMAP, sdp::ATTR_SEP);
+    let extmap = section
+        .lines()
+        .find(|line| {
+            line.strip_prefix(&extmap_prefix)
+                .and_then(|value| value.split_ascii_whitespace().nth(1))
+                == Some(uri)
+        })
+        .expect("test answer section should contain the target extmap URI");
+    let (_, value) = extmap
+        .split_once(sdp::SP)
         .expect("test extmap line should separate id and URI");
-    let id_end = id_start + id_end_offset;
+    let replacement = format!("{extmap_prefix}{id}{}{value}", sdp::SP);
+    let updated_section = section.replacen(extmap, &replacement, 1);
+    answer_sdp.replacen(section, &updated_section, 1)
+}
+
+fn fid_pair_for_mid(answer_sdp: &str, mid: &str) -> Option<(u32, u32)> {
+    let section = media_section_for_mid(answer_sdp, mid)?;
+    let fid_prefix = format!(
+        "{}{}{}{}{}",
+        sdp::ATTR,
+        sdp::attribute::SSRC_GROUP,
+        sdp::ATTR_SEP,
+        sdp::ssrc_group_semantics::FID,
+        sdp::SP,
+    );
+    section.lines().find_map(|line| {
+        let mut ssrcs = line.strip_prefix(&fid_prefix)?.split_ascii_whitespace();
+        Some((ssrcs.next()?.parse().ok()?, ssrcs.next()?.parse().ok()?))
+    })
+}
+
+fn answer_with_leading_fid_pair(answer_sdp: &str, mid: &str) -> String {
+    let section = media_section_for_mid(answer_sdp, mid)
+        .expect("test answer should contain the target MID section");
+    let ssrc_prefix = format!("{}{}{}", sdp::ATTR, sdp::attribute::SSRC, sdp::ATTR_SEP);
+    let ssrc_start = section
+        .find(&ssrc_prefix)
+        .expect("test answer section should signal an SSRC pair");
     let mut updated_section = section.to_owned();
-    updated_section.replace_range(id_start..id_end, &id.to_string());
+    updated_section.insert_str(
+        ssrc_start,
+        concat!(
+            "a=ssrc:4200001 cname:reordered\r\n",
+            "a=ssrc:4200002 cname:reordered\r\n",
+            "a=ssrc-group:FID 4200001 4200002\r\n",
+        ),
+    );
     answer_sdp.replacen(section, &updated_section, 1)
 }
 
@@ -1350,7 +1663,7 @@ fn assert_default_vp8_upload_slot(upload_slots: &[SessionUploadSlot]) {
         video_upload_slot
             .codecs
             .iter()
-            .any(|codec| codec.as_str() == "VP8"),
+            .any(|codec| codec.as_str() == rfc_rtp::codec_name::VP8),
         "empty protocol publish intent should use the server-defined VP8 upload profile"
     );
     assert_eq!(video_upload_slot.simulcast_encodings.len(), 2);
@@ -1372,11 +1685,19 @@ fn assert_default_vp8_upload_slot(upload_slots: &[SessionUploadSlot]) {
 }
 
 fn sdp_rid_line(rid: &str, direction: &str, max_bitrate: Option<u64>) -> String {
-    let mut line = format!("a={}:{} {}", webrtc::sdp::attribute::RID, rid, direction);
+    let mut line = format!(
+        "{}{}{}{}{}{}",
+        sdp::ATTR,
+        sdp::attribute::RID,
+        sdp::ATTR_SEP,
+        rid,
+        sdp::SP,
+        direction,
+    );
     if let Some(max_bitrate) = max_bitrate {
-        line.push(' ');
-        line.push_str(webrtc::sdp::rid_restriction::MAX_BITRATE);
-        line.push('=');
+        line.push(sdp::SP);
+        line.push_str(sdp::rid_restriction::MAX_BITRATE);
+        line.push(sdp::rid_restriction::NAME_VALUE_SEPARATOR);
         line.push_str(&max_bitrate.to_string());
     }
     line
@@ -1384,11 +1705,21 @@ fn sdp_rid_line(rid: &str, direction: &str, max_bitrate: Option<u64>) -> String 
 
 fn sdp_simulcast_line(direction: &str, rids: &[&str]) -> String {
     format!(
-        "a={}:{} {}",
-        webrtc::sdp::attribute::SIMULCAST,
+        "{}{}{}{}{}{}",
+        sdp::ATTR,
+        sdp::attribute::SIMULCAST,
+        sdp::ATTR_SEP,
         direction,
-        rids.join(&webrtc::sdp::simulcast::STREAM_SEPARATOR.to_string())
+        sdp::SP,
+        rids.join(&sdp::simulcast::STREAM_SEPARATOR.to_string())
     )
+}
+
+fn without_vp8_repair(sdp: &str) -> String {
+    sdp.replace(" 96 97", " 96")
+        .replace("a=rtcp-fb:96 nack\r\n", "")
+        .replace("a=rtpmap:97 rtx/90000\r\n", "")
+        .replace("a=fmtp:97 apt=96\r\n", "")
 }
 
 fn answer_with_simulcast_send_rids(
@@ -1396,25 +1727,27 @@ fn answer_with_simulcast_send_rids(
     mid: &str,
     rids: &[(&str, Option<u64>)],
 ) -> String {
-    let marker = format!("a=mid:{mid}\r\n");
+    let marker = format!(
+        "{}{}{}{mid}{}",
+        sdp::ATTR,
+        sdp::attribute::MID,
+        sdp::ATTR_SEP,
+        sdp::CRLF,
+    );
     let mut replacement = marker.clone();
     for (rid, max_bitrate) in rids {
-        replacement.push_str(&sdp_rid_line(
-            rid,
-            webrtc::sdp::rid::DIRECTION_SEND,
-            *max_bitrate,
-        ));
-        replacement.push_str("\r\n");
+        replacement.push_str(&sdp_rid_line(rid, sdp::rid::DIRECTION_SEND, *max_bitrate));
+        replacement.push_str(sdp::CRLF);
     }
     let rid_values = rids
         .iter()
         .map(|(rid, _max_bitrate)| *rid)
         .collect::<Vec<_>>();
     replacement.push_str(&sdp_simulcast_line(
-        webrtc::sdp::simulcast::DIRECTION_SEND,
+        sdp::simulcast::DIRECTION_SEND,
         &rid_values,
     ));
-    replacement.push_str("\r\n");
+    replacement.push_str(sdp::CRLF);
     answer_sdp.replacen(&marker, &replacement, 1)
 }
 
@@ -1422,8 +1755,11 @@ fn build_remote_rtc(port: u16) -> Rtc {
     let mut remote = Rtc::new(Instant::now());
     remote
         .add_local_candidate(
-            Candidate::host(SocketAddr::from(([127, 0, 0, 1], port)), "udp")
-                .expect("test host candidate should build"),
+            Candidate::host(
+                SocketAddr::from(([127, 0, 0, 1], port)),
+                webrtc::ice::transport::UDP,
+            )
+            .expect("test host candidate should build"),
         )
         .expect("remote candidate should register");
     remote
@@ -1467,6 +1803,11 @@ fn reduced_capability_probe_rtc() -> Rtc {
         None,
         FormatParams::default(),
     );
+    config
+        .codec_config()
+        .last_mut()
+        .expect("reduced video capability should exist")
+        .set_fb_nack(false);
     config.build(Instant::now())
 }
 

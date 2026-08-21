@@ -8,7 +8,9 @@ use o_sfu_router::rtp::{MediaCapabilities, MediaCapabilities as RouterRtpCapabil
 use super::super::{
     RoomAdmissionPolicy, RoomMediaCounts, RoomUserPermissions,
     media_graph::{ConsumerRouteView, RoomTopology},
-    outbound::{OutboundSender, RemoteTrackProjection, RemoteTrackSnapshot},
+    outbound::{
+        OutboundSender, RemoteTrackProjection, RemoteTrackSnapshot, VersionedRemoteTrackSnapshot,
+    },
     transition::StagedPublishes,
 };
 use crate::{
@@ -29,6 +31,7 @@ pub struct RoomState {
     /// rejects stale async callbacks from previous connections
     pub(super) next_connection_id: u64,
     pub next_consumer_id: u64,
+    next_track_snapshot_revision: u64,
     pub(super) recording_state: RecordingState,
     pub(in crate::engine::room) staged_publishes: StagedPublishes,
     pub(in crate::engine::room) topology: RoomTopology,
@@ -94,6 +97,7 @@ impl RoomState {
             users: BTreeMap::new(),
             next_connection_id: 0,
             next_consumer_id: 1,
+            next_track_snapshot_revision: 1,
             recording_state: RecordingState {
                 recording: Some(false),
                 audio: Some(false),
@@ -223,12 +227,14 @@ impl RoomState {
     }
 
     pub(in crate::engine::room) fn remote_track_snapshot_for_user(
-        &self,
+        &mut self,
         user_id: &UserId,
         requires_negotiation: bool,
-    ) -> RemoteTrackSnapshot {
+    ) -> VersionedRemoteTrackSnapshot {
+        let revision = self.next_track_snapshot_revision;
+        self.next_track_snapshot_revision = revision.saturating_add(1);
         let connection_id = self.user_connection_id(user_id);
-        RemoteTrackSnapshot {
+        let snapshot = RemoteTrackSnapshot {
             tracks: self
                 .topology
                 .committed_consumer_routes_for_user(user_id)
@@ -246,14 +252,15 @@ impl RoomState {
                 })
                 .collect(),
             requires_negotiation,
-        }
+        };
+        VersionedRemoteTrackSnapshot { snapshot, revision }
     }
 
     pub(in crate::engine::room) fn remote_track_snapshots_for_users(
-        &self,
+        &mut self,
         user_ids: BTreeSet<UserId>,
         requires_negotiation: bool,
-    ) -> Vec<(OutboundSender, RemoteTrackSnapshot)> {
+    ) -> Vec<(OutboundSender, VersionedRemoteTrackSnapshot)> {
         user_ids
             .into_iter()
             .filter_map(|user_id| {

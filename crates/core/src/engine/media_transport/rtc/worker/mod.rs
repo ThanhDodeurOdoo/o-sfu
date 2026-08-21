@@ -22,8 +22,8 @@ use std::{
 #[cfg(feature = "internal-benchmarks")]
 pub use handlers::apply_media_control_batch;
 pub(super) use handlers::{
-    KeyframeRequestMode, KeyframeRequestTarget, WorkerCommandContext, apply_src_decoder_ready,
-    handle_worker_command, request_kf_for_target,
+    KeyframeRequestMode, KeyframeRequestTarget, SessionCloseDisposition, WorkerCommandContext,
+    apply_src_decoder_ready, handle_worker_command, request_kf_for_target, worker_close_session,
 };
 #[cfg(feature = "internal-benchmarks")]
 pub(in crate::engine::media_transport::rtc) use handlers::{

@@ -74,6 +74,23 @@ pub fn sample_local_forwarded_packet(
 
 #[cfg(test)]
 #[must_use]
+pub fn sample_local_repaired_packet(
+    source_session_handle: SessionHandle,
+    mid: &str,
+    sequence_number: u64,
+    payload: &[u8],
+) -> ForwardedPacket {
+    let mut packet = sample_local_forwarded_packet(source_session_handle, mid, payload);
+    packet.was_repair = true;
+    if let ForwardedPacketData::RelayRtp(data) = &mut packet.data {
+        data.sequence_number = sequence_number.into();
+        data.header.sequence_number = data.sequence_number.as_u16();
+    }
+    packet
+}
+
+#[cfg(test)]
+#[must_use]
 pub fn sample_forwarded_packet_with_rid(
     src_key: TransportSessionKey,
     mid: &str,
@@ -169,6 +186,7 @@ pub fn sample_local_forwarded_packet_for_benchmark(
         resolved_source_rid: None,
         facts: None,
         visits_origin_sinks: true,
+        was_repair: false,
         received_at,
         payload,
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
@@ -225,6 +243,7 @@ fn sample_forwarded_packet_with_source(
         resolved_source_rid: None,
         facts: None,
         visits_origin_sinks: true,
+        was_repair: false,
         received_at,
         payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
@@ -265,6 +284,7 @@ pub fn sample_forwarded_packet_without_mid(
         resolved_source_rid: None,
         facts: None,
         visits_origin_sinks: true,
+        was_repair: false,
         received_at,
         payload: Arc::from(payload),
         data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {

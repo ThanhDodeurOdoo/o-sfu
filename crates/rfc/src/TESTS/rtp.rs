@@ -1,7 +1,9 @@
 use super::{
-    PayloadType, fmtp, frame_marking,
+    PayloadType, RtpRtcpMuxPacketKind, Ssrc, classify_rtp_rtcp_mux, fmtp, frame_marking,
+    generic_nack_sequence_numbers,
     h264::{self, LevelIdc, PacketizationMode, Profile, ProfileLevelId},
-    header_extension,
+    header_extension, is_rtcp_mux_dynamic_payload_type, parse_muxed_rtp_fixed_header,
+    rtcp_receiver_report_without_report_blocks, rtx_original_sequence_number,
 };
 
 #[test]
@@ -182,6 +184,137 @@ fn rtcp_mux_payload_type_range_follows_rfc_5761() {
     }
     assert_eq!(PayloadType::try_from(96), Ok(PayloadType::new(96)));
     assert_eq!(PayloadType::try_from(64), Err(super::InvalidPayloadType));
+}
+
+#[test]
+fn rtcp_mux_dynamic_payload_types_include_unassigned_avp_ranges() {
+    for payload_type in [20, 24, 27, 29, 30, 35, 63, 96, 127] {
+        assert!(is_rtcp_mux_dynamic_payload_type(payload_type));
+    }
+    for payload_type in [0, 19, 25, 26, 28, 31, 34, 64, 95, 128] {
+        assert!(!is_rtcp_mux_dynamic_payload_type(payload_type));
+    }
+}
+
+#[test]
+fn rtp_rtcp_mux_classification_uses_version_and_second_octet() {
+    for (second, kind) in [
+        (63, RtpRtcpMuxPacketKind::Rtp),
+        (64, RtpRtcpMuxPacketKind::Rtcp),
+        (95, RtpRtcpMuxPacketKind::Rtcp),
+        (96, RtpRtcpMuxPacketKind::Rtp),
+        (191, RtpRtcpMuxPacketKind::Rtp),
+        (192, RtpRtcpMuxPacketKind::Rtcp),
+        (223, RtpRtcpMuxPacketKind::Rtcp),
+        (224, RtpRtcpMuxPacketKind::Rtp),
+    ] {
+        assert_eq!(classify_rtp_rtcp_mux(&[128, second, 0]), Some(kind));
+    }
+    for packet in [
+        &[][..],
+        &[128][..],
+        &[128, 96][..],
+        &[127, 96, 0][..],
+        &[192, 96, 0][..],
+    ] {
+        assert_eq!(classify_rtp_rtcp_mux(packet), None);
+    }
+}
+
+#[test]
+fn muxed_rtp_fixed_header_exposes_wire_fields_and_flags() {
+    let packet = [
+        0xb1, 0xe0, 0x12, 0x34, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xde, 0xad, 0xbe,
+        0xef,
+    ];
+    let header = parse_muxed_rtp_fixed_header(&packet);
+    assert!(header.is_some());
+    let Some(header) = header else {
+        return;
+    };
+
+    assert_eq!(header.payload_type(), 96);
+    assert_eq!(header.sequence_number(), 0x1234);
+    assert_eq!(header.timestamp(), 0x0123_4567);
+    assert_eq!(header.ssrc(), Ssrc::new(0x89ab_cdef));
+    assert!(header.marker());
+    assert!(header.has_padding());
+    assert!(header.has_extension());
+    assert!(parse_muxed_rtp_fixed_header(&packet[..15]).is_none());
+
+    let mut rtcp = packet;
+    rtcp[1] = 200;
+    assert!(parse_muxed_rtp_fixed_header(&rtcp).is_none());
+}
+
+#[test]
+fn generic_nack_expansion_includes_pid_bits_and_rollover() {
+    assert_eq!(
+        generic_nack_sequence_numbers(u16::MAX - 1, 0b101).collect::<Vec<_>>(),
+        [u16::MAX - 1, u16::MAX, 1]
+    );
+    assert_eq!(
+        generic_nack_sequence_numbers(42, 0).collect::<Vec<_>>(),
+        [42]
+    );
+    assert_eq!(
+        generic_nack_sequence_numbers(42, 1 << 15).collect::<Vec<_>>(),
+        [42, 58]
+    );
+}
+
+#[test]
+fn rtx_payload_starts_with_original_sequence_number() {
+    assert_eq!(
+        rtx_original_sequence_number(&[0x12, 0x34, 0xaa]),
+        Some(0x1234)
+    );
+    assert_eq!(rtx_original_sequence_number(&[0x12]), None);
+}
+
+#[test]
+fn empty_receiver_report_uses_rtcp_length_units() {
+    assert_eq!(
+        rtcp_receiver_report_without_report_blocks(Ssrc::new(0x0102_0304)),
+        [0x80, 201, 0, 1, 1, 2, 3, 4]
+    );
+}
+
+#[test]
+fn one_byte_header_extension_lookup_handles_csrc_and_padding() {
+    let packet = one_byte_extension_packet([0, 0x31, 0xaa, 0xbb, 0x40, 0xcc, 0, 0]);
+
+    assert_eq!(
+        header_extension::find_one_byte_element(&packet, 3),
+        Some(&[0xaa, 0xbb][..])
+    );
+    assert_eq!(
+        header_extension::find_one_byte_element(&packet, 4),
+        Some(&[0xcc][..])
+    );
+    assert_eq!(header_extension::find_one_byte_element(&packet, 5), None);
+    assert_eq!(header_extension::find_one_byte_element(&packet, 0), None);
+    assert_eq!(header_extension::find_one_byte_element(&packet, 15), None);
+}
+
+#[test]
+fn one_byte_header_extension_lookup_rejects_reserved_id_forms() {
+    let malformed_padding = one_byte_extension_packet([0x01, 0xaa, 0xbb, 0x30, 0xcc, 0, 0, 0]);
+    let reserved = one_byte_extension_packet([0xf0, 0x30, 0xcc, 0, 0, 0, 0, 0]);
+
+    assert_eq!(
+        header_extension::find_one_byte_element(&malformed_padding, 3),
+        None
+    );
+    assert_eq!(header_extension::find_one_byte_element(&reserved, 3), None);
+}
+
+fn one_byte_extension_packet(elements: [u8; 8]) -> Vec<u8> {
+    let mut packet = vec![
+        0x91, 96, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0xbe, 0xde, 0, 2,
+    ];
+    packet.extend(elements);
+    packet
 }
 
 #[test]

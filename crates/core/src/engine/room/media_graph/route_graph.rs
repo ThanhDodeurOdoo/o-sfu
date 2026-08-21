@@ -14,6 +14,8 @@ use std::{
     mem,
 };
 
+use o_sfu_router::topology::RoutedConsumerId;
+
 use super::{
     ConsumerSourceSelection, SubscriptionKey, consumer_setup::ConsumerSetupTarget,
     remove_from_index_set,
@@ -22,7 +24,7 @@ use crate::engine::{
     ConnectionId, MediaWorkerId, UserId,
     media_transport::{
         RelayRouteActivity, TransportConsumerRoute, TransportMediaId, TransportRelayRouteAction,
-        TransportSourceKey,
+        TransportSessionKey, TransportSourceKey,
     },
     source_model::{PolicyPauseReason, PublishedSourceId, SourceSubscriptionIntent},
 };
@@ -56,7 +58,12 @@ enum ConsumerRealization {
     #[default]
     Absent,
     Pending(RouteReservationId, Option<RouteRelay>),
-    Committed(TransportConsumerRoute, String, Option<RouteRelay>),
+    Committed(
+        TransportConsumerRoute,
+        String,
+        RoutedConsumerId,
+        Option<RouteRelay>,
+    ),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -97,12 +104,14 @@ pub struct RelayRouteKey {
 #[derive(Debug, Default)]
 pub(super) struct RemovedRoutes {
     pub routes: Vec<TransportConsumerRoute>,
+    pub consumers: Vec<RoutedConsumerId>,
     pub relays: Vec<RelayRouteEffect>,
 }
 
 impl RemovedRoutes {
     pub(super) fn extend(&mut self, mut other: Self) {
         self.routes.append(&mut other.routes);
+        self.consumers.append(&mut other.consumers);
         self.relays.append(&mut other.relays);
     }
 }
@@ -234,7 +243,7 @@ impl RouteGraph {
         route: TransportConsumerRoute,
         mid: String,
         selection: ConsumerSourceSelection,
-        accept: impl FnOnce() -> bool,
+        accept: impl FnOnce() -> Option<RoutedConsumerId>,
     ) -> Result<(), Vec<RelayRouteEffect>> {
         // Consume the reservation before router acceptance so every async
         // completion is terminal and cannot reuse its identity after failure.
@@ -243,16 +252,15 @@ impl RouteGraph {
         let Some(TakenPending { relay }) = pending else {
             return Err(Vec::new());
         };
-        if !accept() {
+        let Some(current) = self.current_mut(&key, source_id) else {
             return Err(relay.map_or_else(Vec::new, |relay| self.release_relay(&key, &relay)));
-        }
-        if let Some(current) = self.current_mut(&key, source_id) {
-            current.selection = selection;
-            current.realization = ConsumerRealization::Committed(route, mid, relay);
-            Ok(())
-        } else {
-            Err(relay.map_or_else(Vec::new, |relay| self.release_relay(&key, &relay)))
-        }
+        };
+        let Some(routed) = accept() else {
+            return Err(relay.map_or_else(Vec::new, |relay| self.release_relay(&key, &relay)));
+        };
+        current.selection = selection;
+        current.realization = ConsumerRealization::Committed(route, mid, routed, relay);
+        Ok(())
     }
 
     pub(super) fn update_selection(
@@ -366,7 +374,7 @@ impl RouteGraph {
                 match mem::take(&mut current.realization) {
                     ConsumerRealization::Absent => None,
                     ConsumerRealization::Pending(_, relay)
-                    | ConsumerRealization::Committed(_, _, relay) => relay,
+                    | ConsumerRealization::Committed(_, _, _, relay) => relay,
                 }
             };
             if let Some(relay) = relay {
@@ -388,6 +396,41 @@ impl RouteGraph {
             };
             remove_from_index_set(&mut self.by_source, &current.source_id, &key);
             self.collect_removed_realization(&key, current.realization, &mut removed);
+        }
+        removed
+    }
+
+    pub(super) fn detach_declined_consumers(
+        &mut self,
+        session: &TransportSessionKey,
+        declined: &[TransportMediaId],
+    ) -> RemovedRoutes {
+        let keys = self
+            .by_receiver
+            .get(session.user_id())
+            .cloned()
+            .unwrap_or_default();
+        let mut removed = RemovedRoutes::default();
+        for key in keys {
+            let realization = {
+                let Some(current) = self
+                    .entries
+                    .get_mut(&key)
+                    .and_then(|entry| entry.current.as_mut())
+                else {
+                    continue;
+                };
+                let ConsumerRealization::Committed(route, ..) = &current.realization else {
+                    continue;
+                };
+                if route.consumer_session_key() != session
+                    || !declined.contains(&route.consumer_transport_media_id())
+                {
+                    continue;
+                }
+                mem::take(&mut current.realization)
+            };
+            self.collect_removed_realization(&key, realization, &mut removed);
         }
         removed
     }
@@ -488,8 +531,9 @@ impl RouteGraph {
         let relay = match realization {
             ConsumerRealization::Absent => None,
             ConsumerRealization::Pending(_, relay) => relay,
-            ConsumerRealization::Committed(route, _, relay) => {
+            ConsumerRealization::Committed(route, _, consumer, relay) => {
                 removed.routes.push(route);
+                removed.consumers.push(consumer);
                 relay
             }
         };
@@ -576,7 +620,7 @@ impl CurrentPublication {
 
     pub(super) fn committed(&self) -> Option<(&TransportConsumerRoute, &str)> {
         match &self.realization {
-            ConsumerRealization::Committed(route, mid, _) => Some((route, mid)),
+            ConsumerRealization::Committed(route, mid, ..) => Some((route, mid)),
             ConsumerRealization::Absent | ConsumerRealization::Pending(..) => None,
         }
     }
@@ -586,7 +630,7 @@ impl ConsumerRealization {
     fn set_relay_activity(&mut self, activity: RelayRouteActivity) -> Option<RouteRelay> {
         let relay = match self {
             Self::Absent => return None,
-            Self::Pending(_, relay) | Self::Committed(_, _, relay) => relay.as_mut()?,
+            Self::Pending(_, relay) | Self::Committed(_, _, _, relay) => relay.as_mut()?,
         };
         if relay.activity == activity {
             return None;

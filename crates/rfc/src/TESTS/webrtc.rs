@@ -1,4 +1,14 @@
-use super::{RtpHeaderExtensionUri, RtpStreamDirection, rtp_header_extension_uri, sdp};
+use super::{
+    RtpHeaderExtensionUri, RtpStreamDirection, is_dtls_mux_packet, rtp_header_extension_uri, sdp,
+};
+
+#[test]
+fn dtls_mux_first_octet_range_follows_rfc_7983() {
+    assert!(!is_dtls_mux_packet(19));
+    assert!(is_dtls_mux_packet(20));
+    assert!(is_dtls_mux_packet(63));
+    assert!(!is_dtls_mux_packet(64));
+}
 
 #[test]
 fn rtp_stream_direction_uses_case_sensitive_rfc_tokens() {

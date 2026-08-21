@@ -8,7 +8,7 @@ use tracing::warn;
 
 use super::{
     super::{
-        outbound::{OutboundSender, RemoteTrackSnapshot},
+        outbound::{OutboundSender, VersionedRemoteTrackSnapshot},
         state::RoomState,
     },
     ConsumerId, ConsumerRouteTarget, PublishedSource, SubscriptionKey,
@@ -72,7 +72,7 @@ pub enum ConsumerSetupOutcome {
         target: ConsumerSetupTarget,
         route: TransportConsumerRoute,
         sender: OutboundSender,
-        track_snapshot: RemoteTrackSnapshot,
+        track_snapshot: VersionedRemoteTrackSnapshot,
         remote_source_activity: Option<TransportSourceActivityEffect>,
         transport_activity_update: Option<bool>,
         readiness_keyframe: Option<ConsumerRouteTarget>,

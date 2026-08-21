@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use o_sfu_rfc::rtp as rfc_rtp;
-use o_sfu_router::rtp::{CodecSetting, RtcpFeedbackKind};
+use o_sfu_router::{
+    MediaKind,
+    rtp::{CodecSetting, RtcpFeedbackKind},
+};
 
 use super::client_rtp_capabilities_from_answer;
 
@@ -9,7 +12,7 @@ const CHROMIUM_OPTIONAL_CODECS_ANSWER: &str =
     include_str!("testdata/chromium_optional_codecs_answer.sdp");
 
 #[test]
-fn chromium_answer_projection_keeps_optional_video_profiles_without_rtx() {
+fn chromium_answer_projection_keeps_video_repair_pairs() {
     let projected = client_rtp_capabilities_from_answer(CHROMIUM_OPTIONAL_CODECS_ANSWER);
     assert!(
         projected.is_some(),
@@ -21,7 +24,7 @@ fn chromium_answer_projection_keeps_optional_video_profiles_without_rtx() {
 
     let h264_variants = projected
         .codecs()
-        .filter(|codec| codec.codec_name() == "H264")
+        .filter(|codec| codec.codec_name() == rfc_rtp::codec_name::H264)
         .map(|codec| {
             let packetization_mode = codec
                 .settings()
@@ -56,7 +59,7 @@ fn chromium_answer_projection_keeps_optional_video_profiles_without_rtx() {
 
     let vp9_profiles = projected
         .codecs()
-        .filter(|codec| codec.codec_name() == "VP9")
+        .filter(|codec| codec.codec_name() == rfc_rtp::codec_name::VP9)
         .map(|codec| {
             codec
                 .parameters()
@@ -68,17 +71,49 @@ fn chromium_answer_projection_keeps_optional_video_profiles_without_rtx() {
         BTreeSet::from([Some(String::from("0")), Some(String::from("2"))])
     );
 
-    assert!(projected.codecs().all(|codec| {
-        codec
-            .rtcp_feedback()
-            .all(|feedback| feedback.kind() != &RtcpFeedbackKind::Nack)
-    }));
-    assert!(projected.codecs().any(|codec| {
-        codec
-            .rtcp_feedback()
-            .any(|feedback| feedback.kind() == &RtcpFeedbackKind::NackPli)
-    }));
-    assert!(projected.codecs().all(|codec| codec.codec_name() != "rtx"));
+    let codecs = projected.codecs().collect::<Vec<_>>();
+    for primary in codecs
+        .iter()
+        .copied()
+        .filter(|codec| codec.media_kind() == MediaKind::Video && !codec.codec().is_rtx())
+    {
+        assert!(
+            primary
+                .rtcp_feedback()
+                .any(|feedback| { feedback.kind() == &RtcpFeedbackKind::Nack })
+        );
+        assert!(
+            primary
+                .rtcp_feedback()
+                .any(|feedback| { feedback.kind() == &RtcpFeedbackKind::NackPli })
+        );
+        assert_eq!(
+            codecs
+                .iter()
+                .filter(|codec| {
+                    codec.codec().is_rtx()
+                        && codec.rtx_associated_payload_type() == primary.payload_type()
+                })
+                .count(),
+            1
+        );
+    }
+    assert!(
+        codecs
+            .iter()
+            .filter(|codec| codec.codec().is_rtx())
+            .all(|codec| codec.media_kind() == MediaKind::Video
+                && codec.rtcp_feedback().next().is_none())
+    );
+    assert!(
+        codecs
+            .iter()
+            .filter(|codec| codec.media_kind() == MediaKind::Audio)
+            .all(|codec| codec.rtx_associated_payload_type().is_none()
+                && codec
+                    .rtcp_feedback()
+                    .all(|feedback| feedback.kind() != &RtcpFeedbackKind::Nack))
+    );
 }
 
 #[test]

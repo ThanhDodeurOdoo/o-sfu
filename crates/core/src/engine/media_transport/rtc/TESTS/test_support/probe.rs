@@ -259,7 +259,7 @@ pub struct SessionStreamTxSsrcProbe {
 
 #[cfg(test)]
 impl DebugProbe for SessionStreamTxSsrcProbe {
-    type Output = Option<u32>;
+    type Output = Option<(u32, Option<u32>)>;
 
     fn inspect(
         self,
@@ -273,7 +273,7 @@ impl DebugProbe for SessionStreamTxSsrcProbe {
                 let mut direct_api = session_state.rtc.direct_api();
                 direct_api
                     .stream_tx_by_mid(self.mid, None)
-                    .map(|stream_tx| *stream_tx.ssrc())
+                    .map(|stream_tx| (*stream_tx.ssrc(), stream_tx.rtx().map(|ssrc| *ssrc)))
             })
     }
 }

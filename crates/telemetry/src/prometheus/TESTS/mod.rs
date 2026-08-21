@@ -5,10 +5,10 @@ use o_sfu_model::WebSocketCloseCode;
 use super::{PROMETHEUS_CONTENT_TYPE, render_prometheus};
 use crate::metrics::{
     BudgetSolverOutcome, HttpRoute, METRIC_FAMILY_COUNT, RoomGaugeValues, RtcDatagramDropReason,
-    RtcDatagramRoutePath, RtcKeyframeRequestOutcome, RtcRelayEnqueueResult,
-    RtcRemoteControlDropKind, RtcRemotePacketGateConvergence, RtcRouteControlOutcome,
-    RtpDecoderRefreshScope, RtpForwardDestinationKind, RuntimeMetrics, SourceSelectionKind,
-    TransportHealthState, TransportIceState, WsSessionLoopExitReason,
+    RtcDatagramRoutePath, RtcKeyframeRequestOutcome, RtcNackDirection, RtcOutputBudgetLimit,
+    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
+    RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind, RuntimeMetrics,
+    SourceSelectionKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
 };
 
 fn assert_http_and_websocket_metrics(rendered: &str) {
@@ -101,6 +101,23 @@ fn assert_rtc_keyframe_request_metrics(rendered: &str) {
     assert!(rendered.contains("osfu_rtc_keyframe_requests_total{outcome=\"cleared\"} 1"));
 }
 
+fn assert_rtc_recovery_metrics(rendered: &str) {
+    for sample in [
+        "osfu_rtc_nacks_total{direction=\"sent_to_publisher\"} 1",
+        "osfu_rtc_nacks_total{direction=\"received_from_subscriber\"} 1",
+        "osfu_rtc_rtx_packets_total{direction=\"received_from_publisher\"} 1",
+        "osfu_rtc_rtx_payload_bytes_total{direction=\"received_from_publisher\"} 1200",
+        "osfu_rtc_rtcp_ingress_budget_drops_total 1",
+        "osfu_rtc_output_budget_exhaustions_total{limit=\"packets\"} 1",
+        "osfu_rtc_output_budget_exhaustions_total{limit=\"payload_bytes\"} 1",
+        "osfu_rtc_output_budget_exhaustions_total{limit=\"packets_and_payload_bytes\"} 1",
+        "osfu_rtc_output_budget_session_closes_total 1",
+    ] {
+        assert!(rendered.contains(sample));
+    }
+    assert!(!rendered.contains("direction=\"sent_to_subscriber\""));
+}
+
 fn sample_metrics() -> RuntimeMetrics {
     let metrics = RuntimeMetrics::default();
     drop(metrics.track_http_request(HttpRoute::Noop));
@@ -137,6 +154,15 @@ fn sample_metrics() -> RuntimeMetrics {
     control_recorder.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
     control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
     control_recorder.record_rtc_datagram_fallback_scan(4);
+    control_recorder.record_rtc_nacks(RtcNackDirection::SentToPublisher, 1);
+    control_recorder.record_rtc_nacks(RtcNackDirection::ReceivedFromSubscriber, 1);
+    control_recorder.record_rtc_rtx_received_from_publisher(1200);
+    control_recorder.record_rtc_rtcp_ingress_budget_drop();
+    control_recorder.record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::Packets);
+    control_recorder.record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::PayloadBytes);
+    control_recorder
+        .record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::PacketsAndPayloadBytes);
+    control_recorder.record_rtc_output_budget_session_close();
     control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
     control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
     control_recorder.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
@@ -178,7 +204,7 @@ fn sample_room_gauges() -> RoomGaugeValues {
 fn prometheus_export_renders_existing_metric_families() {
     let rendered = render_prometheus(&sample_metrics(), sample_room_gauges());
 
-    assert_eq!(METRIC_FAMILY_COUNT, 73);
+    assert_eq!(METRIC_FAMILY_COUNT, 79);
     for prefix in ["# HELP ", "# TYPE "] {
         assert_eq!(
             rendered
@@ -248,6 +274,7 @@ fn prometheus_export_renders_rtc_datagram_metric_families() {
     assert!(rendered.contains("osfu_rtc_datagram_drops_total{reason=\"malformed\"} 1"));
     assert!(rendered.contains("osfu_rtc_datagram_fallback_scans_total 1"));
     assert!(rendered.contains("osfu_rtc_datagram_scan_users_total 4"));
+    assert_rtc_recovery_metrics(&rendered);
     assert!(
         rendered.contains("osfu_rtc_route_control_total{outcome=\"route_gated_relay_drop\"} 1")
     );

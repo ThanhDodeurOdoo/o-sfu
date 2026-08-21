@@ -441,7 +441,7 @@ fn stored_intent_attaches_before_readiness_then_reserves_setup() {
         Some(true)
     );
     let readiness = state
-        .refresh_consumer_readiness(&receiver, receiver_connection)
+        .refresh_consumer_readiness(&receiver, receiver_connection, &[])
         .expect("receiver should remain current");
     assert_eq!(readiness.work.setups.len(), 1);
 }
@@ -537,7 +537,13 @@ fn consumer_setup_commit_uses_latest_room_state() {
     else {
         panic!("current room state should still accept the setup");
     };
-    assert!(snapshot.tracks.iter().any(|track| !track.producer_active));
+    assert!(
+        snapshot
+            .snapshot
+            .tracks
+            .iter()
+            .any(|track| !track.producer_active)
+    );
     let transport_activity_update =
         transport_activity_update.expect("transport declaration should be corrected");
     assert!(!transport_activity_update);

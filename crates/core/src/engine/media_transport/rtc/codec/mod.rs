@@ -12,19 +12,22 @@ mod capabilities;
 mod h264;
 mod packet;
 mod profile;
+mod retransmission;
 mod rid;
 mod vp8;
 
 #[cfg(any(test, fuzzing))]
 pub use capabilities::client_rtp_capabilities_from_answer;
 pub(super) use capabilities::{
-    client_rtp_capabilities_from_sdp_answer, header_extension, media_format, router_payload_type,
+    answer_payload_params, client_rtp_capabilities_from_sdp_answer, header_extension, media_format,
+    router_payload_type, rtx_format,
 };
 use o_sfu_router::rtp::{MediaCodec, MediaStream};
 pub(super) use packet::{
     Packet, PacketIdentity, PacketInspector, ProjectedPacket, Projection, requires_decoder_refresh,
 };
 pub(in crate::engine::media_transport) use profile::RtpProfile;
+pub(super) use retransmission::{RepairSummary, validate_answer_sdp};
 pub(super) use rid::{
     NegotiatedRid, ParsedAnswerRids, initial_packet_gate as initial_consumer_packet_gate,
 };

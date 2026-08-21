@@ -19,20 +19,27 @@ use super::{
     media::remove_source_route,
 };
 use crate::engine::{
-    media_transport::TransportSessionKey,
+    media_transport::{TransportSessionHealth, TransportSessionKey},
     metrics::{self, RuntimeMetrics},
 };
 
-/// Removes every worker-owned entry for `session_key`.
+#[derive(Clone, Copy)]
+pub(in crate::engine::media_transport::rtc) enum SessionCloseDisposition {
+    OwnerClose,
+    OutputBudgetExhausted,
+}
+
+/// Retires one worker RTC session according to `disposition`.
 ///
-/// Missing `RtcSessionState` is not an error. Scheduler, demux, media, route,
-/// snapshot and bitrate cleanup still runs so repeated close and teardown
-/// fallback cannot retain stale indexes.
-pub(super) fn worker_close_session(
+/// Missing `RtcSessionState` is not an error. Scheduler, demux, media, route and
+/// bitrate cleanup still runs so repeated close cannot retain stale indexes.
+/// Output-budget retirement keeps disconnected health until the owner closes.
+pub(in crate::engine::media_transport::rtc) fn worker_close_session(
     state: &mut PacketLoopState,
     bitrate_registry: &Arc<Mutex<BitrateRegistry>>,
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     session_key: &TransportSessionKey,
+    disposition: SessionCloseDisposition,
     metrics: &RuntimeMetrics,
 ) {
     state.clear_session_schedule(session_key);
@@ -57,9 +64,16 @@ pub(super) fn worker_close_session(
         .prune_unrouted_remote_srcs(|src_media| mid_registry.contains_key(src_media));
     if let Ok(mut snapshot) = snapshot_state.lock() {
         let previous = snapshot.remove_session(session_key);
+        let next = match disposition {
+            SessionCloseDisposition::OwnerClose => None,
+            SessionCloseDisposition::OutputBudgetExhausted => {
+                snapshot.set_transport_health(session_key, TransportSessionHealth::Disconnected);
+                Some(TransportSessionHealth::Disconnected)
+            }
+        };
         metrics.record_transport_health_transition(
             previous.map(metrics::transport_health_state),
-            None,
+            next.map(metrics::transport_health_state),
         );
     }
     if let Ok(mut bitrate) = bitrate_registry.lock() {

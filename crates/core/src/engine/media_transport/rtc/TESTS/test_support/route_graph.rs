@@ -130,6 +130,7 @@ impl<'a> MediaWorkerScenario<'a> {
                 dest_stream: ConsumerStreamHandle::default(),
                 dest_mid: mid,
                 dest_payload_type: None,
+                repair_enabled: false,
                 active: true,
                 requires_decoder_refresh: true,
                 delivery_generation: 0,

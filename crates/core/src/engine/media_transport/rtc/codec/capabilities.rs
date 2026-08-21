@@ -1,17 +1,15 @@
-use o_sfu_rfc::{rtp::HeaderExtensionId, webrtc as rfc_webrtc};
+use std::iter;
+
+use o_sfu_rfc::{rtp as rfc_rtp, webrtc as rfc_webrtc};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{
-        HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodec,
+        CodecSetting, HeaderExtension as RouterHeaderExtension, MediaCapabilities, MediaCodec,
         MediaCodecCapability, MediaFormat as RouterMediaFormat, MediaStream, PayloadType,
         RtcpFeedback, RtcpFeedbackKind,
     },
 };
-use str0m::{
-    change::SdpAnswer,
-    format::{Codec, PayloadParams},
-    rtp::Extension,
-};
+use str0m::{change::SdpAnswer, format::PayloadParams, rtp::Extension};
 
 use crate::engine::media_transport::TransportAdapterError;
 
@@ -39,7 +37,7 @@ pub(super) fn media_kind(payload: &PayloadParams) -> RouterMediaKind {
 pub(in crate::engine::media_transport::rtc) fn header_extension(
     (id, extension): (u8, &Extension),
 ) -> Result<RouterHeaderExtension, TransportAdapterError> {
-    let id = HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
+    let id = rfc_rtp::HeaderExtensionId::try_new(id).ok_or(TransportAdapterError::InvalidInput)?;
     Ok(RouterHeaderExtension::new(
         rfc_webrtc::RtpHeaderExtensionUri::from(extension.as_uri()),
         id,
@@ -62,6 +60,29 @@ pub(super) fn media_capability(
     ))
 }
 
+pub(super) fn rtx_capability(
+    kind: RouterMediaKind,
+    payload: &PayloadParams,
+) -> Result<Option<MediaCodecCapability>, TransportAdapterError> {
+    let Some(resend) = payload.resend() else {
+        return Ok(None);
+    };
+    let primary_payload_type = router_payload_type(*payload.pt())?;
+    let resend_payload_type = router_payload_type(*resend)?;
+    // RTX uses the source clock rate and identifies its primary payload type with `apt`.
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-4
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
+    Ok(Some(
+        MediaCodecCapability::new(
+            kind,
+            rfc_rtp::codec_name::RTX,
+            payload.spec().clock_rate.get(),
+        )
+        .with_payload_type(resend_payload_type)
+        .with_setting(CodecSetting::RtxAssociation(primary_payload_type)),
+    ))
+}
+
 pub(in crate::engine::media_transport::rtc) fn media_format(
     kind: RouterMediaKind,
     payload: &PayloadParams,
@@ -74,6 +95,29 @@ pub(in crate::engine::media_transport::rtc) fn media_format(
         RouterMediaFormat::with_channels,
         |format, key, value| format.with_parameter(key, value),
         RouterMediaFormat::with_rtcp_feedback,
+    ))
+}
+
+pub(in crate::engine::media_transport::rtc) fn rtx_format(
+    kind: RouterMediaKind,
+    payload: &PayloadParams,
+) -> Result<Option<RouterMediaFormat>, TransportAdapterError> {
+    let Some(resend) = payload.resend() else {
+        return Ok(None);
+    };
+    let primary_payload_type = router_payload_type(*payload.pt())?;
+    let resend_payload_type = router_payload_type(*resend)?;
+    // Keep the router format aligned with the same RTX mapping projected as a capability.
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-4
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
+    Ok(Some(
+        RouterMediaFormat::new(
+            kind,
+            rfc_rtp::codec_name::RTX,
+            resend_payload_type,
+            payload.spec().clock_rate.get(),
+        )
+        .with_setting(CodecSetting::RtxAssociation(primary_payload_type)),
     ))
 }
 
@@ -90,11 +134,11 @@ fn apply_payload_codec_facts<T>(
     }
     let fmtp = spec.format.to_string();
     for entry in fmtp
-        .split(';')
+        .split(rfc_rtp::fmtp::PARAMETER_SEPARATOR)
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
     {
-        if let Some((key, value)) = entry.split_once('=') {
+        if let Some((key, value)) = entry.split_once(rfc_rtp::fmtp::NAME_VALUE_SEPARATOR) {
             target = with_parameter(target, key.trim(), value.trim());
         }
     }
@@ -109,6 +153,7 @@ fn rtcp_feedback(payload: &PayloadParams) -> impl Iterator<Item = RtcpFeedback> 
         payload
             .fb_transport_cc()
             .then_some(RtcpFeedbackKind::TransportCc),
+        payload.fb_nack().then_some(RtcpFeedbackKind::Nack),
         payload.fb_pli().then_some(RtcpFeedbackKind::NackPli),
         payload.fb_fir().then_some(RtcpFeedbackKind::CcmFir),
         payload.fb_remb().then_some(RtcpFeedbackKind::GoogRemb),
@@ -121,6 +166,7 @@ fn rtcp_feedback(payload: &PayloadParams) -> impl Iterator<Item = RtcpFeedback> 
 #[must_use]
 #[cfg(any(test, fuzzing))]
 pub fn client_rtp_capabilities_from_answer(answer_sdp: &str) -> Option<MediaCapabilities> {
+    super::retransmission::validate_answer_sdp(answer_sdp).ok()?;
     let answer = SdpAnswer::from_sdp_string(answer_sdp).ok()?;
     client_rtp_capabilities_from_sdp_answer(&answer).unwrap_or_default()
 }
@@ -135,17 +181,17 @@ pub(in crate::engine::media_transport::rtc) fn client_rtp_capabilities_from_sdp_
         if media_line.disabled {
             continue;
         }
-        let rtp_parameters = media_line.rtp_params();
-        let Some(media_kind) = media_kind_label(&rtp_parameters) else {
+        let rtp_parameters = answer_payload_params(media_line.rtp_params());
+        let Some(media_kind) = rtp_parameters.first().map(media_kind) else {
             continue;
         };
         for payload in &rtp_parameters {
-            if payload.spec().codec == Codec::Rtx {
-                continue;
-            }
-            let codec = media_capability(media_kind, payload)?;
-            if !codecs.contains(&codec) {
-                codecs.push(codec);
+            for codec in iter::once(media_capability(media_kind, payload)?)
+                .chain(rtx_capability(media_kind, payload)?)
+            {
+                if !codecs.contains(&codec) {
+                    codecs.push(codec);
+                }
             }
         }
         for (id, extension) in media_line.extmaps() {
@@ -163,12 +209,17 @@ pub(in crate::engine::media_transport::rtc) fn client_rtp_capabilities_from_sdp_
     Ok(Some(MediaCapabilities::new(codecs, header_extensions)))
 }
 
-fn media_kind_label(payloads: &[PayloadParams]) -> Option<RouterMediaKind> {
+pub(in crate::engine::media_transport::rtc) fn answer_payload_params(
+    mut payloads: Vec<PayloadParams>,
+) -> Vec<PayloadParams> {
+    // O-SFU accepts Generic NACK only with a usable RTX mapping. RFC 4585 permits
+    // Generic NACK without RTX, so this all-or-nothing projection is O-SFU policy.
+    // https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
+    for payload in &mut payloads {
+        payload.set_fb_nack(payload.resend().is_some());
+    }
     payloads
-        .iter()
-        .find(|payload| payload.spec().codec != Codec::Rtx)
-        .or_else(|| payloads.first())
-        .map(media_kind)
 }
 
 #[cfg(test)]

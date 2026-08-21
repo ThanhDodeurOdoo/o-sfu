@@ -11,13 +11,16 @@ use std::{
     future::Future,
     net::{SocketAddr, UdpSocket as StdUdpSocket},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use o_sfu_rfc::rtp::CodecName;
+use o_sfu_rfc::{
+    rtp::{self, CodecName},
+    webrtc,
+};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{MediaFormat, MediaStream as RouterRtpParameters, PayloadType},
@@ -25,10 +28,12 @@ use o_sfu_router::{
 use o_sfu_telemetry::schema::event::TRANSPORT_HEALTH_CHANGED;
 use serde_json::Value;
 use str0m::{
-    Event, IceConnectionState,
+    Event, IceConnectionState, IceCreds, Input, Output,
     ice::{StunMessage, TransId},
-    media::{KeyframeRequestKind, MediaKind, Mid, Rid},
+    media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
+    net::{Protocol, Receive},
     rtp::Ssrc,
+    stats::{MediaEgressStats, MediaIngressStats},
 };
 use tokio::{
     runtime::Builder,
@@ -40,12 +45,12 @@ use tokio_util::sync::CancellationToken;
 use super::{
     buffers::{MAX_RELAY_PACKETS_PER_ITERATION, PacketLoopBuffers},
     delay::PacketLoopDelaySnapshot,
-    event_observation::observe_rtc_event,
+    event_observation::{RtcEventContext, observe_rtc_event},
     forward_flush::{
         drain_relay_packets, finish_incoming_stats, flush_packet_forwards, record_incoming_packet,
         record_incoming_stats,
     },
-    ingress_routing::route_pkt_to_session,
+    ingress_routing::{PacketRouteDatagram, route_pkt_to_session_at},
     input::{PacketLoopInputReceivers, PacketLoopMailboxInput},
     keyframe_requests::{PendingKeyframeRequest, drain_due_kf_retries, flush_pending_kf_reqs_at},
     loop_driver::{
@@ -64,29 +69,34 @@ use crate::{
             rtc::{
                 RtcWorker, RtcWorkerConfig, RtpProfile,
                 bitrate::BitrateRegistry,
-                bootstrap,
+                bootstrap, codec,
                 commands::{RemoteSourceControl, RouteControlRequest, RtcWorkerCommand},
                 forwarding_destination::ForwardingDestination,
+                local_send_rewrite::SourceRtpIdentity,
                 media_registry::RegisteredMediaHandle,
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
                 routing_miss::PacketLoopRoutingMissKey,
                 slots::ConsumerStreamHandle,
                 source_route::MediaRouteDestination,
-                state::{PacketLoopState, RtcSnapshotState, SharedRtcSocket},
+                state::{
+                    PacketLoopState, RTCP_INGRESS_BUDGET_CAPACITY_BYTES, RtcNackTotals,
+                    RtcSnapshotState, SharedRtcSocket,
+                },
                 test_support::{
                     DebugProbe, DebugProbeRequest, collect_ready_session_keys,
                     prepare_source_session_with_rid, sample_already_relayed_audio_packet_at,
                     sample_already_relayed_packet, sample_forwarded_packet,
                     sample_forwarded_packet_with_audio_activity, sample_forwarded_packet_with_rid,
                     sample_forwarded_packet_without_mid, sample_local_forwarded_packet,
-                    sample_rtp_packet, serialize_stun_message, test_transport_session_key,
+                    sample_local_repaired_packet, sample_rtp_packet, serialize_stun_message,
+                    test_transport_session_key,
                 },
             },
         },
         metrics::{
-            RtcMetricsRecorder, RtpForwardDestinationKind, RtpMetricsRecorder, RuntimeMetrics,
-            test_support::RuntimeMetricsSnapshotTestExt,
+            RtcMetricsRecorder, RtcNackDirection, RtpForwardDestinationKind, RtpMetricsRecorder,
+            RuntimeMetrics, test_support::RuntimeMetricsSnapshotTestExt,
         },
         packet_sink_registry::{
             PacketSink as MediaPacketSink, PacketSinkRouteCache, RegisteredPacketSink,
@@ -98,22 +108,25 @@ use crate::{
 
 struct CountingSink {
     packets: AtomicUsize,
-    last_session: Mutex<Option<TransportSessionKey>>,
+    last_packet: Mutex<(Option<TransportSessionKey>, Vec<u8>)>,
 }
+
+const TEST_REMOTE_ICE_UFRAG: &str = "remote-ufrag";
+const TEST_REMOTE_ICE_PASSWORD: &str = "remote-password";
 
 impl CountingSink {
     fn new() -> Self {
         Self {
             packets: AtomicUsize::new(0),
-            last_session: Mutex::new(None),
+            last_packet: Mutex::new((None, Vec::new())),
         }
     }
 
-    fn last_session(&self) -> Option<TransportSessionKey> {
-        match self.last_session.lock() {
-            Ok(last_session) => last_session.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
+    fn last_packet(&self) -> (Option<TransportSessionKey>, Vec<u8>) {
+        self.last_packet
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -123,13 +136,15 @@ impl MediaPacketSink for CountingSink {
         session_key: &TransportSessionKey,
         _transport_media_id: TransportMediaId,
         _received_at: Instant,
-        _payload: &[u8],
+        payload: &[u8],
     ) {
         self.packets.fetch_add(1, Ordering::Relaxed);
-        match self.last_session.lock() {
-            Ok(mut last_session) => *last_session = Some(session_key.clone()),
-            Err(poisoned) => *poisoned.into_inner() = Some(session_key.clone()),
-        }
+        let mut last_packet = self
+            .last_packet
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        last_packet.0 = Some(session_key.clone());
+        payload.clone_into(&mut last_packet.1);
     }
 }
 
@@ -157,13 +172,15 @@ impl IngressRoutingHarness {
     }
 
     fn route(&mut self, packet: &[u8]) {
-        route_pkt_to_session(
+        self.route_at(packet, Instant::now());
+    }
+
+    fn route_at(&mut self, packet: &[u8], now: Instant) {
+        route_pkt_to_session_at(
             &mut self.packet_loop_state,
             &mut self.demux,
             &self.rtc_metrics,
-            self.source_addr,
-            self.candidate_addr,
-            packet,
+            PacketRouteDatagram::new(self.source_addr, self.candidate_addr, packet, now),
         );
     }
 }
@@ -201,6 +218,134 @@ fn create_rtc_session(state: &mut PacketLoopState, session: &TransportSessionKey
     )
     .expect("test session should enter RTC state");
     assert!(created, "test session should be newly created");
+}
+
+fn authenticated_binding_packet(
+    state: &mut PacketLoopState,
+    session_key: &TransportSessionKey,
+) -> Result<Vec<u8>, &'static str> {
+    let local_ice_credentials = state
+        .users
+        .get_mut(session_key)
+        .map(|session_state| {
+            let mut api = session_state.rtc.direct_api();
+            api.set_remote_ice_credentials(IceCreds {
+                ufrag: TEST_REMOTE_ICE_UFRAG.to_owned(),
+                pass: TEST_REMOTE_ICE_PASSWORD.to_owned(),
+            });
+            api.local_ice_credentials()
+        })
+        .ok_or("session state missing after creation")?;
+    let username = format!(
+        "{}{separator}{TEST_REMOTE_ICE_UFRAG}",
+        local_ice_credentials.ufrag,
+        separator = webrtc::ice::USERNAME_FRAGMENT_SEPARATOR,
+    );
+    serialize_stun_message(
+        &StunMessage::binding_request(&username, TransId::new(), true, 1, 1, true),
+        Some(local_ice_credentials.pass.as_bytes()),
+    )
+    .ok_or("failed to serialize STUN binding request")
+}
+
+fn exhaust_rtcp_ingress_budget(
+    state: &mut PacketLoopState,
+    session_key: &TransportSessionKey,
+    now: Instant,
+) -> Result<(), &'static str> {
+    let Some(session_state) = state.users.get_mut(session_key) else {
+        return Err("session state missing before RTCP budget exhaustion");
+    };
+    if !session_state
+        .rtcp_ingress_budget
+        .try_charge(RTCP_INGRESS_BUDGET_CAPACITY_BYTES, now)
+    {
+        return Err("fresh RTCP ingress budget should admit its full capacity");
+    }
+    Ok(())
+}
+
+enum RtcpBudgetDropRoute {
+    Cached,
+    Recovered,
+}
+
+struct PreparedRtcpBudgetDrop {
+    harness: IngressRoutingHarness,
+    session_key: TransportSessionKey,
+    rtcp: [u8; rtp::RTCP_RECEIVER_REPORT_WITHOUT_BLOCKS_BYTES],
+    now: Instant,
+}
+
+fn prepare_authenticated_rtcp_budget_drop(
+    route: &RtcpBudgetDropRoute,
+) -> Result<PreparedRtcpBudgetDrop, &'static str> {
+    let mut harness = IngressRoutingHarness::new(45_051, 45_050);
+    let session_key = test_transport_session_key(51, 0, 60, UserId::Integer(61));
+
+    create_rtc_session(
+        &mut harness.packet_loop_state,
+        &session_key,
+        harness.candidate_addr.port(),
+    );
+    let binding = authenticated_binding_packet(&mut harness.packet_loop_state, &session_key)?;
+    let now = Instant::now() + Duration::from_secs(1);
+    harness.route_at(&binding, now);
+    poll_rtc_until_timeout(&mut harness.packet_loop_state, &session_key)?;
+    assert_eq!(
+        drain_ready_sessions(&mut harness.packet_loop_state),
+        vec![session_key.clone()]
+    );
+    // A receiver report with no report blocks is the smallest valid RTCP
+    // packet accepted after ICE nomination.
+    // https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.2
+    let rtcp = rtp::rtcp_receiver_report_without_report_blocks(rtp::Ssrc::from(0));
+    let receive = Receive::new(
+        Protocol::Udp,
+        harness.source_addr,
+        harness.candidate_addr,
+        &rtcp,
+    )
+    .map_err(|_error| "candidate RTCP should classify")?;
+    assert!(
+        harness
+            .packet_loop_state
+            .users
+            .get(&session_key)
+            .ok_or("session state missing after ICE nomination")?
+            .rtc
+            .accepts(&Input::Receive(now, receive)),
+        "nominated source should accept candidate RTCP"
+    );
+    if let RtcpBudgetDropRoute::Recovered = route {
+        harness
+            .packet_loop_state
+            .remote_addr_demux
+            .forget_remote_addr(harness.source_addr);
+    }
+    exhaust_rtcp_ingress_budget(&mut harness.packet_loop_state, &session_key, now)?;
+    Ok(PreparedRtcpBudgetDrop {
+        harness,
+        session_key,
+        rtcp,
+        now,
+    })
+}
+
+fn poll_rtc_until_timeout(
+    state: &mut PacketLoopState,
+    session_key: &TransportSessionKey,
+) -> Result<(), &'static str> {
+    let Some(session_state) = state.users.get_mut(session_key) else {
+        return Err("session state missing before RTC output poll");
+    };
+    loop {
+        match session_state.rtc.poll_output() {
+            Ok(Output::Timeout(_)) => return Ok(()),
+            Ok(_) => {}
+            Err(_error) => return Err("RTC output poll failed"),
+        }
+    }
 }
 
 fn bind_std_socket() -> Result<StdUdpSocket, &'static str> {
@@ -275,6 +420,7 @@ fn insert_open_route(
             dest_stream: consumer_stream,
             dest_mid: consumer_mid,
             dest_payload_type: None,
+            repair_enabled: false,
             active: true,
             requires_decoder_refresh: false,
             delivery_generation: 0,
@@ -346,6 +492,7 @@ fn register_consumer_route_fixture(
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
+            repair_enabled: false,
             active,
             requires_decoder_refresh: false,
             delivery_generation: 0,
@@ -896,24 +1043,13 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
         &session_key,
         harness.candidate_addr.port(),
     );
-    let local_ice_credentials = harness
-        .packet_loop_state
-        .users
-        .get_mut(&session_key)
-        .map(|session_state| session_state.rtc.direct_api().local_ice_credentials())
-        .ok_or("session state missing after creation")?;
     assert!(
         harness
             .packet_loop_state
             .remote_addr_demux
             .remember_remote_addr(harness.source_addr, &session_key)
     );
-    let username = format!("{}:remote-ufrag", local_ice_credentials.ufrag);
-    let packet = serialize_stun_message(
-        &StunMessage::binding_request(&username, TransId::new(), true, 1, 1, false),
-        Some(local_ice_credentials.pass.as_bytes()),
-    )
-    .ok_or("failed to serialize STUN binding request")?;
+    let packet = authenticated_binding_packet(&mut harness.packet_loop_state, &session_key)?;
     let miss_key =
         PacketLoopRoutingMissKey::new(harness.source_addr, harness.candidate_addr, &packet);
     harness
@@ -940,6 +1076,58 @@ fn indexed_route_stays_cached_without_touching_recent_miss_state() -> Result<(),
     assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 0);
     assert_eq!(snapshot.rtc_datagram_drops_recent_miss_cache(), 0);
+    Ok(())
+}
+
+#[test]
+fn cached_rtcp_budget_drop_keeps_the_session_and_source_pin() -> Result<(), &'static str> {
+    let PreparedRtcpBudgetDrop {
+        mut harness,
+        session_key,
+        rtcp,
+        now,
+    } = prepare_authenticated_rtcp_budget_drop(&RtcpBudgetDropRoute::Cached)?;
+
+    harness.route_at(&rtcp, now);
+
+    assert!(drain_ready_sessions(&mut harness.packet_loop_state).is_empty());
+    assert!(harness.packet_loop_state.users.contains_key(&session_key));
+    assert_eq!(
+        harness
+            .packet_loop_state
+            .remote_addr_demux
+            .session_key_for_remote_addr(harness.source_addr),
+        Some(&session_key)
+    );
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_datagram_routes_indexed(), 1);
+    assert_eq!(snapshot.rtc_rtcp_ingress_budget_drops(), 1);
+    Ok(())
+}
+
+#[test]
+fn recovered_rtcp_budget_drop_relearns_the_source_pin() -> Result<(), &'static str> {
+    let PreparedRtcpBudgetDrop {
+        mut harness,
+        session_key,
+        rtcp,
+        now,
+    } = prepare_authenticated_rtcp_budget_drop(&RtcpBudgetDropRoute::Recovered)?;
+
+    harness.route_at(&rtcp, now);
+
+    assert!(drain_ready_sessions(&mut harness.packet_loop_state).is_empty());
+    assert!(harness.packet_loop_state.users.contains_key(&session_key));
+    assert_eq!(
+        harness
+            .packet_loop_state
+            .remote_addr_demux
+            .session_key_for_remote_addr(harness.source_addr),
+        Some(&session_key)
+    );
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_datagram_routes_scan(), 2);
+    assert_eq!(snapshot.rtc_rtcp_ingress_budget_drops(), 1);
     Ok(())
 }
 
@@ -1094,6 +1282,7 @@ fn selected_rid_keyframe_does_not_admit_an_earlier_delta_from_the_same_batch() {
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
+            repair_enabled: false,
             active: true,
             requires_decoder_refresh: true,
             delivery_generation: 0,
@@ -1296,7 +1485,7 @@ fn flush_packet_forwards_records_packet_sink_source_key_for_local_packet()
         &harness.buffers,
     );
 
-    assert_eq!(sink.last_session(), Some(source_session));
+    assert_eq!(sink.last_packet().0, Some(source_session));
     Ok(())
 }
 
@@ -1338,39 +1527,71 @@ fn flush_packet_forwards_records_closed_relays_and_keeps_later_destinations() {
 }
 
 #[test]
-fn flush_packet_forwards_marks_local_consumer_sessions_dirty() -> Result<(), &'static str> {
-    let producer_session = test_transport_session_key(218, 0, 219, UserId::Integer(220));
-    let consumer_session = test_transport_session_key(218, 0, 221, UserId::Integer(222));
+fn flush_packet_forwards_queues_normalized_repair_across_destinations() -> Result<(), &'static str>
+{
+    const PRIMARY_SSRC: u32 = 4_321;
+
+    let repair_sequence = u64::from(rtp::RTP_SEQUENCE_NUMBER_MODULUS);
+    let producer_session = test_transport_session_key(219, 0, 222, UserId::Integer(223));
+    let consumer_session = test_transport_session_key(219, 0, 224, UserId::Integer(225));
     let consumer_mid = Mid::from("cam-down");
+    let normalized_payload = b"normalized-primary-payload";
+    let src_media = TransportMediaId::new(226);
     let mut harness = PacketLoopHarness::new();
+    create_rtc_session(&mut harness.state, &producer_session, 45_052);
+    let source_handle = harness
+        .state
+        .users
+        .handle_for_key(&producer_session)
+        .ok_or("source handle missing after session setup")?;
     declare_video_tx(
         &mut harness.state,
         &consumer_session,
-        45_051,
+        45_053,
         consumer_mid,
-        223_001,
+        227_001,
     );
     let consumer = harness
         .state
         .users
         .get_mut(&consumer_session)
         .ok_or("consumer session missing after setup")?;
-    let egress_bitrate = Arc::clone(&consumer.egress_bitrate);
-    let consumer_stream = consumer.consumer_streams.allocate();
-
-    let packet = sample_forwarded_packet(producer_session, "cam-up", b"payload");
-    let received_at = packet.received_at();
-    harness.buffers.pending_packets.push(packet);
-    let src_media = TransportMediaId::new(224);
+    let consumer_stream = consumer.consumer_streams.allocate(consumer_mid);
+    // A repair is admissible only after primary RTP exposes its gap.
+    let mut project_primary = |sequence_number: u64, timestamp: u32| {
+        consumer
+            .consumer_streams
+            .project_identity(
+                consumer_stream,
+                SourceRtpIdentity {
+                    delivery_generation: 0,
+                    ssrc: Ssrc::from(PRIMARY_SSRC),
+                    seq_no: sequence_number.into(),
+                    timestamp,
+                    was_repair: false,
+                },
+                codec::PacketIdentity::default(),
+            )
+            .ok_or("primary packet should project")
+    };
+    project_primary(repair_sequence - 1, 10_000)?;
+    let after_gap = project_primary(repair_sequence + 1, 12_000)?;
     insert_open_route(
         &mut harness.state,
         src_media,
         &consumer_session,
-        TransportMediaId::new(223),
+        TransportMediaId::new(227),
         consumer_stream,
         consumer_mid,
     );
+    let packet =
+        sample_local_repaired_packet(source_handle, "cam-up", repair_sequence, normalized_payload);
+    harness.buffers.pending_packets.push(packet);
+    let sink = Arc::new(CountingSink::new());
+    let (relay_mailbox, mut relay_rx) = RelayPacketMailbox::channel_for_test();
     harness.add_local(src_media, 0);
+    harness.add_relay(src_media, relay_mailbox);
+    harness.add_recording_sink(src_media, &sink);
 
     flush_only_packet_forwards(
         &mut harness.state,
@@ -1380,17 +1601,33 @@ fn flush_packet_forwards_marks_local_consumer_sessions_dirty() -> Result<(), &'s
         &harness.buffers,
     );
 
+    let local_write = harness
+        .state
+        .users
+        .get(&consumer_session)
+        .and_then(|session| session.last_local_write.as_ref())
+        .ok_or("local repair should be written")?;
+    assert!(local_write.0.is_next(after_gap.seq_no));
+    assert_eq!(local_write.1.as_ref(), normalized_payload);
     assert_eq!(
         drain_ready_sessions(&mut harness.state),
         vec![consumer_session]
     );
     assert_eq!(
-        harness.metrics.snapshot().rtp_forwarded_packets_local_rtc(),
-        1
+        sink.last_packet(),
+        (Some(producer_session), normalized_payload.to_vec())
     );
+    let relay_packet = relay_rx
+        .try_recv()
+        .map_err(|_error| "relay should receive the repaired packet")?;
+    assert_eq!(relay_packet.payload(), normalized_payload);
     assert_eq!(
-        egress_bitrate.last_observed_age(received_at),
-        Some(Duration::ZERO)
+        relay_packet.repair_identity(),
+        Some((
+            Pt::from(111),
+            Ssrc::from(PRIMARY_SSRC),
+            repair_sequence.into()
+        ))
     );
     Ok(())
 }
@@ -1478,16 +1715,20 @@ async fn transport_health_events_use_session_room_id_and_deduplicate() {
         return;
     };
     assert_eq!(room_id.as_ref(), "public-room-uuid");
+    let rtc_metrics = worker.metrics.register_rtc_worker();
+    let mut nack_totals = RtcNackTotals::default();
 
-    let observe = |event| {
-        observe_rtc_event(
-            &handle.snapshot_state,
-            &worker.metrics,
-            &worker.source_policy_signal,
-            &room_id,
-            &session,
+    let mut observe = |event| {
+        observe_rtc_event(RtcEventContext {
+            snapshot_state: &handle.snapshot_state,
+            metrics: &worker.metrics,
+            rtc_metrics: &rtc_metrics,
+            nack_totals: &mut nack_totals,
+            source_policy_signal: &worker.source_policy_signal,
+            room_id: &room_id,
+            session_key: &session,
             event,
-        );
+        });
     };
     observe(&Event::Connected);
     observe(&Event::Connected);
@@ -1507,6 +1748,76 @@ async fn transport_health_events_use_session_room_id_and_deduplicate() {
         }
         assert_exact(TRANSPORT_HEALTH_CHANGED, &fields);
     }
+}
+
+#[test]
+fn media_stats_record_exact_nack_deltas_per_stream() {
+    let metrics = RuntimeMetrics::default();
+    let rtc_metrics = metrics.register_rtc_worker();
+    let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+    let source_policy_signal = SourcePolicySignal::default();
+    let mut nack_totals = RtcNackTotals::default();
+    let session = test_transport_session_key(320, 0, 321, UserId::Integer(8));
+    let mid = Mid::from("video");
+    let first_rid = Some(Rid::from("f"));
+    let second_rid = Some(Rid::from("h"));
+    let now = Instant::now();
+    let ingress = |rid, nacks| {
+        Event::MediaIngressStats(MediaIngressStats {
+            mid,
+            rid,
+            bytes: 1,
+            packets: 1,
+            firs: 0,
+            plis: 0,
+            nacks,
+            rtt: None,
+            loss: None,
+            timestamp: now,
+            remote: None,
+        })
+    };
+    let egress = |nacks| {
+        Event::MediaEgressStats(MediaEgressStats {
+            mid,
+            rid: first_rid,
+            bytes: 1,
+            packets: 1,
+            firs: 0,
+            plis: 0,
+            nacks,
+            rtt: None,
+            loss: None,
+            timestamp: now,
+            remote: None,
+        })
+    };
+    let mut observe = |event| {
+        observe_rtc_event(RtcEventContext {
+            snapshot_state: &snapshot_state,
+            metrics: &metrics,
+            rtc_metrics: &rtc_metrics,
+            nack_totals: &mut nack_totals,
+            source_policy_signal: &source_policy_signal,
+            room_id: "room",
+            session_key: &session,
+            event: &event,
+        });
+    };
+
+    observe(ingress(first_rid, 2));
+    observe(ingress(second_rid, 3));
+    observe(ingress(first_rid, 5));
+    observe(egress(3));
+    observe(egress(4));
+    observe(egress(1));
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.rtc_nacks(RtcNackDirection::SentToPublisher), 8);
+    assert_eq!(
+        snapshot.rtc_nacks(RtcNackDirection::ReceivedFromSubscriber),
+        5
+    );
 }
 
 #[test]
@@ -1548,7 +1859,9 @@ fn due_relay_observation_expires_in_same_pump() -> Result<(), &'static str> {
     run_packet_loop_io_test(async {
         let mut state = PacketLoopState::default();
         let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let config = packet_loop_config_for_test();
+        let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
         let subscription = config.source_policy_signal.subscribe();
         let session = test_transport_session_key(400, 0, 401, UserId::Integer(402));
         let source_id = TransportMediaId::new(403);
@@ -1581,8 +1894,10 @@ fn due_relay_observation_expires_in_same_pump() -> Result<(), &'static str> {
         let started_at = Instant::now();
         let snapshot = PacketLoopTurn::new(started_at).pump(
             &mut state,
+            &bitrate_registry,
             &snapshot_state,
             &config,
+            &mut demux,
             &mut relay_rx,
         );
 
@@ -1619,45 +1934,32 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
                 .with_probe_receiver(probe_rx);
         let session = test_transport_session_key(418, 0, 419, UserId::Integer(420));
         let mut shared_socket = test_socket()?;
-        let candidate_addr = shared_socket.candidate_addr;
         let (dirty_response, dirty_result) = oneshot::channel();
         let (queued_response, _queued_result) = oneshot::channel();
-        assert!(
-            bootstrap::ensure_session_rtc_state(
-                &mut state.users,
-                &session,
-                candidate_addr,
-                Bitrate::from_mbps(10),
-            )
-            .is_ok()
-        );
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &session,
+            shared_socket.candidate_addr,
+            Bitrate::from_mbps(10),
+        )
+        .map_err(|_error| "RTC state should initialize")?;
         let source_addr = SocketAddr::from(([127, 0, 0, 1], 42_100));
         let packet = sample_rtp_packet(421, 422);
-        let miss_key = PacketLoopRoutingMissKey::new(source_addr, candidate_addr, &packet);
+        let miss_key =
+            PacketLoopRoutingMissKey::new(source_addr, shared_socket.candidate_addr, &packet);
         demux.record_miss(miss_key, &packet, source_addr, Instant::now());
         assert!(demux.should_skip_scan(miss_key, &packet));
-        assert!(
+        for response in [dirty_response, queued_response] {
             probe_tx
                 .send(DebugProbeRequest::new(
                     MarkSessionDirtyProbe {
                         session_key: session.clone(),
                     },
-                    dirty_response,
+                    response,
                 ))
                 .await
-                .is_ok()
-        );
-        assert!(
-            probe_tx
-                .send(DebugProbeRequest::new(
-                    MarkSessionDirtyProbe {
-                        session_key: session.clone(),
-                    },
-                    queued_response,
-                ))
-                .await
-                .is_ok()
-        );
+                .map_err(|_error| "dirty probe should enqueue")?;
+        }
 
         let first_input = turn
             .wait_for_next_input(
@@ -1674,7 +1976,7 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
                 packet_loop_state: &mut state,
                 bitrate_registry: &bitrate_registry,
                 snapshot_state: &snapshot_state,
-                candidate_addr,
+                candidate_addr: shared_socket.candidate_addr,
                 config: &config,
                 demux: &mut demux,
                 ingress: &shared_socket.ingress,
@@ -1688,7 +1990,14 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
             .map_err(|_error| "dirty probe response should arrive")?;
         assert!(state.has_dirty_sessions());
 
-        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
+        let snapshot = turn.pump(
+            &mut state,
+            &bitrate_registry,
+            &snapshot_state,
+            &config,
+            &mut demux,
+            inputs.relay_rx(),
+        );
 
         assert!(!state.has_dirty_sessions());
 
@@ -1703,7 +2012,6 @@ fn packet_loop_waits_for_one_control_then_pumps_before_the_next_control() -> Res
             .ok_or("second control input should wake after the pump")?;
 
         assert!(matches!(second_input, PacketLoopTurnInput::Control(_)));
-        assert!(!state.has_dirty_sessions());
         Ok(())
     })
 }
@@ -1716,7 +2024,9 @@ fn due_heartbeat_yields_to_ready_control_without_reporting_health() -> Result<()
             .ok_or("test instant should support a short subtraction")?;
         let mut state = PacketLoopState::default();
         let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let config = packet_loop_config_for_test();
+        let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
         let mut turn = PacketLoopTurn::new(started_at);
         let (_command_tx, command_rx) = mpsc::channel(1);
         let (_relay_tx, relay_rx) = mpsc::channel(1);
@@ -1738,7 +2048,14 @@ fn due_heartbeat_yields_to_ready_control_without_reporting_health() -> Result<()
                 .is_ok()
         );
 
-        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
+        let snapshot = turn.pump(
+            &mut state,
+            &bitrate_registry,
+            &snapshot_state,
+            &config,
+            &mut demux,
+            inputs.relay_rx(),
+        );
         turn.flush_outputs(&shared_socket.socket).await;
         let input = turn
             .wait_for_next_input(
@@ -1768,7 +2085,9 @@ fn heartbeat_wake_does_not_create_a_timeout_turn() -> Result<(), &'static str> {
             .ok_or("test instant should support a short subtraction")?;
         let mut state = PacketLoopState::default();
         let snapshot_state = Arc::new(Mutex::new(RtcSnapshotState::default()));
+        let bitrate_registry = Arc::new(Mutex::new(BitrateRegistry::default()));
         let config = packet_loop_config_for_test();
+        let mut demux = super::super::routing_miss::DemuxRecoveryState::new();
         let mut turn = PacketLoopTurn::new(started_at);
         let (_command_tx, command_rx) = mpsc::channel(1);
         let (_relay_tx, relay_rx) = mpsc::channel(1);
@@ -1776,7 +2095,14 @@ fn heartbeat_wake_does_not_create_a_timeout_turn() -> Result<(), &'static str> {
             PacketLoopInputReceivers::new(command_rx, relay_rx, CancellationToken::new());
         let mut shared_socket = test_socket()?;
 
-        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
+        let snapshot = turn.pump(
+            &mut state,
+            &bitrate_registry,
+            &snapshot_state,
+            &config,
+            &mut demux,
+            inputs.relay_rx(),
+        );
         turn.flush_outputs(&shared_socket.socket).await;
         let wait = timeout(
             Duration::from_millis(20),
@@ -1850,7 +2176,14 @@ fn packet_loop_wait_takes_one_completed_datagram_per_turn() -> Result<(), &'stat
             },
             input,
         );
-        let snapshot = turn.pump(&mut state, &snapshot_state, &config, inputs.relay_rx());
+        let snapshot = turn.pump(
+            &mut state,
+            &bitrate_registry,
+            &snapshot_state,
+            &config,
+            &mut demux,
+            inputs.relay_rx(),
+        );
 
         let second_input = timeout(
             Duration::from_secs(1),
@@ -1916,6 +2249,7 @@ fn silent_audio_packets_are_dropped_from_routed_fanout_after_transport_activity_
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: consumer_mid,
             dest_payload_type: None,
+            repair_enabled: false,
             active: true,
             requires_decoder_refresh: false,
             delivery_generation: 0,

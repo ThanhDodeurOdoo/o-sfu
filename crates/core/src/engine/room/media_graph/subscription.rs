@@ -9,8 +9,11 @@ use super::{
 };
 use crate::engine::{
     ConnectionId, UserId,
-    media_transport::TransportRelayRouteEffect,
-    room::source_policy::VideoAdmissionRank,
+    media_transport::{TransportMediaId, TransportRelayRouteEffect, TransportTeardown},
+    room::{
+        outbound::{OutboundSender, VersionedRemoteTrackSnapshot},
+        source_policy::VideoAdmissionRank,
+    },
     source_model::{
         ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId, SourceRoutePriority,
         SourceSubscriptionIntent, UserStreamId,
@@ -51,11 +54,14 @@ pub struct ReceiverRouteWork {
     pub(in crate::engine::room) activities: Vec<ReceiverRouteActivity>,
     pub(in crate::engine::room) setups: Vec<PendingConsumerSetup>,
     pub(in crate::engine::room) relays: Vec<TransportRelayRouteEffect>,
+    pub(in crate::engine::room) teardown: Vec<TransportTeardown>,
 }
 
 #[derive(Debug)]
 pub struct ReceiverRouteCommit {
     pub(in crate::engine::room) work: ReceiverRouteWork,
+    pub(in crate::engine::room) track_snapshots:
+        Vec<(OutboundSender, VersionedRemoteTrackSnapshot)>,
 }
 
 #[derive(Clone, Copy)]
@@ -76,7 +82,10 @@ impl RoomState {
         self.user_for_connection(user_id, connection_id)?;
         let work =
             self.plan_receiver_intent_change(user_id, connection_id, target_user_id, intents);
-        Some(ReceiverRouteCommit { work })
+        Some(ReceiverRouteCommit {
+            work,
+            track_snapshots: Vec::new(),
+        })
     }
 
     #[cfg(test)]
@@ -115,6 +124,7 @@ impl RoomState {
             activities: updates,
             setups,
             relays,
+            ..Default::default()
         }
     }
 
@@ -122,12 +132,34 @@ impl RoomState {
         &mut self,
         user_id: &UserId,
         connection_id: ConnectionId,
+        declined_consumers: &[TransportMediaId],
     ) -> Option<ReceiverRouteCommit> {
-        let user = self.user_for_connection(user_id, connection_id)?;
-        user.parsed_client_rtp_capabilities.as_ref()?;
-        let work =
+        let sender = {
+            let user = self.user_for_connection(user_id, connection_id)?;
+            user.parsed_client_rtp_capabilities.as_ref()?;
+            (!declined_consumers.is_empty()).then(|| user.sender.clone())
+        };
+        let session = self
+            .topology
+            .transport_user_key(user_id.clone(), connection_id);
+        // Keep declined routes committed while planning so the answer turn cannot
+        // immediately recreate the same media lines.
+        let mut work =
             self.plan_missing_receiver_routes(ReceiverRouteScope::Receiver(user_id, connection_id));
-        Some(ReceiverRouteCommit { work })
+        let (relays, teardown, detached) = self
+            .topology
+            .detach_declined_consumers(&session, declined_consumers);
+        work.relays.extend(relays);
+        work.teardown.extend(teardown);
+        let track_snapshots = sender
+            .filter(|_| detached)
+            .map(|sender| (sender, self.remote_track_snapshot_for_user(user_id, false)))
+            .into_iter()
+            .collect();
+        Some(ReceiverRouteCommit {
+            work,
+            track_snapshots,
+        })
     }
 
     #[cfg(test)]

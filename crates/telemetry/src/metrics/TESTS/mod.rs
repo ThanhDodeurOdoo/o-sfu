@@ -4,11 +4,11 @@ use o_sfu_model::WebSocketCloseCode;
 
 use super::{
     BudgetSolverOutcome, HttpRoute, MediaQualityLossDirection, MediaQualitySample, MetricName,
-    RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome, RtcRelayEnqueueResult,
-    RtcRemoteControlDropKind, RtcRemotePacketGateConvergence, RtcRouteControlOutcome,
-    RtpDecoderRefreshScope, RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics,
-    RuntimeMetricsSnapshot, SourceSelectionKind, TransportHealthState, TransportIceState,
-    WsSessionLoopExitReason,
+    RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome, RtcNackDirection,
+    RtcOutputBudgetLimit, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
+    RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetrics, RuntimeMetricsSnapshot,
+    SourceSelectionKind, TransportHealthState, TransportIceState, WsSessionLoopExitReason,
     test_support::{RuntimeMetricsSnapshotLookup, RuntimeMetricsSnapshotTestExt},
 };
 
@@ -85,9 +85,47 @@ fn assert_forwarding_volume_metrics(snapshot: &RuntimeMetricsSnapshot) {
 
 fn assert_rtc_datagram_and_route_control_metrics(snapshot: &RuntimeMetricsSnapshot) {
     assert_rtc_datagram_metrics(snapshot);
+    assert_rtc_recovery_metrics(snapshot);
     assert_rtc_route_control_metrics(snapshot);
     assert_rtc_relay_pressure_metrics(snapshot);
     assert_rtc_remote_control_metrics(snapshot);
+}
+
+fn assert_rtc_recovery_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.rtc_nacks(RtcNackDirection::SentToPublisher), 1);
+    assert_eq!(
+        snapshot.rtc_nacks(RtcNackDirection::ReceivedFromSubscriber),
+        1
+    );
+    assert_eq!(snapshot.rtc_rtx_packets_received_from_publisher(), 1);
+    assert_eq!(
+        snapshot.rtc_rtx_payload_bytes_received_from_publisher(),
+        1200
+    );
+    assert_eq!(snapshot.rtc_rtcp_ingress_budget_drops(), 1);
+    for limit in [
+        RtcOutputBudgetLimit::Packets,
+        RtcOutputBudgetLimit::PayloadBytes,
+        RtcOutputBudgetLimit::PacketsAndPayloadBytes,
+    ] {
+        assert_eq!(snapshot.rtc_output_budget_exhaustions(limit), 1);
+    }
+    assert_eq!(snapshot.rtc_output_budget_session_closes(), 1);
+}
+
+fn assert_aggregated_rtc_recovery_metrics(snapshot: &RuntimeMetricsSnapshot) {
+    assert_eq!(snapshot.rtc_nacks(RtcNackDirection::SentToPublisher), 5);
+    assert_eq!(snapshot.rtc_rtx_packets_received_from_publisher(), 2);
+    assert_eq!(
+        snapshot.rtc_rtx_payload_bytes_received_from_publisher(),
+        1200
+    );
+    assert_eq!(snapshot.rtc_rtcp_ingress_budget_drops(), 2);
+    assert_eq!(
+        snapshot.rtc_output_budget_exhaustions(RtcOutputBudgetLimit::Packets),
+        2
+    );
+    assert_eq!(snapshot.rtc_output_budget_session_closes(), 2);
 }
 
 fn assert_rtc_datagram_metrics(snapshot: &RuntimeMetricsSnapshot) {
@@ -323,6 +361,15 @@ fn metrics_snapshot_tracks_live_gauges_and_rtp_counters() {
     control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
     control_recorder.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
     control_recorder.record_rtc_datagram_fallback_scan(3);
+    control_recorder.record_rtc_nacks(RtcNackDirection::SentToPublisher, 1);
+    control_recorder.record_rtc_nacks(RtcNackDirection::ReceivedFromSubscriber, 1);
+    control_recorder.record_rtc_rtx_received_from_publisher(1200);
+    control_recorder.record_rtc_rtcp_ingress_budget_drop();
+    control_recorder.record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::Packets);
+    control_recorder.record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::PayloadBytes);
+    control_recorder
+        .record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::PacketsAndPayloadBytes);
+    control_recorder.record_rtc_output_budget_session_close();
     control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
     control_recorder.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
     control_recorder.record_rtc_route_control(RtcRouteControlOutcome::RouteGatedRelayDrop);
@@ -386,6 +433,11 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     first_worker.record_rtc_datagram_route(RtcDatagramRoutePath::Indexed);
     first_worker.record_rtc_datagram_drop(RtcDatagramDropReason::NoUser);
     first_worker.record_rtc_datagram_fallback_scan(3);
+    first_worker.record_rtc_nacks(RtcNackDirection::SentToPublisher, 2);
+    first_worker.record_rtc_rtx_received_from_publisher(700);
+    first_worker.record_rtc_rtcp_ingress_budget_drop();
+    first_worker.record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::Packets);
+    first_worker.record_rtc_output_budget_session_close();
     first_worker.record_rtc_route_control(RtcRouteControlOutcome::Forwarded);
     first_worker.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Retry);
     first_worker.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeEnqueued);
@@ -395,6 +447,11 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     first_worker.record_rtc_remote_packet_gate_convergence(RtcRemotePacketGateConvergence::Retry);
     second_worker.record_rtc_datagram_drop(RtcDatagramDropReason::Malformed);
     second_worker.record_rtc_datagram_route(RtcDatagramRoutePath::Scan);
+    second_worker.record_rtc_nacks(RtcNackDirection::SentToPublisher, 3);
+    second_worker.record_rtc_rtx_received_from_publisher(500);
+    second_worker.record_rtc_rtcp_ingress_budget_drop();
+    second_worker.record_rtc_output_budget_exhaustion(RtcOutputBudgetLimit::Packets);
+    second_worker.record_rtc_output_budget_session_close();
     second_worker.record_rtc_route_control(RtcRouteControlOutcome::Absorbed);
     second_worker.record_rtc_keyframe_request(RtcKeyframeRequestOutcome::Cleared);
     second_worker.record_rtc_relay_enqueue(RtcRelayEnqueueResult::IntraNodeClosed);
@@ -412,6 +469,7 @@ fn metrics_snapshot_aggregates_worker_local_rtc_recorders() {
     assert_eq!(snapshot.rtc_datagram_drops_malformed(), 1);
     assert_eq!(snapshot.rtc_datagram_fallback_scans(), 1);
     assert_eq!(snapshot.rtc_datagram_scan_users(), 3);
+    assert_aggregated_rtc_recovery_metrics(&snapshot);
     assert_eq!(snapshot.rtc_route_control_forwarded(), 1);
     assert_eq!(snapshot.rtc_route_control_absorbed(), 1);
     assert_eq!(snapshot.rtc_keyframe_requests_retried(), 1);

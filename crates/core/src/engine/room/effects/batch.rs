@@ -5,6 +5,7 @@ use crate::engine::{
         Room,
         media_graph::{
             ConsumerSetupOrigin, ProducerActivityCommit, PublishCommit, ReceiverRouteCommit,
+            ReceiverRouteWork,
         },
         source_policy::SourcePolicyTurn,
         state::{
@@ -147,13 +148,18 @@ impl RoomEffects {
     }
 
     pub(in crate::engine::room) fn from_receiver_intent(commit: ReceiverRouteCommit) -> Self {
-        let mut batch = Self::from_receiver_route(commit, ConsumerSetupOrigin::Subscribe);
+        let mut batch = Self::from_receiver_route(commit.work, ConsumerSetupOrigin::Subscribe);
         batch.source_policy.request();
         batch
     }
 
     pub(in crate::engine::room) fn from_consumer_readiness(commit: ReceiverRouteCommit) -> Self {
-        let mut batch = Self::from_receiver_route(commit, ConsumerSetupOrigin::Readiness);
+        let ReceiverRouteCommit {
+            work,
+            track_snapshots,
+        } = commit;
+        let mut batch = Self::from_receiver_route(work, ConsumerSetupOrigin::Readiness);
+        batch.output.push_track_snapshots(track_snapshots);
         batch.source_policy.request();
         batch
     }
@@ -165,9 +171,9 @@ impl RoomEffects {
         }
     }
 
-    fn from_receiver_route(commit: ReceiverRouteCommit, origin: ConsumerSetupOrigin) -> Self {
+    fn from_receiver_route(work: ReceiverRouteWork, origin: ConsumerSetupOrigin) -> Self {
         let mut batch = Self::default();
-        batch.transport.push_receiver_work(commit.work, origin);
+        batch.transport.push_receiver_work(work, origin);
         batch
     }
 

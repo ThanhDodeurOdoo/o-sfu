@@ -34,6 +34,7 @@ import {
 } from "./live_server_helpers.mjs";
 
 const PUBLISHER_SESSION_ID = 41;
+const REPAIRED_RID_EXTENSION = "urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id";
 const SUBSCRIBER_SESSION_ID = 42;
 const STUN_MAGIC_COOKIE = 0x2112a442;
 
@@ -560,7 +561,7 @@ test("H264-only live publish applies RID simulcast and renders when supported", 
     }
 });
 
-test("live browser negotiation disables RTX for optional codecs", async ({
+test("live browser negotiation enables video recovery for optional codecs", async ({
     browserName,
     context
 }) => {
@@ -615,7 +616,12 @@ test("live browser negotiation disables RTX for optional codecs", async ({
         if (codecs.vp9Profiles.size > 0) {
             expect(codecs.vp9Profiles).toEqual(new Set(["0", "2"]));
         }
-        expect(codecs.rtxAssociations.size).toBe(0);
+        expect(codecs.genericNackPayloadTypes).toEqual(codecs.videoCodecPayloadTypes);
+        expect(codecs.hasRepairedRidExtension).toBeTruthy();
+        expect(codecs.rtxAssociations.size).toBe(codecs.videoCodecPayloadTypes.size);
+        expect(new Set(codecs.rtxAssociations.keys())).toEqual(codecs.rtxPayloadTypes);
+        expect(new Set(codecs.rtxAssociations.values())).toEqual(codecs.videoCodecPayloadTypes);
+        expect(codecs.audioRepairAttributes).toEqual([]);
     } finally {
         await server.stop();
     }
@@ -791,19 +797,23 @@ function pixelDistance(left, right) {
 
 function parseVideoCodecAnswer(sdp) {
     const lines = sdp.split(/\r?\n/);
+    const audioRepairAttributes = [];
+    const genericNackPayloadTypes = new Set();
     const h264Variants = new Set();
     const h264PayloadTypes = new Set();
     const fmtpByPayloadType = new Map();
     const hasSendRidHi = lines.some((line) => /^a=rid:hi send(?: |$)/.test(line));
     const hasSendRidLo = lines.some((line) => /^a=rid:lo send(?: |$)/.test(line));
     const hasSendSimulcastLoHi = lines.some((line) => /^a=simulcast:send lo[;,]hi$/.test(line));
-    const rtxAssociations = new Set();
+    const rtxAssociations = new Map();
+    const rtxPayloadTypes = new Set();
     const videoCodecPayloadTypes = new Set();
     const videoPayloadTypes = new Map();
     const vp8PayloadTypes = new Set();
     const vp9PayloadTypes = new Set();
     const vp9Profiles = new Set();
     let currentMediaKind = null;
+    let hasRepairedRidExtension = false;
 
     for (const line of lines) {
         const mediaDescriptionMatch = /^m=([^ ]+)/.exec(line);
@@ -811,14 +821,38 @@ function parseVideoCodecAnswer(sdp) {
             [, currentMediaKind] = mediaDescriptionMatch;
             continue;
         }
+        const repairedRidExtension =
+            line.startsWith("a=extmap:") && line.includes(` ${REPAIRED_RID_EXTENSION}`);
+        if (currentMediaKind === "audio") {
+            const fmtpMatch = /^a=fmtp:\d+ (.+)$/.exec(line);
+            if (
+                /^a=rtpmap:\d+ rtx\//i.test(line) ||
+                /^a=rtcp-fb:(?:\d+|\*) nack$/.test(line) ||
+                repairedRidExtension ||
+                (fmtpMatch && parseFmtpParameters(fmtpMatch[1]).apt)
+            ) {
+                audioRepairAttributes.push(line);
+            }
+            continue;
+        }
         if (currentMediaKind !== "video") {
+            continue;
+        }
+        if (repairedRidExtension) {
+            hasRepairedRidExtension = true;
+        }
+        const genericNackMatch = /^a=rtcp-fb:(\d+|\*) nack$/.exec(line);
+        if (genericNackMatch) {
+            genericNackPayloadTypes.add(genericNackMatch[1]);
             continue;
         }
         const rtpmapMatch = /^a=rtpmap:(\d+) ([^/]+)\/\d+/.exec(line);
         if (rtpmapMatch) {
             const [, payloadType, codecName] = rtpmapMatch;
             videoPayloadTypes.set(payloadType, codecName);
-            if (codecName !== "rtx") {
+            if (codecName === "rtx") {
+                rtxPayloadTypes.add(payloadType);
+            } else {
                 videoCodecPayloadTypes.add(payloadType);
             }
             if (codecName === "H264") {
@@ -858,18 +892,22 @@ function parseVideoCodecAnswer(sdp) {
         const codecName = videoPayloadTypes.get(payloadType);
         if (codecName === "rtx") {
             if (params.apt) {
-                rtxAssociations.add(params.apt);
+                rtxAssociations.set(payloadType, params.apt);
             }
         }
     }
 
     return {
+        audioRepairAttributes,
+        genericNackPayloadTypes,
+        hasRepairedRidExtension,
         hasSendRidHi,
         hasSendRidLo,
         hasSendSimulcastLoHi,
         h264PayloadTypes,
         h264Variants,
         rtxAssociations,
+        rtxPayloadTypes,
         videoCodecPayloadTypes,
         vp8PayloadTypes,
         vp9PayloadTypes,

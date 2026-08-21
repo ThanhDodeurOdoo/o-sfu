@@ -29,6 +29,7 @@ use super::{
         commands::{ParsedSessionAnswer, RtcSessionOffer},
         state::PacketLoopState,
     },
+    media::remove_consumer_route,
     publication::{answer_producer_projection, refresh_negotiated_producer_parameters},
     recv_stream::{StaleSsrcPolicy, apply_recv_stream},
 };
@@ -37,7 +38,7 @@ use crate::{
     engine::{
         media_transport::{
             AppliedProducer, AppliedSessionAnswer, SessionUploadEncoding, SessionUploadSlot,
-            TransportAdapterError, TransportSessionKey,
+            TransportAdapterError, TransportMediaId, TransportSessionKey,
         },
         metrics::RuntimeMetrics,
     },
@@ -97,6 +98,8 @@ pub(super) fn worker_create_initial_session_offer(
             .ok_or(TransportAdapterError::TransportUnavailable)?
     };
 
+    session_state.sdp_negotiation.pending_offer_repair =
+        Some(codec::RepairSummary::from_offer(&offer));
     session_state.sdp_negotiation.pending_offer = Some(pending_offer);
     session_state.sdp_negotiation.staged_offer = None;
     session_state
@@ -158,11 +161,28 @@ pub(super) fn worker_apply_session_answer(
     parsed_answer: ParsedSessionAnswer,
 ) -> Result<AppliedSessionAnswer, TransportAdapterError> {
     let producer_media_snapshot = state.producer_media_snapshot(session_key);
+    let consumer_media_snapshot = state.consumer_media_snapshot(session_key);
     let producer_mids = producer_media_snapshot
         .iter()
         .map(|(_transport_media_id, mid)| *mid)
         .collect::<Vec<_>>();
-    let ParsedSessionAnswer { answer, rids } = parsed_answer;
+    let ParsedSessionAnswer {
+        answer,
+        rids,
+        repair,
+    } = parsed_answer;
+    let offered_repair = state
+        .users
+        .get(session_key)
+        .and_then(|session| session.sdp_negotiation.pending_offer_repair.as_ref())
+        .ok_or(TransportAdapterError::InvalidInput)?;
+    // An answer can only retain repair mappings from the offer. The primary and RTX
+    // payload types form one mapping.
+    // https://www.rfc-editor.org/rfc/rfc3264.html#section-6.1
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
+    if !offered_repair.accepts(&repair) {
+        return Err(TransportAdapterError::InvalidInput);
+    }
     // Derive every fallible answer view available before `accept_answer`.
     // str0m 0.21 mutates ICE, DTLS and session state in place, so a later RID
     // or router-projection rejection could not restore the pending offer.
@@ -191,11 +211,13 @@ pub(super) fn worker_apply_session_answer(
         let Some(pending_offer) = session_state.sdp_negotiation.pending_offer.take() else {
             return Err(TransportAdapterError::InvalidInput);
         };
+        session_state.sdp_negotiation.pending_offer_repair = None;
         session_state
             .rtc
             .sdp_api()
             .accept_answer(pending_offer, answer)
             .map_err(|_error| TransportAdapterError::InvalidInput)?;
+        session_state.purge_removed_rtx_streams();
         session_state.sdp_negotiation.initial_offer_applied = true;
         session_state.sdp_negotiation.staged_offer = None;
         let staged_upload_slots =
@@ -204,15 +226,18 @@ pub(super) fn worker_apply_session_answer(
         session_state.dtls_started = true;
         staged_upload_slots
     };
-    let refreshed_parameters = refresh_negotiated_producer_parameters(
+    let declined_consumers =
+        remove_declined_consumer_media(state, session_key, consumer_media_snapshot);
+    let refreshed_by_mid = refresh_negotiated_producer_parameters(
         state,
         session_key,
         &producer_mids,
         producer_answer_projection,
         &rids_by_mid,
         max_bitrate_in,
-    )?;
-    let refreshed_by_mid = refreshed_parameters.into_iter().collect::<BTreeMap<_, _>>();
+    )?
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
     if let Some(session_state) = state.users.get_mut(session_key) {
         stage_queued_removal_offer(session_state);
     }
@@ -236,7 +261,36 @@ pub(super) fn worker_apply_session_answer(
                 })
             }),
     )
+    .with_declined_consumers(declined_consumers)
     .with_client_capabilities(client_capabilities))
+}
+
+fn remove_declined_consumer_media(
+    state: &mut PacketLoopState,
+    session_key: &TransportSessionKey,
+    consumers: Vec<(TransportMediaId, Mid, TransportMediaId)>,
+) -> Vec<TransportMediaId> {
+    let mut declined = Vec::new();
+    for (consumer_media, mid, src_media) in consumers {
+        // A recvonly answer preserves the offerer's sendonly direction. If the
+        // applied local direction is not sending, the answer declined the stream.
+        // https://www.rfc-editor.org/rfc/rfc3264.html#section-6.1
+        if state
+            .users
+            .get(session_key)
+            .and_then(|session| session.rtc.media(mid))
+            .is_some_and(|media| media.direction().is_sending())
+        {
+            continue;
+        }
+        declined.push(consumer_media);
+        remove_consumer_route(state, session_key, consumer_media, src_media);
+        let Some(session_state) = state.users.get_mut(session_key) else {
+            continue;
+        };
+        session_state.remove_consumer_stream_tx(mid);
+    }
+    declined
 }
 
 fn offer_encodings_by_mid(
@@ -334,17 +388,25 @@ fn apply_pending_recv_streams(
         return;
     }
     let pending_recv_streams = mem::take(&mut session_state.sdp_negotiation.pending_recv_streams);
-    let mut api = session_state.rtc.direct_api();
-    for (mid, streams) in pending_recv_streams {
-        for stream in streams {
-            apply_recv_stream(
-                &mut api,
-                mid,
-                stream.rid,
-                stream.ssrc,
-                max_bitrate_in,
-                StaleSsrcPolicy::ReplaceStale,
-            );
+    {
+        let mut api = session_state.rtc.direct_api();
+        for (mid, streams) in pending_recv_streams {
+            for stream in streams {
+                let (ssrc, repair_ssrc) = api
+                    .stream_rx_by_mid(mid, stream.rid)
+                    .map_or((stream.ssrc, stream.repair_ssrc), |accepted| {
+                        (accepted.ssrc(), accepted.rtx())
+                    });
+                apply_recv_stream(
+                    &mut api,
+                    mid,
+                    stream.rid,
+                    ssrc,
+                    repair_ssrc,
+                    max_bitrate_in,
+                    StaleSsrcPolicy::ReplaceStale,
+                );
+            }
         }
     }
     #[cfg(test)]
@@ -359,19 +421,22 @@ fn stage_queued_removal_offer(session_state: &mut super::super::super::state::Rt
     }
 
     let queued_removal_mids = mem::take(&mut session_state.sdp_negotiation.queued_removal_mids);
-    let mut sdp_api = session_state.rtc.sdp_api();
+    let applied = {
+        let mut sdp_api = session_state.rtc.sdp_api();
+        for mid in &queued_removal_mids {
+            sdp_api.set_direction(*mid, Direction::Inactive);
+        }
+        sdp_api.apply()
+    };
     for mid in &queued_removal_mids {
-        sdp_api.set_direction(*mid, Direction::Inactive);
+        session_state.reset_rtx_streams(*mid);
     }
-    let Some((offer, pending_offer)) = sdp_api.apply() else {
+    let Some((offer, pending_offer)) = applied else {
         return;
     };
-    session_state.sdp_negotiation.pending_offer = Some(pending_offer);
-    session_state.sdp_negotiation.staged_offer = Some(Box::new(offer));
-    session_state
-        .sdp_negotiation
-        .staged_offer_upload_slots
-        .clear();
+    let negotiation = &mut session_state.sdp_negotiation;
+    negotiation.stage_offer(offer, pending_offer);
+    negotiation.staged_offer_upload_slots.clear();
 }
 
 fn ensure_initial_negotiation_media(

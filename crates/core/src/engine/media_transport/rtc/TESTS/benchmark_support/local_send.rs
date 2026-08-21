@@ -74,7 +74,7 @@ impl LocalSendBenchFixture {
             .users
             .get_mut(&consumer)
             .expect("benchmark consumer session should exist");
-        let stream = session.consumer_streams.allocate();
+        let stream = session.consumer_streams.allocate(mid);
         let mut direct_api = session.rtc.direct_api();
         direct_api.declare_media(mid, MediaKind::Video);
         direct_api.declare_stream_tx(Ssrc::from(78), None, mid, None);
@@ -87,6 +87,7 @@ impl LocalSendBenchFixture {
                 dest_stream: stream,
                 dest_mid: mid,
                 dest_payload_type: None,
+                repair_enabled: false,
                 active: true,
                 requires_decoder_refresh: false,
                 delivery_generation: 0,

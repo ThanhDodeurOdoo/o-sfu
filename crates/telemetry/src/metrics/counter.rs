@@ -44,6 +44,10 @@ impl PaddedCounter {
         self.value.add(value);
     }
 
+    pub(super) fn add_u64(&self, value: u64) {
+        self.value.add_u64(value);
+    }
+
     pub(super) fn load(&self) -> u64 {
         self.value.load()
     }
@@ -151,6 +155,12 @@ impl<L: MetricLabel> PaddedCounterFamily<L> {
     pub(super) fn add(&self, label: L, value: usize) {
         if let Some(counter) = self.counters.get(label.as_index()) {
             counter.add(value);
+        }
+    }
+
+    pub(super) fn add_u64(&self, label: L, value: u64) {
+        if let Some(counter) = self.counters.get(label.as_index()) {
+            counter.add_u64(value);
         }
     }
 

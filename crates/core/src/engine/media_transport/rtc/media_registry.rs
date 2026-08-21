@@ -112,16 +112,16 @@ fn bind_producer_ssrc(
     transport_media_id: TransportMediaId,
     ssrc: Ssrc,
     rid: Option<Rid>,
-) -> bool {
+) -> Option<bool> {
     let Some(RegisteredMediaHandle::Producer {
         session_key: registered_session_key,
         mid,
     }) = mid_registry.get(&transport_media_id)
     else {
-        return false;
+        return None;
     };
     if registered_session_key != session_key {
-        return false;
+        return None;
     }
     let mid = *mid;
 
@@ -130,7 +130,7 @@ fn bind_producer_ssrc(
             session_media.contains_key(session_key),
             "producer SSRC binding missing session media index for registered producer"
         );
-        return false;
+        return None;
     };
     if let Some(existing_transport_media_id) = session_lookup.producer_ssrcs.get(&ssrc)
         && existing_transport_media_id != transport_media_id
@@ -145,7 +145,7 @@ fn bind_producer_ssrc(
             ?rid,
             "ignored producer SSRC binding because SSRC already belongs to another media"
         );
-        return false;
+        return None;
     }
     let inserted = session_lookup
         .producer_ssrcs
@@ -163,7 +163,7 @@ fn bind_producer_ssrc(
             "learned dynamic producer SSRC binding from RTP header extensions"
         );
     }
-    true
+    Some(inserted)
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +279,22 @@ impl PacketLoopState {
                     .entries
                     .iter()
                     .map(|(mid, transport_media_id)| (*transport_media_id, *mid))
+                    .collect()
+            })
+    }
+
+    pub(super) fn consumer_media_snapshot(
+        &self,
+        session_key: &TransportSessionKey,
+    ) -> Vec<(TransportMediaId, Mid, TransportMediaId)> {
+        self.session_media
+            .get(session_key)
+            .map_or_else(Vec::new, |session_lookup| {
+                session_lookup
+                    .consumer_mids
+                    .entries
+                    .iter()
+                    .map(|(mid, binding)| (binding.consumer_media, *mid, binding.src_media))
                     .collect()
             })
     }
@@ -415,17 +431,19 @@ impl PacketLoopState {
         transport_media_id: TransportMediaId,
         ssrc: Ssrc,
         rid: Option<Rid>,
-    ) {
-        if bind_producer_ssrc(
+    ) -> bool {
+        let Some(inserted) = bind_producer_ssrc(
             &self.mid_registry,
             &mut self.session_media,
             session_key,
             transport_media_id,
             ssrc,
             rid,
-        ) {
-            self.routes.remember_producer_ssrc(transport_media_id, ssrc);
-        }
+        ) else {
+            return false;
+        };
+        self.routes.remember_producer_ssrc(transport_media_id, ssrc);
+        inserted
     }
 
     pub(super) fn learn_producer_ssrc_from_pkt(
@@ -434,18 +452,13 @@ impl PacketLoopState {
         transport_media_id: TransportMediaId,
         ssrc: Ssrc,
         rid: Option<Rid>,
-    ) {
+    ) -> bool {
         match source {
             ForwardedPacketSource::Relayed(session_key) => {
-                self.learn_producer_ssrc_binding(session_key, transport_media_id, ssrc, rid);
+                self.learn_producer_ssrc_binding(session_key, transport_media_id, ssrc, rid)
             }
             ForwardedPacketSource::Local(session_handle) => {
-                self.learn_producer_ssrc_from_handle(
-                    *session_handle,
-                    transport_media_id,
-                    ssrc,
-                    rid,
-                );
+                self.learn_producer_ssrc_from_handle(*session_handle, transport_media_id, ssrc, rid)
             }
         }
     }
@@ -456,20 +469,22 @@ impl PacketLoopState {
         transport_media_id: TransportMediaId,
         ssrc: Ssrc,
         rid: Option<Rid>,
-    ) {
+    ) -> bool {
         let Some(session_key) = self.users.key_for_handle(session_handle) else {
-            return;
+            return false;
         };
-        if bind_producer_ssrc(
+        let Some(inserted) = bind_producer_ssrc(
             &self.mid_registry,
             &mut self.session_media,
             session_key,
             transport_media_id,
             ssrc,
             rid,
-        ) {
-            self.routes.remember_producer_ssrc(transport_media_id, ssrc);
-        }
+        ) else {
+            return false;
+        };
+        self.routes.remember_producer_ssrc(transport_media_id, ssrc);
+        inserted
     }
 
     #[cfg(any(test, feature = "testing-transport"))]
@@ -631,11 +646,35 @@ impl PacketLoopState {
                     ssrc,
                     rid,
                 )
-                .then_some(ssrc)
+                .map(|_| ssrc)
             })
             .collect::<Vec<_>>();
         self.routes
             .replace_producer_ssrcs(transport_media_id, accepted_ssrcs);
+        self.apply_producer_nack_policy(session_key, transport_media_id);
+    }
+
+    /// Reapplies NACK suppression because SDP answers can recreate `StreamRx`.
+    pub(super) fn apply_producer_nack_policy(
+        &mut self,
+        session_key: &TransportSessionKey,
+        transport_media_id: TransportMediaId,
+    ) {
+        let active = self.routes.source_is_active(transport_media_id);
+        let (routes, users) = (&self.routes, &mut self.users);
+        let Some(ssrcs) = routes.producer_ssrcs(transport_media_id) else {
+            return;
+        };
+        let Some(session_state) = users.get_mut(session_key) else {
+            return;
+        };
+        let mut api = session_state.rtc.direct_api();
+        for ssrc in ssrcs {
+            let Some(stream_rx) = api.stream_rx(ssrc) else {
+                continue;
+            };
+            stream_rx.suppress_nack(!active || stream_rx.rtx().is_none());
+        }
     }
 
     pub(super) fn clear_producer_ssrcs_for_mid(

@@ -54,11 +54,14 @@ pub type HeaderExtensionUri = rfc_webrtc::RtpHeaderExtensionUri;
 /// changes (like a new keyframe) to the sender.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RtcpFeedbackKind {
-    /// Generic negative acknowledgment (RFC 4585)
+    /// Generic NACK from
+    /// [RFC 4585 section 6.2.1](https://www.rfc-editor.org/rfc/rfc4585.html#section-6.2.1).
     Nack,
-    /// Picture loss indication (RFC 4585), used to request a full keyframe
+    /// Picture Loss Indication from
+    /// [RFC 4585 section 6.3.1](https://www.rfc-editor.org/rfc/rfc4585.html#section-6.3.1).
     NackPli,
-    /// Full intra request (RFC 5104), a more forceful keyframe request
+    /// Full Intra Request from
+    /// [RFC 5104 section 4.3.1](https://www.rfc-editor.org/rfc/rfc5104.html#section-4.3.1).
     CcmFir,
     /// Google-specific receiver estimated maximum bitrate
     GoogRemb,
@@ -98,7 +101,8 @@ impl RtcpFeedback {
 /// here usually mean the receiver cannot decode the sender's bitstream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodecSetting {
-    /// Associated payload type for RTX (RFC 4588)
+    /// RTX associated payload type from
+    /// [RFC 4588 section 8.1](https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1).
     RtxAssociation(PayloadType),
     /// h264-specific packetization mode
     H264PacketizationMode(rfc_rtp::h264::PacketizationMode),
@@ -476,11 +480,14 @@ impl MediaFormat {
 
 /// Routing bridge between a negotiated media format and a physical stream.
 ///
-/// It ties the codec format to the network-level identifiers (SSRC or RID)
-/// used to identify the stream.
+/// It ties the codec format to the RID or primary and repair SSRCs that
+/// identify the stream. A repair SSRC is the SSRC-multiplexed RTX source from
+/// <https://www.rfc-editor.org/rfc/rfc4588.html#section-4>, signaled with the
+/// FID form in <https://www.rfc-editor.org/rfc/rfc5576.html#section-7>.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StreamBinding {
     ssrc: Option<Ssrc>,
+    repair_ssrc: Option<Ssrc>,
     rid: Option<Rid>,
     payload_type: Option<PayloadType>,
     max_bitrate: Option<u64>,
@@ -495,6 +502,15 @@ impl StreamBinding {
     #[must_use]
     pub fn with_ssrc(mut self, ssrc: impl Into<Ssrc>) -> Self {
         self.ssrc = Some(ssrc.into());
+        self
+    }
+
+    /// Associates an RTX source with its primary per
+    /// <https://www.rfc-editor.org/rfc/rfc4588.html#section-4> and the FID form
+    /// in <https://www.rfc-editor.org/rfc/rfc5576.html#section-7>.
+    #[must_use]
+    pub fn with_repair_ssrc(mut self, repair_ssrc: impl Into<Ssrc>) -> Self {
+        self.repair_ssrc = Some(repair_ssrc.into());
         self
     }
 
@@ -519,6 +535,11 @@ impl StreamBinding {
     #[must_use]
     pub fn ssrc(&self) -> Option<u32> {
         self.ssrc.map(Ssrc::value)
+    }
+
+    #[must_use]
+    pub fn repair_ssrc(&self) -> Option<u32> {
+        self.repair_ssrc.map(Ssrc::value)
     }
 
     #[must_use]

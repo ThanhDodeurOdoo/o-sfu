@@ -747,6 +747,56 @@ metric_catalog! {
         kind: Counter,
         samples: |metrics, capture, output| output.counter(&[], capture.rtc.datagram_scan_users())
     },
+    RtcNacksTotal {
+        name: "osfu_rtc_nacks_total",
+        help: "Total Generic NACK feedback events by WebRTC direction.",
+        kind: Counter,
+        samples: |metrics, capture, output| write_snapshot_counters(output,
+            &capture.rtc,
+            "direction",
+            RtcMetricsSnapshot::nacks
+        )
+    },
+    RtcRtxPacketsTotal {
+        name: "osfu_rtc_rtx_packets_total",
+        help: "Total authenticated RTX packets accepted from publishers.",
+        kind: Counter,
+        samples: |metrics, capture, output| counter(output,
+            [("direction", "received_from_publisher")],
+            capture.rtc.rtx_packets_received_from_publisher()
+        )
+    },
+    RtcRtxPayloadBytesTotal {
+        name: "osfu_rtc_rtx_payload_bytes_total",
+        help: "Total de-RTX media payload bytes accepted from publishers.",
+        kind: Counter,
+        samples: |metrics, capture, output| counter(output,
+            [("direction", "received_from_publisher")],
+            capture.rtc.rtx_payload_bytes_received_from_publisher()
+        )
+    },
+    RtcRtcpIngressBudgetDropsTotal {
+        name: "osfu_rtc_rtcp_ingress_budget_drops_total",
+        help: "Total candidate RTCP datagrams dropped by the per-session ingress byte budget.",
+        kind: Counter,
+        samples: |metrics, capture, output| output.counter(&[], capture.rtc.rtcp_ingress_budget_drops())
+    },
+    RtcOutputBudgetExhaustionsTotal {
+        name: "osfu_rtc_output_budget_exhaustions_total",
+        help: "Total RTC session drains that exhausted the output budget by limit.",
+        kind: Counter,
+        samples: |metrics, capture, output| write_snapshot_counters(output,
+            &capture.rtc,
+            "limit",
+            RtcMetricsSnapshot::output_budget_exhaustions
+        )
+    },
+    RtcOutputBudgetSessionClosesTotal {
+        name: "osfu_rtc_output_budget_session_closes_total",
+        help: "Total RTC sessions closed after output-budget exhaustion.",
+        kind: Counter,
+        samples: |metrics, capture, output| output.counter(&[], capture.rtc.output_budget_session_closes())
+    },
     RtcRouteControlTotal {
         name: "osfu_rtc_route_control_total",
         help: "Total RTC route-control decisions observed at the transport boundary.",

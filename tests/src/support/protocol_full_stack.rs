@@ -11,6 +11,7 @@ use o_sfu_protocol::wire::{
     ServerEnvelope, ServerMessage, ServerRequest, ServerResponse, StreamIntentPayload, StreamType,
     SubscribePayload, UserId, UserInfo, WelcomePayload,
 };
+use o_sfu_rfc::rtp::CodecName;
 use o_sfu_router::MediaKind;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
@@ -18,7 +19,7 @@ use tokio_tungstenite::tungstenite::{self, protocol::frame::coding::CloseCode};
 use super::{
     TEST_ROOM_KEY, TestServer, TestWebSocket, connect_websocket, decode_protocol_welcome_batch,
     fake_media::{FakeClock, FakeMediaSource},
-    fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket},
+    fake_rtc_peer::{FakeRtcPeer, ReceivedRtpPacket, RtcPeerTrace},
     protocol_wire::{encode_client_batch, read_protocol_batch, send_server_request_response},
     read_close_code, read_text_message, signed_connect_claims,
 };
@@ -64,6 +65,26 @@ pub fn connect_fake_peer<'a>(
     user_id: UserId,
     key: &'a str,
 ) -> ProtocolFakePeerFuture<'a> {
+    connect_fake_peer_with_video_answer(server, room_id, user_id, key, false)
+}
+
+#[must_use]
+pub fn connect_ridless_video_fake_peer<'a>(
+    server: &'a TestServer,
+    room_id: &'a str,
+    user_id: UserId,
+    key: &'a str,
+) -> ProtocolFakePeerFuture<'a> {
+    connect_fake_peer_with_video_answer(server, room_id, user_id, key, true)
+}
+
+fn connect_fake_peer_with_video_answer<'a>(
+    server: &'a TestServer,
+    room_id: &'a str,
+    user_id: UserId,
+    key: &'a str,
+    ridless_video_fid: bool,
+) -> ProtocolFakePeerFuture<'a> {
     Box::pin(async move {
         let token = signed_connect_claims(key, room_id, user_id.clone())?;
         let mut websocket = connect_websocket(server).await?;
@@ -81,7 +102,10 @@ pub fn connect_fake_peer<'a>(
             .ok()?;
 
         let welcome = decode_protocol_welcome_batch(&read_text_message(&mut websocket).await?)?;
-        let rtc_peer = FakeRtcPeer::bind(0).await?;
+        let mut rtc_peer = FakeRtcPeer::bind(0).await?;
+        if ridless_video_fid {
+            rtc_peer.answer_video_with_ridless_fid();
+        }
         let mut peer = ProtocolFakePeer {
             user_id,
             websocket,
@@ -272,6 +296,58 @@ impl ProtocolFakePeer {
 
     pub async fn read_rtp_packet(&mut self, timeout_window: Duration) -> Option<ReceivedRtpPacket> {
         self.rtc_peer.read_rtp_packet(timeout_window).await
+    }
+
+    pub async fn pump_rtc(&mut self, timeout_window: Duration) -> Option<()> {
+        self.rtc_peer.pump(timeout_window).await
+    }
+
+    pub fn hold_outbound_rtp(&mut self, payload_type: u8, ssrc: u32) {
+        self.rtc_peer.hold_outbound_rtp(payload_type, ssrc);
+    }
+
+    pub fn clear_outbound_rtp_hold(&mut self) {
+        self.rtc_peer.clear_outbound_rtp_hold();
+    }
+
+    pub fn drop_next_inbound_rtp(&mut self, payload_type: u8, ssrc: u32) {
+        self.rtc_peer.drop_next_inbound_rtp(payload_type, ssrc);
+    }
+
+    pub fn held_outbound_rtp_count(&self) -> usize {
+        self.rtc_peer.held_outbound_rtp_count()
+    }
+
+    pub fn discard_next_held_outbound_rtp(&mut self) -> bool {
+        self.rtc_peer.discard_next_held_outbound_rtp()
+    }
+
+    pub async fn release_next_held_outbound_rtp(&mut self) -> Option<()> {
+        self.rtc_peer.release_next_held_outbound_rtp().await
+    }
+
+    pub fn start_rtc_trace(&mut self) {
+        self.rtc_peer.start_trace();
+    }
+
+    pub fn take_rtc_trace(&mut self) -> RtcPeerTrace {
+        self.rtc_peer.take_trace()
+    }
+
+    pub fn repair_payload_types(&self, codec_name: &CodecName) -> Option<(u8, u8)> {
+        self.rtc_peer.repair_payload_types(codec_name)
+    }
+
+    pub fn send_stream_ssrc_pair(
+        &mut self,
+        media_kind: MediaKind,
+        rid: Option<&str>,
+    ) -> Option<(u32, u32)> {
+        self.rtc_peer.send_stream_ssrc_pair(media_kind, rid)
+    }
+
+    pub fn receive_repair_ssrc(&mut self, primary_ssrc: u32) -> Option<u32> {
+        self.rtc_peer.receive_repair_ssrc(primary_ssrc)
     }
 
     pub fn reset_rtp_ssrc(&mut self, media_kind: MediaKind, rid: Option<&str>) -> Option<()> {

@@ -5,10 +5,7 @@
 //! into router-native RTP parameters and keeps the producer SSRC indexes aligned
 //! with those negotiated bindings.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    mem,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
@@ -45,7 +42,7 @@ pub(super) struct AnswerProducerProjection {
     direction: Direction,
     payload_params: Vec<PayloadParams>,
     header_extensions: Vec<RouterHeaderExtension>,
-    primary_ssrcs: Vec<u32>,
+    signaled_ssrcs: Vec<(u32, Option<u32>)>,
 }
 
 pub(super) fn answer_producer_projection(
@@ -57,21 +54,30 @@ pub(super) fn answer_producer_projection(
         .iter()
         .filter(|media_line| producer_mids.contains(&media_line.mid()))
         .map(|media_line| {
+            let ssrc_info = media_line.ssrc_info();
+            // Each FID group associates an RTX SSRC with its primary SSRC.
+            // https://www.rfc-editor.org/rfc/rfc5576.html#section-7
+            let signaled_ssrcs = ssrc_info
+                .iter()
+                .filter(|info| info.repairs.is_none())
+                .map(|info| {
+                    let primary = *info.ssrc;
+                    let repair = ssrc_info.iter().find_map(|candidate| {
+                        (candidate.repairs == Some(info.ssrc)).then_some(*candidate.ssrc)
+                    });
+                    (primary, repair)
+                })
+                .collect::<Vec<_>>();
             Ok(AnswerProducerProjection {
                 mid: media_line.mid(),
                 direction: media_line.direction(),
-                payload_params: media_line.rtp_params(),
+                payload_params: codec::answer_payload_params(media_line.rtp_params()),
                 header_extensions: media_line
                     .extmaps()
                     .into_iter()
                     .map(codec::header_extension)
                     .collect::<Result<Vec<_>, _>>()?,
-                primary_ssrcs: media_line
-                    .ssrc_info()
-                    .into_iter()
-                    .filter(|info| info.repairs.is_none())
-                    .map(|info| *info.ssrc)
-                    .collect(),
+                signaled_ssrcs,
             })
         })
         .collect()
@@ -96,6 +102,8 @@ pub(super) fn refresh_negotiated_producer_parameters(
             .negotiated_producer_parameters
             .retain(|mid, _parameters| !producer_mid_set.contains(mid));
         for media_line in answer_projection {
+            // Only answer directions where the remote sends can establish a producer.
+            // https://www.rfc-editor.org/rfc/rfc3264.html#section-6.1
             if !matches!(
                 media_line.direction,
                 Direction::SendOnly | Direction::SendRecv
@@ -121,14 +129,15 @@ pub(super) fn refresh_negotiated_producer_parameters(
                 mid,
                 primary_payload_type,
                 rids,
-                &media_line.primary_ssrcs,
+                &media_line.signaled_ssrcs,
             );
-            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in);
-            let Some(parameters) =
-                build_projected_parameters(mid, formats, media_line.header_extensions, bindings)
-            else {
+            if bindings.is_empty() {
                 continue;
-            };
+            }
+            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in);
+            let parameters =
+                RouterRtpParameters::new(formats, media_line.header_extensions, bindings)
+                    .with_mid(mid.to_string());
             session_state
                 .sdp_negotiation
                 .negotiated_producer_parameters
@@ -145,37 +154,28 @@ pub(super) fn refresh_negotiated_producer_parameters(
     Ok(refreshed_parameters)
 }
 
-fn build_projected_parameters(
-    mid: Mid,
-    formats: Vec<RouterMediaFormat>,
-    header_extensions: Vec<RouterHeaderExtension>,
-    bindings: Vec<StreamBinding>,
-) -> Option<RouterRtpParameters> {
-    if bindings.is_empty() {
-        return None;
-    }
-    Some(RouterRtpParameters::new(formats, header_extensions, bindings).with_mid(mid.to_string()))
-}
-
 fn apply_projected_recv_streams(
     session_state: &mut RtcSessionState,
     mid: Mid,
     bindings: &[StreamBinding],
     max_bitrate_in: Bitrate,
 ) {
-    let mut api = session_state.rtc.direct_api();
-    for binding in bindings {
-        let Some(ssrc) = binding.ssrc() else {
-            continue;
-        };
-        apply_recv_stream(
-            &mut api,
-            mid,
-            binding.rid().map(Rid::from),
-            ssrc.into(),
-            max_bitrate_in,
-            StaleSsrcPolicy::KeepExisting,
-        );
+    {
+        let mut api = session_state.rtc.direct_api();
+        for binding in bindings {
+            let Some(ssrc) = binding.ssrc() else {
+                continue;
+            };
+            apply_recv_stream(
+                &mut api,
+                mid,
+                binding.rid().map(Rid::from),
+                ssrc.into(),
+                binding.repair_ssrc().map(Into::into),
+                max_bitrate_in,
+                StaleSsrcPolicy::KeepExisting,
+            );
+        }
     }
     #[cfg(test)]
     {
@@ -237,10 +237,14 @@ fn project_media_formats(
     media_kind: RouterMediaKind,
     payload_params: &[PayloadParams],
 ) -> Result<Vec<RouterMediaFormat>, TransportAdapterError> {
-    payload_params
-        .iter()
-        .map(|params| codec::media_format(media_kind, params))
-        .collect()
+    let mut formats = Vec::with_capacity(payload_params.len() * 2);
+    for payload in payload_params {
+        formats.push(codec::media_format(media_kind, payload)?);
+        if let Some(rtx) = codec::rtx_format(media_kind, payload)? {
+            formats.push(rtx);
+        }
+    }
+    Ok(formats)
 }
 
 fn project_bindings(
@@ -248,10 +252,12 @@ fn project_bindings(
     mid: Mid,
     primary_payload_type: PayloadType,
     rids: &[codec::NegotiatedRid],
-    primary_ssrcs: &[u32],
+    signaled_ssrcs: &[(u32, Option<u32>)],
 ) -> Vec<StreamBinding> {
     if !rids.is_empty() {
-        let mut bindings = rids
+        // RepairedRtpStreamId associates each repair stream with its source RID.
+        // https://www.rfc-editor.org/rfc/rfc8852.html#section-3
+        return rids
             .iter()
             .map(|rid| {
                 let mut binding = StreamBinding::new()
@@ -260,53 +266,46 @@ fn project_bindings(
                 if let Some(max_bitrate) = rid.max_bitrate {
                     binding = binding.with_max_bitrate(max_bitrate.as_bps());
                 }
-                if let Some(ssrc) = stream_rx_ssrc(session_state, mid, Some(rid.rid)) {
+                if let Some((ssrc, repair_ssrc)) =
+                    stream_rx_ssrcs(session_state, mid, Some(rid.rid))
+                {
                     binding = binding.with_ssrc(ssrc);
+                    if let Some(repair_ssrc) = repair_ssrc {
+                        binding = binding.with_repair_ssrc(repair_ssrc);
+                    }
                 }
                 binding
             })
-            .collect::<Vec<StreamBinding>>();
-        if !bindings.iter().any(|binding| binding.ssrc().is_some()) {
-            let fallback_ssrc = primary_ssrcs
-                .first()
-                .copied()
-                .or_else(|| stream_rx_ssrc(session_state, mid, None));
-            if let Some(ssrc) = fallback_ssrc
-                && let Some(first_binding) = bindings.first_mut()
-            {
-                *first_binding = mem::take(first_binding).with_ssrc(ssrc);
-            }
-        }
-        return bindings;
+            .collect();
     }
 
-    let mut bindings = primary_ssrcs
-        .iter()
+    // Multiple RID-less primaries are ambiguous without another stream identity.
+    // Requiring exactly one signaled pair here is O-SFU policy.
+    signaled_ssrcs
+        .first()
         .copied()
-        .map(|ssrc| {
-            StreamBinding::new()
+        .filter(|_| signaled_ssrcs.len() == 1)
+        .or_else(|| stream_rx_ssrcs(session_state, mid, None))
+        .map(|(ssrc, repair_ssrc)| {
+            let mut binding = StreamBinding::new()
                 .with_ssrc(ssrc)
-                .with_payload_type(primary_payload_type)
+                .with_payload_type(primary_payload_type);
+            if let Some(repair_ssrc) = repair_ssrc {
+                binding = binding.with_repair_ssrc(repair_ssrc);
+            }
+            vec![binding]
         })
-        .collect::<Vec<_>>();
-    if bindings.is_empty()
-        && let Some(ssrc) = stream_rx_ssrc(session_state, mid, None)
-    {
-        bindings.push(
-            StreamBinding::new()
-                .with_ssrc(ssrc)
-                .with_payload_type(primary_payload_type),
-        );
-    }
-    bindings
+        .unwrap_or_default()
 }
 
-fn stream_rx_ssrc(session_state: &mut RtcSessionState, mid: Mid, rid: Option<Rid>) -> Option<u32> {
-    session_state
-        .rtc
-        .direct_api()
-        .stream_rx_by_mid(mid, rid)
-        .map(|stream_rx| *stream_rx.ssrc())
+fn stream_rx_ssrcs(
+    session_state: &mut RtcSessionState,
+    mid: Mid,
+    rid: Option<Rid>,
+) -> Option<(u32, Option<u32>)> {
+    let mut api = session_state.rtc.direct_api();
+    let stream_rx = api.stream_rx_by_mid(mid, rid)?;
+    Some((*stream_rx.ssrc(), stream_rx.rtx().map(|ssrc| *ssrc)))
 }
 
 fn to_router_media_kind(media_kind: Str0mMediaKind) -> RouterMediaKind {

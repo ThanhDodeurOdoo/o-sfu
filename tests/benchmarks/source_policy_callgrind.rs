@@ -21,9 +21,8 @@ mod callgrind_config;
 
 use std::hint::black_box;
 
-use gungraun::{library_benchmark, library_benchmark_group, main};
-
 use callgrind_config::callgrind_config;
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use source_policy::SourcePolicyFixture;
 
 // teardown runs the differential budget-pressure check outside the measured

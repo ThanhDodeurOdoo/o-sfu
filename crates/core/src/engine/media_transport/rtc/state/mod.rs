@@ -25,13 +25,16 @@
 //!
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, BTreeSet, BinaryHeap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
     net::SocketAddr,
     sync::Arc,
     time::Instant,
 };
 
+use o_sfu_rfc::rtp;
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
+#[cfg(test)]
+use str0m::rtp::SeqNo;
 use str0m::{
     Rtc,
     change::{SdpOffer, SdpPendingOffer},
@@ -41,11 +44,12 @@ use str0m::{
 
 use super::{
     bitrate::MediaBitrateCounter,
+    codec::RepairSummary,
     demux::RemoteAddrDemux,
     local_send_rewrite::ConsumerStreamStore,
     media_registry::SessionMediaRegistry,
     packet_loop::{RtcUdpSocket, UdpIngress},
-    route_table::RouteTable,
+    route_table::{RidReadinessScratch, RouteTable},
     slots::{MediaStore, SessionHandle, SessionStore},
 };
 pub use crate::engine::media_transport::TransportSessionHealth;
@@ -56,6 +60,14 @@ use crate::{
         TransportQualitySample, TransportQualitySnapshot, TransportSessionKey,
     },
 };
+
+// Across str0m's three-second resend-cache window the local rate permits
+// 20_000 bytes. A maximally dense Generic NACK can therefore reference
+// 85_000 sequence numbers.
+// https://www.rfc-editor.org/rfc/rfc4585.html#section-6.2.1
+pub(super) const RTCP_INGRESS_BUDGET_CAPACITY_BYTES: u64 = 8_000;
+pub(super) const RTCP_INGRESS_BUDGET_REFILL_BYTES_PER_SECOND: u64 = 4_000;
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
 /// shared UDP socket owned by one RTC worker
 ///
@@ -114,6 +126,18 @@ pub(super) struct RtcSessionState {
     pub(super) rtc: Rtc,
     /// creation time used for transport lifetime metrics during session teardown
     pub(super) started_at: Instant,
+    /// candidate RTCP admission state at the pre-authentication boundary
+    pub(super) rtcp_ingress_budget: RtcpIngressBudget,
+    /// whether admitted RTCP already checked RTX age at receive time and its
+    /// next output drain must poll before applying a newer clock
+    pub(super) defer_rtx_expiry: bool,
+    /// Wire SSRC retained across input and output polling so RTX remains
+    /// distinguishable after str0m normalizes the event to its primary SSRC.
+    /// <https://www.rfc-editor.org/rfc/rfc4588.html#section-4>
+    pub(super) pending_rtp_input: Option<Ssrc>,
+    /// Per-MID/RID baselines that convert cumulative str0m NACK counts to
+    /// deltas.
+    pub(super) nack_totals: RtcNackTotals,
     /// shared writer and cold-reader handle for sent media bitrate
     pub(super) egress_bitrate: Arc<MediaBitrateCounter>,
     /// local ICE fragment registered in demux recovery hints
@@ -141,6 +165,87 @@ pub(super) struct RtcSessionState {
     /// local RTP stream per consumer route, independent from whichever
     /// publisher SSRC or RID currently feeds that route
     pub(super) consumer_streams: ConsumerStreamStore,
+    #[cfg(test)]
+    /// Accepted projected sequence and payload at the `StreamTx::write_rtp`
+    /// queue boundary.
+    pub(super) last_local_write: Option<(SeqNo, Arc<[u8]>)>,
+}
+
+impl RtcSessionState {
+    pub(super) fn prepare_rtp_input(&mut self, packet: &[u8]) {
+        self.pending_rtp_input = muxed_rtp_ssrc(packet);
+    }
+
+    pub(super) fn take_rtp_repair(&mut self, primary_ssrc: Ssrc) -> bool {
+        self.pending_rtp_input
+            .take()
+            .is_some_and(|outer_ssrc| outer_ssrc != primary_ssrc)
+    }
+
+    pub(super) fn clear_ingress_context(&mut self) {
+        self.pending_rtp_input = None;
+        self.defer_rtx_expiry = false;
+    }
+}
+
+pub(super) fn muxed_rtp_ssrc(packet: &[u8]) -> Option<Ssrc> {
+    // The SSRC is part of the fixed RTP header. RTCP packets sharing the port
+    // must be rejected before reading that field.
+    // https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1
+    // https://www.rfc-editor.org/rfc/rfc5761.html#section-4
+    let ssrc = rtp::parse_muxed_rtp_fixed_header(packet)?.ssrc();
+    Some(Ssrc::from(ssrc.value()))
+}
+
+pub(super) struct RtcpIngressBudget {
+    available_bytes: u64,
+    refill_remainder: u64,
+    last_refill_at: Instant,
+}
+
+impl RtcpIngressBudget {
+    pub(super) const fn new(now: Instant) -> Self {
+        Self {
+            available_bytes: RTCP_INGRESS_BUDGET_CAPACITY_BYTES,
+            refill_remainder: 0,
+            last_refill_at: now,
+        }
+    }
+
+    pub(super) fn try_charge(&mut self, bytes: u64, now: Instant) -> bool {
+        self.refill(now);
+        if bytes > self.available_bytes {
+            return false;
+        }
+        self.available_bytes -= bytes;
+        true
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let Some(elapsed) = now.checked_duration_since(self.last_refill_at) else {
+            return;
+        };
+        self.last_refill_at = now;
+        if self.available_bytes == RTCP_INGRESS_BUDGET_CAPACITY_BYTES {
+            self.refill_remainder = 0;
+            return;
+        }
+        let fractional_credit = u64::from(elapsed.subsec_nanos())
+            * RTCP_INGRESS_BUDGET_REFILL_BYTES_PER_SECOND
+            + self.refill_remainder;
+        let refill_bytes = elapsed
+            .as_secs()
+            .saturating_mul(RTCP_INGRESS_BUDGET_REFILL_BYTES_PER_SECOND)
+            .saturating_add(fractional_credit / NANOS_PER_SECOND);
+        let missing_bytes = RTCP_INGRESS_BUDGET_CAPACITY_BYTES - self.available_bytes;
+        if refill_bytes >= missing_bytes {
+            self.available_bytes = RTCP_INGRESS_BUDGET_CAPACITY_BYTES;
+            self.refill_remainder = 0;
+        } else {
+            self.available_bytes += refill_bytes;
+            self.refill_remainder = fractional_credit % NANOS_PER_SECOND;
+        }
+    }
 }
 
 /// offer and answer staging state for one worker-local session
@@ -153,6 +258,8 @@ pub(super) struct SessionSdpNegotiationState {
     pub(super) bootstrap_mids: Vec<Mid>,
     /// `str0m` token that must be accepted by the next remote answer
     pub(super) pending_offer: Option<SdpPendingOffer>,
+    /// repair payload pairs advertised by `pending_offer`, grouped by m-line
+    pub(super) pending_offer_repair: Option<RepairSummary>,
     /// follow-up local offer prepared by media lifecycle and not yet delivered
     pub(super) staged_offer: Option<Box<SdpOffer>>,
     pub(super) staged_offer_upload_slots: Vec<SessionUploadSlot>,
@@ -173,11 +280,21 @@ pub(super) struct SessionSdpNegotiationState {
     pub(super) queued_removal_mids: BTreeSet<Mid>,
 }
 
+impl SessionSdpNegotiationState {
+    pub(super) fn stage_offer(&mut self, offer: SdpOffer, pending_offer: SdpPendingOffer) {
+        self.pending_offer_repair = Some(RepairSummary::from_offer(&offer));
+        self.pending_offer = Some(pending_offer);
+        self.staged_offer = Some(Box::new(offer));
+    }
+}
+
 /// receive stream identity staged before a producer media addition is answered
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PendingRecvStream {
     /// producer SSRC expected by the receiving `str0m` media line
     pub(super) ssrc: Ssrc,
+    /// repair SSRC paired with the producer primary SSRC when RTX is negotiated
+    pub(super) repair_ssrc: Option<Ssrc>,
     /// simulcast RID for the producer encoding when the source uses RID identity
     pub(super) rid: Option<Rid>,
 }
@@ -353,28 +470,43 @@ impl PacketLoopState {
     }
 }
 
-/// reusable selected-RID readiness vectors owned by packet-loop state
-///
-/// selected-RID route updates need several temporary RID sets while scanning a
-/// source route
-/// keeping the vectors here lets the packet loop clear and reuse capacity
-/// instead of allocating during steady media flow
-#[derive(Default)]
-pub(super) struct RidReadinessScratch {
-    /// producer RIDs whose liveness is fresh enough to become effective route gates
-    pub(super) ready: Vec<Rid>,
-    /// selected RIDs that became stale and need a recovery keyframe request
-    pub(super) stale: Vec<Rid>,
-    /// selected RIDs still waiting for packet-path liveness
-    pub(super) pending_selected: Vec<Rid>,
+#[derive(Debug, Default)]
+pub(super) struct RtcNackTotals {
+    sent_to_publisher: HashMap<(Mid, Option<Rid>), u64>,
+    received_from_subscriber: HashMap<(Mid, Option<Rid>), u64>,
 }
 
-impl RidReadinessScratch {
-    /// clear every scratch vector while preserving capacity
-    pub(super) fn clear(&mut self) {
-        self.ready.clear();
-        self.stale.clear();
-        self.pending_selected.clear();
+impl RtcNackTotals {
+    pub(super) fn sent_to_publisher(&mut self, mid: Mid, rid: Option<Rid>, total: u64) -> u64 {
+        Self::delta(&mut self.sent_to_publisher, mid, rid, total)
+    }
+
+    pub(super) fn received_from_subscriber(
+        &mut self,
+        mid: Mid,
+        rid: Option<Rid>,
+        total: u64,
+    ) -> u64 {
+        Self::delta(&mut self.received_from_subscriber, mid, rid, total)
+    }
+
+    pub(super) fn remove_mid(&mut self, mid: Mid) {
+        self.sent_to_publisher
+            .retain(|(entry_mid, _), _| *entry_mid != mid);
+        self.received_from_subscriber
+            .retain(|(entry_mid, _), _| *entry_mid != mid);
+    }
+
+    /// Returns the cumulative increase or the new total after a stream counter reset.
+    fn delta(
+        totals: &mut HashMap<(Mid, Option<Rid>), u64>,
+        mid: Mid,
+        rid: Option<Rid>,
+        total: u64,
+    ) -> u64 {
+        totals.insert((mid, rid), total).map_or(total, |previous| {
+            total.checked_sub(previous).unwrap_or(total)
+        })
     }
 }
 
