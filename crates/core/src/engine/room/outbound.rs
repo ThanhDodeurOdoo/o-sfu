@@ -10,7 +10,7 @@ use std::{
     future::pending,
     io,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -23,7 +23,7 @@ use tokio::sync::{
 use super::UserCloseReason;
 use crate::engine::{
     JsonPayload, RecordingStateUpdate, UserId, UserInfo, metrics::RuntimeMetrics,
-    source_model::UserStreamId,
+    source_model::UserStreamId, sync::lock_unpoisoned,
 };
 
 pub const MAX_BROADCAST_PAYLOAD_BYTES: usize = 16 * 1024;
@@ -173,6 +173,12 @@ impl RemoteTrackSnapshot {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(in crate::engine::room) struct VersionedRemoteTrackSnapshot {
+    pub(in crate::engine::room) snapshot: RemoteTrackSnapshot,
+    pub(in crate::engine::room) revision: u64,
+}
+
 /// room output that belongs to one connected user
 #[derive(Debug, Clone)]
 pub enum UserOutbound {
@@ -316,6 +322,7 @@ pub struct UserOutboundSender {
     metrics: Arc<RuntimeMetrics>,
     limits: UserOutboundQueueLimits,
     queued_bytes: Arc<AtomicUsize>,
+    latest_track_snapshot: Arc<Mutex<Option<VersionedRemoteTrackSnapshot>>>,
 }
 
 #[derive(Debug)]
@@ -350,6 +357,7 @@ impl UserOutboundSender {
                 metrics: Arc::clone(&metrics),
                 limits,
                 queued_bytes: Arc::clone(&queued_bytes),
+                latest_track_snapshot: Arc::new(Mutex::new(None)),
             },
             UserOutboundReceiver {
                 messages: messages_rx,
@@ -371,6 +379,41 @@ impl UserOutboundSender {
     /// capacity is exhausted. Returns [`UserOutboundSendError::Closed`] when the
     /// receiver has been dropped.
     pub fn send(&self, outbound: UserOutbound) -> Result<(), UserOutboundSendError> {
+        self.enqueue(outbound)
+    }
+
+    /// Suppresses older track state while carrying every late negotiation edge
+    /// forward on the latest snapshot.
+    pub(in crate::engine::room) fn send_remote_tracks(
+        &self,
+        snapshot: VersionedRemoteTrackSnapshot,
+    ) -> Result<(), UserOutboundSendError> {
+        let revision = snapshot.revision;
+        {
+            let mut latest = lock_unpoisoned(&self.latest_track_snapshot);
+            if self.messages.is_closed() {
+                return Err(UserOutboundSendError::Closed);
+            }
+            if latest
+                .as_ref()
+                .is_none_or(|current| revision > current.revision)
+            {
+                self.enqueue(UserOutbound::RemoteTracks(snapshot.snapshot.clone()))?;
+                *latest = Some(snapshot);
+                return Ok(());
+            }
+            if let Some(current) = latest.as_mut()
+                && revision < current.revision
+                && snapshot.snapshot.requires_negotiation
+            {
+                current.snapshot.requires_negotiation = true;
+                self.enqueue(UserOutbound::RemoteTracks(current.snapshot.clone()))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn enqueue(&self, outbound: UserOutbound) -> Result<(), UserOutboundSendError> {
         let bytes = outbound.queued_bytes();
         self.reserve_bytes(bytes)?;
         match self

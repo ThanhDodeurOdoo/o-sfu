@@ -170,7 +170,7 @@ async fn rtc_recv_media_applies_configured_incoming_bitrate_cap() {
 }
 
 #[tokio::test]
-async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
+async fn rtc_consume_media_uses_negotiated_mid_and_destination_ssrc() {
     let adapter = RtcWorker::default();
     let producer_session_key = transport_key(1, 19, UserId::Integer(19));
     let consumer_key = transport_key(1, 20, UserId::Integer(20));
@@ -230,11 +230,11 @@ async fn rtc_consume_media_uses_negotiated_mid_and_ssrc() {
             && dest.dest_transport_media_id == consumer_media_id
             && dest.dest_mid == expected_dest_mid
     }));
-    assert_eq!(
+    assert!(
         adapter
-            .debug_session_stream_tx_ssrc(&consumer_key, expected_dest_mid)
-            .await,
-        Some(61_000)
+            .debug_session_stream_tx_pair(&consumer_key, expected_dest_mid)
+            .await
+            .is_some_and(|(ssrc, _)| ssrc != 61_000)
     );
     assert_eq!(route_entry.effective_packet_gate, DebugPacketGate::Open);
 }

@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use o_sfu_rfc::webrtc;
+use o_sfu_rfc::webrtc::sdp;
 use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::{
     change::{SdpAnswer, SdpOffer},
@@ -18,7 +18,7 @@ use str0m::{
 use tokio::sync::{mpsc, oneshot};
 
 use super::{
-    codec::{ParsedAnswerRids, RtpProfile},
+    codec::{ParsedAnswerRids, RepairSummary, validate_answer_sdp},
     relay_registry::{RelayPacketMailbox, RelayTargetId},
     route_control::PacketLayerGate,
 };
@@ -151,6 +151,7 @@ pub type RtcWorkerResponse<T> = oneshot::Sender<TransportResult<T>>;
 pub struct ParsedSessionAnswer {
     pub(super) answer: SdpAnswer,
     pub(super) rids: ParsedAnswerRids,
+    pub(super) repair: RepairSummary,
 }
 
 impl ParsedSessionAnswer {
@@ -158,14 +159,18 @@ impl ParsedSessionAnswer {
     ///
     /// # Errors
     ///
-    /// Returns [`TransportAdapterError::InvalidInput`] for unsupported repair
-    /// attributes or SDP that str0m cannot parse.
+    /// Returns [`TransportAdapterError::InvalidInput`] for malformed repair
+    /// topology or SDP that str0m cannot parse.
     pub(in crate::engine::media_transport) fn parse(answer_sdp: &str) -> TransportResult<Self> {
-        RtpProfile::validate_answer_sdp(answer_sdp)?;
+        let repair = validate_answer_sdp(answer_sdp)?;
         let answer = SdpAnswer::from_sdp_string(answer_sdp)
             .map_err(|_error| TransportAdapterError::InvalidInput)?;
         let rids = ParsedAnswerRids::parse(answer_sdp, &answer);
-        Ok(Self { answer, rids })
+        Ok(Self {
+            answer,
+            rids,
+            repair,
+        })
     }
 }
 
@@ -185,7 +190,7 @@ impl RtcSessionOffer {
     pub(in crate::engine::media_transport) fn into_session_offer(self) -> SessionOffer {
         let mut sdp = self.offer.to_sdp_string();
         let media_line_start = sdp.find("\r\nm=").map_or(sdp.len(), |index| index + 2);
-        sdp.insert_str(media_line_start, webrtc::sdp::END_OF_CANDIDATES_LINE);
+        sdp.insert_str(media_line_start, sdp::EOC_LINE);
         SessionOffer::new(sdp).with_upload_slots(self.upload_slots)
     }
 }

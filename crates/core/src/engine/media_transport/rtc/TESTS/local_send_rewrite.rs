@@ -3,14 +3,31 @@
     reason = "local send rewrite tests use panic only for mandatory fixture setup failures"
 )]
 
-use o_sfu_rfc::rtp::CodecName;
+use std::net::SocketAddr;
+
+use o_sfu_rfc::rtp::{CodecName, RTP_SEQUENCE_NUMBER_MODULUS};
 use o_sfu_router::{
     MediaKind,
     rtp::{MediaFormat, MediaStream, PayloadType},
 };
-use str0m::media::Pt;
+use str0m::{
+    Rtc,
+    media::{MediaKind as Str0mMediaKind, Pt},
+};
 
-use super::*;
+use super::{
+    super::{
+        bootstrap,
+        local_forwarding::LocalPacketDestination,
+        state::PacketLoopState,
+        test_support::{sample_forwarded_packet, test_transport_session_key},
+    },
+    *,
+};
+use crate::{
+    Bitrate,
+    engine::{UserId, media_transport::TransportMediaId},
+};
 
 const VP8_PAYLOAD_TYPE: u8 = 96;
 
@@ -48,15 +65,34 @@ fn projected_packet(
 ) -> ProjectedIdentity {
     let Some(identity) = streams.project_identity(
         stream_handle,
-        delivery_generation,
-        source_ssrc,
-        source_seq_no,
-        source_timestamp,
+        source_identity(
+            delivery_generation,
+            source_ssrc,
+            source_seq_no,
+            source_timestamp,
+            false,
+        ),
         codec_packet.identity(),
     ) else {
         panic!("consumer stream handle should be live");
     };
     identity
+}
+
+const fn source_identity(
+    delivery_generation: u64,
+    ssrc: Ssrc,
+    seq_no: SeqNo,
+    timestamp: u32,
+    was_repair: bool,
+) -> SourceRtpIdentity {
+    SourceRtpIdentity {
+        delivery_generation,
+        ssrc,
+        seq_no,
+        timestamp,
+        was_repair,
+    }
 }
 
 fn allocate_at(streams: &mut ConsumerStreamStore, next_seq_no: u64) -> ConsumerStreamHandle {
@@ -100,10 +136,240 @@ fn vp8_packet(
     )
 }
 
+fn repair_rtc(mid: Mid, primary: Ssrc, repair: Ssrc) -> Rtc {
+    let mut rtc = Rtc::builder().set_rtp_mode(true).build(Instant::now());
+    {
+        let mut api = rtc.direct_api();
+        api.declare_media(mid, Str0mMediaKind::Video);
+        api.declare_stream_tx(primary, Some(repair), mid, None);
+    }
+    rtc
+}
+
+#[test]
+fn missing_transmit_stream_does_not_mutate_consumer_state() {
+    let consumer = test_transport_session_key(91, 0, 92, UserId::Integer(93));
+    let source = test_transport_session_key(91, 0, 94, UserId::Integer(95));
+    let mid = Mid::from("cam-down");
+    let primary = Ssrc::from(96);
+    let repair = Ssrc::from(97);
+    let payload = b"payload";
+    let mut state = PacketLoopState::default();
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &consumer,
+            SocketAddr::from(([127, 0, 0, 1], 47_200)),
+            Bitrate::from_mbps(10),
+        )
+        .is_ok()
+    );
+    let Some(session) = state.users.get_mut(&consumer) else {
+        panic!("consumer session should exist after RTC state bootstrap");
+    };
+    let stream_handle = session.consumer_streams.allocate(mid);
+    let destination =
+        LocalPacketDestination::new(TransportMediaId::new(98), stream_handle, 0, mid, None, true);
+    let packet = sample_forwarded_packet(source, "cam-up", payload);
+    let rtp = packet.local_send_packet();
+    let Some(stream) = session.consumer_streams.streams.get(stream_handle) else {
+        panic!("consumer stream handle should be live");
+    };
+    let initial_sequence = stream.rtp.next_seq_no;
+
+    assert_eq!(destination.send(session, &rtp, None), None);
+    let Some(stream) = session.consumer_streams.streams.get(stream_handle) else {
+        panic!("consumer stream handle should remain live");
+    };
+    assert_eq!(stream.rtp.next_seq_no, initial_sequence);
+    assert!(matches!(stream.rtp.timeline, RtpTimeline::Empty));
+    assert_eq!(stream.primary_ssrc, None);
+    assert_eq!(stream.queued_primary_writes, 0);
+    assert_eq!(stream.stale_primary_writes, 0);
+    assert_eq!(stream.rtx_cache_deadline, None);
+    assert!(
+        session
+            .consumer_streams
+            .repair_streams_by_primary
+            .is_empty()
+    );
+    assert!(session.consumer_streams.retired_repair_streams.is_empty());
+
+    {
+        let mut api = session.rtc.direct_api();
+        api.declare_media(mid, Str0mMediaKind::Video);
+        api.declare_stream_tx(primary, Some(repair), mid, None);
+    }
+    assert_eq!(destination.send(session, &rtp, None), Some(payload.len()));
+
+    let Some(stream) = session.consumer_streams.streams.get(stream_handle) else {
+        panic!("consumer stream handle should remain live");
+    };
+    let RtpTimeline::Active {
+        src_seq_anchor,
+        dst_seq_anchor,
+        highest_src_seq,
+        ..
+    } = stream.rtp.timeline
+    else {
+        panic!("first accepted packet should initialize consumer RTP identity");
+    };
+    assert_eq!(src_seq_anchor, 1_u64.into());
+    assert_eq!(dst_seq_anchor, initial_sequence);
+    assert_eq!(highest_src_seq, 1_u64.into());
+    assert_eq!(stream.primary_ssrc, Some(primary));
+    assert_eq!(stream.queued_primary_writes, 1);
+    assert_eq!(stream.stale_primary_writes, 0);
+    assert_eq!(stream.rtx_cache_deadline, None);
+    assert_eq!(
+        session
+            .consumer_streams
+            .repair_streams_by_primary
+            .get(&primary),
+        Some(&stream_handle)
+    );
+    assert!(session.consumer_streams.retired_repair_streams.is_empty());
+}
+
+#[test]
+fn stalled_repair_stream_expires_once_and_rearms_on_send_progress() {
+    let now = Instant::now();
+    let mid = Mid::from("cam-down");
+    let primary = Ssrc::from(301);
+    let repair = Ssrc::from(302);
+    let mut rtc = repair_rtc(mid, primary, repair);
+    let mut streams = ConsumerStreamStore::default();
+    let handle = streams.allocate(mid);
+    streams.queue_repairable_write(handle, primary);
+    streams.note_repairable_transmit(primary, now);
+
+    streams.expire_rtx_streams(
+        &mut rtc,
+        now + RTX_CACHE_LIFETIME.saturating_sub(Duration::from_nanos(1)),
+    );
+    assert!(streams.rtx_cache_is_armed(handle));
+
+    streams.expire_rtx_streams(&mut rtc, now + RTX_CACHE_LIFETIME);
+    assert!(
+        streams
+            .streams
+            .get(handle)
+            .is_some_and(|stream| stream.rtx_cache_deadline.is_none())
+    );
+    streams.expire_rtx_streams(&mut rtc, now + RTX_CACHE_LIFETIME * 2);
+    {
+        let mut api = rtc.direct_api();
+        let Some(stream) = api.stream_tx_by_mid(mid, None) else {
+            panic!("cache rotation should preserve the transmit stream");
+        };
+        assert_eq!(stream.ssrc(), primary);
+        assert_eq!(stream.rtx(), Some(repair));
+    }
+
+    streams.queue_repairable_write(handle, primary);
+    streams.note_repairable_transmit(primary, now + RTX_CACHE_LIFETIME * 2);
+    assert!(streams.rtx_cache_is_armed(handle));
+}
+
+#[test]
+fn stale_earliest_repair_deadline_recomputes_at_its_boundary() {
+    let now = Instant::now();
+    let first_mid = Mid::from("cam-a");
+    let second_mid = Mid::from("cam-b");
+    let first_primary = Ssrc::from(311);
+    let mut rtc = repair_rtc(first_mid, first_primary, Ssrc::from(312));
+    rtc.direct_api()
+        .declare_media(second_mid, Str0mMediaKind::Video);
+    rtc.direct_api()
+        .declare_stream_tx(Ssrc::from(313), Some(Ssrc::from(314)), second_mid, None);
+    let mut streams = ConsumerStreamStore::default();
+    let first = streams.allocate(first_mid);
+    let second = streams.allocate(second_mid);
+    streams.queue_repairable_write(first, first_primary);
+    streams.queue_repairable_write(second, Ssrc::from(313));
+    streams.note_repairable_transmit(first_primary, now);
+    streams.note_repairable_transmit(Ssrc::from(313), now + Duration::from_secs(1));
+    assert_eq!(streams.invalidate_rtx_stream(first), Some(first_primary));
+
+    streams.expire_rtx_streams(&mut rtc, now + RTX_CACHE_LIFETIME);
+    assert_eq!(
+        streams.next_rtx_deadline,
+        Some(now + Duration::from_secs(1) + RTX_CACHE_LIFETIME)
+    );
+    assert!(streams.rtx_cache_is_armed(second));
+}
+
+#[test]
+fn stale_queued_primary_rotates_after_transmit_before_rearming() {
+    let now = Instant::now();
+    let mid = Mid::from("cam-down");
+    let primary = Ssrc::from(315);
+    let mut streams = ConsumerStreamStore::default();
+    let stream = streams.allocate(mid);
+    streams.queue_repairable_write(stream, primary);
+
+    assert_eq!(streams.invalidate_rtx_stream(stream), Some(primary));
+    assert_eq!(
+        streams.note_repairable_transmit(primary, now),
+        Some(primary)
+    );
+    assert!(!streams.rtx_cache_is_armed(stream));
+
+    streams.queue_repairable_write(stream, primary);
+    assert_eq!(streams.note_repairable_transmit(primary, now), None);
+    assert!(streams.rtx_cache_is_armed(stream));
+}
+
+#[test]
+fn replacement_stream_does_not_inherit_repair_state() {
+    let now = Instant::now();
+    let primary = Ssrc::from(321);
+    let mut streams = ConsumerStreamStore::default();
+    let stale = streams.allocate(Mid::from("old"));
+    streams.queue_repairable_write(stale, primary);
+    streams.queue_repairable_write(stale, primary);
+    assert_eq!(streams.invalidate_rtx_stream(stale), Some(primary));
+
+    streams.release(stale);
+    let replacement = streams.allocate(Mid::from("old"));
+    streams.queue_repairable_write(replacement, primary);
+
+    assert!(!streams.rtx_cache_is_armed(stale));
+    assert!(!streams.rtx_cache_is_armed(replacement));
+    assert_eq!(
+        streams.note_repairable_transmit(primary, now),
+        Some(primary)
+    );
+    assert_eq!(
+        streams.note_repairable_transmit(primary, now),
+        Some(primary)
+    );
+    assert_eq!(streams.note_repairable_transmit(primary, now), None);
+    assert!(streams.rtx_cache_is_armed(replacement));
+}
+
+#[test]
+fn inactive_media_reset_discards_phantom_queued_writes() {
+    let mid = Mid::from("cam-down");
+    let primary = Ssrc::from(322);
+    let mut streams = ConsumerStreamStore::default();
+    let stream = streams.allocate(mid);
+    streams.queue_repairable_write(stream, primary);
+
+    streams.reset_rtx_streams(mid);
+    streams.release(stream);
+
+    assert!(streams.retired_repair_streams.is_empty());
+    assert_eq!(
+        streams.note_repairable_transmit(primary, Instant::now()),
+        None
+    );
+}
+
 #[test]
 fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
+    let stream_handle = streams.allocate(Mid::default());
 
     let first = projected(
         &mut streams,
@@ -127,7 +393,7 @@ fn projected_sequence_numbers_start_in_initial_roc_and_increment_per_stream() {
 #[test]
 fn reordered_packets_do_not_move_codec_high_water_before_source_switch() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
+    let stream_handle = streams.allocate(Mid::default());
     let source_ssrc = Ssrc::from(111);
     let switched_ssrc = Ssrc::from(222);
     let inspector = vp8_inspector();
@@ -207,7 +473,7 @@ fn reordered_packets_do_not_move_codec_high_water_before_source_switch() {
 #[test]
 fn delivery_generation_compacts_only_intentional_gaps() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
+    let stream_handle = streams.allocate(Mid::default());
     let source_ssrc = Ssrc::from(111);
     let inspector = vp8_inspector();
     let before_pause_packet = vp8_packet(&inspector, 10, 10);
@@ -246,14 +512,94 @@ fn delivery_generation_compacts_only_intentional_gaps() {
         streams
             .project_identity(
                 stream_handle,
-                0,
-                source_ssrc,
-                11_u64.into(),
-                11_000,
+                source_identity(0, source_ssrc, 11_u64.into(), 11_000, false),
                 vp8_packet(&inspector, 11, 11).identity(),
             )
             .is_none()
     );
+}
+
+#[test]
+fn repair_fills_only_a_gap_in_the_current_delivery_epoch() {
+    let mut streams = ConsumerStreamStore::default();
+    let stream_handle = streams.allocate(Mid::default());
+    let source_ssrc = Ssrc::from(111);
+
+    let first = streams.project_identity(
+        stream_handle,
+        source_identity(0, source_ssrc, 10_u64.into(), 10_000, false),
+        codec::PacketIdentity::default(),
+    );
+    let after_gap = streams.project_identity(
+        stream_handle,
+        source_identity(0, source_ssrc, 12_u64.into(), 12_000, false),
+        codec::PacketIdentity::default(),
+    );
+    let repaired = streams.project_identity(
+        stream_handle,
+        source_identity(0, source_ssrc, 11_u64.into(), 11_000, true),
+        codec::PacketIdentity::default(),
+    );
+    let stale_epoch = streams.project_identity(
+        stream_handle,
+        source_identity(1, source_ssrc, 11_u64.into(), 11_000, true),
+        codec::PacketIdentity::default(),
+    );
+    let mut new_streams = ConsumerStreamStore::default();
+    let new_stream = new_streams.allocate(Mid::default());
+    assert!(
+        new_streams
+            .project_identity(
+                new_stream,
+                source_identity(0, source_ssrc, 12_u64.into(), 12_000, false),
+                codec::PacketIdentity::default(),
+            )
+            .is_some()
+    );
+    let new_route = new_streams.project_identity(
+        new_stream,
+        source_identity(0, source_ssrc, 11_u64.into(), 11_000, true),
+        codec::PacketIdentity::default(),
+    );
+
+    let (Some(first), Some(after_gap), Some(repaired)) = (first, after_gap, repaired) else {
+        panic!("current-epoch primary packets and gap repair should project");
+    };
+    assert_eq!(*after_gap.seq_no - *first.seq_no, 2);
+    assert!(repaired.seq_no.is_next(after_gap.seq_no));
+    assert!(stale_epoch.is_none());
+    assert!(new_route.is_none());
+}
+
+#[test]
+fn repair_projection_preserves_extended_sequence_wrap() {
+    let source_ssrc = Ssrc::from(111);
+    let mut streams = ConsumerStreamStore::default();
+    let stream = streams.allocate(Mid::default());
+    let rollover = u64::from(RTP_SEQUENCE_NUMBER_MODULUS);
+
+    let before_wrap = streams.project_identity(
+        stream,
+        source_identity(0, source_ssrc, (rollover - 1).into(), 10_000, false),
+        codec::PacketIdentity::default(),
+    );
+    let after_gap = streams.project_identity(
+        stream,
+        source_identity(0, source_ssrc, (rollover + 1).into(), 12_000, false),
+        codec::PacketIdentity::default(),
+    );
+    let repaired = streams.project_identity(
+        stream,
+        source_identity(0, source_ssrc, rollover.into(), 11_000, true),
+        codec::PacketIdentity::default(),
+    );
+
+    let (Some(before_wrap), Some(after_gap), Some(repaired)) = (before_wrap, after_gap, repaired)
+    else {
+        panic!("repair across RTP sequence wrap should project");
+    };
+    assert_eq!(*after_gap.seq_no - *before_wrap.seq_no, 2);
+    assert!(repaired.seq_no.is_next(after_gap.seq_no));
 }
 
 #[test]
@@ -326,10 +672,10 @@ fn forgetting_transport_media_streams_drops_all_stream_state_for_that_consumer()
 #[test]
 fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
+    let stream_handle = streams.allocate(Mid::default());
 
     streams.release(stream_handle);
-    let replacement_handle = streams.allocate();
+    let replacement_handle = streams.allocate(Mid::default());
 
     let replacement = projected(
         &mut streams,
@@ -343,10 +689,7 @@ fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
         streams
             .project_identity(
                 stream_handle,
-                0,
-                Ssrc::from(111),
-                0_u64.into(),
-                1234,
+                source_identity(0, Ssrc::from(111), 0_u64.into(), 1234, false),
                 codec::Packet::default().identity(),
             )
             .is_none()
@@ -364,7 +707,7 @@ fn released_consumer_stream_handle_is_ignored_after_slot_reuse() {
 #[test]
 fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
+    let stream_handle = streams.allocate(Mid::default());
 
     let first = projected(
         &mut streams,
@@ -390,7 +733,7 @@ fn projected_timestamps_preserve_source_deltas_on_one_ssrc() {
 #[test]
 fn projected_timestamps_stay_monotonic_across_simulcast_ssrc_switches() {
     let mut streams = ConsumerStreamStore::default();
-    let stream_handle = streams.allocate();
+    let stream_handle = streams.allocate(Mid::default());
 
     let low = projected(
         &mut streams,

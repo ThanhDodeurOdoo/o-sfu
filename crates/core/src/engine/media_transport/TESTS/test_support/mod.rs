@@ -209,6 +209,28 @@ impl MediaTransportTestApi<'_> {
         None
     }
 
+    #[cfg(test)]
+    pub async fn session_stream_tx_pair(
+        self,
+        session_key: &TransportSessionKey,
+        mid: Mid,
+    ) -> Option<(u32, Option<u32>)> {
+        self.transport
+            .worker_for_user(session_key)?
+            .debug_session_stream_tx_pair(session_key, mid)
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn source_relay_target_count(self, source: &TransportSourceKey) -> usize {
+        let Some(worker) = self.transport.worker_for_user(source.session_key()) else {
+            return 0;
+        };
+        worker
+            .debug_relay_target_count(source.transport_media_id())
+            .await
+    }
+
     pub async fn session_receiver_bwe_target(
         self,
         session_key: &TransportSessionKey,

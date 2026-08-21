@@ -443,7 +443,7 @@ pub struct MeetingFlowBenchFixture {
     turn: PacketLoopTurn,
     packet_loop_config: PacketLoopConfig,
     relay_rx: mpsc::Receiver<ForwardedPacket>,
-    bitrate_registry: BitrateRegistry,
+    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     participants: Vec<MeetingParticipant>,
     session_keys: Vec<TransportSessionKey>,
     video_publishers: Vec<MeetingVideoPublisher>,
@@ -585,6 +585,7 @@ impl MeetingFlowBenchFixture {
         };
         self.turn.pump_for_benchmark(
             &mut self.state,
+            &self.bitrate_registry,
             &self.snapshot_state,
             &self.packet_loop_config,
             &mut self.relay_rx,
@@ -954,6 +955,8 @@ impl MeetingFlowBenchFixture {
         }
         if self
             .bitrate_registry
+            .lock()
+            .expect("meeting benchmark bitrate registry should lock")
             .egress_bitrate_snapshot_at(&self.session_keys, self.now)
             > Bitrate::zero()
         {
@@ -994,6 +997,7 @@ impl MeetingFlowBenchFixture {
             observe_rtc_event_for_benchmark(
                 &self.snapshot_state,
                 &self.metrics,
+                &self.rtc_metrics,
                 &self.source_policy_signal,
                 ROOM_ID,
                 &entry.session_key,
@@ -1135,7 +1139,7 @@ impl MeetingFlowBenchFixture {
             turn: PacketLoopTurn::new(Instant::now()),
             packet_loop_config,
             relay_rx,
-            bitrate_registry: BitrateRegistry::default(),
+            bitrate_registry: Arc::new(Mutex::new(BitrateRegistry::default())),
             participants: Vec::with_capacity(MEETING_PARTICIPANTS),
             session_keys: Vec::with_capacity(MEETING_PARTICIPANTS),
             video_publishers: Vec::with_capacity(MEETING_VIDEO_PUBLISHERS),
@@ -1274,9 +1278,11 @@ impl MeetingFlowBenchFixture {
                 session_key: session_key.clone(),
                 mid,
             });
-        let counter =
-            self.bitrate_registry
-                .register_incoming_media(session_key, src_media, self.now);
+        let counter = self
+            .bitrate_registry
+            .lock()
+            .expect("meeting benchmark bitrate registry should lock")
+            .register_incoming_media(session_key, src_media, self.now);
         self.state
             .register_incoming_bitrate_counter(src_media, counter);
         src_media
@@ -1450,12 +1456,14 @@ impl MeetingFlowBenchFixture {
             .users
             .get_mut(&session_key)
             .expect("meeting benchmark receiver session should exist");
-        let dest_stream = session.consumer_streams.allocate();
+        let dest_stream = session.consumer_streams.allocate(mid);
         let egress_bitrate = Arc::clone(&session.egress_bitrate);
         let mut direct_api = session.rtc.direct_api();
         direct_api.declare_media(mid, kind);
         direct_api.declare_stream_tx(Ssrc::from(ssrc), None, mid, None);
         self.bitrate_registry
+            .lock()
+            .expect("meeting benchmark bitrate registry should lock")
             .register_session_egress(&session_key, egress_bitrate);
         let consumer_media = self
             .state
@@ -1489,6 +1497,7 @@ impl MeetingFlowBenchFixture {
                 dest_stream,
                 dest_mid: mid,
                 dest_payload_type,
+                repair_enabled: false,
                 active: true,
                 requires_decoder_refresh,
                 delivery_generation: 0,

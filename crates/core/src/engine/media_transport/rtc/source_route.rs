@@ -35,6 +35,8 @@ pub(super) struct MediaRouteDestination {
     /// source payload types can differ from consumer payload types after router
     /// negotiation, so forwarding must not reuse the publisher value blindly
     pub(super) dest_payload_type: Option<Pt>,
+    /// whether this destination negotiated Generic NACK with matching RTX
+    pub(super) repair_enabled: bool,
     /// destination-level activity gate controlled by consumer state
     pub(super) active: bool,
     /// video routes resume only from a decoder refresh packet

@@ -14,6 +14,7 @@ use super::super::{
 };
 use crate::engine::{
     UserId,
+    media_transport::TransportMediaId,
     source_model::{SourceSubscriptionIntent, UserStreamId},
 };
 
@@ -21,26 +22,30 @@ impl RoomUserOperation<'_> {
     pub(crate) async fn apply_session_negotiated(
         self,
         capabilities: MediaCapabilities,
+        declined_consumers: &[TransportMediaId],
     ) -> Option<()> {
         let became_ready = {
             let mut state = self.room.state.write().await;
             state.set_user_negotiated(self.user_id, self.connection_id, capabilities)
         }?;
         if became_ready {
-            self.apply_receiver_readiness().await
+            self.apply_receiver_readiness(declined_consumers).await
         } else {
             Some(())
         }
     }
 
-    pub(crate) async fn apply_session_refreshed(self) -> Option<()> {
-        self.apply_receiver_readiness().await
+    pub(crate) async fn apply_session_refreshed(
+        self,
+        declined_consumers: &[TransportMediaId],
+    ) -> Option<()> {
+        self.apply_receiver_readiness(declined_consumers).await
     }
 
-    async fn apply_receiver_readiness(self) -> Option<()> {
+    async fn apply_receiver_readiness(self, declined_consumers: &[TransportMediaId]) -> Option<()> {
         let commit = {
             let mut state = self.room.state.write().await;
-            state.refresh_consumer_readiness(self.user_id, self.connection_id)
+            state.refresh_consumer_readiness(self.user_id, self.connection_id, declined_consumers)
         };
         let commit = commit?;
         RoomEffects::from_consumer_readiness(commit)

@@ -198,6 +198,7 @@ impl LocalRtcPacketDestination {
                 route_destination.delivery_generation,
                 route_destination.dest_mid,
                 route_destination.dest_payload_type,
+                route_destination.repair_enabled,
             );
             let codec_packet = packet.local_codec_packet();
             let Some(payload_bytes) =

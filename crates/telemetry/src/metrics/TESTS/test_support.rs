@@ -1,9 +1,9 @@
 use super::{
     HttpRoute, MetricName, RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome,
-    RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-    RtcRouteControlOutcome, RtpDecoderRefreshScope, RtpForwardDestinationKind, RtpRelayDropKind,
-    RuntimeMetricsSnapshot, TransportHealthState, TransportIceState, counter::ExportedMetricLabel,
-    labels::ExportedMetricLabelPair,
+    RtcNackDirection, RtcOutputBudgetLimit, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+    RtcRemotePacketGateConvergence, RtcRouteControlOutcome, RtpDecoderRefreshScope,
+    RtpForwardDestinationKind, RtpRelayDropKind, RuntimeMetricsSnapshot, TransportHealthState,
+    TransportIceState, counter::ExportedMetricLabel, labels::ExportedMetricLabelPair,
 };
 
 macro_rules! snapshot_counter_accessors {
@@ -211,6 +211,10 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
         transport_dtls_connected => TransportDtlsConnectedTotal &[],
         rtc_datagram_fallback_scans => RtcDatagramFallbackScansTotal &[],
         rtc_datagram_scan_users => RtcDatagramScanUsersTotal &[],
+        rtc_rtx_packets_received_from_publisher => RtcRtxPacketsTotal &[("direction", "received_from_publisher")],
+        rtc_rtx_payload_bytes_received_from_publisher => RtcRtxPayloadBytesTotal &[("direction", "received_from_publisher")],
+        rtc_rtcp_ingress_budget_drops => RtcRtcpIngressBudgetDropsTotal &[],
+        rtc_output_budget_session_closes => RtcOutputBudgetSessionClosesTotal &[],
         rtc_relay_mailbox_depth_samples => RtcRelayMailboxDepthSamplesTotal &[],
         rtc_relay_mailbox_depth_observed => RtcRelayMailboxDepthObservedTotal &[],
         rtc_relay_drain_batches => RtcRelayDrainBatchesTotal &[],
@@ -365,6 +369,20 @@ pub trait RuntimeMetricsSnapshotTestExt: RuntimeMetricsSnapshotLookup {
 
     fn rtc_datagram_drops_malformed(&self) -> u64 {
         self.rtc_datagram_drops(RtcDatagramDropReason::Malformed)
+    }
+
+    fn rtc_nacks(&self, direction: RtcNackDirection) -> u64 {
+        self.counter_value(
+            MetricName::RtcNacksTotal,
+            &[("direction", metric_label(direction))],
+        )
+    }
+
+    fn rtc_output_budget_exhaustions(&self, limit: RtcOutputBudgetLimit) -> u64 {
+        self.counter_value(
+            MetricName::RtcOutputBudgetExhaustionsTotal,
+            &[("limit", metric_label(limit))],
+        )
     }
 
     fn rtc_route_control(&self, outcome: RtcRouteControlOutcome) -> u64 {

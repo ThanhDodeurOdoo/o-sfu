@@ -18,13 +18,14 @@ use str0m::{
 };
 use tracing::{debug, info, trace};
 
-use super::super::state::{RtcSnapshotState, TransportSessionHealth};
+use super::super::state::{RtcNackTotals, RtcSnapshotState, TransportSessionHealth};
 use crate::{
     Bitrate,
     engine::{
         media_transport::{SourcePolicySignal, TransportSessionKey},
         metrics::{
-            self, MediaQualityLossDirection, MediaQualitySample, RuntimeMetrics, TransportIceState,
+            self, MediaQualityLossDirection, MediaQualitySample, RtcMetricsRecorder,
+            RtcNackDirection, RuntimeMetrics, TransportIceState,
         },
     },
 };
@@ -62,20 +63,29 @@ pub(super) fn log_rtc_event(session_key: &TransportSessionKey, event: &Event) {
     }
 }
 
-/// Project selected `str0m` events into metrics, snapshots and diagnostics.
-///
-/// Snapshot writes are best-effort. If the snapshot lock is unavailable, the
-/// packet loop keeps running because the worker-local
-/// [`PacketLoopState`](crate::engine::media_transport::rtc::state::PacketLoopState)
-/// remains authoritative for media behavior.
-pub(super) fn observe_rtc_event(
-    snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
-    metrics: &RuntimeMetrics,
-    source_policy_signal: &SourcePolicySignal,
-    room_id: &str,
-    session_key: &TransportSessionKey,
-    event: &Event,
-) {
+pub(super) struct RtcEventContext<'a> {
+    pub(super) snapshot_state: &'a Arc<Mutex<RtcSnapshotState>>,
+    pub(super) metrics: &'a RuntimeMetrics,
+    pub(super) rtc_metrics: &'a RtcMetricsRecorder,
+    pub(super) nack_totals: &'a mut RtcNackTotals,
+    pub(super) source_policy_signal: &'a SourcePolicySignal,
+    pub(super) room_id: &'a str,
+    pub(super) session_key: &'a TransportSessionKey,
+    pub(super) event: &'a Event,
+}
+
+/// Projects one `str0m` event into metrics, snapshots and diagnostics.
+pub(super) fn observe_rtc_event(context: RtcEventContext<'_>) {
+    let RtcEventContext {
+        snapshot_state,
+        metrics,
+        rtc_metrics,
+        nack_totals,
+        source_policy_signal,
+        room_id,
+        session_key,
+        event,
+    } = context;
     match event {
         Event::IceConnectionStateChange(state) => {
             metrics.record_transport_ice_state_change(transport_ice_state(*state));
@@ -90,10 +100,24 @@ pub(super) fn observe_rtc_event(
             observe_peer_quality(snapshot_state, metrics, session_key, stats);
         }
         Event::MediaIngressStats(stats) => {
-            observe_media_ingress_quality(snapshot_state, metrics, session_key, stats);
+            observe_media_ingress_quality(
+                snapshot_state,
+                metrics,
+                rtc_metrics,
+                nack_totals,
+                session_key,
+                stats,
+            );
         }
         Event::MediaEgressStats(stats) => {
-            observe_media_egress_quality(snapshot_state, metrics, session_key, stats);
+            observe_media_egress_quality(
+                snapshot_state,
+                metrics,
+                rtc_metrics,
+                nack_totals,
+                session_key,
+                stats,
+            );
         }
         _ => {}
     }
@@ -172,6 +196,8 @@ fn observe_peer_quality(
 fn observe_media_ingress_quality(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     metrics: &RuntimeMetrics,
+    rtc_metrics: &RtcMetricsRecorder,
+    nack_totals: &mut RtcNackTotals,
     session_key: &TransportSessionKey,
     stats: &MediaIngressStats,
 ) {
@@ -182,6 +208,8 @@ fn observe_media_ingress_quality(
     if let Some(loss_ppm) = loss_fraction_ppm(stats.loss) {
         metrics.record_media_quality_loss_ppm(MediaQualityLossDirection::Ingress, loss_ppm);
     }
+    let nack_delta = nack_totals.sent_to_publisher(stats.mid, stats.rid, stats.nacks);
+    rtc_metrics.record_rtc_nacks(RtcNackDirection::SentToPublisher, nack_delta);
     let Ok(mut snapshot_state) = snapshot_state.lock() else {
         return;
     };
@@ -198,6 +226,8 @@ fn observe_media_ingress_quality(
 fn observe_media_egress_quality(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     metrics: &RuntimeMetrics,
+    rtc_metrics: &RtcMetricsRecorder,
+    nack_totals: &mut RtcNackTotals,
     session_key: &TransportSessionKey,
     stats: &MediaEgressStats,
 ) {
@@ -211,6 +241,8 @@ fn observe_media_egress_quality(
     if let Some(remote) = stats.remote.as_ref() {
         metrics.record_media_quality_jitter_rtp_timestamp_units(u64::from(remote.jitter));
     }
+    let nack_delta = nack_totals.received_from_subscriber(stats.mid, stats.rid, stats.nacks);
+    rtc_metrics.record_rtc_nacks(RtcNackDirection::ReceivedFromSubscriber, nack_delta);
     let Ok(mut snapshot_state) = snapshot_state.lock() else {
         return;
     };
@@ -277,19 +309,23 @@ fn observe_receiver_bandwidth(
 pub fn observe_rtc_event_for_benchmark(
     snapshot_state: &Arc<Mutex<RtcSnapshotState>>,
     metrics: &RuntimeMetrics,
+    rtc_metrics: &RtcMetricsRecorder,
     source_policy_signal: &SourcePolicySignal,
     room_id: &str,
     session_key: &TransportSessionKey,
     event: &Event,
 ) {
-    observe_rtc_event(
+    let mut nack_totals = RtcNackTotals::default();
+    observe_rtc_event(RtcEventContext {
         snapshot_state,
         metrics,
+        rtc_metrics,
+        nack_totals: &mut nack_totals,
         source_policy_signal,
         room_id,
         session_key,
         event,
-    );
+    });
 }
 
 /// Convert `str0m` ICE connection state into the metrics enum.

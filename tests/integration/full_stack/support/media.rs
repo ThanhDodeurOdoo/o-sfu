@@ -36,15 +36,7 @@ pub(crate) async fn consume_video_source_and_ready_route(
     subscriber: &mut ProtocolFakePeer,
     publisher_user_id: &UserId,
 ) -> TrackBinding {
-    let track_binding = assert_track_snapshot(
-        subscriber,
-        publisher_user_id.clone(),
-        StreamType::Camera,
-        true,
-    )
-    .await;
-    assert!(subscriber.complete_next_negotiation().await.is_some());
-    assert_video_subscription_enabled(subscriber, publisher_user_id.clone()).await;
+    let track_binding = consume_video_source(subscriber, publisher_user_id).await;
     assert_consumer_route(
         server,
         room,
@@ -65,9 +57,44 @@ pub(crate) async fn publish_video_source_and_ready_route(
     publisher_user_id: &UserId,
     source: &FakeMediaSource,
 ) -> TrackBinding {
+    let track = publish_video_source(publisher, subscriber, publisher_user_id, source).await;
+    assert_consumer_route(
+        server,
+        room,
+        subscriber,
+        publisher_user_id,
+        track.stream_type,
+        RouteState::Active,
+    )
+    .await;
+    track
+}
+
+pub(crate) async fn publish_video_source(
+    publisher: &mut ProtocolFakePeer,
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: &UserId,
+    source: &FakeMediaSource,
+) -> TrackBinding {
     assert!(publisher.publish_track(source).await.is_some());
     assert!(publisher.complete_next_negotiation().await.is_some());
-    consume_video_source_and_ready_route(server, room, subscriber, publisher_user_id).await
+    consume_video_source(subscriber, publisher_user_id).await
+}
+
+async fn consume_video_source(
+    subscriber: &mut ProtocolFakePeer,
+    publisher_user_id: &UserId,
+) -> TrackBinding {
+    let track = assert_track_snapshot(
+        subscriber,
+        publisher_user_id.clone(),
+        StreamType::Camera,
+        true,
+    )
+    .await;
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    assert_video_subscription_enabled(subscriber, publisher_user_id.clone()).await;
+    track
 }
 
 pub(crate) async fn assert_video_subscription_selected_rid(
@@ -98,7 +125,15 @@ pub(crate) async fn assert_packet_forwarded(
     let Some(expected_payload) = publisher.send_rtp_packet(source, clock).await else {
         panic!("synthetic packet should be accepted by fake publisher");
     };
-    assert!(read_expected_rtp_payload(subscriber, &expected_payload, Duration::from_secs(5)).await);
+    assert!(
+        read_expected_rtp_payload(
+            publisher,
+            subscriber,
+            &expected_payload,
+            Duration::from_secs(5),
+        )
+        .await
+    );
     u64::try_from(expected_payload.len()).unwrap_or(u64::MAX)
 }
 
@@ -112,7 +147,14 @@ pub(crate) async fn assert_synthetic_video_packet_forwarded(
         let Some(expected_payload) = publisher.send_rtp_packet(source, clock).await else {
             panic!("synthetic video packet should be accepted by fake publisher");
         };
-        if read_expected_rtp_payload(subscriber, &expected_payload, Duration::from_secs(5)).await {
+        if read_expected_rtp_payload(
+            publisher,
+            subscriber,
+            &expected_payload,
+            Duration::from_secs(5),
+        )
+        .await
+        {
             return u64::try_from(expected_payload.len()).unwrap_or(u64::MAX);
         }
     }
@@ -126,15 +168,17 @@ pub(crate) async fn assert_packet_dropped(
     clock: &mut FakeClock,
 ) {
     assert!(publisher.send_rtp_packet(source, clock).await.is_some());
-    assert!(
-        subscriber
-            .read_rtp_packet(Duration::from_millis(300))
-            .await
-            .is_none()
+    let observation_window = Duration::from_millis(300);
+    let (publisher_pumped, received_packet) = join!(
+        publisher.pump_rtc(observation_window),
+        subscriber.read_rtp_packet(observation_window),
     );
+    assert!(publisher_pumped.is_some());
+    assert!(received_packet.is_none());
 }
 
-async fn read_expected_rtp_payload(
+pub(crate) async fn read_expected_rtp_payload(
+    publisher: &mut ProtocolFakePeer,
     subscriber: &mut ProtocolFakePeer,
     expected_payload: &[u8],
     timeout_window: Duration,
@@ -145,10 +189,13 @@ async fn read_expected_rtp_payload(
         if now >= deadline {
             return false;
         }
-        let Some(received_packet) = subscriber.read_rtp_packet(deadline - now).await else {
+        let slice = Duration::from_millis(50).min(deadline - now);
+        let (publisher_pumped, received_packet) =
+            join!(publisher.pump_rtc(slice), subscriber.read_rtp_packet(slice),);
+        if publisher_pumped.is_none() {
             return false;
-        };
-        if received_packet.payload.as_ref() == expected_payload {
+        }
+        if received_packet.is_some_and(|packet| packet.payload.as_ref() == expected_payload) {
             return true;
         }
     }

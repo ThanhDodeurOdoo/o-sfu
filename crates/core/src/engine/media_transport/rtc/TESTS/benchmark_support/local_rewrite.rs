@@ -6,13 +6,13 @@ use o_sfu_router::{
     rtp::{MediaFormat, MediaStream, PayloadType},
 };
 use str0m::{
-    media::Pt,
+    media::{Mid, Pt},
     rtp::{SeqNo, Ssrc},
 };
 
 use super::super::{
     codec,
-    local_send_rewrite::{ConsumerStreamStore, SourceTransition},
+    local_send_rewrite::{ConsumerStreamStore, SourceRtpIdentity, SourceTransition},
 };
 
 const RTP_REWRITE_PACKETS: usize = 4096;
@@ -54,7 +54,7 @@ impl LocalRewriteBenchFixture {
 
     fn new(mode: RewriteMode) -> Self {
         let mut streams = ConsumerStreamStore::default();
-        let stream_handle = streams.allocate();
+        let stream_handle = streams.allocate(Mid::default());
         Self {
             streams,
             inputs: rewrite_inputs(mode),
@@ -68,10 +68,13 @@ impl LocalRewriteBenchFixture {
         for input in &self.inputs {
             if let Some(identity) = self.streams.project_identity(
                 self.stream_handle,
-                0,
-                input.source_ssrc,
-                input.sequence_number,
-                input.timestamp,
+                SourceRtpIdentity {
+                    delivery_generation: 0,
+                    ssrc: input.source_ssrc,
+                    seq_no: input.sequence_number,
+                    timestamp: input.timestamp,
+                    was_repair: false,
+                },
                 input.codec_identity,
             ) {
                 black_box(identity.codec);

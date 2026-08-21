@@ -10,6 +10,7 @@ use str0m::{
 };
 use tracing::debug;
 
+use super::{ConsumerRouteUpdate, RidReadinessScratch};
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityRevision,
     SourceActivityUpdate, TransportAdapterError, TransportMediaId, TransportRidActivity,
@@ -56,6 +57,10 @@ impl RidReadinessRouteUpdate {
 
     fn mark_bootstrap_fallback(&mut self) {
         self.selected_gate = RidReadinessSelectedGateUpdate::BootstrapFallback;
+    }
+
+    fn mark_suspended_stale_gate(&mut self) {
+        self.suspended_stale_gate = true;
     }
 }
 
@@ -238,13 +243,15 @@ impl RouteSource {
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         active: bool,
-    ) -> Result<bool, TransportAdapterError> {
+    ) -> Result<ConsumerRouteUpdate, TransportAdapterError> {
         let route = self
             .local_route
             .as_mut()
             .ok_or(TransportAdapterError::TransportUnavailable)?;
-        validate_destination(route, dst_idx, session_key, media_id)?;
-        Ok(route.set_destination_active(dst_idx, active))
+        let destination = validate_destination(route, dst_idx, session_key, media_id)?;
+        let repair_enabled = destination.repair_enabled;
+        let changed = route.set_destination_active(dst_idx, active);
+        Ok(ConsumerRouteUpdate::new(changed, changed && repair_enabled))
     }
 
     pub(super) fn set_consumer_pkt_gate(
@@ -253,17 +260,18 @@ impl RouteSource {
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-    ) -> Result<bool, TransportAdapterError> {
+    ) -> Result<ConsumerRouteUpdate, TransportAdapterError> {
         let route = self
             .local_route
             .as_mut()
             .ok_or(TransportAdapterError::TransportUnavailable)?;
         let dst = validate_destination(route, dst_idx, session_key, media_id)?;
         if dst.packet_gate == packet_gate {
-            return Ok(dst.pending_gate.take().is_some());
+            let changed = dst.pending_gate.take().is_some();
+            return Ok(ConsumerRouteUpdate::new(changed, false));
         }
         if dst.pending_gate == Some(packet_gate) {
-            return Ok(false);
+            return Ok(ConsumerRouteUpdate::new(false, false));
         }
         if dst.requires_decoder_refresh {
             dst.packet_gate = PacketLayerGate::Block;
@@ -273,7 +281,7 @@ impl RouteSource {
             dst.pending_gate = None;
         }
         dst.advance_delivery();
-        Ok(true)
+        Ok(ConsumerRouteUpdate::new(true, dst.repair_enabled))
     }
 
     pub(super) fn update_decoder_readiness(
@@ -281,9 +289,8 @@ impl RouteSource {
         source_id: TransportMediaId,
         incoming_rid: Option<Rid>,
         is_keyframe: bool,
-        ready: &[Rid],
-        stale: &mut Vec<Rid>,
-        pending_selected: &mut Vec<Rid>,
+        scratch: &mut RidReadinessScratch,
+        on_repair_delivery_changed: impl FnMut(&MediaRouteDestination),
     ) -> RidReadinessRouteUpdate {
         if !self.source_active {
             return RidReadinessRouteUpdate::default();
@@ -296,9 +303,8 @@ impl RouteSource {
             source_id,
             incoming_rid,
             is_keyframe,
-            ready,
-            stale,
-            pending_selected,
+            scratch,
+            on_repair_delivery_changed,
         )
     }
 
@@ -849,20 +855,27 @@ fn update_decoder_ready_dsts(
     source_id: TransportMediaId,
     incoming_rid: Option<Rid>,
     is_keyframe: bool,
-    ready: &[Rid],
-    stale: &mut Vec<Rid>,
-    pending_selected: &mut Vec<Rid>,
+    scratch: &mut RidReadinessScratch,
+    mut on_repair_delivery_changed: impl FnMut(&MediaRouteDestination),
 ) -> RidReadinessRouteUpdate {
     let mut update = RidReadinessRouteUpdate::default();
     for dst in &mut route.destinations {
         if let Some(incoming_rid) = incoming_rid {
-            suspend_stale_dst_gate(dst, source_id, incoming_rid, ready, stale, &mut update);
+            suspend_stale_dst_gate(
+                dst,
+                source_id,
+                incoming_rid,
+                &scratch.ready,
+                &mut scratch.stale,
+                &mut on_repair_delivery_changed,
+                &mut update,
+            );
         }
         let Some(pending_gate) = dst.pending_gate else {
             continue;
         };
         if let Some(selected_rid) = pending_gate.selected_rid() {
-            push_unique_rid(pending_selected, selected_rid);
+            push_unique_rid(&mut scratch.pending_selected, selected_rid);
             if Some(selected_rid) != incoming_rid {
                 continue;
             }
@@ -880,6 +893,7 @@ fn update_decoder_ready_dsts(
                 "activated deferred strict RID packet gate after producer RID became live"
             );
             dst.activate_refresh(pending_gate);
+            notify_repair_delivery_changed(dst, &mut on_repair_delivery_changed);
             update.mark_activated_pending_gate();
         }
     }
@@ -887,7 +901,13 @@ fn update_decoder_ready_dsts(
         && update.selected_gate != RidReadinessSelectedGateUpdate::Activated
         && let Some(incoming_rid) = incoming_rid
     {
-        activate_bootstrap_dsts(route, source_id, incoming_rid, &mut update);
+        activate_bootstrap_dsts(
+            route,
+            source_id,
+            incoming_rid,
+            &mut on_repair_delivery_changed,
+            &mut update,
+        );
     }
     update
 }
@@ -898,6 +918,7 @@ fn suspend_stale_dst_gate(
     incoming_rid: Rid,
     ready: &[Rid],
     stale: &mut Vec<Rid>,
+    on_repair_delivery_changed: &mut impl FnMut(&MediaRouteDestination),
     update: &mut RidReadinessRouteUpdate,
 ) {
     if dst.pending_gate.is_some() {
@@ -921,13 +942,15 @@ fn suspend_stale_dst_gate(
     );
     dst.pause_delivery();
     push_unique_rid(stale, selected_rid);
-    update.suspended_stale_gate = true;
+    notify_repair_delivery_changed(dst, on_repair_delivery_changed);
+    update.mark_suspended_stale_gate();
 }
 
 fn activate_bootstrap_dsts(
     route: &mut MediaRouteEntry,
     source_id: TransportMediaId,
     incoming_rid: Rid,
+    on_repair_delivery_changed: &mut impl FnMut(&MediaRouteDestination),
     update: &mut RidReadinessRouteUpdate,
 ) {
     for dst in &mut route.destinations {
@@ -950,7 +973,17 @@ fn activate_bootstrap_dsts(
             "activated bootstrap fallback RID packet gate while selected producer RID is pending"
         );
         dst.activate_bootstrap_refresh(PacketLayerGate::Rid(incoming_rid));
+        notify_repair_delivery_changed(dst, on_repair_delivery_changed);
         update.mark_bootstrap_fallback();
+    }
+}
+
+fn notify_repair_delivery_changed(
+    destination: &MediaRouteDestination,
+    on_changed: &mut impl FnMut(&MediaRouteDestination),
+) {
+    if destination.repair_enabled {
+        on_changed(destination);
     }
 }
 

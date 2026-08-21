@@ -16,6 +16,10 @@
 use core::hint::cold_path;
 use std::{fmt, net::SocketAddr, slice::Iter, time::Instant};
 
+use o_sfu_rfc::{
+    rtp::{self, RtpRtcpMuxPacketKind},
+    webrtc,
+};
 use str0m::{
     Input,
     ice::StunMessage,
@@ -25,7 +29,7 @@ use tracing::{debug, trace, warn};
 
 use super::super::{
     routing_miss::{DemuxRecoveryState, PacketLoopRoutingMissKey},
-    state::PacketLoopState,
+    state::{PacketLoopState, RtcSessionState},
 };
 use crate::engine::{
     media_transport::TransportSessionKey,
@@ -111,23 +115,6 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
     }
 }
 
-#[cfg(test)]
-pub(super) fn route_pkt_to_session(
-    state: &mut PacketLoopState,
-    demux: &mut DemuxRecoveryState,
-    metrics: &RtcMetricsRecorder,
-    source_addr: SocketAddr,
-    candidate_addr: SocketAddr,
-    packet: &[u8],
-) {
-    route_pkt_to_session_at(
-        state,
-        demux,
-        metrics,
-        PacketRouteDatagram::new(source_addr, candidate_addr, packet, Instant::now()),
-    );
-}
-
 /// Routes one datagram against the current worker topology.
 ///
 /// Malformed, unowned and throttled datagrams are recorded then dropped.
@@ -139,6 +126,7 @@ pub fn route_pkt_to_session_at(
 ) {
     match route_cached_pkt(
         state,
+        metrics,
         datagram.source_addr,
         datagram.candidate_addr,
         datagram.packet,
@@ -194,6 +182,7 @@ pub fn route_pkt_to_session_at(
 /// Attempts routing through a learned source-address pin.
 fn route_cached_pkt(
     state: &mut PacketLoopState,
+    metrics: &RtcMetricsRecorder,
     source_addr: SocketAddr,
     candidate_addr: SocketAddr,
     packet: &[u8],
@@ -228,10 +217,15 @@ fn route_cached_pkt(
         state.remote_addr_demux.forget_remote_addr(source_addr);
         return CachedRouteOutcome::NotMatched;
     }
+    if !admit_rtcp_datagram(session_state, packet, now) {
+        metrics.record_rtc_rtcp_ingress_budget_drop();
+        return CachedRouteOutcome::Routed;
+    }
+    session_state.prepare_rtp_input(packet);
     // `Rtc::accepts()` owns the demux decision. A later processing error does
     // not invalidate the learned pin.
-    let handle_result = session_state.rtc.handle_input(input);
-    if handle_result.is_err() {
+    if session_state.rtc.handle_input(input).is_err() {
+        session_state.clear_ingress_context();
         cold_path();
         warn!(
             user_id = ?session_key.user_id(),
@@ -358,11 +352,14 @@ fn packet_index_probe(source_addr: SocketAddr, packet: &[u8]) -> Option<PacketIn
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     // DTLS exposes no ICE ufrag. RTP and RTCP share source-candidate lookup
-    // because `Receive::new` has already applied str0m's second-byte split.
-    if (20..64).contains(&byte0) {
+    // after the RFC 5761 second-octet split.
+    // https://www.rfc-editor.org/rfc/rfc5761.html#section-4
+    // DTLS records occupy their RFC 7983 first-octet range.
+    // https://www.rfc-editor.org/rfc/rfc7983.html#section-5
+    if webrtc::is_dtls_mux_packet(byte0) {
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
-    if (128..192).contains(&byte0) && packet_len > 2 {
+    if rtp::classify_rtp_rtcp_mux(packet).is_some() {
         return Some(PacketIndexProbe::RemoteCandidateAddr(source_addr));
     }
     None
@@ -376,6 +373,30 @@ fn receive_input(
 ) -> Option<Input<'_>> {
     let receive = Receive::new(Protocol::Udp, source_addr, candidate_addr, packet).ok()?;
     Some(Input::Receive(now, receive))
+}
+
+fn admit_rtcp_datagram(session_state: &mut RtcSessionState, packet: &[u8], now: Instant) -> bool {
+    // RFC 5761 section 4 reserves the muxed second-octet range used to
+    // recognize RTCP before admitting feedback to str0m.
+    // https://www.rfc-editor.org/rfc/rfc5761.html#section-4
+    if !matches!(
+        rtp::classify_rtp_rtcp_mux(packet),
+        Some(RtpRtcpMuxPacketKind::Rtcp)
+    ) {
+        return true;
+    }
+    if !session_state
+        .rtcp_ingress_budget
+        .try_charge(u64::try_from(packet.len()).unwrap_or(u64::MAX), now)
+    {
+        return false;
+    }
+    // Rotate expired caches before str0m consumes RTCP so a NACK cannot
+    // recover media older than the configured RTX cache lifetime.
+    session_state.expire_rtx_streams(now);
+    // Carry this receive-time decision into the immediately following drain.
+    session_state.defer_rtx_expiry = true;
+    true
 }
 
 fn log_malformed_datagram(source_addr: SocketAddr) {
@@ -420,15 +441,20 @@ fn route_packet_to_session(
     let Some(session_state) = state.users.get_mut(session_key) else {
         return false;
     };
-    let handle_result = session_state.rtc.handle_input(input);
-    if handle_result.is_err() {
-        warn!(
-            user_id = ?session_key.user_id(),
-            media_worker_id = session_key.media_worker_id().as_usize(),
-            "failed to feed incoming UDP datagram into rtc user state"
-        );
+    if admit_rtcp_datagram(session_state, route.packet, route.now) {
+        session_state.prepare_rtp_input(route.packet);
+        if session_state.rtc.handle_input(input).is_err() {
+            session_state.clear_ingress_context();
+            warn!(
+                user_id = ?session_key.user_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
+                "failed to feed incoming UDP datagram into rtc user state"
+            );
+        } else {
+            state.mark_session_dirty(session_key);
+        }
     } else {
-        state.mark_session_dirty(session_key);
+        route.metrics.record_rtc_rtcp_ingress_budget_drop();
     }
     // `Rtc::accepts()` already decided ownership. Later input processing does
     // not revise that decision, so retain the source pin on either result.
@@ -436,34 +462,33 @@ fn route_packet_to_session(
         .remote_addr_demux
         .session_key_for_remote_addr(route.source_addr)
         .cloned();
-    if state
+    let source_pin_changed = state
         .remote_addr_demux
-        .remember_remote_addr(route.source_addr, session_key)
-    {
-        match previous_session_key {
-            Some(previous_session_key) => {
-                debug!(
-                    source_addr = %route.source_addr,
-                    candidate_addr = %route.candidate_addr,
-                    route_resolution,
-                    previous_session_id = ?previous_session_key.user_id(),
-                    previous_media_worker_id = previous_session_key.media_worker_id().as_usize(),
-                    user_id = ?session_key.user_id(),
-                    media_worker_id = session_key.media_worker_id().as_usize(),
-                    "remapped rtc source address to a different user"
-                );
-            }
-            None => {
-                debug!(
-                    source_addr = %route.source_addr,
-                    candidate_addr = %route.candidate_addr,
-                    route_resolution,
-                    user_id = ?session_key.user_id(),
-                    media_worker_id = session_key.media_worker_id().as_usize(),
-                    "pinned rtc source address to user"
-                );
-            }
+        .remember_remote_addr(route.source_addr, session_key);
+    match (source_pin_changed, previous_session_key) {
+        (true, Some(previous_session_key)) => {
+            debug!(
+                source_addr = %route.source_addr,
+                candidate_addr = %route.candidate_addr,
+                route_resolution,
+                previous_session_id = ?previous_session_key.user_id(),
+                previous_media_worker_id = previous_session_key.media_worker_id().as_usize(),
+                user_id = ?session_key.user_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
+                "remapped rtc source address to a different user"
+            );
         }
+        (true, None) => {
+            debug!(
+                source_addr = %route.source_addr,
+                candidate_addr = %route.candidate_addr,
+                route_resolution,
+                user_id = ?session_key.user_id(),
+                media_worker_id = session_key.media_worker_id().as_usize(),
+                "pinned rtc source address to user"
+            );
+        }
+        (false, _) => {}
     }
     route
         .metrics

@@ -23,9 +23,8 @@ mod callgrind_config;
 
 use std::hint::black_box;
 
-use gungraun::{library_benchmark, library_benchmark_group, main};
-
 use callgrind_config::callgrind_config;
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use o_sfu_core::server::transport::benchmark_support::MeetingFlowBenchFixture;
 
 // teardown re-checks coverage outside the measured window, so the benchmark

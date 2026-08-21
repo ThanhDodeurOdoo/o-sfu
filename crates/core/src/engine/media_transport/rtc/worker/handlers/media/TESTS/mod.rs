@@ -16,10 +16,13 @@ use fixtures::{
     LocalVideoRoute, RemoteVideoRoute, prepare_pending_selected_rid_route,
     set_consumer_packet_gate_at,
 };
-use o_sfu_rfc::rtp::CodecName;
+use o_sfu_rfc::rtp::{self, CodecName};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
-    rtp::{MediaFormat, MediaStream as RouterRtpParameters, PayloadType, StreamBinding},
+    rtp::{
+        CodecSetting, MediaFormat, MediaStream as RouterRtpParameters, PayloadType, RtcpFeedback,
+        RtcpFeedbackKind, StreamBinding,
+    },
 };
 use str0m::{
     media::{KeyframeRequestKind, MediaKind, Mid, Pt, Rid},
@@ -39,27 +42,30 @@ use crate::{
         media_transport::{
             ConsumerActivity, ConsumerRouteControl, ConsumerRouteControlOutcome, ProducerActivity,
             ProducerRouteControl, SourceActivityRevision, SourceActivityUpdate,
-            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSourceKey,
+            TransportAdapterError, TransportConsumerRoute, TransportMediaId, TransportSessionKey,
+            TransportSourceKey,
             rtc::{
-                bootstrap,
+                bootstrap, codec,
                 commands::{
                     RemoteSourceControl, RouteControlRequest, WorkerMediaControlBatch,
                     WorkerMediaControlBatchOutcome,
                 },
                 keyframe_tracker::{KeyframeRequestDecision, KeyframeRequestOrigin},
+                local_send_rewrite::SourceRtpIdentity,
                 media_registry::{ConsumerKeyframeTarget, RegisteredMediaHandle},
                 relay_registry::{RelayPacketMailbox, RelayTargetId},
                 route_control::PacketLayerGate,
+                slots::ConsumerStreamHandle,
                 source_route::RemoteSourceRegistration,
                 state::PacketLoopState,
                 test_support::{
                     MediaWorkerScenario, add_source_rid_stream, assert_consumer_packet_gate,
                     assert_remote_keyframe_command, assert_remote_packet_gate_command,
-                    drain_ready_sessions, prepare_source_session, prepare_source_session_with_rid,
-                    register_remote_source_control, register_saturated_remote_source,
-                    saturated_remote_control, test_consumer_session_key,
-                    test_consumer_session_key_on_worker, test_source_session_key,
-                    test_transport_session_key,
+                    drain_ready_sessions, install_video_route_with_gate, prepare_source_session,
+                    prepare_source_session_with_rid, register_remote_source_control,
+                    register_saturated_remote_source, sample_rtp_packet, saturated_remote_control,
+                    test_consumer_session_key, test_consumer_session_key_on_worker,
+                    test_source_session_key, test_transport_session_key,
                 },
                 worker::RtcWorkerCommand,
             },
@@ -93,6 +99,246 @@ fn apply_source_activity(
     assert_eq!(results, vec![Ok(())]);
 }
 
+fn arm_destination_repair(
+    state: &mut PacketLoopState,
+    consumer_session: &TransportSessionKey,
+    src_media: TransportMediaId,
+    now: Instant,
+) -> Result<ConsumerStreamHandle, &'static str> {
+    let destination = state
+        .routes
+        .local_route(src_media)
+        .and_then(|entry| {
+            entry
+                .destinations
+                .iter()
+                .find(|destination| destination.dest_session == *consumer_session)
+        })
+        .cloned()
+        .ok_or("local route should have one destination")?;
+    bootstrap::ensure_session_rtc_state(
+        &mut state.users,
+        &destination.dest_session,
+        SocketAddr::from(([127, 0, 0, 1], 47_900)),
+        Bitrate::from_mbps(10),
+    )
+    .map_err(|_error| "consumer session should bootstrap")?;
+    let dest_stream = state
+        .users
+        .get_mut(&destination.dest_session)
+        .ok_or("consumer session should exist")?
+        .consumer_streams
+        .allocate(destination.dest_mid);
+    let removed = state
+        .routes
+        .remove_consumer_route(
+            src_media,
+            &destination.dest_session,
+            destination.dest_transport_media_id,
+        )
+        .ok_or("local route destination should remain registered")?;
+    if let Some(moved) = &removed.moved {
+        state.set_consumer_dst_idx(
+            &moved.session_key,
+            moved.mid,
+            moved.media_id,
+            src_media,
+            Some(moved.dst_idx),
+        );
+    }
+    let mut removed = removed.destination;
+    removed.dest_stream = dest_stream;
+    removed.repair_enabled = true;
+    let dst_idx = state.routes.add_consumer_route(src_media, removed);
+    state.set_consumer_dst_idx(
+        &destination.dest_session,
+        destination.dest_mid,
+        destination.dest_transport_media_id,
+        src_media,
+        Some(dst_idx),
+    );
+    let session = state
+        .users
+        .get_mut(&destination.dest_session)
+        .ok_or("consumer session should exist")?;
+    if session.rtc.media(destination.dest_mid).is_none() {
+        session
+            .rtc
+            .direct_api()
+            .declare_media(destination.dest_mid, MediaKind::Video);
+    }
+    let primary_ssrc = {
+        let mut api = session.rtc.direct_api();
+        let primary_ssrc = api.new_ssrc();
+        let repair_ssrc = api.new_ssrc();
+        api.declare_stream_tx(primary_ssrc, Some(repair_ssrc), destination.dest_mid, None);
+        primary_ssrc
+    };
+    session
+        .consumer_streams
+        .queue_repairable_write(dest_stream, primary_ssrc);
+    let packet = sample_rtp_packet(0, *primary_ssrc);
+    session.note_repairable_transmit(&packet, now);
+    if !session.consumer_streams.rtx_cache_is_armed(dest_stream) {
+        return Err("repair cache should be armed");
+    }
+    Ok(dest_stream)
+}
+
+fn destination_repair_is_armed(
+    state: &mut PacketLoopState,
+    consumer_session: &TransportSessionKey,
+    stream: ConsumerStreamHandle,
+) -> bool {
+    state
+        .users
+        .get_mut(consumer_session)
+        .is_some_and(|session| session.consumer_streams.rtx_cache_is_armed(stream))
+}
+
+fn arm_route_repair(
+    route: &mut LocalVideoRoute,
+    now: Instant,
+) -> Result<ConsumerStreamHandle, &'static str> {
+    arm_destination_repair(
+        &mut route.state,
+        &route.consumer_session,
+        route.src_media,
+        now,
+    )
+}
+
+fn route_repair_is_armed(route: &mut LocalVideoRoute, stream: ConsumerStreamHandle) -> bool {
+    destination_repair_is_armed(&mut route.state, &route.consumer_session, stream)
+}
+
+#[test]
+fn consumer_inactive_invalidates_repair_cache() -> Result<(), &'static str> {
+    let mut route = LocalVideoRoute::new(93, 93_000);
+    let stream = arm_route_repair(&mut route, Instant::now())?;
+    let consumer_route = route.consumer_route();
+    let outcome = apply_media_control_batch(
+        &mut route.state,
+        &route.rtc_metrics,
+        Bitrate::from_mbps(10),
+        Instant::now(),
+        WorkerMediaControlBatch::ConsumerFollowUp(vec![(
+            0,
+            ConsumerRouteControl::new(consumer_route).activity(ConsumerActivity::Inactive),
+        )]),
+    );
+
+    assert!(matches!(
+        outcome,
+        WorkerMediaControlBatchOutcome::Consumers(_)
+    ));
+    assert!(!route_repair_is_armed(&mut route, stream));
+    Ok(())
+}
+
+#[test]
+fn consumer_gate_reanchor_invalidates_repair_cache() -> Result<(), &'static str> {
+    let mut route = LocalVideoRoute::new(94, 94_000);
+    let stream = arm_route_repair(&mut route, Instant::now())?;
+    let consumer_route = route.consumer_route();
+
+    set_consumer_packet_gate_at(
+        &mut route.state,
+        &consumer_route,
+        PacketLayerGate::Block,
+        Instant::now(),
+    );
+
+    assert!(!route_repair_is_armed(&mut route, stream));
+    Ok(())
+}
+
+#[test]
+fn transmit_classification_arms_only_primary_repair_cache() -> Result<(), &'static str> {
+    let now = Instant::now();
+    let mut route = LocalVideoRoute::new(97, 97_000);
+    let stream = arm_route_repair(&mut route, now)?;
+    let session = route
+        .state
+        .users
+        .get_mut(&route.consumer_session)
+        .ok_or("consumer session should exist")?;
+    let (primary_ssrc, repair_ssrc) = {
+        let mut api = session.rtc.direct_api();
+        let stream_tx = api
+            .stream_tx_by_mid(Mid::from("cam-down"), None)
+            .ok_or("repair transmit stream should exist")?;
+        (
+            stream_tx.ssrc(),
+            stream_tx.rtx().ok_or("repair SSRC should exist")?,
+        )
+    };
+    session.invalidate_rtx_stream(stream);
+    session
+        .consumer_streams
+        .queue_repairable_write(stream, primary_ssrc);
+
+    let repair = sample_rtp_packet(0, *repair_ssrc);
+    session.note_repairable_transmit(&repair, now);
+    // A receiver report with no report blocks provides valid non-RTP input.
+    // https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.2
+    let rtcp = rtp::rtcp_receiver_report_without_report_blocks(rtp::Ssrc::from(0));
+    session.note_repairable_transmit(&rtcp, now);
+    assert!(!session.consumer_streams.rtx_cache_is_armed(stream));
+
+    let primary = sample_rtp_packet(0, *primary_ssrc);
+    session.note_repairable_transmit(&primary, now);
+    assert!(session.consumer_streams.rtx_cache_is_armed(stream));
+
+    session.expire_rtx_streams(now + Duration::from_secs(3));
+    assert!(!session.consumer_streams.rtx_cache_is_armed(stream));
+    let mut api = session.rtc.direct_api();
+    assert!(
+        api.stream_tx_by_mid(Mid::from("cam-down"), None)
+            .is_some_and(|stream_tx| {
+                stream_tx.ssrc() == primary_ssrc && stream_tx.rtx() == Some(repair_ssrc)
+            })
+    );
+    Ok(())
+}
+
+#[test]
+fn source_inactive_invalidates_destination_repair_cache() -> Result<(), &'static str> {
+    let mut route = LocalVideoRoute::new(95, 95_000);
+    let stream = arm_route_repair(&mut route, Instant::now())?;
+    let source = TransportSourceKey::new(route.source_session.clone(), route.src_media);
+
+    apply_source_activity(
+        &mut route.state,
+        &route.rtc_metrics,
+        source,
+        SourceActivityUpdate::new(
+            ProducerActivity::Inactive,
+            SourceActivityRevision::default().next(),
+        ),
+        Instant::now(),
+    );
+
+    assert!(!route_repair_is_armed(&mut route, stream));
+    Ok(())
+}
+
+#[test]
+fn consumer_removal_releases_repair_state() -> Result<(), &'static str> {
+    let mut route = LocalVideoRoute::new(96, 96_000);
+    let stream = arm_route_repair(&mut route, Instant::now())?;
+
+    remove_consumer_route(
+        &mut route.state,
+        &route.consumer_session,
+        route.consumer_media,
+        route.src_media,
+    );
+
+    assert!(!route_repair_is_armed(&mut route, stream));
+    Ok(())
+}
+
 #[test]
 fn media_removal_rejects_a_registered_handle_without_its_owner_session() {
     let source_session = test_source_session_key(91);
@@ -110,6 +356,185 @@ fn media_removal_rejects_a_registered_handle_without_its_owner_session() {
         Err(TransportAdapterError::InvalidInput)
     );
     assert!(state.media_handle(source_media).is_some());
+}
+
+#[test]
+fn producer_removal_preserves_shared_mid_repair_identity() {
+    let source_session = test_source_session_key(92);
+    let source_mid = Mid::from("cam-up");
+    let primary_ssrc = Ssrc::from(92_000);
+    let repair_ssrc = Ssrc::from(92_001);
+    let sibling_primary_ssrc = Ssrc::from(92_010);
+    let sibling_repair_ssrc = Ssrc::from(92_011);
+    let mut state = PacketLoopState::default();
+    let source_media =
+        prepare_source_session(&mut state, &source_session, source_mid, *primary_ssrc);
+    state.register_media_handle(RegisteredMediaHandle::Producer {
+        session_key: source_session.clone(),
+        mid: source_mid,
+    });
+    let parameters = RouterRtpParameters::new(
+        vec![],
+        vec![],
+        vec![
+            StreamBinding::new()
+                .with_ssrc(*primary_ssrc)
+                .with_repair_ssrc(*repair_ssrc),
+            StreamBinding::new()
+                .with_ssrc(*sibling_primary_ssrc)
+                .with_repair_ssrc(*sibling_repair_ssrc),
+        ],
+    )
+    .with_mid(source_mid.to_string());
+    let Some(session_state) = state.users.get_mut(&source_session) else {
+        panic!("source session should exist after setup");
+    };
+    {
+        let mut api = session_state.rtc.direct_api();
+        assert!(api.remove_stream_rx(primary_ssrc));
+        api.expect_stream_rx(primary_ssrc, Some(repair_ssrc), source_mid, None);
+        api.expect_stream_rx(
+            sibling_primary_ssrc,
+            Some(sibling_repair_ssrc),
+            source_mid,
+            None,
+        );
+    }
+    session_state
+        .sdp_negotiation
+        .negotiated_producer_parameters
+        .insert(source_mid, parameters);
+    state
+        .routes
+        .replace_producer_ssrcs(source_media, vec![primary_ssrc]);
+
+    assert!(
+        worker_remove_media(&mut state, &Arc::default(), &source_session, source_media,).is_ok()
+    );
+
+    let Some(session_state) = state.users.get_mut(&source_session) else {
+        panic!("shared source session should remain after sibling removal");
+    };
+    {
+        let mut api = session_state.rtc.direct_api();
+        assert!(api.stream_rx(&primary_ssrc).is_none());
+        assert!(
+            api.stream_rx(&sibling_primary_ssrc)
+                .is_some_and(|stream| stream.rtx() == Some(sibling_repair_ssrc))
+        );
+    }
+    assert!(
+        session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .contains_key(&source_mid)
+    );
+}
+
+#[test]
+fn nack_totals_reset_after_the_last_mid_handle_is_removed() -> Result<(), &'static str> {
+    let mut route = LocalVideoRoute::new(98, 98_000);
+    let shared_mid = Mid::from("cam-down");
+    let unrelated_mid = Mid::from("screen-up");
+    let consumer_key = route.consumer_session.clone();
+    let sibling_media = route
+        .state
+        .register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_key.clone(),
+            mid: shared_mid,
+            src_media: route.src_media,
+        });
+    arm_route_repair(&mut route, Instant::now())?;
+
+    let Some(session) = route.state.users.get_mut(&consumer_key) else {
+        panic!("consumer session should exist after setup");
+    };
+    session.sdp_negotiation.initial_offer_applied = true;
+    let totals = &mut session.nack_totals;
+    assert_eq!(
+        (
+            totals.sent_to_publisher(shared_mid, None, 50),
+            totals.received_from_subscriber(shared_mid, None, 70),
+            totals.sent_to_publisher(unrelated_mid, None, 100),
+            totals.received_from_subscriber(unrelated_mid, None, 200),
+        ),
+        (50, 70, 100, 200)
+    );
+
+    assert!(
+        worker_remove_media(
+            &mut route.state,
+            &Arc::default(),
+            &consumer_key,
+            route.consumer_media,
+        )
+        .is_ok()
+    );
+    let Some(session) = route.state.users.get_mut(&consumer_key) else {
+        panic!("consumer session should remain while a MID sibling exists");
+    };
+    assert!(
+        session
+            .rtc
+            .direct_api()
+            .stream_tx_by_mid(shared_mid, None)
+            .is_some()
+    );
+    let totals = &mut session.nack_totals;
+    assert_eq!(
+        (
+            totals.sent_to_publisher(shared_mid, None, 55),
+            totals.received_from_subscriber(shared_mid, None, 77),
+        ),
+        (5, 7)
+    );
+
+    assert!(
+        worker_remove_media(
+            &mut route.state,
+            &Arc::default(),
+            &consumer_key,
+            sibling_media,
+        )
+        .is_ok()
+    );
+    let Some(session) = route.state.users.get_mut(&consumer_key) else {
+        panic!("consumer session should remain after last-handle removal");
+    };
+    assert!(
+        session
+            .rtc
+            .direct_api()
+            .stream_tx_by_mid(shared_mid, None)
+            .is_none()
+    );
+    route
+        .state
+        .register_media_handle(RegisteredMediaHandle::Consumer {
+            session_key: consumer_key.clone(),
+            mid: shared_mid,
+            src_media: route.src_media,
+        });
+    let Some(session) = route.state.users.get_mut(&consumer_key) else {
+        panic!("consumer session should remain after media recreation");
+    };
+    session.rtc.direct_api().declare_stream_tx(
+        Ssrc::from(98_100),
+        Some(Ssrc::from(98_101)),
+        shared_mid,
+        None,
+    );
+    let totals = &mut session.nack_totals;
+    assert_eq!(
+        (
+            totals.sent_to_publisher(shared_mid, None, 60),
+            totals.received_from_subscriber(shared_mid, None, 80),
+            totals.sent_to_publisher(unrelated_mid, None, 109),
+            totals.received_from_subscriber(unrelated_mid, None, 211),
+        ),
+        (60, 80, 9, 11)
+    );
+    Ok(())
 }
 
 #[test]
@@ -688,10 +1113,160 @@ fn selected_rid_packet_gate_uses_bootstrap_fallback_before_becoming_strict() {
 }
 
 #[test]
-fn selecting_bootstrap_fallback_clears_pending_gate_without_advancing_delivery() {
+fn repaired_selected_keyframe_activation_invalidates_before_projection() -> Result<(), &'static str>
+{
     let mut route = prepare_pending_selected_rid_route();
     let now = Instant::now();
+    let stream = arm_destination_repair(
+        &mut route.state,
+        &route.consumer_session,
+        route.src_media,
+        now,
+    )?;
+    let destination = route
+        .state
+        .routes
+        .local_route(route.src_media)
+        .and_then(|entry| entry.destinations.first())
+        .cloned()
+        .ok_or("selected RID route should have a destination")?;
+    let source_ssrc = Ssrc::from(88_301);
+    {
+        let session = route
+            .state
+            .users
+            .get_mut(&route.consumer_session)
+            .ok_or("consumer session should exist")?;
+        for sequence_number in [10_u32, 12] {
+            assert!(
+                session
+                    .consumer_streams
+                    .project_identity(
+                        stream,
+                        SourceRtpIdentity {
+                            delivery_generation: destination.delivery_generation,
+                            ssrc: source_ssrc,
+                            seq_no: u64::from(sequence_number).into(),
+                            timestamp: sequence_number,
+                            was_repair: false,
+                        },
+                        codec::PacketIdentity::default(),
+                    )
+                    .is_some()
+            );
+        }
+    }
+
+    assert!(route.observe_rid_ready(route.selected_rid, true, now));
+    let delivery_generation = route
+        .state
+        .routes
+        .local_route(route.src_media)
+        .and_then(|entry| entry.destinations.first())
+        .map(|destination| destination.delivery_generation)
+        .ok_or("activated route should keep its destination")?;
+    assert_ne!(delivery_generation, destination.delivery_generation);
+    assert!(!destination_repair_is_armed(
+        &mut route.state,
+        &route.consumer_session,
+        stream,
+    ));
+    let session = route
+        .state
+        .users
+        .get_mut(&route.consumer_session)
+        .ok_or("consumer session should remain available")?;
+    let mut project = |sequence_number: u32, was_repair| {
+        session.consumer_streams.project_identity(
+            stream,
+            SourceRtpIdentity {
+                delivery_generation,
+                ssrc: source_ssrc,
+                seq_no: u64::from(sequence_number).into(),
+                timestamp: sequence_number,
+                was_repair,
+            },
+            codec::PacketIdentity::default(),
+        )
+    };
+    assert!(project(11, true).is_none());
+    let [Some(first), Some(after_gap), Some(repaired), Some(next)] = [
+        project(20, false),
+        project(22, false),
+        project(21, true),
+        project(23, false),
+    ] else {
+        return Err("current delivery generation should accept primary RTP and gap repair");
+    };
+    assert_eq!(*after_gap.seq_no - *first.seq_no, 2);
+    assert!(repaired.seq_no.is_next(after_gap.seq_no));
+    assert!(after_gap.seq_no.is_next(next.seq_no));
+    Ok(())
+}
+
+#[test]
+fn selected_rid_activation_preserves_unchanged_destination_repair() -> Result<(), &'static str> {
+    let mut route = prepare_pending_selected_rid_route();
+    let now = Instant::now();
+    let selected_stream = arm_destination_repair(
+        &mut route.state,
+        &route.consumer_session,
+        route.src_media,
+        now,
+    )?;
+    let sibling_session = test_consumer_session_key(232);
+    let _sibling_media = install_video_route_with_gate(
+        &mut route.state,
+        route.src_media,
+        &sibling_session,
+        Mid::from("cam-down-lo"),
+        PacketLayerGate::Rid(route.fallback_rid),
+    );
+    let sibling_stream =
+        arm_destination_repair(&mut route.state, &sibling_session, route.src_media, now)?;
+    route.state.routes.observe_producer_packet(
+        route.src_media,
+        Some(route.fallback_rid),
+        false,
+        now,
+    );
+
+    assert!(route.observe_rid_ready(route.selected_rid, true, now + Duration::from_millis(10),));
+    assert!(!destination_repair_is_armed(
+        &mut route.state,
+        &route.consumer_session,
+        selected_stream,
+    ));
+    assert!(destination_repair_is_armed(
+        &mut route.state,
+        &sibling_session,
+        sibling_stream,
+    ));
+    Ok(())
+}
+
+#[test]
+fn bootstrap_fallback_rotates_then_preserves_current_repair() -> Result<(), &'static str> {
+    let mut route = prepare_pending_selected_rid_route();
+    let now = Instant::now();
+    let stale_stream = arm_destination_repair(
+        &mut route.state,
+        &route.consumer_session,
+        route.src_media,
+        now,
+    )?;
     assert!(route.observe_rid_ready(route.fallback_rid, true, now));
+    assert!(!destination_repair_is_armed(
+        &mut route.state,
+        &route.consumer_session,
+        stale_stream,
+    ));
+    let stream = arm_destination_repair(
+        &mut route.state,
+        &route.consumer_session,
+        route.src_media,
+        now,
+    )?;
     let Some(destination) = route
         .state
         .routes
@@ -724,6 +1299,12 @@ fn selecting_bootstrap_fallback_clears_pending_gate_without_advancing_delivery()
             .map(|destination| destination.delivery_generation),
         Some(delivery_generation)
     );
+    assert!(destination_repair_is_armed(
+        &mut route.state,
+        &route.consumer_session,
+        stream,
+    ));
+    Ok(())
 }
 
 #[test]
@@ -744,7 +1325,7 @@ fn selected_rid_packet_gate_switches_from_bootstrap_fallback_on_selected_keyfram
 }
 
 #[test]
-fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
+fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() -> Result<(), &'static str> {
     let selected_rid = Rid::from("hi");
     let fallback_rid = Rid::from("lo");
     let mut route = LocalVideoRoute::with_rid_gate(
@@ -753,6 +1334,7 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
         selected_rid,
         PacketLayerGate::Rid(selected_rid),
     );
+    let stream = arm_route_repair(&mut route, Instant::now())?;
     route.state.routes.refresh_src_pkt_gate(route.src_media);
 
     let now = Instant::now();
@@ -767,6 +1349,7 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
     );
 
     assert!(route.observe_rid_ready(fallback_rid, false, now));
+    assert!(!route_repair_is_armed(&mut route, stream));
 
     route.assert_packet_gate(
         PacketLayerGate::Block,
@@ -797,6 +1380,7 @@ fn selected_rid_packet_gate_blocks_when_selected_rid_goes_stale() {
     assert!(route.observe_rid_ready(selected_rid, true, now + Duration::from_millis(20)));
 
     route.assert_packet_gate(PacketLayerGate::Rid(selected_rid), None);
+    Ok(())
 }
 
 #[test]
@@ -1176,7 +1760,7 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
             RouterMediaKind::Video,
             CodecName::Vp8,
             PayloadType::new(96),
-            90_000,
+            rtp::RTP_VIDEO_CLOCK_RATE_HZ,
         )],
         vec![],
         vec![
@@ -1248,6 +1832,94 @@ fn add_send_media_declares_one_ridless_downstream_stream_for_simulcast_source() 
 }
 
 #[test]
+fn add_send_media_declares_a_destination_local_primary_and_repair_pair() {
+    let source_session = test_source_session_key(752);
+    let consumer_session = test_consumer_session_key(752);
+    let source_mid = Mid::from("cam-up");
+    let consumer_mid = Mid::from("cam-down");
+    let primary_ssrc = Ssrc::from(72_201);
+    let repair_ssrc = Ssrc::from(72_202);
+    let mut state = PacketLoopState::default();
+    let src_media = prepare_source_session(&mut state, &source_session, source_mid, 71_201);
+    assert!(
+        bootstrap::ensure_session_rtc_state(
+            &mut state.users,
+            &consumer_session,
+            SocketAddr::from(([127, 0, 0, 1], 47_103)),
+            Bitrate::from_mbps(10),
+        )
+        .is_ok()
+    );
+    let primary_payload_type = PayloadType::new(96);
+    let consumer_rtp_parameters = RouterRtpParameters::new(
+        vec![
+            MediaFormat::new(
+                RouterMediaKind::Video,
+                CodecName::Vp8,
+                primary_payload_type,
+                rtp::RTP_VIDEO_CLOCK_RATE_HZ,
+            )
+            .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None)),
+            MediaFormat::new(
+                RouterMediaKind::Video,
+                CodecName::Rtx,
+                PayloadType::new(97),
+                rtp::RTP_VIDEO_CLOCK_RATE_HZ,
+            )
+            .with_setting(CodecSetting::RtxAssociation(primary_payload_type)),
+        ],
+        vec![],
+        vec![
+            StreamBinding::new()
+                .with_ssrc(*primary_ssrc)
+                .with_repair_ssrc(*repair_ssrc)
+                .with_payload_type(primary_payload_type),
+        ],
+    )
+    .with_mid(consumer_mid.to_string());
+    let source = TransportSourceKey::new(source_session, src_media);
+
+    assert!(
+        worker_add_send_media(
+            &mut state,
+            AddSendMediaRequest {
+                consumer_key: &consumer_session,
+                media_kind: MediaKind::Video,
+                source: &source,
+                remote_source_control: None,
+                consumer_rtp_parameters: &consumer_rtp_parameters,
+                active: true,
+            },
+        )
+        .is_ok()
+    );
+
+    let Some(consumer) = state.users.get_mut(&consumer_session) else {
+        panic!("consumer session should exist after setup");
+    };
+    let mut api = consumer.rtc.direct_api();
+    let Some(stream) = api.stream_tx_by_mid(consumer_mid, None) else {
+        panic!("consumer primary stream should be declared");
+    };
+    let destination_ssrc = stream.ssrc();
+    let Some(destination_repair_ssrc) = stream.rtx() else {
+        panic!("consumer repair stream should be declared");
+    };
+    assert_ne!(destination_ssrc, primary_ssrc);
+    assert_ne!(destination_ssrc, repair_ssrc);
+    assert_ne!(destination_repair_ssrc, primary_ssrc);
+    assert_ne!(destination_repair_ssrc, repair_ssrc);
+    assert_ne!(destination_repair_ssrc, destination_ssrc);
+    assert!(
+        state
+            .routes
+            .local_route(src_media)
+            .and_then(|route| route.destinations.first())
+            .is_some_and(|destination| destination.repair_enabled)
+    );
+}
+
+#[test]
 fn add_send_media_blocks_initial_video_until_a_decoder_refresh() {
     let source_session = test_source_session_key(751);
     let consumer_session = test_consumer_session_key(751);
@@ -1280,7 +1952,7 @@ fn add_send_media_blocks_initial_video_until_a_decoder_refresh() {
             RouterMediaKind::Video,
             CodecName::Vp8,
             PayloadType::new(96),
-            90_000,
+            rtp::RTP_VIDEO_CLOCK_RATE_HZ,
         )],
         vec![],
         vec![

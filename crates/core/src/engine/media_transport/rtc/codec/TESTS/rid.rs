@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use o_sfu_rfc::webrtc;
+use o_sfu_rfc::webrtc::sdp;
 use o_sfu_router::rtp::{MediaStream, StreamBinding};
 use str0m::media::{Mid, Rid};
 
@@ -187,9 +187,9 @@ fn answer_requires_accepted_simulcast_send_list() {
 fn answer_rejects_simulcast_alternatives() {
     let send = format!(
         "{pause}lo{alternative}backup{separator}hi",
-        pause = webrtc::sdp::simulcast::INITIAL_PAUSE_PREFIX,
-        alternative = webrtc::sdp::simulcast::ALTERNATIVE_SEPARATOR,
-        separator = webrtc::sdp::simulcast::STREAM_SEPARATOR,
+        pause = sdp::simulcast::INITIAL_PAUSE_PREFIX,
+        alternative = sdp::simulcast::ALTERNATIVE_SEPARATOR,
+        separator = sdp::simulcast::STREAM_SEPARATOR,
     );
     let answer = answer(
         "video_0",
@@ -230,10 +230,10 @@ fn answer_matches_exact_mid_section() -> Result<(), SimulcastAnswerError> {
             "a={rid}:right {send} {max_br}=222000\r\n",
             "a={simulcast}:{send} right\r\n"
         ),
-        rid = webrtc::sdp::attribute::RID,
-        simulcast = webrtc::sdp::attribute::SIMULCAST,
-        send = webrtc::sdp::rid::DIRECTION_SEND,
-        max_br = webrtc::sdp::rid_restriction::MAX_BITRATE,
+        rid = sdp::attribute::RID,
+        simulcast = sdp::attribute::SIMULCAST,
+        send = sdp::rid::DIRECTION_SEND,
+        max_br = sdp::rid_restriction::MAX_BITRATE,
     );
     let answer = SdpAnswer::from_sdp_string(&answer_sdp).map_err(|_error| SimulcastAnswerError)?;
     let rids = ParsedAnswerRids::parse(&answer_sdp, &answer);
@@ -265,7 +265,7 @@ fn answer_matches_exact_mid_section() -> Result<(), SimulcastAnswerError> {
 fn answer_rejects_invalid_rfc8852_ids() {
     let send = format!(
         "low-1{separator}hi_2{separator}hi2",
-        separator = webrtc::sdp::simulcast::STREAM_SEPARATOR,
+        separator = sdp::simulcast::STREAM_SEPARATOR,
     );
     let answer = answer(
         "video_0",
@@ -287,7 +287,7 @@ fn answer_rejects_invalid_rfc8852_ids() {
 fn answer_rejects_extra_simulcast_streams() {
     let send = format!(
         "lo{separator}mid{separator}hi",
-        separator = webrtc::sdp::simulcast::STREAM_SEPARATOR,
+        separator = sdp::simulcast::STREAM_SEPARATOR,
     );
     let answer = answer(
         "video_0",
@@ -366,16 +366,16 @@ fn answer(mid: &str, declarations: &[(&str, Option<&str>)], simulcast: Option<&s
         let _ = write!(
             answer,
             "a={attribute}:{rid} {send}{restriction}\r\n",
-            attribute = webrtc::sdp::attribute::RID,
-            send = webrtc::sdp::rid::DIRECTION_SEND,
+            attribute = sdp::attribute::RID,
+            send = sdp::rid::DIRECTION_SEND,
         );
     }
     if let Some(simulcast) = simulcast {
         let _ = write!(
             answer,
             "a={attribute}:{send} {simulcast}\r\n",
-            attribute = webrtc::sdp::attribute::SIMULCAST,
-            send = webrtc::sdp::rid::DIRECTION_SEND,
+            attribute = sdp::attribute::SIMULCAST,
+            send = sdp::rid::DIRECTION_SEND,
         );
     }
     answer

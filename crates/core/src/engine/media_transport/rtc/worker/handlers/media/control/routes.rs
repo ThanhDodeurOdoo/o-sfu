@@ -1,4 +1,4 @@
-use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
+use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, RtcpFeedbackKind};
 use str0m::media::{Mid, Pt};
 
 use super::{super::RouteSourceKind, selected_rid};
@@ -106,6 +106,7 @@ pub fn register_consumer_route(
         active,
     } = registration;
     let dest_payload_type = consumer_payload_type(consumer_rtp);
+    let repair_enabled = consumer_repair_enabled(consumer_rtp, dest_payload_type);
     let requires_decoder_refresh = codec::requires_decoder_refresh(consumer_rtp, dest_payload_type);
     let (packet_gate, pending_gate) = selected_rid::guarded_pkt_gate(
         requires_decoder_refresh,
@@ -120,6 +121,7 @@ pub fn register_consumer_route(
             dest_stream: consumer_stream,
             dest_mid: consumer_mid,
             dest_payload_type,
+            repair_enabled,
             active,
             requires_decoder_refresh,
             delivery_generation: 0,
@@ -146,6 +148,30 @@ pub fn consumer_payload_type(consumer_rtp: &RouterRtpParameters) -> Option<Pt> {
                 .find(|format| !format.codec().is_rtx())
                 .map(|format| Pt::from(format.payload_type()))
         })
+}
+
+pub(in crate::engine::media_transport::rtc) fn consumer_repair_enabled(
+    consumer_rtp: &RouterRtpParameters,
+    primary_payload_type: Option<Pt>,
+) -> bool {
+    let Some(primary_payload_type) = primary_payload_type else {
+        return false;
+    };
+    let Some(primary) = consumer_rtp.formats().find(|format| {
+        !format.codec().is_rtx() && Pt::from(format.payload_type()) == primary_payload_type
+    }) else {
+        return false;
+    };
+    // Repair is usable only when Generic NACK was negotiated for the primary
+    // format and an RTX format names that primary payload type through `apt`.
+    // https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
+    primary.rtcp_feedback().any(|feedback| {
+        feedback.kind() == &RtcpFeedbackKind::Nack && feedback.parameter().is_none()
+    }) && consumer_rtp.formats().any(|format| {
+        format.codec().is_rtx()
+            && format.rtx_associated_payload_type_id() == Some(primary.payload_type_id())
+    })
 }
 
 pub(super) fn set_remote_src_pkt_gate(
@@ -239,7 +265,7 @@ pub fn remove_consumer_route(
             Some(moved.dst_idx),
         );
     }
-    release_dst_stream(state, &removed.destination);
+    release_destination_stream(state, &removed.destination);
 }
 
 pub fn remove_source_route(state: &mut PacketLoopState, src_media: TransportMediaId) {
@@ -254,15 +280,30 @@ pub fn remove_source_route(state: &mut PacketLoopState, src_media: TransportMedi
             src_media,
             None,
         );
-        release_dst_stream(state, &destination);
+        release_destination_stream(state, &destination);
     }
 }
 
-fn release_dst_stream(state: &mut PacketLoopState, destination: &MediaRouteDestination) {
+fn release_destination_stream(state: &mut PacketLoopState, destination: &MediaRouteDestination) {
     if let Some(session_state) = state.users.get_mut(&destination.dest_session) {
+        session_state.invalidate_rtx_stream(destination.dest_stream);
         session_state
             .consumer_streams
             .release(destination.dest_stream);
+    }
+}
+
+pub(super) fn invalidate_source_repair(state: &mut PacketLoopState, src_media: TransportMediaId) {
+    let (routes, users) = (&state.routes, &mut state.users);
+    let Some(route) = routes.local_route(src_media) else {
+        return;
+    };
+    for destination in &route.destinations {
+        if destination.repair_enabled
+            && let Some(session_state) = users.get_mut(&destination.dest_session)
+        {
+            session_state.invalidate_rtx_stream(destination.dest_stream);
+        }
     }
 }
 
@@ -273,7 +314,16 @@ pub(super) fn worker_apply_producer_activity(
 ) -> Result<bool, TransportAdapterError> {
     let src_media = source.transport_media_id();
     ensure_local_producer_mid(state, source.session_key(), src_media)?;
-    state.routes.apply_source_activity(src_media, update)
+    let active = update.activity().is_active();
+    let activity_changed = state.routes.source_is_active(src_media) != active;
+    let accepted = state.routes.apply_source_activity(src_media, update)?;
+    if accepted {
+        state.apply_producer_nack_policy(source.session_key(), src_media);
+    }
+    if accepted && activity_changed {
+        invalidate_source_repair(state, src_media);
+    }
+    Ok(accepted)
 }
 
 pub(super) fn worker_set_remote_source_activity(
@@ -287,10 +337,13 @@ pub(super) fn worker_set_remote_source_activity(
         Some(_) => return Err(TransportAdapterError::InvalidInput),
         None => return Ok(()),
     }
-    state
-        .routes
-        .apply_source_activity(src_media, update)
-        .map(|_| ())
+    let activity_changed =
+        state.routes.source_is_active(src_media) != update.activity().is_active();
+    let accepted = state.routes.apply_source_activity(src_media, update)?;
+    if accepted && activity_changed {
+        invalidate_source_repair(state, src_media);
+    }
+    Ok(())
 }
 
 pub(super) fn worker_set_consumer_active(
@@ -363,7 +416,7 @@ fn update_consumer_route(
     let dst_idx = state
         .consumer_dst_idx(consumer_key, *mid, consumer_media, src_media)
         .ok_or(TransportAdapterError::TransportUnavailable)?;
-    match mutation {
+    let update = match mutation {
         ConsumerRouteMutation::Active(active) => state.routes.set_consumer_active(
             src_media,
             dst_idx,
@@ -378,7 +431,18 @@ fn update_consumer_route(
             consumer_media,
             packet_gate,
         ),
+    }?;
+    if update.repair_delivery_changed {
+        let (routes, users) = (&state.routes, &mut state.users);
+        if let Some(destination) = routes
+            .local_route(src_media)
+            .and_then(|route| route.destinations.get(dst_idx))
+            && let Some(session_state) = users.get_mut(consumer_key)
+        {
+            session_state.invalidate_rtx_stream(destination.dest_stream);
+        }
     }
+    Ok(update.route_changed)
 }
 /// returns the MID for a local producer after enforcing source ownership
 ///

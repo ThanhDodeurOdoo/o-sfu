@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use o_sfu_rfc::rtp::CodecName;
+use o_sfu_rfc::rtp::{CodecName, RTP_SEQUENCE_NUMBER_MODULUS};
 use o_sfu_router::{
     MediaKind as RouterMediaKind,
     rtp::{MediaFormat, MediaStream as RouterRtpParameters, PayloadType, StreamBinding},
@@ -227,9 +227,12 @@ fn forwarded_packet_relay_clone_preserves_source_facts() {
             0x68, 0x01,
         ],
     );
+    let post_wrap_sequence = u64::from(RTP_SEQUENCE_NUMBER_MODULUS) + 1;
     if let ForwardedPacketData::RelayRtp(rtp) = &mut source_packet.data {
         rtp.header.ext_vals.rid = Some(Rid::from("hi"));
+        rtp.sequence_number = post_wrap_sequence.into();
     }
+    source_packet.was_repair = true;
     let source_facts = source_packet.resolve_facts(&source_state);
     assert!(source_facts.is_some_and(|facts| facts.codec.decoder_refresh()));
 
@@ -250,6 +253,12 @@ fn forwarded_packet_relay_clone_preserves_source_facts() {
     assert_eq!(relay_facts.voice_activity, source_facts.voice_activity);
     assert_eq!(relay_facts.audio_level, source_facts.audio_level);
     assert!(relay_facts.codec.decoder_refresh());
+    assert!(relay_packet.was_repair);
+    assert!(matches!(
+        relay_packet.data,
+        ForwardedPacketData::RelayRtp(ref rtp)
+            if rtp.sequence_number == post_wrap_sequence.into()
+    ));
     let source_codec = project_codec_packet(&source_facts.codec);
     assert_ne!(source_codec, codec::ProjectedPacket::default());
     assert_eq!(project_codec_packet(&relay_facts.codec), source_codec);

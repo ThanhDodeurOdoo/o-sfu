@@ -1,6 +1,17 @@
+use std::num::{NonZeroU64, NonZeroUsize};
+
+use o_sfu_rfc::webrtc::sdp;
+
 use super::support::*;
-use crate::prelude::{
-    MediaSession, NegotiationOffer, SessionError, SfuCore, SourceDeactivateIntent,
+use crate::{
+    engine::{
+        media_transport::TransportSourceKey,
+        room::{RoomRuntimePolicy, media_graph::ConsumerRouteState},
+    },
+    prelude::{
+        MediaSession, NegotiationOffer, RoomWorkerPolicy, RuntimeFeatureFlags, SessionError,
+        SfuCore, SourceDeactivateIntent,
+    },
 };
 
 #[tokio::test]
@@ -119,6 +130,95 @@ async fn queued_publish_after_initial_offer_creates_a_follow_up_offer() {
             .is_none()
     );
     fixture.assert_committed(video, 1).await;
+}
+
+#[tokio::test]
+async fn inactive_consumer_answer_releases_room_route_for_later_retry() {
+    let ConsumerAnswerFixture {
+        room,
+        media_transport,
+        publisher_user_id,
+        subscriber_user_id,
+        subscriber_session_key,
+        source,
+        source_media_id,
+        declined_media_id,
+        declined_mid,
+        mut subscriber,
+        mut subscriber_remote,
+        mut subscriber_rx,
+    } = Box::pin(build_consumer_answer_fixture()).await;
+    let inspect = room.test_api().inspect();
+    let transport = media_transport.test_api();
+    assert_eq!(transport.source_relay_target_count(&source).await, 1);
+    assert_eq!(router_consumer_dependency_count(&room).await, 1);
+
+    let offer = subscriber
+        .renegotiate()
+        .await
+        .expect("subscriber renegotiation should succeed")
+        .expect("consumer setup should stage an offer");
+    let answer = remote_answer_sdp(&mut subscriber_remote, &offer.sdp);
+    let inactive_answer = inactive_answer_for_mid(&answer, declined_mid);
+    drain_remote_track_snapshots(&mut subscriber_rx);
+    let offer = subscriber
+        .answer(&inactive_answer)
+        .await
+        .expect("inactive consumer answer should apply");
+    assert!(offer.is_none(), "declined consumer must not be restaged");
+    let snapshots = drain_remote_track_snapshots(&mut subscriber_rx);
+    let [snapshot] = snapshots.as_slice() else {
+        panic!("decline should emit one authoritative track snapshot");
+    };
+    assert!(!snapshot.requires_negotiation);
+    assert!(snapshot.tracks.is_empty());
+    assert_eq!(inspect.consumer_count().await, 0);
+    let route_state = inspect
+        .consumer_route_state(
+            &subscriber_user_id,
+            &publisher_user_id,
+            &stream_id_for_source(TestSourceKind::ScalableVideo),
+        )
+        .await;
+    assert_eq!(route_state, Some(ConsumerRouteState::Absent));
+    let media_mid = media_transport
+        .transport_media_mid(&subscriber_session_key, declined_media_id)
+        .await;
+    assert_eq!(media_mid, None);
+    let tx_pair = transport
+        .session_stream_tx_pair(&subscriber_session_key, declined_mid)
+        .await;
+    assert_eq!(tx_pair, None);
+    assert_eq!(transport.source_relay_target_count(&source).await, 0);
+    assert_eq!(router_consumer_dependency_count(&room).await, 0);
+
+    assert!(
+        room.test_api()
+            .lifecycle()
+            .refresh_session(&subscriber_user_id, &media_transport)
+            .await
+    );
+    let (replacement_media_id, replacement_mid) =
+        consumer_destination_identity(&media_transport, source_media_id, &subscriber_user_id).await;
+    assert_ne!(replacement_media_id, declined_media_id);
+    assert_eq!(transport.source_relay_target_count(&source).await, 1);
+    assert_eq!(router_consumer_dependency_count(&room).await, 1);
+    let offer = subscriber
+        .renegotiate()
+        .await
+        .expect("replacement renegotiation should succeed")
+        .expect("later readiness should stage a replacement offer");
+    let answer = remote_answer_sdp(&mut subscriber_remote, &offer.sdp);
+    let offer = subscriber
+        .answer(&answer)
+        .await
+        .expect("replacement consumer answer should apply");
+    assert!(offer.is_none());
+    assert_eq!(inspect.consumer_count().await, 1);
+    let tx_pair = transport
+        .session_stream_tx_pair(&subscriber_session_key, replacement_mid)
+        .await;
+    assert!(tx_pair.is_some());
 }
 
 #[tokio::test]
@@ -353,6 +453,21 @@ struct PublisherFixture {
     remote: Rtc,
 }
 
+struct ConsumerAnswerFixture {
+    room: Arc<Room>,
+    media_transport: MediaTransport,
+    publisher_user_id: UserId,
+    subscriber_user_id: UserId,
+    subscriber_session_key: TransportSessionKey,
+    source: TransportSourceKey,
+    source_media_id: TransportMediaId,
+    declined_media_id: TransportMediaId,
+    declined_mid: Mid,
+    subscriber: MediaSession,
+    subscriber_remote: Rtc,
+    subscriber_rx: UserOutboundReceiver,
+}
+
 impl PublisherFixture {
     async fn assert_staged(&self, source: TestSourceKind, expected: bool) {
         assert_eq!(
@@ -378,16 +493,25 @@ impl PublisherFixture {
 
 async fn build_publisher_fixture(port: u16) -> PublisherFixture {
     let manager = Arc::new(RoomManager::for_test());
+    build_publisher_fixture_with(
+        port,
+        manager,
+        build_real_rtc_media_transport(),
+        "issuer-sfu-core",
+    )
+    .await
+}
+
+async fn build_publisher_fixture_with(
+    port: u16,
+    manager: Arc<RoomManager>,
+    media_transport: MediaTransport,
+    issuer: &str,
+) -> PublisherFixture {
     let room = manager
-        .serve_room(
-            "issuer-sfu-core",
-            TEST_ROOM_KEY,
-            &RoomConfig::default(),
-            None,
-        )
+        .serve_room(issuer, TEST_ROOM_KEY, &RoomConfig::default(), None)
         .await
         .expect("test room should be served");
-    let media_transport = build_real_rtc_media_transport();
     let core = SfuCore::new(media_transport.clone(), Arc::clone(&manager));
     let publisher_user_id = UserId::Integer(1);
     let session = core
@@ -401,6 +525,107 @@ async fn build_publisher_fixture(port: u16) -> PublisherFixture {
         user_id: publisher_user_id,
         session,
         remote: build_remote_rtc(port),
+    }
+}
+
+async fn build_consumer_answer_fixture() -> ConsumerAnswerFixture {
+    let manager = Arc::new(RoomManager::for_test_with_runtime_policy(
+        RoomRuntimePolicy::new(
+            RoomAdmissionPolicy::new(100),
+            RuntimeFeatureFlags::default(),
+            test_client_rtp_capabilities(),
+        )
+        .with_room_worker_policy(RoomWorkerPolicy::new(
+            NonZeroUsize::new(2).expect("test router cap should be positive"),
+            NonZeroU64::new(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS)
+                .expect("default delay threshold should be positive"),
+        )),
+    ));
+    let media_transport = real_adapter();
+    media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(vec![Some(0); 4]);
+    let mut publisher = build_publisher_fixture_with(
+        55_230,
+        manager,
+        media_transport,
+        "issuer-sfu-core-consumer-answer",
+    )
+    .await;
+    establish_session(&mut publisher.session, &mut publisher.remote).await;
+    let publisher_session_key = publisher
+        .room
+        .transport_user_key(&publisher.user_id, publisher.session.connection_id())
+        .await;
+    let mut delays = vec![Some(0); 4];
+    delays[publisher_session_key.media_worker_id().as_usize()] =
+        Some(RoomWorkerPolicy::DEFAULT_PACKET_LOOP_DELAY_THRESHOLD_MS);
+    publisher
+        .media_transport
+        .test_api()
+        .set_packet_loop_delays_ms(delays);
+
+    let subscriber_user_id = UserId::Integer(2);
+    let (subscriber_sender, subscriber_rx) = test_sender();
+    let mut subscriber = publisher
+        .core
+        .admit_user(
+            publisher.room.uuid(),
+            JoinUserRequest {
+                user_id: subscriber_user_id.clone(),
+                label: None,
+                permissions: UserPermissions::default(),
+                sender: subscriber_sender,
+            },
+        )
+        .await
+        .expect("subscriber should join through core facade");
+    let mut subscriber_remote = build_remote_rtc(55_231);
+    establish_session(&mut subscriber, &mut subscriber_remote).await;
+    let subscriber_session_key = publisher
+        .room
+        .transport_user_key(&subscriber_user_id, subscriber.connection_id())
+        .await;
+    assert_ne!(
+        publisher_session_key.media_worker_id(),
+        subscriber_session_key.media_worker_id()
+    );
+    assert_eq!(router_consumer_dependency_count(&publisher.room).await, 0);
+    publish_source(&mut publisher, TestSourceKind::ScalableVideo).await;
+    let source_media_id = publisher
+        .room
+        .test_api()
+        .inspect()
+        .first_published_transport_media_id()
+        .await
+        .expect("published source should expose its transport media id");
+    let source = TransportSourceKey::new(publisher_session_key.clone(), source_media_id);
+    let (declined_media_id, declined_mid) = consumer_destination_identity(
+        &publisher.media_transport,
+        source_media_id,
+        &subscriber_user_id,
+    )
+    .await;
+    let PublisherFixture {
+        room,
+        media_transport,
+        user_id: publisher_user_id,
+        ..
+    } = publisher;
+
+    ConsumerAnswerFixture {
+        room,
+        media_transport,
+        publisher_user_id,
+        subscriber_user_id,
+        subscriber_session_key,
+        source,
+        source_media_id,
+        declined_media_id,
+        declined_mid,
+        subscriber,
+        subscriber_remote,
+        subscriber_rx,
     }
 }
 
@@ -454,6 +679,36 @@ async fn publish_source(fixture: &mut PublisherFixture, source: TestSourceKind) 
             .expect("publish answer should apply")
             .is_none()
     );
+}
+
+async fn router_consumer_dependency_count(room: &Room) -> usize {
+    room.state
+        .read()
+        .await
+        .topology
+        .router()
+        .consumer_dependency_count()
+}
+
+fn inactive_answer_for_mid(answer: &str, mid: Mid) -> String {
+    let marker = format!("{}{}{}{mid}", sdp::ATTR, sdp::attribute::MID, sdp::ATTR_SEP);
+    let media_boundary = format!("{}{}", sdp::CRLF, sdp::MEDIA);
+    let marker_start = answer
+        .find(&marker)
+        .expect("consumer answer should contain its MID");
+    let section_start = answer[..marker_start]
+        .rfind(&media_boundary)
+        .map_or(0, |index| index + sdp::CRLF.len());
+    let section_end = answer[marker_start..]
+        .find(&media_boundary)
+        .map_or(answer.len(), |offset| {
+            marker_start + offset + sdp::CRLF.len()
+        });
+    let section = &answer[section_start..section_end];
+    let recv_only = format!("{}{}", sdp::ATTR, sdp::direction::RECV_ONLY);
+    let inactive = format!("{}{}", sdp::ATTR, sdp::direction::INACTIVE);
+    assert!(section.contains(&recv_only));
+    answer.replacen(section, &section.replacen(&recv_only, &inactive, 1), 1)
 }
 
 async fn assert_invalid_answer_is_rejected(session: &mut MediaSession) {

@@ -8,6 +8,12 @@
 //! - RTP stream ID header extensions: <https://www.rfc-editor.org/rfc/rfc8852>
 //! - SDP simulcast signaling: <https://www.rfc-editor.org/rfc/rfc8853>
 //! - RTCP multiplexing: <https://www.rfc-editor.org/rfc/rfc5761>
+//! - WebRTC datagram multiplexing: <https://www.rfc-editor.org/rfc/rfc7983>
+//! - RTCP feedback SDP signaling: <https://www.rfc-editor.org/rfc/rfc4585>
+//! - RTP retransmission SDP signaling: <https://www.rfc-editor.org/rfc/rfc4588>
+//! - SDP source attributes: <https://www.rfc-editor.org/rfc/rfc5576>
+//! - SDP grammar: <https://www.rfc-editor.org/rfc/rfc8866>
+//! - SDP offer/answer: <https://www.rfc-editor.org/rfc/rfc3264>
 //! - SDP `setup` roles for connection-oriented media: <https://www.rfc-editor.org/rfc/rfc4145>
 //! - DTLS-SRTP offer/answer usage of `setup`: <https://www.rfc-editor.org/rfc/rfc5763>
 //! - Video frame marking RTP header extension: <https://www.rfc-editor.org/rfc/rfc9626>
@@ -15,8 +21,25 @@
 
 use std::fmt;
 
+const DTLS_MUX_FIRST_OCTET_START: u8 = 20;
+const DTLS_MUX_FIRST_OCTET_END: u8 = 63;
+
+/// Returns whether a datagram first octet selects DTLS in WebRTC multiplexing.
+///
+/// Reference: <https://www.rfc-editor.org/rfc/rfc7983.html#section-5>
+#[must_use]
+pub const fn is_dtls_mux_packet(first_octet: u8) -> bool {
+    first_octet >= DTLS_MUX_FIRST_OCTET_START && first_octet <= DTLS_MUX_FIRST_OCTET_END
+}
+
 /// ICE portocol registries used by WebRTC signaling.
 pub mod ice {
+    /// Separator between the peer and sender username fragments in a
+    /// connectivity-check credential.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8445.html#section-7.2.2>
+    pub const USERNAME_FRAGMENT_SEPARATOR: char = ':';
+
     /// ICE component IDs for RTP and RTCP.
     ///
     /// Reference: RFC 8445 section 5.1.1.
@@ -250,12 +273,73 @@ pub mod rtcp_feedback {
 }
 
 pub mod sdp {
-    pub const ATTRIBUTE_PREFIX: &str = "a=";
-    /// Session-level end-of-candidates indication.
+    /// Carriage-return line-feed SDP line ending.
     ///
-    /// Reference: RFC 8840 section 8.
-    pub const END_OF_CANDIDATES_LINE: &str = "a=end-of-candidates\r\n";
-    pub const MEDIA_PREFIX: &str = "m=";
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5>
+    pub const CRLF: &str = "\r\n";
+
+    /// Carriage-return octet stripped by line-oriented SDP parsers.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5>
+    pub const CR: char = '\r';
+
+    /// Line-feed octet used to split SDP text while preserving line endings.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5>
+    pub const LF: char = '\n';
+
+    /// ASCII space separating fields within an SDP value.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5>
+    pub const SP: char = ' ';
+
+    /// Attribute field prefix.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5.13>
+    pub const ATTR: &str = "a=";
+
+    /// Separator between an SDP attribute name and value.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5.13>
+    pub const ATTR_SEP: char = ':';
+
+    /// Session-level end-of-candidates line.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8840.html#section-8>
+    pub const EOC_LINE: &str = "a=end-of-candidates\r\n";
+    /// Media description field prefix.
+    ///
+    /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5.14>
+    pub const MEDIA: &str = "m=";
+
+    /// Media description grammar tokens.
+    pub mod media {
+        /// Separator between an SDP media port and port count.
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-5.14>
+        pub const PORT_SEP: char = '/';
+
+        /// Port value that rejects a media description in offer/answer.
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc3264.html#section-6>
+        pub const ZERO_PORT: &str = "0";
+    }
+
+    /// `a=extmap` grammar tokens.
+    pub mod extmap {
+        /// Separator between an extension ID and direction.
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8285.html#section-5>
+        pub const DIR_SEP: char = '/';
+    }
+
+    /// `a=rtpmap` grammar tokens.
+    pub mod rtpmap {
+        /// Separator between encoding name, clock rate and encoding parameters.
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-6.6>
+        pub const ENC_SEP: char = '/';
+    }
 
     pub mod group_semantics {
         /// `a=group:BUNDLE ...`
@@ -264,21 +348,38 @@ pub mod sdp {
         pub const BUNDLE: &str = "BUNDLE";
     }
 
+    pub mod ssrc_group_semantics {
+        /// Flow Identification semantics for `a=ssrc-group`.
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc5576.html#section-4.2>
+        pub const FID: &str = "FID";
+    }
+
     pub mod attribute {
         /// `a=extmap:<id> <uri>`
         ///
         /// Reference: RFC 8285 section 5.
         pub const EXTMAP: &str = "extmap";
 
+        /// `a=fmtp:<format> <format-specific-parameters>`
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-6.15>
+        pub const FMTP: &str = "fmtp";
+
         /// `a=rtcp-fb:<pt> <feedback-type> [<feedback-parameter>]`
         ///
-        /// Reference: RFC 4585 section 4.2.
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2>
         pub const RTCP_FB: &str = "rtcp-fb";
 
         /// `a=rtcp-mux`
         ///
         /// Reference: RFC 5761.
         pub const RTCP_MUX: &str = "rtcp-mux";
+
+        /// `a=rtpmap:<payload-type> <encoding-name>/<clock-rate>`
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-6.6>
+        pub const RTPMAP: &str = "rtpmap";
 
         /// `a=rid:<rid-id> <direction> ...`
         ///
@@ -289,6 +390,16 @@ pub mod sdp {
         ///
         /// Reference: RFC 8853 section 5.1.
         pub const SIMULCAST: &str = "simulcast";
+
+        /// `a=ssrc-group:<semantics> <ssrc-id> ...`
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc5576.html#section-4.2>
+        pub const SSRC_GROUP: &str = "ssrc-group";
+
+        /// `a=ssrc:<ssrc-id> <attribute>`
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc5576.html#section-4.1>
+        pub const SSRC: &str = "ssrc";
 
         /// `a=setup:<role>`
         ///
@@ -328,6 +439,16 @@ pub mod sdp {
     ///
     /// Reference: RFC 8851 section 12.2.
     pub mod rid_restriction {
+        /// Separator between RID restrictions.
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8851.html#section-4>
+        pub const PARAMETER_SEPARATOR: char = ';';
+
+        /// Separator between a RID restriction name and value.
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8851.html#section-4>
+        pub const NAME_VALUE_SEPARATOR: char = '=';
+
         pub const PAYLOAD_TYPES: &str = "pt";
         pub const MAX_WIDTH: &str = "max-width";
         pub const MAX_HEIGHT: &str = "max-height";
@@ -395,10 +516,25 @@ pub mod sdp {
     }
 
     pub mod direction {
+        /// `a=inactive`
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-6.7.4>
+        pub const INACTIVE: &str = "inactive";
+
+        /// `a=recvonly`
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-6.7.1>
+        pub const RECV_ONLY: &str = "recvonly";
+
         /// `a=sendrecv`
         ///
-        /// Reference: RFC 8866 section 6.7.
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-6.7.2>
         pub const SEND_RECV: &str = "sendrecv";
+
+        /// `a=sendonly`
+        ///
+        /// Reference: <https://www.rfc-editor.org/rfc/rfc8866.html#section-6.7.3>
+        pub const SEND_ONLY: &str = "sendonly";
     }
 }
 

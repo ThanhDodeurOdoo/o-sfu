@@ -54,6 +54,7 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
                 .with_payload_type(pt(101))
                 .with_parameter(fmtp::H264_PACKETIZATION_MODE, "1")
                 .with_parameter(fmtp::H264_PROFILE_LEVEL_ID, "4d0032")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),
             MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
@@ -73,6 +74,7 @@ fn derive_consumable_parameters_remap_primary_payloads_rtx_apt_and_bindings() {
             MediaFormat::new(MediaKind::Video, "H264", pt(111), 90_000)
                 .with_parameter(fmtp::H264_PACKETIZATION_MODE, "1")
                 .with_parameter(fmtp::H264_PROFILE_LEVEL_ID, "4d0032")
+                .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::NackPli, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::GoogRemb, None))
                 .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::TransportCc, None)),

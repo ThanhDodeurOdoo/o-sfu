@@ -3,7 +3,10 @@
     reason = "route graph tests fail loudly when fixed route reservations are invalid"
 )]
 
-use o_sfu_router::{MediaKind, ProducerId, RouterId, topology::RoutedProducerId};
+use o_sfu_router::{
+    ConsumerId, MediaKind, ProducerId, RouterId,
+    topology::{RoutedConsumerId, RoutedProducerId},
+};
 
 use super::{
     ConsumerSourceSelection, SubscriptionKey,
@@ -67,6 +70,14 @@ fn route(target: &ConsumerSetupTarget, media: u64) -> TransportConsumerRoute {
     target.transport_consumer_route(TransportMediaId::new(media))
 }
 
+fn routed_consumer(target: &ConsumerSetupTarget, consumer: u64) -> RoutedConsumerId {
+    RoutedConsumerId::for_test(
+        target.routed.router_id(),
+        target.session.connection_id(),
+        ConsumerId(consumer),
+    )
+}
+
 fn reserve(
     graph: &mut RouteGraph,
     key: &SubscriptionKey,
@@ -93,7 +104,7 @@ fn commit_route(
             route.clone(),
             String::from("mid"),
             selection,
-            || true,
+            || Some(routed_consumer(target, media)),
         )
         .expect("current reservation should commit");
     route
@@ -176,7 +187,7 @@ fn receiver_reset_rejects_stale_reservation_for_same_publication() {
                 ConsumerSourceSelection::open(true),
                 || {
                     accepted = true;
-                    true
+                    Some(routed_consumer(&target, 100))
                 },
             )
             .is_err()
@@ -313,7 +324,7 @@ fn stale_source_or_route_cannot_commit_after_reattach() {
                 ConsumerSourceSelection::open(true),
                 || {
                     router_called = true;
-                    true
+                    Some(routed_consumer(&old_target, 100))
                 },
             )
             .is_err()
@@ -438,7 +449,7 @@ fn rejected_route_preserves_selection_and_shared_relay() {
                     route(&active_target, 101),
                     String::from("active"),
                     ConsumerSourceSelection::open(true),
-                    || false,
+                    || None,
                 )
                 .expect_err("router rejection should release the active relay owner")
         ),

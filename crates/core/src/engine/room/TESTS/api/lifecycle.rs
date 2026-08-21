@@ -146,7 +146,7 @@ impl RoomTestLifecycle<'_> {
         };
         self.room
             .user_operation(user_id, connection_id, media_transport)
-            .apply_session_refreshed()
+            .apply_session_refreshed(&[])
             .await
             .is_some()
     }

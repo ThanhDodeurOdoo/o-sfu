@@ -15,6 +15,8 @@
 
 use std::{mem::take, sync::Arc, time::Instant};
 
+#[cfg(test)]
+use str0m::media::Pt;
 use str0m::{
     media::{ExtensionValues, Mid, Rid},
     rtp::{RtpHeader, RtpPacket, SeqNo, Ssrc},
@@ -62,6 +64,9 @@ pub struct ForwardedPacket {
     /// relayed packets already passed through their origin worker, so target
     /// workers must not send them back into origin sinks or second-hop relays
     visits_origin_sinks: bool,
+    /// whether str0m authenticated and normalized this RFC 4588 repair packet
+    /// <https://www.rfc-editor.org/rfc/rfc4588.html#section-4>
+    was_repair: bool,
     /// packet timestamp used for bitrate, activity and egress metrics
     received_at: Instant,
     /// source payload bytes shared by relay and local fanout
@@ -142,6 +147,7 @@ impl ForwardedPacket {
     pub(super) fn from_rtp_packet(
         source_session_handle: SessionHandle,
         mut rtp_packet: RtpPacket,
+        was_repair: bool,
     ) -> Self {
         Self {
             source: ForwardedPacketSource::Local(source_session_handle),
@@ -149,6 +155,7 @@ impl ForwardedPacket {
             resolved_source_rid: None,
             facts: None,
             visits_origin_sinks: true,
+            was_repair,
             received_at: rtp_packet.timestamp,
             payload: take(&mut rtp_packet.payload),
             data: ForwardedPacketData::Str0mRtp(ForwardedRtpData { rtp_packet }),
@@ -185,6 +192,19 @@ impl ForwardedPacket {
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         self.payload.as_ref()
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(super) fn repair_identity(&self) -> Option<(Pt, Ssrc, SeqNo)> {
+        let sequence_number = match &self.data {
+            ForwardedPacketData::Str0mRtp(data) => data.rtp_packet.seq_no,
+            ForwardedPacketData::RelayRtp(data) => data.sequence_number,
+        };
+        self.was_repair.then(|| {
+            let header = self.rtp_header();
+            (header.payload_type, header.ssrc, sequence_number)
+        })
     }
 
     /// Caches one source view for local and relay fanout.
@@ -277,6 +297,7 @@ impl ForwardedPacket {
             resolved_source_rid: self.resolved_source_rid,
             facts: self.facts,
             visits_origin_sinks: false,
+            was_repair: self.was_repair,
             received_at: self.received_at,
             payload: Arc::clone(&self.payload),
             data: ForwardedPacketData::RelayRtp(ForwardedRelayRtpData {
@@ -327,7 +348,7 @@ impl ForwardedPacket {
         let payload = &self.payload;
         match &self.data {
             ForwardedPacketData::Str0mRtp(rtp_data) => {
-                LocalForwardedRtp::new(&rtp_data.rtp_packet, payload)
+                LocalForwardedRtp::new(&rtp_data.rtp_packet, payload, self.was_repair)
             }
             ForwardedPacketData::RelayRtp(rtp_data) => {
                 let header = &rtp_data.header;
@@ -336,6 +357,7 @@ impl ForwardedPacket {
                     rtp_data.sequence_number,
                     self.received_at,
                     payload,
+                    self.was_repair,
                 )
             }
         }

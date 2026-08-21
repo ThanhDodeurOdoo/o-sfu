@@ -49,6 +49,12 @@ pub(super) struct PendingFirstVideoKeyframe {
     pub(super) observed_at: Instant,
 }
 
+pub(super) struct SessionDrainCheckpoint {
+    transmits: usize,
+    packets: usize,
+    keyframe_requests: usize,
+}
+
 /// per-worker scratch buffers reused across packet-loop turns
 ///
 /// # hot-path contract
@@ -128,6 +134,22 @@ impl PacketLoopBuffers {
             destination,
             contents,
         });
+    }
+
+    #[must_use]
+    pub(super) fn checkpoint_session_drain(&self) -> SessionDrainCheckpoint {
+        SessionDrainCheckpoint {
+            transmits: self.pending_transmits.len(),
+            packets: self.pending_packets.len(),
+            keyframe_requests: self.pending_keyframe_requests.len(),
+        }
+    }
+
+    pub(super) fn rollback_session_drain(&mut self, checkpoint: &SessionDrainCheckpoint) {
+        self.pending_transmits.truncate(checkpoint.transmits);
+        self.pending_packets.truncate(checkpoint.packets);
+        self.pending_keyframe_requests
+            .truncate(checkpoint.keyframe_requests);
     }
 
     pub(super) fn pending_transmits_mut(&mut self) -> impl Iterator<Item = &mut PendingTransmit> {

@@ -3,14 +3,16 @@ use std::sync::{Arc, Mutex};
 use super::{
     counter::{MetricLabel, PaddedCounter, PaddedCounterFamily},
     labels::{
-        RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome,
-        RtcRelayEnqueueResult, RtcRemoteControlDropKind, RtcRemotePacketGateConvergence,
-        RtcRouteControlOutcome,
+        RtcDatagramDropReason, RtcDatagramRoutePath, RtcKeyframeRequestOutcome, RtcNackDirection,
+        RtcOutputBudgetLimit, RtcRelayEnqueueResult, RtcRemoteControlDropKind,
+        RtcRemotePacketGateConvergence, RtcRouteControlOutcome,
     },
 };
 
 const RTC_DATAGRAM_ROUTE_PATH_COUNT: usize = <RtcDatagramRoutePath as MetricLabel>::COUNT;
 const RTC_DATAGRAM_DROP_REASON_COUNT: usize = <RtcDatagramDropReason as MetricLabel>::COUNT;
+const RTC_NACK_DIRECTION_COUNT: usize = <RtcNackDirection as MetricLabel>::COUNT;
+const RTC_OUTPUT_BUDGET_LIMIT_COUNT: usize = <RtcOutputBudgetLimit as MetricLabel>::COUNT;
 const RTC_ROUTE_CONTROL_OUTCOME_COUNT: usize = <RtcRouteControlOutcome as MetricLabel>::COUNT;
 const RTC_KEYFRAME_REQUEST_OUTCOME_COUNT: usize = <RtcKeyframeRequestOutcome as MetricLabel>::COUNT;
 const RTC_RELAY_ENQUEUE_RESULT_COUNT: usize = <RtcRelayEnqueueResult as MetricLabel>::COUNT;
@@ -29,6 +31,12 @@ pub struct RtcMetricsRecorder {
     datagram_drops: PaddedCounterFamily<RtcDatagramDropReason>,
     datagram_fallback_scans: PaddedCounter,
     datagram_scan_users: PaddedCounter,
+    nacks: PaddedCounterFamily<RtcNackDirection>,
+    rtx_packets_received_from_publisher: PaddedCounter,
+    rtx_payload_bytes_received_from_publisher: PaddedCounter,
+    rtcp_ingress_budget_drops: PaddedCounter,
+    output_budget_exhaustions: PaddedCounterFamily<RtcOutputBudgetLimit>,
+    output_budget_session_closes: PaddedCounter,
     route_control: PaddedCounterFamily<RtcRouteControlOutcome>,
     keyframe_requests: PaddedCounterFamily<RtcKeyframeRequestOutcome>,
     relay_enqueues: PaddedCounterFamily<RtcRelayEnqueueResult>,
@@ -53,6 +61,28 @@ impl RtcMetricsRecorder {
     pub fn record_rtc_datagram_fallback_scan(&self, examined_sessions: usize) {
         self.datagram_fallback_scans.increment();
         self.datagram_scan_users.add(examined_sessions);
+    }
+
+    pub fn record_rtc_nacks(&self, direction: RtcNackDirection, count: u64) {
+        self.nacks.add_u64(direction, count);
+    }
+
+    pub fn record_rtc_rtx_received_from_publisher(&self, payload_bytes: usize) {
+        self.rtx_packets_received_from_publisher.increment();
+        self.rtx_payload_bytes_received_from_publisher
+            .add(payload_bytes);
+    }
+
+    pub fn record_rtc_rtcp_ingress_budget_drop(&self) {
+        self.rtcp_ingress_budget_drops.increment();
+    }
+
+    pub fn record_rtc_output_budget_exhaustion(&self, limit: RtcOutputBudgetLimit) {
+        self.output_budget_exhaustions.increment(limit);
+    }
+
+    pub fn record_rtc_output_budget_session_close(&self) {
+        self.output_budget_session_closes.increment();
     }
 
     pub fn record_rtc_route_control(&self, outcome: RtcRouteControlOutcome) {
@@ -134,6 +164,12 @@ pub(super) struct RtcMetricsSnapshot {
     datagram_drops: [u64; RTC_DATAGRAM_DROP_REASON_COUNT],
     datagram_fallback_scans: u64,
     datagram_scan_users: u64,
+    nacks: [u64; RTC_NACK_DIRECTION_COUNT],
+    rtx_packets_received_from_publisher: u64,
+    rtx_payload_bytes_received_from_publisher: u64,
+    rtcp_ingress_budget_drops: u64,
+    output_budget_exhaustions: [u64; RTC_OUTPUT_BUDGET_LIMIT_COUNT],
+    output_budget_session_closes: u64,
     route_control: [u64; RTC_ROUTE_CONTROL_OUTCOME_COUNT],
     keyframe_requests: [u64; RTC_KEYFRAME_REQUEST_OUTCOME_COUNT],
     relay_enqueues: [u64; RTC_RELAY_ENQUEUE_RESULT_COUNT],
@@ -167,6 +203,33 @@ impl RtcMetricsSnapshot {
 
     pub(super) const fn datagram_scan_users(&self) -> u64 {
         self.datagram_scan_users
+    }
+
+    pub(super) fn nacks(&self, direction: RtcNackDirection) -> u64 {
+        self.nacks.get(direction.as_index()).copied().unwrap_or(0)
+    }
+
+    pub(super) const fn rtx_packets_received_from_publisher(&self) -> u64 {
+        self.rtx_packets_received_from_publisher
+    }
+
+    pub(super) const fn rtx_payload_bytes_received_from_publisher(&self) -> u64 {
+        self.rtx_payload_bytes_received_from_publisher
+    }
+
+    pub(super) const fn rtcp_ingress_budget_drops(&self) -> u64 {
+        self.rtcp_ingress_budget_drops
+    }
+
+    pub(super) fn output_budget_exhaustions(&self, limit: RtcOutputBudgetLimit) -> u64 {
+        self.output_budget_exhaustions
+            .get(limit.as_index())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(super) const fn output_budget_session_closes(&self) -> u64 {
+        self.output_budget_session_closes
     }
 
     pub(super) fn route_control(&self, outcome: RtcRouteControlOutcome) -> u64 {
@@ -240,6 +303,27 @@ impl RtcMetricsSnapshot {
         self.datagram_scan_users = self
             .datagram_scan_users
             .saturating_add(recorder.datagram_scan_users.load());
+        for direction in <RtcNackDirection as MetricLabel>::VARIANTS {
+            self.add_nack(*direction, recorder.nacks.load(*direction));
+        }
+        self.rtx_packets_received_from_publisher = self
+            .rtx_packets_received_from_publisher
+            .saturating_add(recorder.rtx_packets_received_from_publisher.load());
+        self.rtx_payload_bytes_received_from_publisher = self
+            .rtx_payload_bytes_received_from_publisher
+            .saturating_add(recorder.rtx_payload_bytes_received_from_publisher.load());
+        self.rtcp_ingress_budget_drops = self
+            .rtcp_ingress_budget_drops
+            .saturating_add(recorder.rtcp_ingress_budget_drops.load());
+        for limit in <RtcOutputBudgetLimit as MetricLabel>::VARIANTS {
+            self.add_output_budget_exhaustion(
+                *limit,
+                recorder.output_budget_exhaustions.load(*limit),
+            );
+        }
+        self.output_budget_session_closes = self
+            .output_budget_session_closes
+            .saturating_add(recorder.output_budget_session_closes.load());
         for outcome in <RtcRouteControlOutcome as MetricLabel>::VARIANTS {
             self.add_route_control(*outcome, recorder.route_control.load(*outcome));
         }
@@ -283,6 +367,18 @@ impl RtcMetricsSnapshot {
 
     fn add_datagram_drop(&mut self, reason: RtcDatagramDropReason, count: u64) {
         if let Some(counter) = self.datagram_drops.get_mut(reason.as_index()) {
+            *counter = counter.saturating_add(count);
+        }
+    }
+
+    fn add_nack(&mut self, direction: RtcNackDirection, count: u64) {
+        if let Some(counter) = self.nacks.get_mut(direction.as_index()) {
+            *counter = counter.saturating_add(count);
+        }
+    }
+
+    fn add_output_budget_exhaustion(&mut self, limit: RtcOutputBudgetLimit, count: u64) {
+        if let Some(counter) = self.output_budget_exhaustions.get_mut(limit.as_index()) {
             *counter = counter.saturating_add(count);
         }
     }

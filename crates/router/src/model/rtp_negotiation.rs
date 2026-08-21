@@ -3,14 +3,16 @@
 //! - This module negotiates an internal typed RTP model (`MediaStream`,
 //!   `MediaFormat`, `HeaderExtension`, `StreamBinding`).
 //! - It is not a full SDP offer/answer engine.
-//! - Rules that depend on SDP sesion structure (m-line ordering, rejected
+//! - Rules that depend on SDP session structure (m-line ordering, rejected
 //!   m-sections, extmap direction, BUNDLE-wide extmap id consistency, etc.)
 //!   must be enforced at the signaling / SDP edge, not here.
 //!
-//! why:
-//! - it keep router-core pure
-//! - Keep protocol-shaped negotiation details at the edge or in dedicated
-//!   adapters, instead of leaking SDP mecanics into the router model.
+//! Why:
+//! - it keeps router-core pure
+//! - protocol-shaped negotiation details stay at the edge or in dedicated
+//!   adapters instead of leaking SDP mechanics into the router model.
+
+use std::collections::HashSet;
 
 use o_sfu_rfc::rtp as rfc_rtp;
 
@@ -48,13 +50,13 @@ pub enum RtpNegotiationError {
 const RFC_3264_SECTION_6: RfcReference = RfcReference::new(
     "RFC 3264",
     "section 6",
-    "https://www.rfc-editor.org/rfc/rfc3264#section-6",
+    "https://www.rfc-editor.org/rfc/rfc3264.html#section-6",
 );
 #[cfg(any(test, feature = "test-support"))]
 const RFC_4588_SECTION_8_1: RfcReference = RfcReference::new(
     "RFC 4588",
     "section 8.1",
-    "https://www.rfc-editor.org/rfc/rfc4588#section-8.1",
+    "https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1",
 );
 
 #[cfg(any(test, feature = "test-support"))]
@@ -99,9 +101,10 @@ impl ParseDiagnostic for RtpNegotiationError {
 /// 5. Remap stream bindings so payload-type-bound bindings stay aligned with the
 ///    negotiated primary payload types.
 ///
-/// This split is intentional: RFC 4588 ties RTX to an alreadynegotiated
+/// This split is intentional: RFC 4588 ties RTX to an already negotiated
 /// primary codec via `apt`, so RTX cannot be validated correctly until the
-/// primary codec set is known.
+/// primary codec set is known. See
+/// <https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1>.
 ///
 /// # Errors
 ///
@@ -129,14 +132,16 @@ pub fn derive_consumable_rtp_parameters(
     // able to describe or forward that media in its consumable model, so we reject
     // the whole producer stream instead of silently dropping the codec.
     for format in producer_parameters.formats() {
-        // RFC 4588 section 8.1 binds RTX to an already-negotiated primary payload type via `apt`,
-        // so media codecs must be matched before retransmission formats can be validated.
+        // RFC 4588 section 8.1 binds RTX to an already-negotiated primary PT
+        // through `apt`, so media codecs must be matched first.
+        // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
         if format.codec().is_rtx() {
             continue;
         }
         let Some(capability_format) = find_matching_media_capability(format, capabilities) else {
             // RFC 3264 section 6 only allows formats that both sides support to survive
             // negotiation, so a producer codec with no router capability match is rejected.
+            // https://www.rfc-editor.org/rfc/rfc3264.html#section-6
             return Err(RtpNegotiationError::UnsupportedProducerCodec {
                 codec_name: format.codec().as_str().to_owned(),
                 payload_type: format.payload_type(),
@@ -165,7 +170,9 @@ pub fn derive_consumable_rtp_parameters(
                 (*original == associated_payload_type).then_some(*mapped)
             })
         else {
-            // RFC 4588 section 8.1 makes RTX invalid without a negotiated associated payload type.
+            // RFC 4588 section 8.1 makes RTX invalid without a negotiated
+            // associated payload type.
+            // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
             return Err(RtpNegotiationError::MissingAssociatedMediaCodecForRtx {
                 payload_type: format.payload_type(),
                 associated_payload_type: associated_payload_type.value(),
@@ -190,12 +197,14 @@ pub fn derive_consumable_rtp_parameters(
             &feedback,
         ));
     }
+    normalize_nack_rtx(&mut consumable_formats);
 
     let header_extensions = capabilities
         .header_extensions()
         .filter(|extension| {
             // RFC 8285 negotiates header extensions by common support. Keep only producer-backed
-            // URIs here because the runtime only forward observed extension values
+            // URIs here because the runtime only forwards observed extension values
+            // https://www.rfc-editor.org/rfc/rfc8285.html#section-5
             producer_parameters
                 .header_extensions()
                 .any(|producer_extension| producer_extension.uri_kind() == extension.uri_kind())
@@ -224,7 +233,7 @@ pub fn derive_consumable_rtp_parameters(
 /// 4. Admit RTX only when its primary codec survived
 /// 5. Filter bindings so they only reference negotiated payload types.
 ///
-/// The output keeps consumable payload types rather than adopting arbtirary
+/// The output keeps consumable payload types rather than adopting arbitrary
 /// consumer capability PT numbers, because the consumable stream is already the
 /// router's negotiated forwarding model
 ///
@@ -243,8 +252,9 @@ pub fn negotiate_consumer_rtp_parameters(
     let mut negotiated_formats = consumable_parameters
         .formats()
         .filter_map(|format| {
-            // RFC 4588 section 8.1 requires a surviving primary codec before RTX can be
-            // admitted, so the first pass negotiates only non-RTX media formats.
+            // RFC 4588 section 8.1 requires a surviving primary codec before
+            // RTX can be admitted, so the first pass negotiates primary formats.
+            // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
             if format.codec().is_rtx() {
                 return None;
             }
@@ -264,6 +274,7 @@ pub fn negotiate_consumer_rtp_parameters(
     if negotiated_formats.is_empty() {
         // RFC 3264 section 6 requires at least one mutually acceptable media format for an
         // accepted stream, so a consumer with no surviving media codec is incompatible.
+        // https://www.rfc-editor.org/rfc/rfc3264.html#section-6
         return Err(RtpNegotiationError::NoCompatibleConsumerCodec);
     }
 
@@ -288,6 +299,7 @@ pub fn negotiate_consumer_rtp_parameters(
             &feedback,
         ));
     }
+    normalize_nack_rtx(&mut negotiated_formats);
 
     let bindings = consumable_parameters
         .bindings()
@@ -339,7 +351,7 @@ fn negotiated_payload_type(
 /// Media capability matching ignores payload type.
 /// PT is negotiated output state, not an identity key for codec compatibility.
 ///
-/// Compatibliity is instead based on the codec's media kind, codec name,
+/// Compatibility is instead based on the codec's media kind, codec name,
 /// clock rate, normalized channel count, and codec-specific critical fmtp
 /// parameters.
 fn find_matching_media_capability<'a>(
@@ -354,9 +366,10 @@ fn find_matching_media_capability<'a>(
 
 /// RTX matching has one extra constraint beyond ordinary codec matching:
 ///
-/// the router RTX capability must be asociated with the already negotiated
+/// the router RTX capability must be associated with the already negotiated
 /// primary payload type, because RFC 4588 binds RTX to a specific primary PT
-/// through `apt`
+/// through `apt`.
+/// <https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1>
 fn find_matching_rtx_capability<'a>(
     format: &MediaFormat,
     negotiated_associated_payload_type: PayloadType,
@@ -380,7 +393,8 @@ fn find_matching_consumer_rtx_capability<'a>(
     capabilities: &'a MediaCapabilities,
 ) -> Option<&'a MediaCodecCapability> {
     let associated_payload_type = parse_rtx_associated_payload(format).ok()?;
-    // RFC 4588 section 8.1 ties each RTX format to one negotiated primary payload type.
+    // RFC 4588 section 8.1 ties each RTX format to one negotiated primary PT.
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
     if !formats_contain_primary_payload_type(negotiated_formats, associated_payload_type) {
         return None;
     }
@@ -447,6 +461,7 @@ fn h264_critical_settings_match(
     };
     // RFC 6184 section 8.2.2 requires packetization-mode compatibility, mismatched packetization
     // modes describe different wire behaviors and are therefore rejected.
+    // https://www.rfc-editor.org/rfc/rfc6184.html#section-8.2.2
     if format_packetization_mode != capability_packetization_mode {
         return false;
     }
@@ -572,6 +587,7 @@ fn format_with_overrides(
 /// RTCP feedback is negotiated by common support, not by union.
 /// Advertising feedback that only one side supports would let later code assume
 /// a control signal is usable when the peer never negotiated it.
+/// <https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2>
 fn intersect_feedback<'a>(
     format_feedback: impl Iterator<Item = &'a RtcpFeedback>,
     capability_feedback: impl Iterator<Item = &'a RtcpFeedback>,
@@ -581,6 +597,48 @@ fn intersect_feedback<'a>(
         .filter(|feedback| capability_feedback.contains(feedback))
         .cloned()
         .collect()
+}
+
+fn normalize_nack_rtx(formats: &mut Vec<MediaFormat>) {
+    // RFC 4585 negotiates Generic NACK per format and RFC 4588 links RTX through
+    // `apt`. O-SFU policy exposes repair only as a complete pair. It keeps the
+    // first matching RTX, drops duplicates and orphans then removes Generic
+    // NACK when no repair remains.
+    // https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
+    let nack_payload_types = formats
+        .iter()
+        .filter(|format| !format.codec().is_rtx() && has_generic_nack(format))
+        .map(MediaFormat::payload_type_id)
+        .collect::<HashSet<_>>();
+    let mut paired_payload_types = HashSet::new();
+    formats.retain(|format| {
+        !format.codec().is_rtx()
+            || format.rtx_associated_payload_type_id().is_some_and(|apt| {
+                nack_payload_types.contains(&apt) && paired_payload_types.insert(apt)
+            })
+    });
+
+    for format in formats.iter_mut() {
+        if format.codec().is_rtx()
+            || !has_generic_nack(format)
+            || paired_payload_types.contains(&format.payload_type_id())
+        {
+            continue;
+        }
+        let feedback = format
+            .rtcp_feedback()
+            .filter(|feedback| !matches!(feedback.kind(), RtcpFeedbackKind::Nack))
+            .cloned()
+            .collect::<Vec<_>>();
+        *format = format_with_overrides(format, format.payload_type_id(), None, &feedback);
+    }
+}
+
+fn has_generic_nack(format: &MediaFormat) -> bool {
+    format
+        .rtcp_feedback()
+        .any(|feedback| matches!(feedback.kind(), RtcpFeedbackKind::Nack))
 }
 
 /// Channel count is only part of codec identity for audio.
@@ -611,6 +669,7 @@ fn negotiate_header_extensions(
         .header_extensions()
         // RFC 8285 extmaps are negotiated by common support. This helper keeps the
         // router model at URI-intersection scope and leaves direction/id validation to the SDP edge.
+        // https://www.rfc-editor.org/rfc/rfc8285.html#section-5
         .filter(|extension| {
             consumer_capabilities
                 .header_extensions()
@@ -643,7 +702,7 @@ enum BweFeedbackPolicy {
 }
 
 /// Selects a local forwarding policy for mutually exclusive bandwidth-estimation
-/// feedback famillies
+/// feedback families
 ///
 /// This is an implementation policy choice, not a pure codec-compatibility rule:
 /// - if transport-wide CC is available, prefer transport-cc

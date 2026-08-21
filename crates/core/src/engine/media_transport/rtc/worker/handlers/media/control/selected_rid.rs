@@ -27,9 +27,11 @@ use crate::engine::{
         TransportMediaId, TransportSessionKey,
         rtc::{
             route_control::PacketLayerGate,
-            route_table::{RidReadinessRouteUpdate, RidReadinessSelectedGateUpdate},
+            route_table::{
+                RidReadinessRouteUpdate, RidReadinessScratch, RidReadinessSelectedGateUpdate,
+            },
             source_route::RemoteSourceRegistration,
-            state::{PacketLoopState, RidReadinessScratch},
+            state::PacketLoopState,
         },
     },
     metrics::RtcMetricsRecorder,
@@ -181,13 +183,17 @@ fn update_rid_readiness_routes(
         SELECTED_RID_READY_MAX_AGE,
         &mut scratch.ready,
     );
-    state.routes.update_decoder_readiness(
+    let (routes, users) = (&mut state.routes, &mut state.users);
+    routes.update_decoder_readiness(
         src_media,
         incoming_rid,
         is_keyframe,
-        &scratch.ready,
-        &mut scratch.stale,
-        &mut scratch.pending_selected,
+        scratch,
+        |destination| {
+            if let Some(session_state) = users.get_mut(&destination.dest_session) {
+                session_state.invalidate_rtx_stream(destination.dest_stream);
+            }
+        },
     )
 }
 

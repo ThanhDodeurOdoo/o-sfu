@@ -86,6 +86,9 @@ pub mod rtp {
 /// # Examples
 ///
 /// ```
+/// # use o_sfu_rfc::rtp::{
+/// #     CodecName, RTP_VIDEO_CLOCK_RATE_HZ as VIDEO_CLOCK_RATE_HZ, codec_name, fmtp,
+/// # };
 /// # use o_sfu_router::{
 /// #     MediaKind,
 /// #     negotiation::{
@@ -94,33 +97,37 @@ pub mod rtp {
 /// #     },
 /// #     rtp::{
 /// #         MediaCapabilities, MediaCodecCapability, MediaFormat, MediaStream, PayloadType,
+/// #         RtcpFeedback, RtcpFeedbackKind,
 /// #     },
 /// # };
 /// # fn main() -> Result<(), RtpNegotiationError> {
 /// let producer = MediaStream::new(
 ///     vec![
-///         MediaFormat::new(MediaKind::Video, "rtx", PayloadType::new(97), 90_000)
-///             .with_parameter("apt", "96"),
-///         MediaFormat::new(MediaKind::Video, "VP8", PayloadType::new(96), 90_000),
+///         MediaFormat::new(MediaKind::Video, CodecName::Rtx, PayloadType::new(97), VIDEO_CLOCK_RATE_HZ)
+///             .with_parameter(fmtp::RTX_ASSOCIATION, "96"),
+///         MediaFormat::new(MediaKind::Video, CodecName::Vp8, PayloadType::new(96), VIDEO_CLOCK_RATE_HZ)
+///             .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None)),
 ///     ],
 ///     vec![],
 ///     vec![],
 /// );
 /// let router = MediaCapabilities::new(
 ///     vec![
-///         MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000)
-///             .with_payload_type(PayloadType::new(100)),
-///         MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
+///         MediaCodecCapability::new(MediaKind::Video, CodecName::Vp8, VIDEO_CLOCK_RATE_HZ)
+///             .with_payload_type(PayloadType::new(100))
+///             .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None)),
+///         MediaCodecCapability::new(MediaKind::Video, CodecName::Rtx, VIDEO_CLOCK_RATE_HZ)
 ///             .with_payload_type(PayloadType::new(101))
-///             .with_parameter("apt", "100"),
+///             .with_parameter(fmtp::RTX_ASSOCIATION, "100"),
 ///     ],
 ///     vec![],
 /// );
 /// let consumer = MediaCapabilities::new(
 ///     vec![
-///         MediaCodecCapability::new(MediaKind::Video, "VP8", 90_000),
-///         MediaCodecCapability::new(MediaKind::Video, "rtx", 90_000)
-///             .with_parameter("apt", "100"),
+///         MediaCodecCapability::new(MediaKind::Video, CodecName::Vp8, VIDEO_CLOCK_RATE_HZ)
+///             .with_rtcp_feedback(RtcpFeedback::new(RtcpFeedbackKind::Nack, None)),
+///         MediaCodecCapability::new(MediaKind::Video, CodecName::Rtx, VIDEO_CLOCK_RATE_HZ)
+///             .with_parameter(fmtp::RTX_ASSOCIATION, "100"),
 ///     ],
 ///     vec![],
 /// );
@@ -137,7 +144,7 @@ pub mod rtp {
 ///             format.rtx_associated_payload_type(),
 ///         ))
 ///         .collect::<Vec<_>>(),
-///     vec![("VP8", 100, None), ("rtx", 101, Some(100))],
+///     vec![(codec_name::VP8, 100, None), (codec_name::RTX, 101, Some(100))],
 /// );
 /// assert_eq!(negotiated, consumable);
 /// # Ok(())

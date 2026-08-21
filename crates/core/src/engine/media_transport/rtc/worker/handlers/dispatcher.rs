@@ -145,6 +145,7 @@ pub fn handle_worker_command(
                 context.bitrate_registry,
                 context.snapshot_state,
                 &session_key,
+                session::SessionCloseDisposition::OwnerClose,
                 context.runtime_metrics,
             );
             respond(response, Ok(()));

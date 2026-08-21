@@ -77,6 +77,39 @@ use super::{
     route_control::PacketLayerGate,
     source_route::{MediaRouteDestination, MediaRouteEntry, RemoteSourceRegistration},
 };
+
+#[derive(Clone, Copy)]
+pub(super) struct ConsumerRouteUpdate {
+    pub(super) route_changed: bool,
+    pub(super) repair_delivery_changed: bool,
+}
+
+impl ConsumerRouteUpdate {
+    fn new(route_changed: bool, repair_delivery_changed: bool) -> Self {
+        Self {
+            route_changed,
+            repair_delivery_changed,
+        }
+    }
+}
+
+/// reusable selected-RID readiness vectors owned by packet-loop state
+///
+/// route updates clear these vectors after every packet and retain capacity
+#[derive(Default)]
+pub(super) struct RidReadinessScratch {
+    pub(super) ready: Vec<Rid>,
+    pub(super) stale: Vec<Rid>,
+    pub(super) pending_selected: Vec<Rid>,
+}
+
+impl RidReadinessScratch {
+    pub(super) fn clear(&mut self) {
+        self.ready.clear();
+        self.stale.clear();
+        self.pending_selected.clear();
+    }
+}
 use crate::engine::media_transport::{
     ActiveSpeakerSource, ActiveSpeakerSourceDiagnostic, SourceActivityUpdate,
     TransportAdapterError, TransportMediaId, TransportSessionKey, TransportSourceActivity,
@@ -221,16 +254,16 @@ impl RouteTable {
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         active: bool,
-    ) -> Result<bool, TransportAdapterError> {
-        let changed = self
+    ) -> Result<ConsumerRouteUpdate, TransportAdapterError> {
+        let update = self
             .sources
             .get_mut(&source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?
             .set_consumer_active(dst_idx, session_key, media_id, active)?;
-        if changed {
+        if update.route_changed {
             self.refresh_src_pkt_gate(source_id);
         }
-        Ok(changed)
+        Ok(update)
     }
 
     pub(super) fn set_consumer_pkt_gate(
@@ -240,7 +273,7 @@ impl RouteTable {
         session_key: &TransportSessionKey,
         media_id: TransportMediaId,
         packet_gate: PacketLayerGate,
-    ) -> Result<bool, TransportAdapterError> {
+    ) -> Result<ConsumerRouteUpdate, TransportAdapterError> {
         self.sources
             .get_mut(&source_id)
             .ok_or(TransportAdapterError::TransportUnavailable)?
@@ -252,9 +285,8 @@ impl RouteTable {
         source_id: TransportMediaId,
         incoming_rid: Option<Rid>,
         is_keyframe: bool,
-        ready: &[Rid],
-        stale: &mut Vec<Rid>,
-        pending_selected: &mut Vec<Rid>,
+        scratch: &mut RidReadinessScratch,
+        on_repair_delivery_changed: impl FnMut(&MediaRouteDestination),
     ) -> RidReadinessRouteUpdate {
         let Some(source) = self.sources.get_mut(&source_id) else {
             return RidReadinessRouteUpdate::default();
@@ -263,9 +295,8 @@ impl RouteTable {
             source_id,
             incoming_rid,
             is_keyframe,
-            ready,
-            stale,
-            pending_selected,
+            scratch,
+            on_repair_delivery_changed,
         );
         if update.changed_gate() {
             self.refresh_src_pkt_gate(source_id);
@@ -344,6 +375,12 @@ impl RouteTable {
         {
             source.producer.ssrcs.push(ssrc);
         }
+    }
+
+    pub(super) fn producer_ssrcs(&self, source_id: TransportMediaId) -> Option<&[Ssrc]> {
+        self.sources
+            .get(&source_id)
+            .map(|source| source.producer.ssrcs.as_slice())
     }
 
     pub(super) fn clear_producer_ssrcs(

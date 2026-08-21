@@ -8,7 +8,7 @@ use std::{fmt, time::Duration};
 use o_sfu_protocol::wire::StreamType;
 use o_sfu_rfc::rtp::{self, CodecName, frame_marking};
 use o_sfu_router::MediaKind;
-use str0m::rtp::ExtensionValues;
+use str0m::rtp::{ExtensionValues, Vp8Descriptor};
 
 const AUDIO_FRAME_INTERVAL: Duration = Duration::from_millis(20);
 const AUDIO_TIMESTAMP_STEP: u32 = rtp::opus::RTP_CLOCK_RATE_HZ / 50;
@@ -26,6 +26,37 @@ const AUDIO_PAYLOAD_SEED: u8 = 0x11;
 const VP8_PAYLOAD_SEED: u8 = 0x41;
 const H264_PAYLOAD_SEED: u8 = 0x51;
 const UNSUPPORTED_PAYLOAD_SEED: u8 = 0x71;
+
+/// Projects wrapping `PictureID` and TL0 source-anchor deltas onto the destination
+/// anchor while preserving the synthetic VP8 body.
+#[must_use]
+pub fn project_synthetic_vp8_payload(
+    source_anchor: &[u8],
+    destination_anchor: &[u8],
+    mut payload: Vec<u8>,
+) -> Option<Vec<u8>> {
+    let source_anchor = Vp8Descriptor::parse(source_anchor).ok()?;
+    let destination_anchor = Vp8Descriptor::parse(destination_anchor).ok()?;
+    let source = Vp8Descriptor::parse(&payload).ok()?;
+    let picture_id = destination_anchor.picture_id()?.wrapping_add(
+        source
+            .picture_id()?
+            .wrapping_sub(source_anchor.picture_id()?),
+    ) % rtp::vp8::LONG_PICTURE_ID_MODULUS;
+    let tl0_pic_idx = destination_anchor.tl0_pic_idx()?.wrapping_add(
+        source
+            .tl0_pic_idx()?
+            .wrapping_sub(source_anchor.tl0_pic_idx()?),
+    );
+    let picture_id_high = payload.get_mut(2)?;
+    if *picture_id_high & rtp::vp8::LONG_PICTURE_ID_BIT == 0 {
+        return None;
+    }
+    *picture_id_high = rtp::vp8::LONG_PICTURE_ID_BIT | u8::try_from(picture_id >> 8).ok()?;
+    *payload.get_mut(3)? = u8::try_from(picture_id & 0xff).ok()?;
+    *payload.get_mut(4)? = tl0_pic_idx;
+    Some(payload)
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FakeClock {

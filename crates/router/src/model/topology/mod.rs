@@ -51,6 +51,16 @@ impl RoutedProducerId {
 pub struct RoutedConsumerId(RouterId, ConnectionId, ConsumerId);
 
 impl RoutedConsumerId {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub const fn for_test(
+        router: RouterId,
+        connection: ConnectionId,
+        consumer: ConsumerId,
+    ) -> Self {
+        Self(router, connection, consumer)
+    }
+
     #[must_use]
     pub const fn router_id(self) -> RouterId {
         self.0
@@ -326,6 +336,17 @@ impl Router {
     #[must_use]
     pub fn router_count(&self) -> usize {
         self.routers.len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn consumer_dependency_count(&self) -> usize {
+        self.routers
+            .values()
+            .flat_map(|router| router.sessions.values())
+            .flat_map(|session| session.producers.values())
+            .map(BTreeSet::len)
+            .sum()
     }
 
     /// create a producer on the user's home router

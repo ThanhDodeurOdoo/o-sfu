@@ -84,6 +84,7 @@ impl RoomTransportPlan {
     ) {
         extract_relay_teardown(&mut work.relays, &mut self.teardown);
         self.relays.extend(work.relays);
+        self.teardown.extend(work.teardown);
         for activity in work.activities {
             self.route_control.receiver_activity(activity);
         }

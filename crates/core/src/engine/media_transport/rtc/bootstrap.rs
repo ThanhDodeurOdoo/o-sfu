@@ -22,7 +22,7 @@ use tracing::{info, warn};
 use super::{
     RtpProfile,
     bitrate::MediaBitrateCounter,
-    local_send_rewrite::ConsumerStreamStore,
+    local_send_rewrite::{ConsumerStreamStore, RTX_CACHE_MAX_PACKETS},
     packet_loop::{RtcUdpSocket, UdpIngress},
     slots::SessionStore,
     state::{RtcSessionState, SessionSdpNegotiationState, SharedRtcSocket},
@@ -158,7 +158,9 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
         return Ok(false);
     }
     let started_at = Instant::now();
-    let mut config = profile.session_config();
+    let mut config = profile
+        .session_config()
+        .set_send_buffer_video(RTX_CACHE_MAX_PACKETS);
     if let Some(stats_interval) = stats_interval {
         config = config.set_stats_interval(Some(stats_interval));
     }
@@ -178,6 +180,10 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
             room_id,
             rtc,
             started_at,
+            rtcp_ingress_budget: super::state::RtcpIngressBudget::new(started_at),
+            defer_rtx_expiry: false,
+            pending_rtp_input: None,
+            nack_totals: super::state::RtcNackTotals::default(),
             egress_bitrate: Arc::new(MediaBitrateCounter::new(started_at)),
             local_ice_ufrag,
             #[cfg(test)]
@@ -191,6 +197,8 @@ pub(super) fn ensure_session_rtc_state_with_stats_interval(
             packet_loop_dirty: false,
             sdp_negotiation: SessionSdpNegotiationState::default(),
             consumer_streams: ConsumerStreamStore::default(),
+            #[cfg(test)]
+            last_local_write: None,
         },
     );
     Ok(true)

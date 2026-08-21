@@ -14,7 +14,7 @@ use crate::engine::{
             },
             relay_registry::{RelayPacketMailbox, RelayTargetId},
             route_control::PacketLayerGate,
-            route_table::RouteTable,
+            route_table::{RidReadinessScratch, RouteTable},
             slots::ConsumerStreamHandle,
             source_route::MediaRouteDestination,
             test_support::test_transport_session_key,
@@ -73,6 +73,7 @@ fn video_route_resumes_only_from_its_selected_rid_keyframe() {
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: Mid::from("cam-down"),
             dest_payload_type: None,
+            repair_enabled: false,
             active: true,
             requires_decoder_refresh: true,
             delivery_generation: 0,
@@ -81,14 +82,16 @@ fn video_route_resumes_only_from_its_selected_rid_keyframe() {
         },
     );
 
-    assert_eq!(
-        state.set_consumer_active(src_media, dst_idx, &consumer_session, consumer_media, false,),
-        Ok(true)
-    );
-    assert_eq!(
-        state.set_consumer_active(src_media, dst_idx, &consumer_session, consumer_media, true,),
-        Ok(true)
-    );
+    let update = state
+        .set_consumer_active(src_media, dst_idx, &consumer_session, consumer_media, false)
+        .unwrap();
+    assert!(update.route_changed);
+    assert!(!update.repair_delivery_changed);
+    let update = state
+        .set_consumer_active(src_media, dst_idx, &consumer_session, consumer_media, true)
+        .unwrap();
+    assert!(update.route_changed);
+    assert!(!update.repair_delivery_changed);
     let destination = &state.local_route(src_media).unwrap().destinations[dst_idx];
     assert_eq!(destination.packet_gate, PacketLayerGate::Block);
     assert_eq!(
@@ -96,45 +99,38 @@ fn video_route_resumes_only_from_its_selected_rid_keyframe() {
         Some(PacketLayerGate::Rid(selected_rid))
     );
 
-    let mut stale_rids = Vec::new();
-    let mut pending = Vec::new();
-    state.update_decoder_readiness(
-        src_media,
-        Some(selected_rid),
-        false,
-        &[selected_rid],
-        &mut stale_rids,
-        &mut pending,
-    );
+    let mut scratch = RidReadinessScratch::default();
+    scratch.ready.push(selected_rid);
+    state.update_decoder_readiness(src_media, Some(selected_rid), false, &mut scratch, |_| {
+        panic!("repair-disabled destination invalidated repair state")
+    });
     assert_eq!(
         state.local_route(src_media).unwrap().destinations[dst_idx].packet_gate,
         PacketLayerGate::Block
     );
 
-    state.update_decoder_readiness(
-        src_media,
-        Some(selected_rid),
-        true,
-        &[selected_rid],
-        &mut stale_rids,
-        &mut pending,
-    );
+    state.update_decoder_readiness(src_media, Some(selected_rid), true, &mut scratch, |_| {
+        panic!("repair-disabled destination invalidated repair state")
+    });
     let destination = &state.local_route(src_media).unwrap().destinations[dst_idx];
     assert_eq!(destination.packet_gate, PacketLayerGate::Rid(selected_rid));
     assert_eq!(destination.pending_gate, None);
     assert!(destination.delivery_generation >= 3);
 
-    assert_eq!(
-        state.set_consumer_pkt_gate(
+    let update = state
+        .set_consumer_pkt_gate(
             src_media,
             dst_idx,
             &consumer_session,
             consumer_media,
             PacketLayerGate::Open,
-        ),
-        Ok(true)
-    );
-    state.update_decoder_readiness(src_media, None, true, &[], &mut stale_rids, &mut pending);
+        )
+        .unwrap();
+    assert!(update.route_changed);
+    assert!(!update.repair_delivery_changed);
+    state.update_decoder_readiness(src_media, None, true, &mut scratch, |_| {
+        panic!("repair-disabled destination invalidated repair state");
+    });
     let destination = &state.local_route(src_media).unwrap().destinations[dst_idx];
     assert_eq!(destination.packet_gate, PacketLayerGate::Open);
     assert_eq!(destination.pending_gate, None);
@@ -413,6 +409,7 @@ fn route_control_refreshes_source_gate_after_relay_gate_removal() {
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: Mid::from("cam-down"),
             dest_payload_type: None,
+            repair_enabled: false,
             active: true,
             requires_decoder_refresh: false,
             delivery_generation: 0,
@@ -483,6 +480,7 @@ fn route_control_removing_last_consumer_route_preserves_producer_packet_state() 
             dest_stream: ConsumerStreamHandle::default(),
             dest_mid: Mid::from("cam-down"),
             dest_payload_type: None,
+            repair_enabled: false,
             active: true,
             requires_decoder_refresh: false,
             delivery_generation: 0,

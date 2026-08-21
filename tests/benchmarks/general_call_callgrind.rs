@@ -19,10 +19,9 @@ mod callgrind_config;
 
 use std::hint::black_box;
 
+use callgrind_config::callgrind_config;
 use general_call::GeneralCallFixture;
 use gungraun::{library_benchmark, library_benchmark_group, main};
-
-use callgrind_config::callgrind_config;
 
 #[library_benchmark(config = callgrind_config(2.0))]
 #[bench::mix_10s(GeneralCallFixture::new())]

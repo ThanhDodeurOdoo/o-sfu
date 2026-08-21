@@ -16,6 +16,7 @@ use std::{
 use tokio::sync::mpsc;
 
 use super::super::{
+    bitrate::BitrateRegistry,
     bootstrap::ensure_session_rtc_state,
     forwarded_packet::ForwardedPacket,
     packet_loop::{
@@ -37,6 +38,8 @@ pub struct SessionDrainBenchFixture {
     state: PacketLoopState,
     snapshot_state: Arc<Mutex<RtcSnapshotState>>,
     metrics: RuntimeMetrics,
+    rtc_metrics: Arc<RtcMetricsRecorder>,
+    bitrate_registry: Arc<Mutex<BitrateRegistry>>,
     source_policy_signal: SourcePolicySignal,
     buffers: PacketLoopBuffers,
     now: Instant,
@@ -46,6 +49,8 @@ impl SessionDrainBenchFixture {
     #[must_use]
     pub fn new() -> Self {
         let mut state = PacketLoopState::default();
+        let metrics = RuntimeMetrics::default();
+        let rtc_metrics = metrics.register_rtc_worker();
         let candidate_addr = SocketAddr::from(([127, 0, 0, 1], 46_300));
         let session_count = 128_u32;
 
@@ -70,7 +75,9 @@ impl SessionDrainBenchFixture {
         Self {
             state,
             snapshot_state: Arc::new(Mutex::new(RtcSnapshotState::default())),
-            metrics: RuntimeMetrics::default(),
+            metrics,
+            rtc_metrics,
+            bitrate_registry: Arc::new(Mutex::new(BitrateRegistry::default())),
             source_policy_signal: SourcePolicySignal::default(),
             buffers: PacketLoopBuffers::new(),
             now: Instant::now(),
@@ -83,12 +90,14 @@ impl SessionDrainBenchFixture {
         }
 
         self.buffers.clear();
-        let context = SessionDrainContext {
-            snapshot_state: &self.snapshot_state,
-            metrics: &self.metrics,
-            source_policy_signal: &self.source_policy_signal,
-        };
-        drain_ready_sessions(&mut self.state, &context, &mut self.buffers, self.now);
+        let context = SessionDrainContext::new(
+            &self.snapshot_state,
+            &self.bitrate_registry,
+            &self.metrics,
+            &self.rtc_metrics,
+            &self.source_policy_signal,
+        );
+        let _ = drain_ready_sessions(&mut self.state, &context, &mut self.buffers, self.now);
         self.buffers.pending_packets.len()
     }
 }

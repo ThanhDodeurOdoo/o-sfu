@@ -11,6 +11,8 @@ mod download_controls;
 mod large_room_spillover;
 #[path = "full_stack/metrics.rs"]
 mod metrics;
+#[path = "full_stack/nack_recovery.rs"]
+mod nack_recovery;
 #[path = "full_stack/protocol_flow.rs"]
 mod protocol_flow;
 #[path = "full_stack/relay_spillover.rs"]

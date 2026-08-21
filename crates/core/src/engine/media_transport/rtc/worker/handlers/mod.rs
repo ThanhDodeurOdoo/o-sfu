@@ -19,4 +19,8 @@ pub use media::apply_media_control_batch;
 pub use media::{
     KeyframeRequestMode, KeyframeRequestTarget, apply_src_decoder_ready, request_kf_for_target,
 };
+#[cfg(feature = "internal-benchmarks")]
 pub(in crate::engine::media_transport::rtc) use media::{consumer_payload_type, guarded_pkt_gate};
+pub(in crate::engine::media_transport::rtc) use session::{
+    SessionCloseDisposition, worker_close_session,
+};
