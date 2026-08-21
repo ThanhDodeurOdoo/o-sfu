@@ -39,7 +39,7 @@ version = "0.10.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
-base64 = "0.22"
+base64 = "0.23"
 futures-util = "0.3"
 o-sfu-protocol = { path = "crates/protocol" }
 o-sfu-core = { path = "crates/core" }
