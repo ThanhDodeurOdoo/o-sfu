@@ -77,7 +77,8 @@ use o_sfu_rfc::{
     rtp,
     webrtc::{self, sdp},
 };
-use str0m::{change::SdpOffer, format::PayloadParams};
+use o_sfu_router::rtp::{MediaStream, RtcpFeedbackKind};
+use str0m::{change::SdpOffer, format::PayloadParams, media::Pt};
 
 use super::rid::send_simulcast_stream_count;
 use crate::engine::media_transport::TransportAdapterError;
@@ -116,6 +117,39 @@ impl RepairSummary {
                 .zip(&answer.0)
                 .all(|(offered, accepted)| accepted.iter().all(|pair| offered.contains(pair)))
     }
+}
+
+pub fn primary_payload_type(parameters: &MediaStream) -> Option<Pt> {
+    parameters
+        .bindings()
+        .find_map(|binding| binding.payload_type().map(Pt::from))
+        .or_else(|| {
+            parameters
+                .formats()
+                .find(|format| !format.codec().is_rtx())
+                .map(|format| Pt::from(format.payload_type()))
+        })
+}
+
+pub fn repair_enabled(parameters: &MediaStream) -> bool {
+    let Some(primary_payload_type) = primary_payload_type(parameters) else {
+        return false;
+    };
+    let Some(primary) = parameters.formats().find(|format| {
+        !format.codec().is_rtx() && Pt::from(format.payload_type()) == primary_payload_type
+    }) else {
+        return false;
+    };
+    // Repair requires exact Generic NACK plus an RTX format whose `apt` names
+    // the selected primary payload type.
+    // https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
+    primary.rtcp_feedback().any(|feedback| {
+        feedback.kind() == &RtcpFeedbackKind::Nack && feedback.parameter().is_none()
+    }) && parameters.formats().any(|format| {
+        format.codec().is_rtx()
+            && format.rtx_associated_payload_type_id() == Some(primary.payload_type_id())
+    })
 }
 
 pub(super) fn validate_profile_payload_types(

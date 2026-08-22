@@ -39,9 +39,8 @@ use super::{
     },
     AddSendMediaRequest,
     control::{
-        ConsumerRouteRegistration, consumer_payload_type, consumer_repair_enabled,
-        ensure_route_src_registered, register_consumer_route, remove_consumer_route,
-        remove_source_route,
+        ConsumerRouteRegistration, ensure_route_src_registered, register_consumer_route,
+        remove_consumer_route, remove_source_route,
     },
 };
 use crate::{
@@ -599,8 +598,6 @@ fn declare_direct_send_media(
     consumer_rtp_parameters: &RouterRtpParameters,
 ) {
     let has_media = session_state.rtc.media(mid).is_some();
-    let primary_payload_type = consumer_payload_type(consumer_rtp_parameters);
-    let repair_enabled = consumer_repair_enabled(consumer_rtp_parameters, primary_payload_type);
     let mut api = session_state.rtc.direct_api();
     if !has_media {
         api.declare_media(mid, media_kind);
@@ -608,7 +605,7 @@ fn declare_direct_send_media(
     let ssrc = api.new_ssrc();
     // SSRC-multiplexed RTX uses a different SSRC from the primary stream.
     // https://www.rfc-editor.org/rfc/rfc4588.html#section-4
-    let repair_ssrc = repair_enabled.then(|| {
+    let repair_ssrc = codec::repair_enabled(consumer_rtp_parameters).then(|| {
         loop {
             let repair_ssrc = api.new_ssrc();
             if repair_ssrc != ssrc {

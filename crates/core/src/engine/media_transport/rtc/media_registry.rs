@@ -18,6 +18,7 @@ use str0m::{
 use tracing::{debug, warn};
 
 use super::{
+    codec,
     forwarded_packet::ForwardedPacketSource,
     slots::{MediaStore, SessionHandle},
     source_route::DestinationKeyframeTarget,
@@ -660,20 +661,40 @@ impl PacketLoopState {
         session_key: &TransportSessionKey,
         transport_media_id: TransportMediaId,
     ) {
+        let Some(mid) = self.resolve_mid(transport_media_id) else {
+            return;
+        };
         let active = self.routes.source_is_active(transport_media_id);
-        let (routes, users) = (&self.routes, &mut self.users);
+        let (routes, session_media, users) = (&self.routes, &self.session_media, &mut self.users);
         let Some(ssrcs) = routes.producer_ssrcs(transport_media_id) else {
             return;
         };
+        let Some(session_lookup) = session_media.get(session_key) else {
+            return;
+        };
+        // SSRC rotation retains demux history but maps each RID to one receive stream.
+        let mut rids = Vec::new();
+        for ssrc in ssrcs {
+            let rid = session_lookup.producer_ssrc_rids.get(ssrc);
+            if !rids.contains(&rid) {
+                rids.push(rid);
+            }
+        }
         let Some(session_state) = users.get_mut(session_key) else {
             return;
         };
+        let repair_enabled = session_state
+            .sdp_negotiation
+            .negotiated_producer_parameters
+            .get(&mid)
+            .is_some_and(codec::repair_enabled);
         let mut api = session_state.rtc.direct_api();
-        for ssrc in ssrcs {
-            let Some(stream_rx) = api.stream_rx(ssrc) else {
+        for rid in rids {
+            // `stream_rx_by_mid` invalidates str0m's aggregate NACK cache before mutation.
+            let Some(stream_rx) = api.stream_rx_by_mid(mid, rid) else {
                 continue;
             };
-            stream_rx.suppress_nack(!active || stream_rx.rtx().is_none());
+            stream_rx.suppress_nack(!active || !repair_enabled);
         }
     }
 

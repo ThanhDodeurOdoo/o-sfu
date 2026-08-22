@@ -392,10 +392,10 @@ async fn fake_rtc_recovers_ridless_fid_publisher_video_loss() -> s::TestResult {
 }
 
 #[tokio::test]
-async fn fake_rtc_recovers_low_simulcast_rid_publisher_video_loss() -> s::TestResult {
+async fn fake_rtc_recovers_dynamic_rtx_after_answer_refresh() -> s::TestResult {
     let _guard = st::full_stack_test_guard().await;
     let (peers, mut source, mut clock) = Box::pin(ready_nack_route(
-        "issuer-low-rid-nack-recovery",
+        "issuer-dynamic-rtx-answer-refresh",
         118,
         119,
         Some("lo"),
@@ -407,6 +407,77 @@ async fn fake_rtc_recovers_low_simulcast_rid_publisher_video_loss() -> s::TestRe
         mut publisher,
         mut subscriber,
     } = peers;
+    let audio_source = s::FakeMediaSource::audio();
+    assert!(publisher.publish_track(&audio_source).await.is_some());
+    assert!(publisher.complete_next_negotiation().await.is_some());
+    // The subscriber offer follows the publisher answer while the camera RTX SSRC is unknown.
+    assert!(subscriber.complete_next_negotiation().await.is_some());
+    recover_publisher_gap(
+        &mut publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+        Some("lo"),
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_rtc_recovers_dynamic_rtx_after_pause_and_resume() -> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let (peers, mut source, mut clock) = Box::pin(ready_nack_route(
+        "issuer-dynamic-rtx-pause-resume",
+        120,
+        121,
+        Some("lo"),
+    ))
+    .await?;
+    let publisher_id = s::UserId::Integer(120);
+    let st::ReadyRoomFakePeers {
+        server,
+        room,
+        mut publisher,
+        mut subscriber,
+    } = peers;
+
+    assert!(
+        publisher
+            .set_publication_active(s::StreamType::Camera, false)
+            .await
+            .is_some()
+    );
+    assert_camera_route(
+        &server,
+        &room,
+        &subscriber,
+        &publisher_id,
+        m::RouteState::Inactive,
+    )
+    .await;
+    assert!(
+        publisher
+            .set_publication_active(s::StreamType::Camera, true)
+            .await
+            .is_some()
+    );
+    assert_camera_route(
+        &server,
+        &room,
+        &subscriber,
+        &publisher_id,
+        m::RouteState::Active,
+    )
+    .await;
+    source.request_keyframe(Some("lo"));
+    m::assert_synthetic_video_packet_forwarded(
+        &mut publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+    )
+    .await;
+
     recover_publisher_gap(
         &mut publisher,
         &mut subscriber,
