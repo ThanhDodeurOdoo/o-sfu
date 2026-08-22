@@ -15,11 +15,14 @@
 
 Only latest. Version support is at the Odoo layer.
 
-### SBOM & Attestations
+### Releases
 
-See the releases pages:
+#### The release includes:
+- A build provenance summary listing all the tools and pinned versions used to generate the binary.
+- SLSA/Sigstore attestations and a SHA256 checksum for every generated artifact
+- A SBOM in SPDX (ISO/IEC 5962:2021) format
 
-https://github.com/ThanhDodeurOdoo/o-sfu/releases
+see: https://github.com/ThanhDodeurOdoo/o-sfu/releases
 
 ### Contact
 
