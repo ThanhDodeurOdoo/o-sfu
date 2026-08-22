@@ -211,17 +211,13 @@ async fn protocol_core_queues_one_follow_up_offer_until_first_answer() -> TestRe
             ProtocolStreamType::Screen,
         ],
     ] {
-        let Some(tracks) = read_track_snapshot(&mut bob).await else {
-            panic!("subscriber should receive queued publish replay snapshot");
+        let Some(tracks) = read_track_snapshot_and_server_request(&mut bob).await else {
+            panic!("subscriber should receive each queued publish snapshot and negotiation");
         };
         assert_eq!(tracks.len(), expected.len());
         for stream_type in expected {
             assert_track_snapshot_contains(&tracks, &ProtocolSessionId::Integer(73), *stream_type);
         }
-        assert!(
-            read_until_server_request(&mut bob).await.is_some(),
-            "subscriber should negotiate each replayed stream"
-        );
     }
     assert!(
         no_server_frame(&mut bob, Duration::from_millis(150)).await,
