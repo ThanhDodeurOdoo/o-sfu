@@ -27,7 +27,9 @@ pub(super) use packet::{
     Packet, PacketIdentity, PacketInspector, ProjectedPacket, Projection, requires_decoder_refresh,
 };
 pub(in crate::engine::media_transport) use profile::RtpProfile;
-pub(super) use retransmission::{RepairSummary, validate_answer_sdp};
+pub(super) use retransmission::{
+    RepairSummary, primary_payload_type, repair_enabled, validate_answer_sdp,
+};
 pub(super) use rid::{
     NegotiatedRid, ParsedAnswerRids, initial_packet_gate as initial_consumer_packet_gate,
 };

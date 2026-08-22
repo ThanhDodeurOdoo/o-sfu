@@ -31,7 +31,7 @@ use super::{
     },
     media::remove_consumer_route,
     publication::{answer_producer_projection, refresh_negotiated_producer_parameters},
-    recv_stream::{StaleSsrcPolicy, apply_recv_stream},
+    recv_stream::{RecvStreamRepair, StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
     Bitrate, VideoBitrateLimits,
@@ -402,7 +402,10 @@ fn apply_pending_recv_streams(
                     mid,
                     stream.rid,
                     ssrc,
-                    repair_ssrc,
+                    RecvStreamRepair {
+                        ssrc: repair_ssrc,
+                        nack_enabled: repair_ssrc.is_some(),
+                    },
                     max_bitrate_in,
                     StaleSsrcPolicy::ReplaceStale,
                 );

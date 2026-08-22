@@ -20,7 +20,10 @@ fn keep_existing_primary_replaces_the_complete_repair_pair() -> Result<(), &'sta
         mid,
         None,
         primary,
-        Some(repair),
+        RecvStreamRepair {
+            ssrc: Some(repair),
+            nack_enabled: true,
+        },
         bitrate,
         StaleSsrcPolicy::ReplaceStale,
     );
@@ -29,7 +32,10 @@ fn keep_existing_primary_replaces_the_complete_repair_pair() -> Result<(), &'sta
         mid,
         None,
         Ssrc::from(201),
-        Some(next_repair),
+        RecvStreamRepair {
+            ssrc: Some(next_repair),
+            nack_enabled: true,
+        },
         bitrate,
         StaleSsrcPolicy::KeepExisting,
     );
@@ -45,7 +51,10 @@ fn keep_existing_primary_replaces_the_complete_repair_pair() -> Result<(), &'sta
         mid,
         None,
         Ssrc::from(202),
-        None,
+        RecvStreamRepair {
+            ssrc: None,
+            nack_enabled: false,
+        },
         bitrate,
         StaleSsrcPolicy::KeepExisting,
     );

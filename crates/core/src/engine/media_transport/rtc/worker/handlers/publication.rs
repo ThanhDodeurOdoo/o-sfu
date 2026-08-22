@@ -30,7 +30,7 @@ use super::{
         codec,
         state::{PacketLoopState, RtcSessionState},
     },
-    recv_stream::{StaleSsrcPolicy, apply_recv_stream},
+    recv_stream::{RecvStreamRepair, StaleSsrcPolicy, apply_recv_stream},
 };
 use crate::{
     Bitrate,
@@ -134,10 +134,10 @@ pub(super) fn refresh_negotiated_producer_parameters(
             if bindings.is_empty() {
                 continue;
             }
-            apply_projected_recv_streams(session_state, mid, &bindings, max_bitrate_in);
             let parameters =
                 RouterRtpParameters::new(formats, media_line.header_extensions, bindings)
                     .with_mid(mid.to_string());
+            apply_projected_recv_streams(session_state, mid, &parameters, max_bitrate_in);
             session_state
                 .sdp_negotiation
                 .negotiated_producer_parameters
@@ -157,12 +157,13 @@ pub(super) fn refresh_negotiated_producer_parameters(
 fn apply_projected_recv_streams(
     session_state: &mut RtcSessionState,
     mid: Mid,
-    bindings: &[StreamBinding],
+    parameters: &RouterRtpParameters,
     max_bitrate_in: Bitrate,
 ) {
+    let nack_enabled = codec::repair_enabled(parameters);
     {
         let mut api = session_state.rtc.direct_api();
-        for binding in bindings {
+        for binding in parameters.bindings() {
             let Some(ssrc) = binding.ssrc() else {
                 continue;
             };
@@ -171,7 +172,10 @@ fn apply_projected_recv_streams(
                 mid,
                 binding.rid().map(Rid::from),
                 ssrc.into(),
-                binding.repair_ssrc().map(Into::into),
+                RecvStreamRepair {
+                    ssrc: binding.repair_ssrc().map(Into::into),
+                    nack_enabled,
+                },
                 max_bitrate_in,
                 StaleSsrcPolicy::KeepExisting,
             );

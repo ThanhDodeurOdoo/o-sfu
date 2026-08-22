@@ -1,4 +1,4 @@
-use o_sfu_router::rtp::{MediaStream as RouterRtpParameters, RtcpFeedbackKind};
+use o_sfu_router::rtp::MediaStream as RouterRtpParameters;
 use str0m::media::{Mid, Pt};
 
 use super::{super::RouteSourceKind, selected_rid};
@@ -106,7 +106,7 @@ pub fn register_consumer_route(
         active,
     } = registration;
     let dest_payload_type = consumer_payload_type(consumer_rtp);
-    let repair_enabled = consumer_repair_enabled(consumer_rtp, dest_payload_type);
+    let repair_enabled = codec::repair_enabled(consumer_rtp);
     let requires_decoder_refresh = codec::requires_decoder_refresh(consumer_rtp, dest_payload_type);
     let (packet_gate, pending_gate) = selected_rid::guarded_pkt_gate(
         requires_decoder_refresh,
@@ -139,39 +139,7 @@ pub fn register_consumer_route(
 }
 
 pub fn consumer_payload_type(consumer_rtp: &RouterRtpParameters) -> Option<Pt> {
-    consumer_rtp
-        .bindings()
-        .find_map(|encoding| encoding.payload_type().map(Pt::from))
-        .or_else(|| {
-            consumer_rtp
-                .formats()
-                .find(|format| !format.codec().is_rtx())
-                .map(|format| Pt::from(format.payload_type()))
-        })
-}
-
-pub(in crate::engine::media_transport::rtc) fn consumer_repair_enabled(
-    consumer_rtp: &RouterRtpParameters,
-    primary_payload_type: Option<Pt>,
-) -> bool {
-    let Some(primary_payload_type) = primary_payload_type else {
-        return false;
-    };
-    let Some(primary) = consumer_rtp.formats().find(|format| {
-        !format.codec().is_rtx() && Pt::from(format.payload_type()) == primary_payload_type
-    }) else {
-        return false;
-    };
-    // Repair is usable only when Generic NACK was negotiated for the primary
-    // format and an RTX format names that primary payload type through `apt`.
-    // https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2
-    // https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1
-    primary.rtcp_feedback().any(|feedback| {
-        feedback.kind() == &RtcpFeedbackKind::Nack && feedback.parameter().is_none()
-    }) && consumer_rtp.formats().any(|format| {
-        format.codec().is_rtx()
-            && format.rtx_associated_payload_type_id() == Some(primary.payload_type_id())
-    })
+    codec::primary_payload_type(consumer_rtp)
 }
 
 pub(super) fn set_remote_src_pkt_gate(
