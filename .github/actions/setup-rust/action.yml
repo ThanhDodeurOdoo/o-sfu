@@ -1,0 +1,45 @@
+# Shared setup for jobs that use the compiler selected by rust-toolchain.toml.
+
+name: Set up repository Rust toolchain
+description: Install the repository toolchain, optional components and report versions
+
+inputs:
+  components:
+    description: Space-separated Rustup components to install
+    required: false
+    default: ""
+
+outputs:
+  rustc-version:
+    description: Version reported by rustc
+    value: ${{ steps.versions.outputs.rustc-version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install repository Rust toolchain
+      shell: bash
+      run: rustup toolchain install --profile minimal --no-self-update
+
+    - name: Install optional Rust components
+      if: inputs.components != ''
+      shell: bash
+      env:
+        O_SFU_RUST_COMPONENTS: ${{ inputs.components }}
+      run: |
+        set -euo pipefail
+        read -r -a components <<< "$O_SFU_RUST_COMPONENTS"
+        # No-argument toolchain installs ignore component flags for the active toolchain.
+        rustup component add "${components[@]}"
+
+    - name: Report Rust versions
+      id: versions
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustc_version="$(rustc --version)"
+        echo "rustc-version=${rustc_version}" >> "$GITHUB_OUTPUT"
+        rustup show active-toolchain
+        rustc --version --verbose
+        cargo --version --verbose
+        rustup --version
