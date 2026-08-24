@@ -40,30 +40,6 @@ pub(crate) async fn read_track_snapshot(
     None
 }
 
-pub(crate) async fn read_track_snapshot_and_server_request(
-    peer: &mut ProtocolHarnessPeer,
-) -> Option<Vec<TrackBinding>> {
-    let mut tracks = None;
-    let mut saw_request = false;
-    // Track snapshots and renegotiation requests use separate frames whose arrival
-    // order is not fixed, so retain either observation until its pair arrives.
-    for _ in 0..8 {
-        let websocket = peer.websocket.as_mut()?;
-        let payload = read_next_server_payload(websocket).await?;
-        let batch = serde_json::from_str::<EnvelopeBatch>(&payload).ok()?;
-        saw_request |= first_protocol_server_request(&batch).is_some();
-        if tracks.is_none() {
-            tracks = track_snapshot_in_batch(&batch);
-        }
-        let commands = peer.core.on_ws_message(&payload);
-        peer.run_commands(commands).await?;
-        if saw_request && tracks.is_some() {
-            return tracks;
-        }
-    }
-    None
-}
-
 pub(crate) async fn read_until_server_request(peer: &mut ProtocolHarnessPeer) -> Option<()> {
     for _ in 0..4 {
         let websocket = peer.websocket.as_mut()?;
