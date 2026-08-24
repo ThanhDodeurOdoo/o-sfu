@@ -58,11 +58,8 @@ impl<'a> SourcePolicySnapshot<'a> {
             media_limits.max_active_audio_speakers(),
         );
         let deaf_receiver_connection_ids = deaf_receiver_connection_ids(room);
-        let featured_source_user_ids = featured_source_user_ids(room, &ranked_sources);
-        let active_speaker_rank_by_user = active_speaker_rank_by_user(room, &ranked_sources);
-        let desired_featured_user_id = ranked_sources.iter().find_map(|source| {
-            featured_source_owner_for_active_speaker_source(room, source.transport_media_id())
-        });
+        let (desired_featured_user_id, featured_source_user_ids, active_speaker_rank_by_user) =
+            derive_active_speaker_facts(room, &ranked_sources);
         let featured_user_updates = featured_user_updates(room, desired_featured_user_id.as_ref());
         // Include policy-paused routes so later turns can resume them. Filtering
         // on `delivery_active()` would make a policy pause self-perpetuating.
@@ -245,31 +242,42 @@ fn deaf_receiver_connection_ids(room: &RoomState) -> BTreeSet<ConnectionId> {
         .collect()
 }
 
-fn featured_source_user_ids(room: &RoomState, sources: &[ActiveSpeakerSource]) -> BTreeSet<UserId> {
-    sources
-        .iter()
-        .filter_map(|source| {
-            featured_source_owner_for_active_speaker_source(room, source.transport_media_id())
-        })
-        .take(ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT)
-        .collect()
-}
-
-fn active_speaker_rank_by_user(
+/// Derive featured owner, featured user set, and per-user speaker rank in one
+/// pass over `ranked_sources` so each source resolves its owner at most once.
+fn derive_active_speaker_facts(
     room: &RoomState,
     sources: &[ActiveSpeakerSource],
-) -> BTreeMap<UserId, usize> {
-    let mut ranks = BTreeMap::new();
+) -> (Option<UserId>, BTreeSet<UserId>, BTreeMap<UserId, usize>) {
+    let mut desired_featured_user_id = None;
+    let mut featured_source_user_ids = BTreeSet::new();
+    let mut active_speaker_rank_by_user = BTreeMap::new();
+
     for source in sources {
         let Some(user_id) =
             featured_source_owner_for_active_speaker_source(room, source.transport_media_id())
         else {
             continue;
         };
-        let next_rank = ranks.len();
-        ranks.entry(user_id).or_insert(next_rank);
+
+        if desired_featured_user_id.is_none() {
+            desired_featured_user_id = Some(user_id.clone());
+        }
+
+        let next_rank = active_speaker_rank_by_user.len();
+        active_speaker_rank_by_user
+            .entry(user_id.clone())
+            .or_insert(next_rank);
+
+        if featured_source_user_ids.len() < ACTIVE_SPEAKER_FEATURED_CLEAR_LIMIT {
+            featured_source_user_ids.insert(user_id);
+        }
     }
-    ranks
+
+    (
+        desired_featured_user_id,
+        featured_source_user_ids,
+        active_speaker_rank_by_user,
+    )
 }
 
 fn featured_source_owner_for_active_speaker_source(
