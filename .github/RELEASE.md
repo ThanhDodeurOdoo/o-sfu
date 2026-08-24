@@ -36,8 +36,10 @@ references are read from the tagged `Dockerfile`.
 
 ## build inputs
 
-the preflight summary records the reviewed Buildx, BuildKit, Rust, Node.js,
-wasm-pack and Docker base-image references from the tagged workflow. Docker
+the preflight summary records the reviewed Buildx, BuildKit, Node.js, wasm-pack
+and Docker base-image references from the tagged workflow. the tagged
+`rust-toolchain.toml` selects the host Rust compiler. the release job records
+the version reported by the selected compiler in the release notes. Docker
 bases keep readable tags and immutable multi-platform index digests. the runtime
 copies the CA bundle from the pinned builder, so the image build performs no
 operating-system package download.
@@ -45,15 +47,28 @@ operating-system package download.
 Dependabot checks the root Dockerfile each week and proposes base tag or digest
 updates as pull requests. review and verify those changes before merging them.
 GitHub Actions updates remain separate Dependabot pull requests. update the
-exact Buildx, Rust, Node.js or wasm-pack selector in `release.yml` through the
-same reviewed pull-request process when a toolchain update is intentional.
-BuildKit updates must change its readable tag and multi-platform index digest
-together against the published `moby/buildkit` image.
+exact Buildx, Node.js or wasm-pack selector in `release.yml` through the same
+reviewed pull-request process when a tool update is intentional. BuildKit
+updates must change its readable tag and multi-platform index digest together
+against the published `moby/buildkit` image.
 
 `ubuntu-24.04` fixes the release runner OS generation. GitHub still updates the
 hosted image contents and does not expose a content-digest runner selector. the
 exact runner image used by a release remains available in that workflow run's
 setup log.
+
+## updating Rust versions
+
+1. update [`rust-toolchain.toml`](/rust-toolchain.toml) for developer builds,
+   normal CI and releases.
+2. update the Rust builder tag and immutable digest in
+   [`Dockerfile`](/Dockerfile) in the same pull request.
+3. update Cargo `rust-version` in [`Cargo.toml`](/Cargo.toml) only when the
+   supported compiler floor changes.
+
+the container build rejects a compiler that differs from
+[`rust-toolchain.toml`](/rust-toolchain.toml). dated nightly and tool-specific
+toolchains remain independent.
 
 ## updating the release lockfile
 

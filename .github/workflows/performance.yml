@@ -5,8 +5,10 @@ on:
   push:
     branches: [main, master]
     paths:
+      - .github/actions/setup-rust/**
       - .github/workflows/performance.yml
       - Cargo.lock
+      - rust-toolchain.toml
       - crates/core/Cargo.toml
       - crates/core/src/engine/room/**
       - crates/core/src/engine/source_model/**
@@ -22,8 +24,10 @@ on:
   pull_request:
     branches: [main, master]
     paths:
+      - .github/actions/setup-rust/**
       - .github/workflows/performance.yml
       - Cargo.lock
+      - rust-toolchain.toml
       - crates/core/Cargo.toml
       - crates/core/src/engine/room/**
       - crates/core/src/engine/source_model/**
@@ -112,17 +116,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq valgrind
 
-      - name: Install Rust toolchain
-        # dtolnay/rust-toolchain master
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
-        with:
-          toolchain: 1.95.0
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+
+      - name: Freeze Rust toolchain
+        run: |
+          set -euo pipefail
+          toolchain="$(rustup show active-toolchain | awk '{print $1}')"
+          echo "RUSTUP_TOOLCHAIN=${toolchain}" >> "$GITHUB_ENV"
 
       - name: Cache Rust build artifacts
         # Swatinem/rust-cache v2
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          shared-key: rust-1.95-gungraun
+          shared-key: callgrind
 
       - name: Install Gungraun runner
         run: cargo install gungraun-runner --version 0.19.4 --locked
@@ -317,6 +324,7 @@ jobs:
             printf 'base_ref=%s\n' '${{ steps.refs.outputs.base-ref }}'
             printf 'head_ref=%s\n' '${{ steps.refs.outputs.head-ref }}'
             printf 'pull_request_number=%s\n' "$PULL_REQUEST_NUMBER"
+            printf 'rust_toolchain=%s\n' "$RUSTUP_TOOLCHAIN"
             printf 'workflow_event=%s\n' "$GITHUB_EVENT_NAME"
             printf 'worker_investigation=%s\n' "${INPUT_WORKER_INVESTIGATION:-false}"
             printf 'cache_simulation=%s\n' "${INPUT_CACHE_SIMULATION:-false}"

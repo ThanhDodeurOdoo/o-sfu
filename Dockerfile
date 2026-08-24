@@ -2,6 +2,12 @@ FROM rust:1.95.0-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f9
 
 WORKDIR /app
 
+ENV RUSTUP_AUTO_INSTALL=0
+
+COPY rust-toolchain.toml ./
+
+RUN test "$(rustc --version --verbose | sed -n 's/^release: //p')" = "$RUST_VERSION"
+
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY tests ./tests
