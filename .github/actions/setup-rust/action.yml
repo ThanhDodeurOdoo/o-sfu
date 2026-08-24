@@ -1,4 +1,5 @@
 # Shared setup for jobs that use the compiler selected by rust-toolchain.toml.
+# Cargo CI defaults apply only when callers have not selected their own values.
 
 name: Set up repository Rust toolchain
 description: Install the repository toolchain, optional components and report versions
@@ -17,6 +18,16 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Configure Cargo environment
+      shell: bash
+      run: |
+        if [[ -z "${CARGO_INCREMENTAL+x}" ]]; then
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+        fi
+        if [[ -z "${CARGO_TERM_COLOR+x}" ]]; then
+          echo "CARGO_TERM_COLOR=always" >> "$GITHUB_ENV"
+        fi
+
     - name: Install repository Rust toolchain
       shell: bash
       run: rustup toolchain install --profile minimal --no-self-update
