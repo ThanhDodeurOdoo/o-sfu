@@ -5,8 +5,8 @@ use super::support::{self as s, media as m, setup as st};
 const RECOVERY_TIMEOUT: s::Duration = s::Duration::from_secs(3);
 const POST_RECOVERY_SETTLE: s::Duration = s::Duration::from_millis(200);
 const RTC_POLL_SLICE: s::Duration = s::Duration::from_millis(50);
-// Keeps the primary queued beyond RECOVERY_TIMEOUT until the test releases it.
-const LATE_PRIMARY_DELAY: s::Duration = s::Duration::from_secs(10);
+// Keeps one selected RTP packet queued beyond RECOVERY_TIMEOUT until release.
+const NETEM_RTP_DELAY: s::Duration = s::Duration::from_secs(10);
 const GAP_EXPOSING_PACKET_COUNT: usize = 6;
 const RIDLESS_POLICY_WARMUP_PACKET_COUNT: usize = 60;
 
@@ -399,7 +399,7 @@ async fn fake_rtc_does_not_forward_late_primary_after_rtx() -> s::TestResult {
     assert!(publisher.try_delay_next_outbound_rtp(
         primary_payload_type,
         primary_ssrc,
-        LATE_PRIMARY_DELAY,
+        NETEM_RTP_DELAY,
     ));
     let expected_payload = s::require_some(
         publisher.send_rtp_packet(&mut source, &mut clock).await,
@@ -470,6 +470,94 @@ async fn fake_rtc_does_not_forward_late_primary_after_rtx() -> s::TestResult {
             .is_none(),
         "subscriber should not receive the late primary after RTX"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_rtc_recovers_before_delayed_publisher_rtx() -> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let (peers, mut source, mut clock) = Box::pin(ready_nack_route(
+        "issuer-delayed-publisher-rtx",
+        124,
+        125,
+        Some("hi"),
+    ))
+    .await?;
+    let st::ReadyRoomFakePeers {
+        mut publisher,
+        mut subscriber,
+        ..
+    } = peers;
+    let (primary_payload_type, repair_payload_type) = s::require_some(
+        publisher.repair_payload_types(&s::CodecName::Vp8),
+        "publisher should negotiate VP8 RTX",
+    )?;
+    let (primary_ssrc, repair_ssrc) = s::require_some(
+        publisher.send_stream_ssrc_pair(source.media_kind(), Some("hi")),
+        "publisher should negotiate a matching primary and repair SSRC pair",
+    )?;
+
+    let (dropped, mut trace, expected_payload) = hold_next_publisher_primary(
+        &mut publisher,
+        &mut source,
+        &mut clock,
+        primary_payload_type,
+        primary_ssrc,
+    )
+    .await?;
+    assert!(publisher.discard_next_held_outbound_rtp());
+
+    // Wireless interference or congestion can also affect the repair packet.
+    // RFC 4588 section 6.3 permits another NACK after a retransmission fails.
+    // https://www.rfc-editor.org/rfc/rfc4588.html#section-6.3
+    assert!(publisher.try_delay_next_outbound_rtp(
+        repair_payload_type,
+        repair_ssrc,
+        NETEM_RTP_DELAY,
+    ));
+    s::require_some(
+        publisher
+            .send_rtp_packets(&mut source, &mut clock, GAP_EXPOSING_PACKET_COUNT)
+            .await,
+        "publisher should expose the primary gap",
+    )?;
+    s::require_some(
+        pump_until_rtx_count(
+            &mut publisher,
+            &mut trace,
+            s::RtcTraceDirection::Tx,
+            dropped.sequence_number,
+            2,
+            RECOVERY_TIMEOUT,
+        )
+        .await,
+        "publisher should retry RTX while the first repair remains delayed",
+    )?;
+
+    assert_publisher_repair_retry(
+        &trace,
+        dropped,
+        repair_payload_type,
+        repair_ssrc,
+        &expected_payload,
+    )?;
+
+    s::require_some(
+        read_payload(&mut subscriber, &expected_payload, RECOVERY_TIMEOUT).await,
+        "subscriber should recover through the later RTX packet",
+    )?;
+    assert!(publisher.has_delayed_outbound_rtp());
+    s::require_some(
+        publisher.release_delayed_outbound_rtp().await,
+        "publisher should release the delayed first RTX packet",
+    )?;
+    assert!(
+        read_payload(&mut subscriber, &expected_payload, POST_RECOVERY_SETTLE)
+            .await
+            .is_none(),
+        "subscriber should emit the recovered payload once"
+    );
+    assert_eq!(trace.keyframe_requests, 0);
     Ok(())
 }
 
@@ -607,28 +695,9 @@ async fn assert_publisher_gap_nack(
     primary_ssrc: u32,
     expected: ExpectedPublisherFeedback,
 ) -> s::TestResult<(s::DroppedRtpPacket, s::RtcPeerTrace, Vec<u8>)> {
-    publisher.start_rtc_trace();
-    publisher.hold_outbound_rtp(primary_payload_type, primary_ssrc);
-    let expected_payload = s::require_some(
-        publisher.send_rtp_packet(source, clock).await,
-        "publisher should send the packet selected for loss",
-    )?;
-    publisher.clear_outbound_rtp_hold();
-    let mut trace = publisher.take_rtc_trace();
-    assert!(
-        pump_until_drop(
-            publisher,
-            &mut trace,
-            s::RtcTraceDirection::Tx,
-            RECOVERY_TIMEOUT,
-        )
-        .await
-        .is_some()
-    );
-    let dropped = s::require_some(
-        only_dropped_packet(&trace, s::RtcTraceDirection::Tx),
-        "publisher should drop exactly one selected packet",
-    )?;
+    let (dropped, mut trace, expected_payload) =
+        hold_next_publisher_primary(publisher, source, clock, primary_payload_type, primary_ssrc)
+            .await?;
     assert!(
         publisher
             .send_rtp_packets(source, clock, GAP_EXPOSING_PACKET_COUNT)
@@ -670,6 +739,38 @@ async fn assert_publisher_gap_nack(
         assert!(publisher.discard_next_held_outbound_rtp());
     }
     assert!(publisher.pump_rtc(POST_RECOVERY_SETTLE).await.is_some());
+    Ok((dropped, trace, expected_payload))
+}
+
+async fn hold_next_publisher_primary(
+    publisher: &mut s::ProtocolFakePeer,
+    source: &mut s::FakeMediaSource,
+    clock: &mut s::FakeClock,
+    primary_payload_type: u8,
+    primary_ssrc: u32,
+) -> s::TestResult<(s::DroppedRtpPacket, s::RtcPeerTrace, Vec<u8>)> {
+    publisher.start_rtc_trace();
+    publisher.hold_outbound_rtp(primary_payload_type, primary_ssrc);
+    let expected_payload = s::require_some(
+        publisher.send_rtp_packet(source, clock).await,
+        "publisher should send the packet selected for loss",
+    )?;
+    publisher.clear_outbound_rtp_hold();
+    let mut trace = publisher.take_rtc_trace();
+    assert!(
+        pump_until_drop(
+            publisher,
+            &mut trace,
+            s::RtcTraceDirection::Tx,
+            RECOVERY_TIMEOUT,
+        )
+        .await
+        .is_some()
+    );
+    let dropped = s::require_some(
+        only_dropped_packet(&trace, s::RtcTraceDirection::Tx),
+        "publisher should drop exactly one selected packet",
+    )?;
     Ok((dropped, trace, expected_payload))
 }
 
@@ -766,14 +867,7 @@ async fn restart_publisher_vp8_and_assert_rewrite(
     source: &mut s::FakeMediaSource,
     clock: &mut s::FakeClock,
 ) -> s::TestResult<(s::FakeMediaSource, Vec<u8>, s::ReceivedRtpPacket)> {
-    let sample_payload = s::require_some(
-        publisher.send_rtp_packet(source, clock).await,
-        "publisher should send the primary stream sample",
-    )?;
-    let sample = s::require_some(
-        read_payload(subscriber, &sample_payload, RECOVERY_TIMEOUT).await,
-        "subscriber should receive the primary stream sample",
-    )?;
+    let (_, sample) = downstream_identity_anchor(publisher, subscriber, source, clock).await?;
     s::require_some(
         publisher.reset_rtp_ssrc(source.media_kind(), Some("hi")),
         "publisher should restart its VP8 stream before subscriber loss",
@@ -796,6 +890,84 @@ async fn restart_publisher_vp8_and_assert_rewrite(
     assert_eq!(restart_sample.ssrc, sample.ssrc);
     assert_ne!(restart_sample.payload.as_ref(), restart_payload.as_slice());
     Ok((restarted_source, restart_payload, restart_sample))
+}
+
+async fn downstream_identity_anchor(
+    publisher: &mut s::ProtocolFakePeer,
+    subscriber: &mut s::ProtocolFakePeer,
+    source: &mut s::FakeMediaSource,
+    clock: &mut s::FakeClock,
+) -> s::TestResult<(Vec<u8>, s::ReceivedRtpPacket)> {
+    let source_payload = s::require_some(
+        publisher.send_rtp_packet(source, clock).await,
+        "publisher should send the downstream identity anchor",
+    )?;
+    let downstream_packet = s::require_some(
+        read_payload(subscriber, &source_payload, RECOVERY_TIMEOUT).await,
+        "subscriber should receive the downstream identity anchor",
+    )?;
+    Ok((source_payload, downstream_packet))
+}
+
+async fn recover_subscriber_gap(
+    publisher: &mut s::ProtocolFakePeer,
+    subscriber: &mut s::ProtocolFakePeer,
+    source: &mut s::FakeMediaSource,
+    clock: &mut s::FakeClock,
+    primary_payload_type: u8,
+    primary_ssrc: u32,
+    repair_loss: Option<(u8, u32)>,
+) -> s::TestResult<(
+    s::DroppedRtpPacket,
+    s::RtcPeerTrace,
+    s::ReceivedRtpPacket,
+    Vec<u8>,
+)> {
+    publisher.start_rtc_trace();
+    subscriber.start_rtc_trace();
+    subscriber.drop_next_inbound_rtp(primary_payload_type, primary_ssrc);
+    let expected_payload = s::require_some(
+        publisher.send_rtp_packet(source, clock).await,
+        "publisher should send the packet selected for subscriber loss",
+    )?;
+    let mut trace = subscriber.take_rtc_trace();
+    s::require_some(
+        pump_until_drop(
+            subscriber,
+            &mut trace,
+            s::RtcTraceDirection::Rx,
+            RECOVERY_TIMEOUT,
+        )
+        .await,
+        "subscriber should lose the selected primary packet",
+    )?;
+    let dropped = s::require_some(
+        trace
+            .dropped_rtp_packets
+            .iter()
+            .find(|packet| {
+                packet.direction == s::RtcTraceDirection::Rx
+                    && packet.payload_type == primary_payload_type
+                    && packet.ssrc == primary_ssrc
+            })
+            .copied(),
+        "subscriber should lose the selected primary packet",
+    )?;
+    if let Some((repair_payload_type, repair_ssrc)) = repair_loss {
+        subscriber.drop_next_inbound_rtp(repair_payload_type, repair_ssrc);
+    }
+    s::require_some(
+        publisher
+            .send_rtp_packets(source, clock, GAP_EXPOSING_PACKET_COUNT)
+            .await,
+        "publisher should send packets after the subscriber gap",
+    )?;
+    let recovered = s::require_some(
+        read_sequence(subscriber, dropped.sequence_number, RECOVERY_TIMEOUT).await,
+        "subscriber should receive its repaired packet",
+    )?;
+    merge_trace(&mut trace, subscriber.take_rtc_trace());
+    Ok((dropped, trace, recovered, expected_payload))
 }
 
 #[tokio::test]
@@ -830,44 +1002,16 @@ async fn fake_rtc_recovers_subscriber_video_loss_with_nack_and_rtx() -> s::TestR
         subscriber.receive_repair_ssrc(restart_sample.ssrc),
         "subscriber should negotiate a VP8 repair SSRC",
     )?;
-    publisher.start_rtc_trace();
-    subscriber.start_rtc_trace();
-    subscriber.drop_next_inbound_rtp(restart_sample.payload_type, restart_sample.ssrc);
-    let expected_payload = s::require_some(
-        publisher
-            .send_rtp_packet(&mut restarted_source, &mut clock)
-            .await,
-        "publisher should send the packet selected for subscriber loss",
-    )?;
-    s::require_some(
-        publisher
-            .send_rtp_packets(&mut restarted_source, &mut clock, GAP_EXPOSING_PACKET_COUNT)
-            .await,
-        "publisher should send packets after the subscriber gap",
-    )?;
-
-    let mut subscriber_trace = s::RtcPeerTrace::default();
-    let packet_after_drop = s::require_some(
-        read_until_drop(
-            &mut subscriber,
-            &mut subscriber_trace,
-            s::RtcTraceDirection::Rx,
-            RECOVERY_TIMEOUT,
-        )
-        .await,
-        "subscriber should receive a packet after the gap",
-    )?;
-    let dropped = s::require_some(
-        only_dropped_packet(&subscriber_trace, s::RtcTraceDirection::Rx),
-        "subscriber should drop exactly one selected packet",
-    )?;
-    let recovered = if packet_after_drop.sequence_number == dropped.sequence_number {
-        Some(packet_after_drop)
-    } else {
-        read_sequence(&mut subscriber, dropped.sequence_number, RECOVERY_TIMEOUT).await
-    };
-    merge_trace(&mut subscriber_trace, subscriber.take_rtc_trace());
-    let recovered = s::require_some(recovered, "subscriber should receive its repaired packet")?;
+    let (dropped, subscriber_trace, recovered, expected_payload) = recover_subscriber_gap(
+        &mut publisher,
+        &mut subscriber,
+        &mut restarted_source,
+        &mut clock,
+        restart_sample.payload_type,
+        restart_sample.ssrc,
+        None,
+    )
+    .await?;
     let expected_rewritten_payload = s::require_some(
         s::project_synthetic_vp8_payload(
             &restart_source_anchor,
@@ -901,6 +1045,76 @@ async fn fake_rtc_recovers_subscriber_video_loss_with_nack_and_rtx() -> s::TestR
     );
     assert_eq!(subscriber_trace.keyframe_requests, 0);
 
+    assert_no_publisher_repair_feedback(&mut publisher).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_rtc_recovers_after_first_downstream_rtx_loss() -> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let (peers, mut source, mut clock) = Box::pin(ready_nack_route(
+        "issuer-downstream-rtx-loss",
+        126,
+        127,
+        Some("hi"),
+    ))
+    .await?;
+    let st::ReadyRoomFakePeers {
+        mut publisher,
+        mut subscriber,
+        ..
+    } = peers;
+    let (source_anchor, downstream_anchor) =
+        downstream_identity_anchor(&mut publisher, &mut subscriber, &mut source, &mut clock)
+            .await?;
+    let (_, repair_payload_type) = s::require_some(
+        subscriber.repair_payload_types(&s::CodecName::Vp8),
+        "subscriber should negotiate VP8 RTX",
+    )?;
+    let repair_ssrc = s::require_some(
+        subscriber.receive_repair_ssrc(downstream_anchor.ssrc),
+        "subscriber should negotiate a VP8 repair SSRC",
+    )?;
+
+    // Correlated loss can remove the primary and its first repair on the same
+    // Wi-Fi or congested path. The repeated NACK must remain local to O-SFU.
+    let (dropped, subscriber_trace, recovered, expected_payload) = recover_subscriber_gap(
+        &mut publisher,
+        &mut subscriber,
+        &mut source,
+        &mut clock,
+        downstream_anchor.payload_type,
+        downstream_anchor.ssrc,
+        Some((repair_payload_type, repair_ssrc)),
+    )
+    .await?;
+    let expected_rewritten_payload = s::require_some(
+        s::project_synthetic_vp8_payload(
+            &source_anchor,
+            &downstream_anchor.payload,
+            expected_payload,
+        ),
+        "subscriber repair should have a projected VP8 identity",
+    )?;
+    assert_subscriber_repair_retry(
+        &subscriber_trace,
+        dropped,
+        repair_payload_type,
+        repair_ssrc,
+        &recovered,
+        &expected_rewritten_payload,
+    )?;
+    assert!(
+        read_sequence(
+            &mut subscriber,
+            recovered.sequence_number,
+            POST_RECOVERY_SETTLE,
+        )
+        .await
+        .is_none(),
+        "subscriber should emit the recovered payload once"
+    );
+    assert_eq!(subscriber_trace.keyframe_requests, 0);
     assert_no_publisher_repair_feedback(&mut publisher).await?;
     Ok(())
 }
@@ -991,6 +1205,54 @@ fn assert_publisher_recovery(
     Ok(())
 }
 
+fn assert_publisher_repair_retry(
+    trace: &s::RtcPeerTrace,
+    dropped: s::DroppedRtpPacket,
+    repair_payload_type: u8,
+    repair_ssrc: u32,
+    expected_payload: &[u8],
+) -> s::TestResult {
+    assert!(
+        matching_nack_count(
+            trace,
+            s::RtcTraceDirection::Rx,
+            dropped.ssrc,
+            dropped.sequence_number,
+        ) >= 2
+    );
+    assert!(
+        !trace
+            .nacks
+            .iter()
+            .any(|nack| { nack.direction == s::RtcTraceDirection::Rx && nack.ssrc == repair_ssrc })
+    );
+    let mut repairs =
+        matching_rtx_packets(trace, s::RtcTraceDirection::Tx, dropped.sequence_number);
+    let first_repair = s::require_some(
+        repairs.next(),
+        "publisher should emit the first matching RTX packet",
+    )?;
+    let second_repair = s::require_some(
+        repairs.next(),
+        "publisher should emit a later matching RTX packet",
+    )?;
+    for repair in [first_repair, second_repair] {
+        assert_eq!(repair.payload_type, repair_payload_type);
+        assert_eq!(repair.ssrc, repair_ssrc);
+        assert_eq!(
+            repair.payload.get(RTX_ORIGINAL_SEQUENCE_NUMBER_BYTES..),
+            Some(expected_payload)
+        );
+        assert_fresh_transport_sequence(repair, dropped);
+    }
+    assert_ne!(first_repair.sequence_number, second_repair.sequence_number);
+    assert_ne!(
+        first_repair.transport_sequence_number,
+        second_repair.transport_sequence_number
+    );
+    Ok(())
+}
+
 fn assert_subscriber_recovery(
     trace: &s::RtcPeerTrace,
     dropped: s::DroppedRtpPacket,
@@ -1034,6 +1296,61 @@ fn assert_subscriber_recovery(
     Ok(())
 }
 
+fn assert_subscriber_repair_retry(
+    trace: &s::RtcPeerTrace,
+    dropped: s::DroppedRtpPacket,
+    repair_payload_type: u8,
+    repair_ssrc: u32,
+    recovered: &s::ReceivedRtpPacket,
+    expected_payload: &[u8],
+) -> s::TestResult {
+    let first_repair_drop = s::require_some(
+        trace
+            .dropped_rtp_packets
+            .iter()
+            .find(|packet| {
+                packet.direction == s::RtcTraceDirection::Rx
+                    && packet.payload_type == repair_payload_type
+                    && packet.ssrc == repair_ssrc
+            })
+            .copied(),
+        "subscriber should lose the first matching RTX packet",
+    )?;
+    assert_eq!(first_repair_drop.timestamp, dropped.timestamp);
+    assert_eq!(first_repair_drop.marker, dropped.marker);
+    assert!(
+        matching_nack_count(
+            trace,
+            s::RtcTraceDirection::Tx,
+            dropped.ssrc,
+            dropped.sequence_number,
+        ) >= 2
+    );
+    assert!(
+        !trace
+            .nacks
+            .iter()
+            .any(|nack| { nack.direction == s::RtcTraceDirection::Tx && nack.ssrc == repair_ssrc })
+    );
+    assert_subscriber_recovery(trace, dropped, repair_payload_type, repair_ssrc, recovered)?;
+    assert_eq!(recovered.payload.as_ref(), expected_payload);
+    let delivered_repair = s::require_some(
+        matching_rtx(trace, s::RtcTraceDirection::Rx, dropped.sequence_number),
+        "subscriber should receive the later RTX packet",
+    )?;
+    assert_ne!(
+        delivered_repair.sequence_number,
+        first_repair_drop.sequence_number
+    );
+    assert!(first_repair_drop.transport_sequence_number.is_some());
+    assert_ne!(
+        first_repair_drop.transport_sequence_number,
+        dropped.transport_sequence_number
+    );
+    assert_fresh_transport_sequence(delivered_repair, first_repair_drop);
+    Ok(())
+}
+
 fn assert_fresh_transport_sequence(rtx: &s::TracedRtpPacket, dropped: s::DroppedRtpPacket) {
     assert!(dropped.transport_sequence_number.is_some());
     assert!(rtx.transport_sequence_number.is_some());
@@ -1058,11 +1375,24 @@ fn nack_contains(
     ssrc: u32,
     sequence_number: u16,
 ) -> bool {
-    trace.nacks.iter().any(|nack| {
-        nack.direction == direction
-            && nack.ssrc == ssrc
-            && nack.sequence_numbers.contains(&sequence_number)
-    })
+    matching_nack_count(trace, direction, ssrc, sequence_number) > 0
+}
+
+fn matching_nack_count(
+    trace: &s::RtcPeerTrace,
+    direction: s::RtcTraceDirection,
+    ssrc: u32,
+    sequence_number: u16,
+) -> usize {
+    trace
+        .nacks
+        .iter()
+        .filter(|nack| {
+            nack.direction == direction
+                && nack.ssrc == ssrc
+                && nack.sequence_numbers.contains(&sequence_number)
+        })
+        .count()
 }
 
 fn matching_rtx(
@@ -1070,7 +1400,15 @@ fn matching_rtx(
     direction: s::RtcTraceDirection,
     original_sequence_number: u16,
 ) -> Option<&s::TracedRtpPacket> {
-    trace.rtp_packets.iter().find(|packet| {
+    matching_rtx_packets(trace, direction, original_sequence_number).next()
+}
+
+fn matching_rtx_packets(
+    trace: &s::RtcPeerTrace,
+    direction: s::RtcTraceDirection,
+    original_sequence_number: u16,
+) -> impl Iterator<Item = &s::TracedRtpPacket> {
+    trace.rtp_packets.iter().filter(move |packet| {
         packet.direction == direction
             && packet.original_sequence_number == Some(original_sequence_number)
     })
@@ -1140,30 +1478,6 @@ async fn read_matching_packet(
     }
 }
 
-async fn read_until_drop(
-    peer: &mut s::ProtocolFakePeer,
-    trace: &mut s::RtcPeerTrace,
-    direction: s::RtcTraceDirection,
-    timeout_window: s::Duration,
-) -> Option<s::ReceivedRtpPacket> {
-    let deadline = s::Instant::now() + timeout_window;
-    loop {
-        let now = s::Instant::now();
-        if now >= deadline {
-            return None;
-        }
-        let packet = peer.read_rtp_packet(deadline - now).await?;
-        merge_trace(trace, peer.take_rtc_trace());
-        if trace
-            .dropped_rtp_packets
-            .iter()
-            .any(|packet| packet.direction == direction)
-        {
-            return Some(packet);
-        }
-    }
-}
-
 async fn pump_until_drop(
     peer: &mut s::ProtocolFakePeer,
     trace: &mut s::RtcPeerTrace,
@@ -1195,12 +1509,30 @@ async fn pump_until_rtx(
     original_sequence_number: u16,
     timeout_window: s::Duration,
 ) -> Option<()> {
+    pump_until_rtx_count(
+        peer,
+        trace,
+        direction,
+        original_sequence_number,
+        1,
+        timeout_window,
+    )
+    .await
+}
+
+async fn pump_until_rtx_count(
+    peer: &mut s::ProtocolFakePeer,
+    trace: &mut s::RtcPeerTrace,
+    direction: s::RtcTraceDirection,
+    original_sequence_number: u16,
+    expected_count: usize,
+    timeout_window: s::Duration,
+) -> Option<()> {
     let deadline = s::Instant::now() + timeout_window;
     loop {
-        if trace.rtp_packets.iter().any(|packet| {
-            packet.direction == direction
-                && packet.original_sequence_number == Some(original_sequence_number)
-        }) {
+        if matching_rtx_packets(trace, direction, original_sequence_number).count()
+            >= expected_count
+        {
             return Some(());
         }
         let now = s::Instant::now();

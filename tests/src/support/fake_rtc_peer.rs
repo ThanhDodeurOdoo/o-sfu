@@ -27,7 +27,9 @@ use str0m::{
         rtcp::{Nack, Rtcp},
     },
 };
-use str0m_netem::{Input as NetemInput, Netem, NetemConfig, Output as NetemOutput};
+use str0m_netem::{
+    Input as NetemInput, Netem, NetemConfig, Output as NetemOutput, Probability, RandomLoss,
+};
 use tokio::{net::UdpSocket, time::timeout};
 use tokio_util::bytes::Bytes;
 
@@ -112,7 +114,7 @@ pub struct FakeRtcPeer {
     trace_enabled: bool,
     outbound_rtp_hold: Option<RtpSelector>,
     outbound_rtp_delay: Option<OutboundRtpDelay>,
-    drop_next_inbound_rtp: Option<RtpSelector>,
+    drop_next_inbound_rtp: Option<RtpLoss>,
     held_outbound_rtp: VecDeque<(SocketAddr, Vec<u8>)>,
 }
 
@@ -120,6 +122,11 @@ pub struct FakeRtcPeer {
 struct RtpSelector {
     payload_type: u8,
     ssrc: u32,
+}
+
+struct RtpLoss {
+    selector: RtpSelector,
+    netem: Netem<Bytes>,
 }
 
 struct OutboundRtpDelay {
@@ -330,7 +337,7 @@ impl FakeRtcPeer {
 
     pub fn drop_next_inbound_rtp(&mut self, payload_type: u8, ssrc: u32) {
         self.trace_enabled = true;
-        self.drop_next_inbound_rtp = Some(RtpSelector { payload_type, ssrc });
+        self.drop_next_inbound_rtp = Some(RtpLoss::new(RtpSelector { payload_type, ssrc }));
     }
 
     pub fn held_outbound_rtp_count(&self) -> usize {
@@ -655,21 +662,29 @@ impl FakeRtcPeer {
         None
     }
 
-    fn intercept_selected_rtp(&mut self, direction: RtcTraceDirection, packet: &[u8]) -> bool {
+    fn intercept_selected_rtp(&mut self, direction: RtcTraceDirection, raw_packet: &[u8]) -> bool {
         let Some(packet) =
-            dropped_rtp_packet(direction, packet, self.transport_sequence_extension_id)
+            dropped_rtp_packet(direction, raw_packet, self.transport_sequence_extension_id)
         else {
             return false;
         };
         let selected = match direction {
             RtcTraceDirection::Tx => self.outbound_rtp_hold,
-            RtcTraceDirection::Rx => self.drop_next_inbound_rtp,
+            RtcTraceDirection::Rx => self
+                .drop_next_inbound_rtp
+                .as_ref()
+                .map(|loss| loss.selector),
         };
         if !selected.is_some_and(|selector| selector.matches(packet.payload_type, packet.ssrc)) {
             return false;
         }
         if direction == RtcTraceDirection::Rx {
-            self.drop_next_inbound_rtp = None;
+            let Some(mut loss) = self.drop_next_inbound_rtp.take() else {
+                return false;
+            };
+            if !loss.drops(raw_packet) {
+                return false;
+            }
         }
         if self.trace_enabled {
             self.trace.dropped_rtp_packets.push(packet);
@@ -843,6 +858,23 @@ fn dropped_rtp_packet(
 impl RtpSelector {
     fn matches(self, payload_type: u8, ssrc: u32) -> bool {
         self.payload_type == payload_type && self.ssrc == ssrc
+    }
+}
+
+impl RtpLoss {
+    fn new(selector: RtpSelector) -> Self {
+        Self {
+            selector,
+            netem: Netem::new(NetemConfig::new().loss(RandomLoss::new(Probability::ONE))),
+        }
+    }
+
+    fn drops(&mut self, packet: &[u8]) -> bool {
+        self.netem.handle_input(NetemInput::Packet(
+            Instant::now(),
+            Bytes::copy_from_slice(packet),
+        ));
+        self.netem.is_empty()
     }
 }
 
