@@ -63,7 +63,7 @@ This document explains how to set up the SFU server for development to work with
 The SFU uses meaningful defaults for almost everything. However, you must provide two specific configurations: `AUTH_KEY` and `ANNOUNCED_IP`. 
 
 ### 1. Generate your `AUTH_KEY`
-This key authenticates client requests to the SFU server. It must be a 32-byte, base64-encoded, cryptographically safe hash. You can generate one with:
+This key authenticates client requests to the SFU server. It must be valid base64 data that decodes to at least 32 bytes. Generate it from cryptographically secure randomness with:
 ```bash
 openssl rand -base64 32
 ```
@@ -99,7 +99,7 @@ Now that you have your `AUTH_KEY` and `ANNOUNCED_IP`, you need to configure both
 > Alternatively, you can provide these variables directly to Odoo via the environment variables `ODOO_SFU_KEY` and `ODOO_SFU_URL`.
 
 > [!NOTE]
-> By default, the SFU server uses port 8070 unless you override it via the `PORT` environment variable.
+> By default, the SFU server binds to `0.0.0.0:8070`. Override it with a full socket address via `BIND_ADDRESS`, for example `BIND_ADDRESS=127.0.0.1:9000`.
 
 ---
 
