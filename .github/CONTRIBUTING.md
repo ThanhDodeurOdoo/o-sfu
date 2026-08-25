@@ -76,6 +76,48 @@
 
 Verification commands and the `tests/` layout are at [tests/README.md](/tests/README.md).
 
+## Commit guidelines
+
+```
+[TAG] module: describe your change in a short sentence (ideally < 50 chars)
+
+Long version of the change description, including the rationale for the change,
+or a summary of the feature being introduced.
+
+Please spend a lot more time describing WHY the change is being done rather
+than WHAT is being changed. This is usually easy to grasp by actually reading
+the diff. WHAT should be explained only if there are technical choices
+or decision involved. In that case explain WHY this decision was taken.
+
+End the message with references, such as task or bug numbers, PR numbers, and
+OPW tickets, following the suggested format:
+task-123 (related to task)
+Fixes #123  (close related issue on Github)
+Closes #123  (close related PR on Github)
+opw-123 (related to ticket)
+```
+
+possible `TAG`:
+- `[FIX]` for bug fixes: mostly used in stable version but also valid if you are fixing a recent bug in development version;
+- `[REF]` for refactoring: when a feature is heavily rewritten;
+- `[REM]` for removing resources: removing dead code, removing views, removing modules, …;
+- `[REV]` for reverting commits: if a commit causes issues or is not wanted reverting it is done using this tag;
+- `[MOV]` for moving files: use git move and do not change content of moved file otherwise Git may loose track and history of the file; also used when moving code from one file to another;
+- `[REL]` for release commits: new major or minor stable versions;
+- `[IMP]` for improvements: most of the changes done in development version are incremental improvements not related to another tag;
+- `[MERGE]` for merge commits: used in forward port of bug fixes but also as main commit for feature involving several separated commits;
+- `[PERF]` for performance patches;
+- `[DEP]` for changing dependencies;
+
+possible `module`:
+- any of the sub crates: `client`, `core`, `model`, `protocol`, `rfc`, `router`, `telemetry`
+- `ci` for changing ci-related files like workflow `.yml` files.
+- `doc` for the documentation files (typically `.md` files)
+- `src` for anything in the `/src` sub dir, that's basically the root/orchestration/config layer of the SFU.
+- nothing or `root` if updating a root file like `cargo.toml`.
+
+(based on [Odoo's git guidelines](https://www.odoo.com/documentation/19.0/contributing/development/git_guidelines.html))
+
 ## Deployment
 
 Deployment and local container usage are covered in [DEPLOYMENT.md](/DEPLOYMENT.md).
