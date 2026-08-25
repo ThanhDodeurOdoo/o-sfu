@@ -21,12 +21,13 @@ use str0m::{
     change::SdpOffer,
     format::{Codec, PayloadParams},
     media::{KeyframeRequest, Mid, Pt, Rid},
-    net::{Protocol, Receive},
+    net::{Protocol, Receive, Transmit},
     rtp::{
         RawPacket, RtpHeader, RtpPacket, RtpWrite, Ssrc,
         rtcp::{Nack, Rtcp},
     },
 };
+use str0m_netem::{Input as NetemInput, Netem, NetemConfig, Output as NetemOutput};
 use tokio::{net::UdpSocket, time::timeout};
 use tokio_util::bytes::Bytes;
 
@@ -110,6 +111,7 @@ pub struct FakeRtcPeer {
     trace: RtcPeerTrace,
     trace_enabled: bool,
     outbound_rtp_hold: Option<RtpSelector>,
+    outbound_rtp_delay: Option<OutboundRtpDelay>,
     drop_next_inbound_rtp: Option<RtpSelector>,
     held_outbound_rtp: VecDeque<(SocketAddr, Vec<u8>)>,
 }
@@ -118,6 +120,17 @@ pub struct FakeRtcPeer {
 struct RtpSelector {
     payload_type: u8,
     ssrc: u32,
+}
+
+struct OutboundRtpDelay {
+    selector: Option<RtpSelector>,
+    pending: Netem<PendingOutboundDatagram>,
+}
+
+#[derive(Clone)]
+struct PendingOutboundDatagram {
+    destination: SocketAddr,
+    contents: Bytes,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -171,6 +184,7 @@ impl FakeRtcPeer {
             trace: RtcPeerTrace::default(),
             trace_enabled: false,
             outbound_rtp_hold: None,
+            outbound_rtp_delay: None,
             drop_next_inbound_rtp: None,
             held_outbound_rtp: VecDeque::new(),
         })
@@ -281,6 +295,37 @@ impl FakeRtcPeer {
 
     pub fn clear_outbound_rtp_hold(&mut self) {
         self.outbound_rtp_hold = None;
+    }
+
+    pub(super) fn try_delay_next_outbound_rtp(
+        &mut self,
+        payload_type: u8,
+        ssrc: u32,
+        delay: Duration,
+    ) -> bool {
+        if self.outbound_rtp_delay.is_some() {
+            return false;
+        }
+        self.trace_enabled = true;
+        self.outbound_rtp_delay = Some(OutboundRtpDelay::new(
+            RtpSelector { payload_type, ssrc },
+            delay,
+        ));
+        true
+    }
+
+    pub(super) fn has_delayed_outbound_rtp(&self) -> bool {
+        self.outbound_rtp_delay
+            .as_ref()
+            .is_some_and(|delay| !delay.pending.is_empty())
+    }
+
+    pub(super) async fn release_delayed_outbound_rtp(&mut self) -> Option<()> {
+        // Evaluate `Netem` at its own deadline so tests can release a late packet
+        // deterministically without sleeping for the configured delay.
+        let release_at = self.outbound_rtp_delay.as_ref()?.next_timeout()?;
+        self.flush_delayed_outbound_rtp(release_at).await?;
+        self.outbound_rtp_delay.is_none().then_some(())
     }
 
     pub fn drop_next_inbound_rtp(&mut self, payload_type: u8, ssrc: u32) {
@@ -464,6 +509,9 @@ impl FakeRtcPeer {
                             .push_back((transmit.destination, Vec::from(transmit.contents)));
                         continue;
                     }
+                    let Some(transmit) = self.schedule_delayed_outbound_rtp(now, transmit) else {
+                        continue;
+                    };
                     self.socket
                         .send_to(&transmit.contents, transmit.destination)
                         .await
@@ -501,11 +549,10 @@ impl FakeRtcPeer {
                         self.rtc.handle_input(Input::Timeout(now)).ok()?;
                         continue;
                     }
+                    self.flush_delayed_outbound_rtp(now).await?;
+                    let now = Instant::now();
 
-                    let wait_duration = timeout_at
-                        .saturating_duration_since(now)
-                        .min(MAX_SOCKET_WAIT)
-                        .min(deadline.saturating_duration_since(now));
+                    let wait_duration = self.socket_wait_duration(timeout_at, now, deadline);
                     if wait_duration.is_zero() {
                         self.rtc.handle_input(Input::Timeout(Instant::now())).ok()?;
                         continue;
@@ -541,6 +588,73 @@ impl FakeRtcPeer {
         Some(PumpResult::Deadline)
     }
 
+    fn socket_wait_duration(
+        &self,
+        rtc_timeout: Instant,
+        now: Instant,
+        deadline: Instant,
+    ) -> Duration {
+        // Keep polling str0m while netem holds the primary so RTX can overtake it.
+        let netem_wait = self
+            .outbound_rtp_delay
+            .as_ref()
+            .and_then(OutboundRtpDelay::next_timeout)
+            .map_or(Duration::MAX, |timeout| {
+                timeout.saturating_duration_since(now)
+            });
+        rtc_timeout
+            .saturating_duration_since(now)
+            .min(netem_wait)
+            .min(MAX_SOCKET_WAIT)
+            .min(deadline.saturating_duration_since(now))
+    }
+
+    async fn flush_delayed_outbound_rtp(&mut self, now: Instant) -> Option<()> {
+        while let Some(datagram) = self
+            .outbound_rtp_delay
+            .as_mut()
+            .and_then(|delay| delay.pop_due(now))
+        {
+            self.socket
+                .send_to(&datagram.contents, datagram.destination)
+                .await
+                .ok()?;
+        }
+        if self
+            .outbound_rtp_delay
+            .as_ref()
+            .is_some_and(OutboundRtpDelay::is_complete)
+        {
+            self.outbound_rtp_delay = None;
+        }
+        Some(())
+    }
+
+    fn schedule_delayed_outbound_rtp(
+        &mut self,
+        now: Instant,
+        transmit: Transmit,
+    ) -> Option<Transmit> {
+        let Some(delay) = self.outbound_rtp_delay.as_mut() else {
+            return Some(transmit);
+        };
+        let Some(selector) = delay.selector else {
+            return Some(transmit);
+        };
+        let Some(header) = rtp::parse_muxed_rtp_fixed_header(transmit.contents.as_ref()) else {
+            return Some(transmit);
+        };
+        if !selector.matches(header.payload_type(), header.ssrc().value()) {
+            return Some(transmit);
+        }
+        let datagram = PendingOutboundDatagram {
+            destination: transmit.destination,
+            contents: Bytes::from(Vec::from(transmit.contents)),
+        };
+        delay.push(now, datagram);
+        None
+    }
+
     fn intercept_selected_rtp(&mut self, direction: RtcTraceDirection, packet: &[u8]) -> bool {
         let Some(packet) =
             dropped_rtp_packet(direction, packet, self.transport_sequence_extension_id)
@@ -551,7 +665,7 @@ impl FakeRtcPeer {
             RtcTraceDirection::Tx => self.outbound_rtp_hold,
             RtcTraceDirection::Rx => self.drop_next_inbound_rtp,
         };
-        if !selected.is_some_and(|selector| selector.matches(&packet)) {
+        if !selected.is_some_and(|selector| selector.matches(packet.payload_type, packet.ssrc)) {
             return false;
         }
         if direction == RtcTraceDirection::Rx {
@@ -727,8 +841,47 @@ fn dropped_rtp_packet(
 }
 
 impl RtpSelector {
-    fn matches(self, packet: &DroppedRtpPacket) -> bool {
-        self.payload_type == packet.payload_type && self.ssrc == packet.ssrc
+    fn matches(self, payload_type: u8, ssrc: u32) -> bool {
+        self.payload_type == payload_type && self.ssrc == ssrc
+    }
+}
+
+impl OutboundRtpDelay {
+    fn new(selector: RtpSelector, delay: Duration) -> Self {
+        Self {
+            selector: Some(selector),
+            pending: Netem::new(NetemConfig::new().latency(delay)),
+        }
+    }
+
+    fn push(&mut self, now: Instant, datagram: PendingOutboundDatagram) {
+        self.selector = None;
+        self.pending.handle_input(NetemInput::Packet(now, datagram));
+    }
+
+    fn pop_due(&mut self, now: Instant) -> Option<PendingOutboundDatagram> {
+        if self.pending.is_empty() || self.pending.poll_timeout() > now {
+            return None;
+        }
+        self.pending.handle_input(NetemInput::Timeout(now));
+        match self.pending.poll_output() {
+            Some(NetemOutput::Packet(datagram)) => Some(datagram),
+            Some(NetemOutput::Timeout(_)) | None => None,
+        }
+    }
+
+    fn next_timeout(&self) -> Option<Instant> {
+        (!self.pending.is_empty()).then(|| self.pending.poll_timeout())
+    }
+
+    fn is_complete(&self) -> bool {
+        self.selector.is_none() && self.pending.is_empty()
+    }
+}
+
+impl AsRef<[u8]> for PendingOutboundDatagram {
+    fn as_ref(&self) -> &[u8] {
+        &self.contents
     }
 }
 

@@ -310,6 +310,24 @@ impl ProtocolFakePeer {
         self.rtc_peer.clear_outbound_rtp_hold();
     }
 
+    pub fn try_delay_next_outbound_rtp(
+        &mut self,
+        payload_type: u8,
+        ssrc: u32,
+        delay: Duration,
+    ) -> bool {
+        self.rtc_peer
+            .try_delay_next_outbound_rtp(payload_type, ssrc, delay)
+    }
+
+    pub fn has_delayed_outbound_rtp(&self) -> bool {
+        self.rtc_peer.has_delayed_outbound_rtp()
+    }
+
+    pub async fn release_delayed_outbound_rtp(&mut self) -> Option<()> {
+        self.rtc_peer.release_delayed_outbound_rtp().await
+    }
+
     pub fn drop_next_inbound_rtp(&mut self, payload_type: u8, ssrc: u32) {
         self.rtc_peer.drop_next_inbound_rtp(payload_type, ssrc);
     }
