@@ -1,5 +1,5 @@
 use super::{
-    PayloadType, RtpRtcpMuxPacketKind, Ssrc, classify_rtp_rtcp_mux, fmtp, frame_marking,
+    CodecName, PayloadType, RtpRtcpMuxPacketKind, Ssrc, classify_rtp_rtcp_mux, fmtp, frame_marking,
     generic_nack_sequence_numbers,
     h264::{self, LevelIdc, PacketizationMode, Profile, ProfileLevelId},
     header_extension, is_rtcp_mux_dynamic_payload_type, parse_muxed_rtp_fixed_header,
@@ -363,4 +363,20 @@ fn vp8_payload_keyframe_detection_follows_payload_descriptor() {
     ]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x40, 0, 0]));
     assert!(!super::vp8::payload_starts_keyframe(&[0x90, 0x80]));
+}
+
+#[test]
+fn codec_name_from_str_is_case_insensitive() {
+    assert_eq!(CodecName::from("opus"), CodecName::Opus);
+    assert_eq!(CodecName::from("OPUS"), CodecName::Opus);
+    assert_eq!(CodecName::from("vp8"), CodecName::Vp8);
+    assert_eq!(CodecName::from("VP8"), CodecName::Vp8);
+    assert_eq!(CodecName::from("h264"), CodecName::H264);
+    assert_eq!(CodecName::from("H264"), CodecName::H264);
+    assert_eq!(CodecName::from("rtx"), CodecName::Rtx);
+    assert_eq!(CodecName::from("RTX"), CodecName::Rtx);
+    assert_eq!(
+        CodecName::from("custom-codec"),
+        CodecName::Other("custom-codec".to_owned())
+    );
 }
