@@ -5,6 +5,8 @@ use super::support::{self as s, media as m, setup as st};
 const RECOVERY_TIMEOUT: s::Duration = s::Duration::from_secs(3);
 const POST_RECOVERY_SETTLE: s::Duration = s::Duration::from_millis(200);
 const RTC_POLL_SLICE: s::Duration = s::Duration::from_millis(50);
+// Keeps the primary queued beyond RECOVERY_TIMEOUT until the test releases it.
+const LATE_PRIMARY_DELAY: s::Duration = s::Duration::from_secs(10);
 const GAP_EXPOSING_PACKET_COUNT: usize = 6;
 const RIDLESS_POLICY_WARMUP_PACKET_COUNT: usize = 60;
 
@@ -360,6 +362,114 @@ async fn fake_rtc_recovers_publisher_video_loss_with_nack_and_rtx() -> s::TestRe
         read_payload(&mut subscriber, &expected_payload, RECOVERY_TIMEOUT).await,
         "subscriber should receive the normalized replacement repair",
     )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_rtc_does_not_forward_late_primary_after_rtx() -> s::TestResult {
+    let _guard = st::full_stack_test_guard().await;
+    let (peers, mut source, mut clock) = Box::pin(ready_nack_route(
+        "issuer-late-primary-after-rtx",
+        122,
+        123,
+        Some("hi"),
+    ))
+    .await?;
+    let st::ReadyRoomFakePeers {
+        mut publisher,
+        mut subscriber,
+        ..
+    } = peers;
+    let (primary_payload_type, repair_payload_type) = s::require_some(
+        publisher.repair_payload_types(&s::CodecName::Vp8),
+        "publisher should negotiate VP8 RTX",
+    )?;
+    let (primary_ssrc, repair_ssrc) = s::require_some(
+        publisher.send_stream_ssrc_pair(source.media_kind(), Some("hi")),
+        "publisher should negotiate a matching primary and repair SSRC pair",
+    )?;
+
+    publisher.start_rtc_trace();
+    // A link-layer retransmission or unequal delay across load-balanced paths
+    // can make one RTP packet arrive after later packets. RFC 4737 section 1.1
+    // lists both causes.
+    // https://www.rfc-editor.org/rfc/rfc4737.html#section-1.1
+    // The held primary creates that sequence gap. O-SFU must request it with
+    // Generic NACK and accept its RTX repair before the original arrives.
+    assert!(publisher.try_delay_next_outbound_rtp(
+        primary_payload_type,
+        primary_ssrc,
+        LATE_PRIMARY_DELAY,
+    ));
+    let expected_payload = s::require_some(
+        publisher.send_rtp_packet(&mut source, &mut clock).await,
+        "publisher should send the packet selected for delay",
+    )?;
+    let mut trace = publisher.take_rtc_trace();
+    let delayed_sequence_number = s::require_some(
+        matching_primary_payload(&trace, s::RtcTraceDirection::Tx, &expected_payload),
+        "publisher trace should contain the delayed primary packet",
+    )?
+    .sequence_number;
+
+    s::require_some(
+        publisher
+            .send_rtp_packets(&mut source, &mut clock, GAP_EXPOSING_PACKET_COUNT)
+            .await,
+        "publisher should expose the delayed primary gap",
+    )?;
+    s::require_some(
+        pump_until_rtx(
+            &mut publisher,
+            &mut trace,
+            s::RtcTraceDirection::Tx,
+            delayed_sequence_number,
+            RECOVERY_TIMEOUT,
+        )
+        .await,
+        "publisher should repair the delayed primary through RTX",
+    )?;
+    // Tie feedback and repair to delayed_sequence_number. An unrelated NACK or
+    // RTX packet would not prove that the delayed primary was recovered.
+    assert!(nack_contains(
+        &trace,
+        s::RtcTraceDirection::Rx,
+        primary_ssrc,
+        delayed_sequence_number,
+    ));
+    let rtx = s::require_some(
+        matching_rtx(&trace, s::RtcTraceDirection::Tx, delayed_sequence_number),
+        "publisher should emit a matching RTX packet",
+    )?;
+    assert_eq!(rtx.payload_type, repair_payload_type);
+    assert_eq!(rtx.ssrc, repair_ssrc);
+    assert_eq!(
+        rtx.payload.get(RTX_ORIGINAL_SEQUENCE_NUMBER_BYTES..),
+        Some(expected_payload.as_slice())
+    );
+
+    s::require_some(
+        read_payload(&mut subscriber, &expected_payload, RECOVERY_TIMEOUT).await,
+        "subscriber should receive the repaired publisher packet",
+    )?;
+    // Keeping the primary queued proves the subscriber recovered through RTX.
+    // If the original had reached O-SFU first, the same payload assertion could
+    // pass without exercising retransmission.
+    assert!(publisher.has_delayed_outbound_rtp());
+
+    // A reordered primary may arrive after its RTX repair. The subscriber's
+    // `str0m::Rtc` must not emit a second `Event::RtpPacket` for that payload.
+    s::require_some(
+        publisher.release_delayed_outbound_rtp().await,
+        "publisher should release the delayed primary packet",
+    )?;
+    assert!(!publisher.has_delayed_outbound_rtp());
+    assert!(
+        read_payload(&mut subscriber, &expected_payload, POST_RECOVERY_SETTLE)
+            .await
+            .is_none(),
+        "subscriber should not receive the late primary after RTX"
+    );
     Ok(())
 }
 

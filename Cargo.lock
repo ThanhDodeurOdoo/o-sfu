@@ -1493,6 +1493,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "str0m",
+ "str0m-netem",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
@@ -2155,6 +2156,16 @@ dependencies = [
  "dimpl",
  "str0m-proto",
  "time",
+]
+
+[[package]]
+name = "str0m-netem"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c93838ef4196ab2d588154d7c87db3da034699124a669886fe288b90b5ecb91"
+dependencies = [
+ "fastrand",
+ "str0m-proto",
 ]
 
 [[package]]
