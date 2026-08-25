@@ -16,7 +16,9 @@ const result = spawnSync(
         "--out-dir",
         generatedDirectory,
         "--out-name",
-        "o_sfu_protocol"
+        "o_sfu_protocol",
+        "--",
+        "--locked"
     ],
     {
         cwd: clientDirectory,
