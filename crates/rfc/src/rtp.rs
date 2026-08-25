@@ -821,34 +821,18 @@ impl CodecName {
 
 impl From<&str> for CodecName {
     fn from(value: &str) -> Self {
-        if value.eq_ignore_ascii_case(codec_name::PCMU) {
-            return Self::Pcmu;
+        match value {
+            s if s.eq_ignore_ascii_case(codec_name::PCMU) => Self::Pcmu,
+            s if s.eq_ignore_ascii_case(codec_name::PCMA) => Self::Pcma,
+            s if s.eq_ignore_ascii_case(codec_name::OPUS) => Self::Opus,
+            s if s.eq_ignore_ascii_case(codec_name::VP8) => Self::Vp8,
+            s if s.eq_ignore_ascii_case(codec_name::H264) => Self::H264,
+            s if s.eq_ignore_ascii_case(codec_name::H265) => Self::H265,
+            s if s.eq_ignore_ascii_case(codec_name::VP9) => Self::Vp9,
+            s if s.eq_ignore_ascii_case(codec_name::AV1) => Self::Av1,
+            s if s.eq_ignore_ascii_case(codec_name::RTX) => Self::Rtx,
+            _ => Self::Other(value.to_owned()),
         }
-        if value.eq_ignore_ascii_case(codec_name::PCMA) {
-            return Self::Pcma;
-        }
-        if value.eq_ignore_ascii_case(codec_name::OPUS) {
-            return Self::Opus;
-        }
-        if value.eq_ignore_ascii_case(codec_name::VP8) {
-            return Self::Vp8;
-        }
-        if value.eq_ignore_ascii_case(codec_name::H264) {
-            return Self::H264;
-        }
-        if value.eq_ignore_ascii_case(codec_name::H265) {
-            return Self::H265;
-        }
-        if value.eq_ignore_ascii_case(codec_name::VP9) {
-            return Self::Vp9;
-        }
-        if value.eq_ignore_ascii_case(codec_name::AV1) {
-            return Self::Av1;
-        }
-        if value.eq_ignore_ascii_case(codec_name::RTX) {
-            return Self::Rtx;
-        }
-        Self::Other(value.to_owned())
     }
 }
 
