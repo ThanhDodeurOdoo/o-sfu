@@ -94,6 +94,7 @@ pub struct DroppedRtpPacket {
 pub struct RtcPeerTrace {
     pub nacks: Vec<TracedNack>,
     pub rtp_packets: Vec<TracedRtpPacket>,
+    pub inbound_rtp_headers: Vec<rtp::RtpFixedHeader>,
     pub dropped_rtp_packets: Vec<DroppedRtpPacket>,
     pub keyframe_requests: usize,
 }
@@ -571,6 +572,13 @@ impl FakeRtcPeer {
                                 continue;
                             }
                             let packet = receive_buffer.get(..received_size)?;
+                            // Trace before `handle_input` because str0m rejects a late primary
+                            // recovered by RTX before `Event::RawPacket` or `Event::RtpPacket`.
+                            if self.trace_enabled
+                                && let Some(header) = rtp::parse_muxed_rtp_fixed_header(packet)
+                            {
+                                self.trace.inbound_rtp_headers.push(header);
+                            }
                             if self.intercept_selected_rtp(RtcTraceDirection::Rx, packet) {
                                 continue;
                             }

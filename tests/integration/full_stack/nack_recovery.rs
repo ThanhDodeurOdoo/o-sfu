@@ -448,7 +448,8 @@ async fn fake_rtc_does_not_forward_late_primary_after_rtx() -> s::TestResult {
         Some(expected_payload.as_slice())
     );
 
-    s::require_some(
+    subscriber.start_rtc_trace();
+    let delivered = s::require_some(
         read_payload(&mut subscriber, &expected_payload, RECOVERY_TIMEOUT).await,
         "subscriber should receive the repaired publisher packet",
     )?;
@@ -457,8 +458,8 @@ async fn fake_rtc_does_not_forward_late_primary_after_rtx() -> s::TestResult {
     // pass without exercising retransmission.
     assert!(publisher.has_delayed_outbound_rtp());
 
-    // A reordered primary may arrive after its RTX repair. The subscriber's
-    // `str0m::Rtc` must not emit a second `Event::RtpPacket` for that payload.
+    // A second datagram with the recovered identity proves O-SFU forwarded the
+    // late primary even when str0m suppresses its duplicate media event.
     s::require_some(
         publisher.release_delayed_outbound_rtp().await,
         "publisher should release the delayed primary packet",
@@ -469,6 +470,12 @@ async fn fake_rtc_does_not_forward_late_primary_after_rtx() -> s::TestResult {
             .await
             .is_none(),
         "subscriber should not receive the late primary after RTX"
+    );
+    let subscriber_trace = subscriber.take_rtc_trace();
+    assert_eq!(
+        matching_inbound_rtp_count(&subscriber_trace, &delivered),
+        1,
+        "subscriber should receive one wire packet for the recovered sequence"
     );
     Ok(())
 }
@@ -1364,9 +1371,26 @@ fn merge_trace(trace: &mut s::RtcPeerTrace, mut next: s::RtcPeerTrace) {
     trace.nacks.append(&mut next.nacks);
     trace.rtp_packets.append(&mut next.rtp_packets);
     trace
+        .inbound_rtp_headers
+        .append(&mut next.inbound_rtp_headers);
+    trace
         .dropped_rtp_packets
         .append(&mut next.dropped_rtp_packets);
     trace.keyframe_requests += next.keyframe_requests;
+}
+
+fn matching_inbound_rtp_count(trace: &s::RtcPeerTrace, packet: &s::ReceivedRtpPacket) -> usize {
+    trace
+        .inbound_rtp_headers
+        .iter()
+        .filter(|header| {
+            header.payload_type() == packet.payload_type
+                && header.sequence_number() == packet.sequence_number
+                && header.timestamp() == packet.timestamp
+                && header.marker() == packet.marker
+                && header.ssrc().value() == packet.ssrc
+        })
+        .count()
 }
 
 fn nack_contains(
