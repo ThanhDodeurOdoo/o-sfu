@@ -1771,6 +1771,7 @@ fn media_stats_record_exact_nack_deltas_per_stream() {
             firs: 0,
             plis: 0,
             nacks,
+            jitter: 0,
             rtt: None,
             loss: None,
             timestamp: now,
