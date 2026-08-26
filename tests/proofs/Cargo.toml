@@ -10,7 +10,7 @@ rust-version = "1.93"
 version.workspace = true
 
 [dependencies]
-o-sfu-rfc = { path = "../../crates/rfc" }
+o-sfu-rfc.workspace = true
 
 [lints]
 workspace = true

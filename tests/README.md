@@ -46,6 +46,33 @@ run one target explicitly:
 cargo +nightly-2026-04-01 fuzz run --fuzz-dir tests/fuzz --features fuzz-targets protocol_decode
 ```
 
+## Formal verification
+
+`o-sfu-proofs` is a dependency leaf for proofs over public production APIs.
+Proofs that require private state belong in a `PROOFS/` directory beside the
+owning module behind `cfg(kani)`. Add a module-local proof to CI only when the
+pinned Kani build can compile that crate.
+
+Production crates never depend on `o-sfu-proofs`. CI selects Cargo packages and
+harnesses without including production source or naming source files.
+
+```bash
+cargo kani --package o-sfu-proofs --lib \
+  --harness h264_profile_level_id_parse_matches_rfc_patterns
+
+cargo kani --package o-sfu-proofs --lib \
+  --harness vp8_keyframe_prefix_matches_rfc_model
+
+cargo kani --package o-sfu-core --lib \
+  --harness vp8_identity_projection_matches_modular_model
+```
+
+CI builds its Rust 1.95-compatible Kani toolchain from an exact upstream
+revision until that compiler support is available in a Kani release.
+
+Run Kani in CI unless a proof is under local development. Ordinary Cargo
+commands do not execute solver harnesses.
+
 ## Callgrind benchmarks
 
 There are four comparison targets. Each scenario is documented once, on its

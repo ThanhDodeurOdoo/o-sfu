@@ -27,7 +27,7 @@ fn vp8_keyframe_prefix_matches_rfc_model() {
     let payload = &prefix[..payload_len];
 
     let actual = production::payload_starts_keyframe(payload);
-    let frame = spec_frame(payload);
+    let frame = model_frame_payload(payload);
     let expected = frame.is_some_and(is_keyframe_prefix);
     let descriptor = payload.first().copied().unwrap_or_default();
     let extension = payload.get(1).copied().unwrap_or_default();
@@ -84,7 +84,7 @@ fn vp8_keyframe_prefix_matches_rfc_model() {
     kani::cover!(
         frame.is_some_and(|frame| {
             has_complete_prefix(frame)
-                && has_defined_keyframe_tag(frame)
+                && has_keyframe_type_and_defined_version(frame)
                 && !has_start_code(frame)
                 && has_nonzero_dimensions(frame)
         }) && !actual,
@@ -93,7 +93,7 @@ fn vp8_keyframe_prefix_matches_rfc_model() {
     kani::cover!(
         frame.is_some_and(|frame| {
             has_complete_prefix(frame)
-                && has_defined_keyframe_tag(frame)
+                && has_keyframe_type_and_defined_version(frame)
                 && has_start_code(frame)
                 && !has_nonzero_dimensions(frame)
         }) && !actual,
@@ -115,7 +115,7 @@ fn vp8_keyframe_prefix_matches_rfc_model() {
 ///
 /// The offset follows only the advertised descriptor fields so shared parser
 /// control flow cannot make the equivalence assertion pass by construction.
-fn spec_frame(payload: &[u8]) -> Option<&[u8]> {
+fn model_frame_payload(payload: &[u8]) -> Option<&[u8]> {
     let descriptor = *payload.first()?;
     if descriptor & S_BIT == 0 || descriptor & PARTITION_ID_MASK != 0 {
         return None;
@@ -151,7 +151,7 @@ fn spec_frame(payload: &[u8]) -> Option<&[u8]> {
 
 fn is_keyframe_prefix(frame: &[u8]) -> bool {
     has_complete_prefix(frame)
-        && has_defined_keyframe_tag(frame)
+        && has_keyframe_type_and_defined_version(frame)
         && has_start_code(frame)
         && has_nonzero_dimensions(frame)
 }
@@ -160,7 +160,7 @@ fn has_complete_prefix(frame: &[u8]) -> bool {
     frame.len() >= 10
 }
 
-fn has_defined_keyframe_tag(frame: &[u8]) -> bool {
+fn has_keyframe_type_and_defined_version(frame: &[u8]) -> bool {
     frame
         .first()
         .is_some_and(|tag| tag & INTERFRAME_BIT == 0 && (tag & VERSION_MASK) >> 1 <= 3)
