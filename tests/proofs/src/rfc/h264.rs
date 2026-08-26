@@ -2,9 +2,11 @@ use o_sfu_rfc::rtp::h264::{LevelIdc, Profile, ProfileLevelId};
 
 const CONSTRAINT_SET3_FLAG: u8 = 0x10;
 
-/// Proves the full 24-bit `profile-level-id` space against an independent
-/// RFC-shaped model. Profile parsing feeds every later H264 compatibility
-/// decision while unit tests can only sample the accepted and rejected space.
+/// Proves every 24-bit value encoded as six lowercase ASCII hexadecimal bytes
+/// against an independent RFC 6184 profile and level model. Alternate and
+/// malformed ASCII encodings are outside this proof. Profile parsing feeds
+/// every later H264 compatibility decision while unit tests can only sample
+/// accepted and rejected values.
 #[kani::proof]
 fn h264_profile_level_id_parse_matches_rfc_patterns() {
     let raw = kani::any::<u32>() & 0x00FF_FFFF;
@@ -14,25 +16,24 @@ fn h264_profile_level_id_parse_matches_rfc_patterns() {
     let expected = spec_profile_from_bytes(bytes[1], bytes[2])
         .zip(spec_normalized_level_idc(bytes[1], bytes[2], bytes[3]));
 
-    assert_eq!(parsed.is_some(), expected.is_some());
-    if let (Some(parsed), Some((profile, level))) = (parsed, expected) {
-        assert_eq!(parsed.profile(), profile);
-        assert_eq!(parsed.level(), level);
-    }
+    assert_eq!(
+        parsed.map(|parsed| (parsed.profile(), parsed.level())),
+        expected
+    );
 }
 
 fn hex_profile_level_id(raw: u32) -> [u8; 6] {
     [
-        hex_byte(((raw >> 20) & 0x0F) as u8),
-        hex_byte(((raw >> 16) & 0x0F) as u8),
-        hex_byte(((raw >> 12) & 0x0F) as u8),
-        hex_byte(((raw >> 8) & 0x0F) as u8),
-        hex_byte(((raw >> 4) & 0x0F) as u8),
-        hex_byte((raw & 0x0F) as u8),
+        lower_hex_digit(((raw >> 20) & 0x0F) as u8),
+        lower_hex_digit(((raw >> 16) & 0x0F) as u8),
+        lower_hex_digit(((raw >> 12) & 0x0F) as u8),
+        lower_hex_digit(((raw >> 8) & 0x0F) as u8),
+        lower_hex_digit(((raw >> 4) & 0x0F) as u8),
+        lower_hex_digit((raw & 0x0F) as u8),
     ]
 }
 
-fn hex_byte(nibble: u8) -> u8 {
+fn lower_hex_digit(nibble: u8) -> u8 {
     match nibble {
         0..=9 => b'0' + nibble,
         10..=15 => b'a' + (nibble - 10),

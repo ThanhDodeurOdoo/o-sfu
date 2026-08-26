@@ -271,6 +271,10 @@ impl From<Vp8Descriptor> for Identity {
     }
 }
 
+#[cfg(kani)]
+#[path = "PROOFS/vp8.rs"]
+mod proofs;
+
 #[cfg(test)]
 #[path = "TESTS/vp8.rs"]
 mod tests;
