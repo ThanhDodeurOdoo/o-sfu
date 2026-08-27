@@ -454,11 +454,11 @@ fn diagnostics_subscriptions(
                    consumer_media: Option<TransportMediaId>,
                    source_media: TransportMediaId,
                    route_state| {
-        let layout = state.diagnostics_video_layout_intent(user_id, source);
+        let layout = state.diagnostics_video_layout_role(user_id, source);
         DiagnosticsSubscription {
             consumer_transport_media_id: consumer_media.map(TransportMediaId::as_u64),
-            layout_priority: layout.map(|intent| intent.priority().into()),
-            layout_role: layout.map(|intent| intent.role().into()),
+            layout_priority: layout.map(|role| role.priority().into()),
+            layout_role: layout.map(Into::into),
             producer_user_id: source.owner().user_id().clone(),
             selection: selection(source, route_selection),
             source_id: source.source_id().as_u64(),
