@@ -62,7 +62,7 @@
 > rustfmt nightly is only used to format imports nicely, but it is not enforced in the CI.
 
 - **Formatting**: `cargo +nightly fmt`, Always run it before committing (we use nightly for the import ordering). Our rules can be found at [rustfmt.toml](/rustfmt.toml), more information on the defaults can be found at the [rustfmt documentation](https://rust-lang.github.io/rustfmt/).
-- **Linting**: Run `cargo clippy --locked --all-targets --all-features -- -D warnings`. We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](/Cargo.toml). See the [Clippy documentation](https://rust-lang.github.io/rust-clippy/) for explanations.
+- **Linting**: Run `cargo clippy --locked --all-targets --all-features`. We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](/Cargo.toml). See the [Clippy documentation](https://rust-lang.github.io/rust-clippy/) for explanations. Note that the CI will also deny warnings (`-D warnings`), some rules are put in warnings only for developer convenience when prototyping/drafting code, but no warning are accepted when merging.
 - **Justify overrides**: Any override of a rule MUST be justified with a "reason".
 
 ### TypeScript & JavaScript (Bundle)
