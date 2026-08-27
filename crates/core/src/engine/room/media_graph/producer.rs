@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use o_sfu_rfc::rtp::{Mid, Rid, Ssrc};
 use o_sfu_router::{
     MediaKind as RouterMediaKind, RouterError,
@@ -422,7 +423,6 @@ fn negotiated_format_for_binding(
     }
     parameters
         .formats()
-        .find(|format| !format.codec().is_rtx())
-        .or_else(|| parameters.formats().next())
+        .find_or_first(|format| !format.codec().is_rtx())
         .cloned()
 }

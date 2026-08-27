@@ -5,6 +5,8 @@
 
 use std::{cmp::Reverse, collections::BTreeMap};
 
+use itertools::Itertools;
+
 use super::{
     super::{input::SourcePolicySnapshot, turn::SourcePolicyTransaction},
     input::{ReceiverVideoRouteInput, receiver_video_routes},
@@ -586,17 +588,14 @@ fn highest_affordable_encoding_index(
             0
         });
     }
-    source
-        .selectable_encodings()
-        .enumerate()
-        .filter(|(_index, encoding)| {
-            encoding.max_bitrate().is_some_and(|bitrate| {
-                bitrate <= budget && source_cap.is_none_or(|cap| bitrate <= cap)
-            })
+    allowed_encoding_indices(source, source_cap)
+        .rev()
+        .find_or_last(|index| {
+            source
+                .selectable_encoding_by_rank(*index)
+                .and_then(SourceEncodingDescriptor::max_bitrate)
+                .is_some_and(|bitrate| bitrate <= budget)
         })
-        .last()
-        .map(|(index, _encoding)| index)
-        .or_else(|| allowed_encoding_indices(source, source_cap).next())
 }
 
 fn selector_index(source: &PublishedSourceDescriptor, selector: SourceSelector) -> usize {
@@ -624,20 +623,39 @@ fn allowed_encoding_indices(
     })
 }
 
+/// enforces receiver download limits by pausing the lowest-ranked routes using top-k selection
+///
+/// ```text
+/// all active routes (N)
+///   [ R0: rank 2, R1: rank 5, R2: rank 1, R3: rank 8, R4: rank 4 ]
+///   limit = 3  ==>  routes_to_pause (K) = 5 - 3 = 2
+///                              |
+///                              v  .k_largest_by_key(K = 2)
+///   +-------------------------------------------------------------+
+///   | min-heap of size K=2:                                       |
+///   | retains only the 2 highest ranks: [ R1: rank 5, R3: rank 8 ]|
+///   +-------------------------------------------------------------+
+///                              |
+///                              v  .rev()
+///   route.pause(VideoDownloadLimit) applied only to [ R3, R1 ]
+/// ```
 fn apply_video_download_limit(
     routes: &mut [PlannedReceiverRoute<'_>],
     max_video_downloads_per_receiver: usize,
 ) {
-    if active_route_count(routes) <= max_video_downloads_per_receiver {
+    let routes_to_pause =
+        active_route_count(routes).saturating_sub(max_video_downloads_per_receiver);
+    if routes_to_pause == 0 {
         return;
     }
-    let mut ranked = routes
+    for (_rank_key, route) in routes
         .iter_mut()
         .filter(|route| route.selection.policy_pause_reason.is_none())
-        .map(|route| (video_download_rank(route), route))
-        .collect::<Vec<_>>();
-    ranked.sort_by_key(|(rank, _)| *rank);
-    for (_rank, route) in ranked.into_iter().skip(max_video_downloads_per_receiver) {
+        .enumerate()
+        .map(|(position, route)| ((video_download_rank(route), position), route))
+        .k_largest_by_key(routes_to_pause, |(rank_key, _route)| *rank_key)
+        .rev()
+    {
         route.pause(PolicyPauseReason::VideoDownloadLimit, RouteOutcome::Paused);
     }
 }

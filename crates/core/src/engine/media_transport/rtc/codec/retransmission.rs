@@ -73,6 +73,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
 use o_sfu_rfc::{
     rtp,
     webrtc::{self, sdp},
@@ -207,13 +208,12 @@ pub fn validate_answer_sdp(answer_sdp: &str) -> Result<RepairSummary, TransportA
     if let Some(section) = current {
         sections.push(section.validate()?);
     }
-    let mut claimed_ssrcs = BTreeSet::new();
     // O-SFU uses one bundled RTP session, where one SSRC identifies one media section.
     // https://www.rfc-editor.org/rfc/rfc9143.html#section-9.2
-    if sections
+    if !sections
         .iter()
         .flat_map(|section| &section.signaled_ssrcs)
-        .any(|ssrc| !claimed_ssrcs.insert(*ssrc))
+        .all_unique()
     {
         return Err(TransportAdapterError::InvalidInput);
     }
@@ -557,15 +557,12 @@ fn parse_payload_type(value: &str) -> Result<u8, TransportAdapterError> {
 }
 
 fn parse_rtpmap(value: &str) -> Result<(u8, RtpMap), TransportAdapterError> {
-    let mut fields = value.split_ascii_whitespace();
-    let payload_type = fields
-        .next()
-        .ok_or(TransportAdapterError::InvalidInput)
-        .and_then(parse_payload_type)?;
-    let mut encoding = fields
-        .next()
-        .ok_or(TransportAdapterError::InvalidInput)?
-        .split(sdp::rtpmap::ENC_SEP);
+    let (payload_type, encoding) = value
+        .split_ascii_whitespace()
+        .collect_tuple()
+        .ok_or(TransportAdapterError::InvalidInput)?;
+    let payload_type = parse_payload_type(payload_type)?;
+    let mut encoding = encoding.split(sdp::rtpmap::ENC_SEP);
     let codec = encoding.next().ok_or(TransportAdapterError::InvalidInput)?;
     let clock_rate = encoding
         .next()
@@ -575,7 +572,7 @@ fn parse_rtpmap(value: &str) -> Result<(u8, RtpMap), TransportAdapterError> {
     // SDP encoding names are case-insensitive.
     // https://www.rfc-editor.org/rfc/rfc8866.html#section-6.6
     let is_rtx = codec.eq_ignore_ascii_case(rtp::codec_name::RTX);
-    if fields.next().is_some() || is_rtx && encoding.next().is_some() {
+    if is_rtx && encoding.next().is_some() {
         return Err(TransportAdapterError::InvalidInput);
     }
     Ok((payload_type, RtpMap { is_rtx, clock_rate }))
@@ -616,11 +613,10 @@ fn parse_exact_nack(value: &str) -> Result<Option<u8>, TransportAdapterError> {
     let target = fields.next().ok_or(TransportAdapterError::InvalidInput)?;
     // RTCP feedback attribute tokens are case-sensitive.
     // https://www.rfc-editor.org/rfc/rfc4585.html#section-4.2
-    if fields
-        .next()
-        .is_none_or(|feedback| feedback != webrtc::rtcp_feedback::kind::NACK)
-        || fields.next().is_some()
-    {
+    let Ok(feedback) = fields.exactly_one() else {
+        return Ok(None);
+    };
+    if feedback != webrtc::rtcp_feedback::kind::NACK {
         return Ok(None);
     }
     parse_payload_type(target).map(Some)
@@ -638,18 +634,14 @@ fn parse_fid(value: &str) -> Result<Option<(u32, u32)>, TransportAdapterError> {
     // `ssrc-group` grammar permits other semantics and group sizes.
     // https://www.rfc-editor.org/rfc/rfc5576.html#section-4.2
     // https://www.rfc-editor.org/rfc/rfc5576.html#section-7
-    let primary = fields
-        .next()
-        .ok_or(TransportAdapterError::InvalidInput)?
+    let (primary, repair) = fields
+        .collect_tuple()
+        .ok_or(TransportAdapterError::InvalidInput)?;
+    let primary = primary
         .parse::<u32>()
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
-    let repair = fields
-        .next()
-        .ok_or(TransportAdapterError::InvalidInput)?
+    let repair = repair
         .parse::<u32>()
         .map_err(|_error| TransportAdapterError::InvalidInput)?;
-    if fields.next().is_some() {
-        return Err(TransportAdapterError::InvalidInput);
-    }
     Ok(Some((primary, repair)))
 }

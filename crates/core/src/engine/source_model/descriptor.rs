@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use o_sfu_rfc::rtp::{Mid, Rid, Ssrc};
 use o_sfu_router::{MediaKind, rtp::MediaFormat};
 use thiserror::Error;
@@ -192,14 +193,12 @@ impl PublishedSourceDescriptor {
 }
 
 fn duplicate_encoding_id(encodings: &[SourceEncodingDescriptor]) -> Option<SourceEncodingId> {
-    encodings.iter().enumerate().find_map(|(index, encoding)| {
-        let encoding_id = encoding.encoding_id();
-        encodings
-            .iter()
-            .skip(index + 1)
-            .any(|other| other.encoding_id() == encoding_id)
-            .then_some(encoding_id)
-    })
+    encodings
+        .iter()
+        .tuple_combinations()
+        .find_map(|(left, right)| {
+            (left.encoding_id() == right.encoding_id()).then_some(left.encoding_id())
+        })
 }
 
 fn selectable_encoding_indices(encodings: &[SourceEncodingDescriptor]) -> Vec<usize> {

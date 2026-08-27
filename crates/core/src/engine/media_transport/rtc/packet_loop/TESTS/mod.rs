@@ -2660,7 +2660,7 @@ fn flush_pending_kf_reqs_coalesces_duplicate_remote_requests() {
 }
 
 #[test]
-fn flush_pending_kf_reqs_keeps_distinct_rids_separate() {
+fn flush_pending_kf_reqs_coalesces_each_rid_separately() {
     let source_session = test_transport_session_key(84, 0, 85, UserId::Integer(86));
     let first_consumer_session = test_transport_session_key(84, 1, 87, UserId::Integer(88));
     let second_consumer_session = test_transport_session_key(84, 1, 89, UserId::Integer(90));
@@ -2691,9 +2691,21 @@ fn flush_pending_kf_reqs_keeps_distinct_rids_separate() {
     drain_remote_packet_gate_setup(&mut control_rx);
     push_keyframe_request(
         &mut harness.buffers,
-        first_consumer_session,
+        first_consumer_session.clone(),
         "cam-down-1",
         KeyframeRequestKind::Pli,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        second_consumer_session.clone(),
+        "cam-down-2",
+        KeyframeRequestKind::Pli,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        first_consumer_session,
+        "cam-down-1",
+        KeyframeRequestKind::Fir,
     );
     push_keyframe_request(
         &mut harness.buffers,
@@ -2717,10 +2729,92 @@ fn flush_pending_kf_reqs_keeps_distinct_rids_separate() {
         assert_eq!(actual_target_id, target_id);
         requests.push((rid, kind));
     }
-    assert!(requests.contains(&(Some(first_rid), KeyframeRequestKind::Pli)));
+    assert!(requests.contains(&(Some(first_rid), KeyframeRequestKind::Fir)));
     assert!(requests.contains(&(Some(second_rid), KeyframeRequestKind::Fir)));
-    assert_eq!(requests.len(), 2);
     assert_no_remote_keyframe_request(&mut control_rx);
+    let snapshot = harness.metrics.snapshot();
+    assert_eq!(snapshot.rtc_route_control_forwarded(), 2);
+    assert_eq!(snapshot.rtc_route_control_absorbed(), 0);
+}
+
+#[test]
+fn flush_pending_kf_reqs_keeps_sources_separate_for_same_rid() {
+    let first_source_session = test_transport_session_key(91, 0, 92, UserId::Integer(93));
+    let second_source_session = test_transport_session_key(91, 2, 94, UserId::Integer(95));
+    let first_consumer_session = test_transport_session_key(91, 1, 96, UserId::Integer(97));
+    let second_consumer_session = test_transport_session_key(91, 1, 98, UserId::Integer(99));
+    let first_src_media = TransportMediaId::new(105);
+    let second_src_media = TransportMediaId::new(106);
+    let rid = Rid::from("hi");
+    let first_target_id = RelayTargetId::new(7);
+    let second_target_id = RelayTargetId::new(8);
+    let mut harness = PacketLoopHarness::new();
+    let mut first_control_rx =
+        harness.remote_keyframe_source(first_src_media, &first_source_session, first_target_id, 2);
+    let mut second_control_rx = harness.remote_keyframe_source(
+        second_src_media,
+        &second_source_session,
+        second_target_id,
+        2,
+    );
+    register_consumer_route_fixture(
+        &mut harness.state,
+        &first_consumer_session,
+        "cam-down-1",
+        first_src_media,
+        true,
+        PacketLayerGate::Rid(rid),
+        None,
+    );
+    register_consumer_route_fixture(
+        &mut harness.state,
+        &second_consumer_session,
+        "cam-down-2",
+        second_src_media,
+        true,
+        PacketLayerGate::Rid(rid),
+        None,
+    );
+    drain_remote_packet_gate_setup(&mut first_control_rx);
+    drain_remote_packet_gate_setup(&mut second_control_rx);
+    push_keyframe_request(
+        &mut harness.buffers,
+        first_consumer_session,
+        "cam-down-1",
+        KeyframeRequestKind::Pli,
+    );
+    push_keyframe_request(
+        &mut harness.buffers,
+        second_consumer_session,
+        "cam-down-2",
+        KeyframeRequestKind::Pli,
+    );
+
+    flush_pending_kf_reqs_at(
+        &mut harness.state,
+        harness.rtc_metrics.as_ref(),
+        &mut harness.buffers,
+        Instant::now(),
+    );
+
+    assert_remote_keyframe_request(
+        &mut first_control_rx,
+        &first_source_session,
+        first_src_media,
+        first_target_id,
+        Some(rid),
+        KeyframeRequestKind::Pli,
+    );
+    assert_remote_keyframe_request(
+        &mut second_control_rx,
+        &second_source_session,
+        second_src_media,
+        second_target_id,
+        Some(rid),
+        KeyframeRequestKind::Pli,
+    );
+    assert_no_remote_keyframe_request(&mut first_control_rx);
+    assert_no_remote_keyframe_request(&mut second_control_rx);
 }
 
 #[test]

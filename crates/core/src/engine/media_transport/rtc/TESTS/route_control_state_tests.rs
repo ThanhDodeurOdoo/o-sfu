@@ -296,10 +296,13 @@ fn keyframe_tracker_tracks_explicit_rids_independently() {
 }
 
 #[test]
-fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
+fn keyframe_tracker_decoder_refresh_clears_matching_pending_requests() {
     let mut state = KeyframeRequestTracker::default();
     let src_media = TransportMediaId::new(182);
     let now = Instant::now();
+    let source_wide_at = now + Duration::from_millis(100);
+    let lo_at = now + Duration::from_millis(200);
+    let lo_deadline = lo_at + Duration::from_secs(1);
     let hi = Rid::from("hi");
     let lo = Rid::from("lo");
     let mut retries = Vec::new();
@@ -317,29 +320,34 @@ fn keyframe_tracker_decoder_refresh_clears_matching_pending_request() {
     assert_eq!(
         state.track(
             src_media,
-            Some(lo),
+            Some(hi),
             KeyframeRequestKind::Pli,
             KeyframeRequestOrigin::DecoderTransition,
-            now,
+            now + Duration::from_millis(50)
         ),
+        KeyframeRequestDecision::Absorb
+    );
+    assert_eq!(
+        track_source_wide(&mut state, src_media, source_wide_at),
         KeyframeRequestDecision::Forward
     );
     assert_eq!(
         state.track(
             src_media,
-            Some(hi),
+            Some(lo),
             KeyframeRequestKind::Pli,
             KeyframeRequestOrigin::DecoderTransition,
-            now + Duration::from_millis(100)
+            lo_at,
         ),
-        KeyframeRequestDecision::Absorb
+        KeyframeRequestDecision::Forward
     );
 
-    assert_eq!(state.observe_refresh(src_media, Some(lo)), 1);
-    state.drain_due(now + Duration::from_secs(1), &mut retries);
+    assert_eq!(state.observe_refresh(src_media, Some(hi)), 2);
+    assert_eq!(state.next_deadline(), Some(lo_deadline));
+    state.drain_due(lo_deadline, &mut retries);
 
     assert_eq!(retries.len(), 1);
-    assert_eq!(retries[0].rid, Some(hi));
+    assert_eq!(retries[0].rid, Some(lo));
 }
 
 #[test]
