@@ -11,52 +11,10 @@ use crate::{
         room::{media_graph::SubscriptionKey, state::RoomState},
         source_model::{
             ConsumerSourceSelection, PublishedSourceDescriptor, SourceAdaptationPolicy,
-            SourceRoomPolicySelector, SourceRoutePriority,
+            SourceRoomPolicySelector,
         },
     },
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::engine::room) struct ReceiverVideoLayoutIntent {
-    role: SourceRoomPolicySelector,
-}
-
-impl ReceiverVideoLayoutIntent {
-    #[must_use]
-    pub(in crate::engine::room) const fn role(self) -> SourceRoomPolicySelector {
-        self.role
-    }
-
-    #[must_use]
-    pub(in crate::engine::room) const fn priority(self) -> SourceRoutePriority {
-        self.role.priority()
-    }
-
-    #[must_use]
-    pub(super) const fn uses_featured_quality(self) -> bool {
-        self.role.uses_featured_quality()
-    }
-
-    #[must_use]
-    const fn counts_toward_visible_budget(self) -> bool {
-        self.role.counts_toward_visible_budget()
-    }
-
-    #[must_use]
-    fn resolve(
-        source: &PublishedSourceDescriptor,
-        preference: Option<VideoLayoutIntent>,
-        active_speaker: bool,
-    ) -> Self {
-        let role = source
-            .policy()
-            .layout()
-            .map_or(SourceRoomPolicySelector::Hidden, |policy| {
-                policy.resolve(preference, active_speaker)
-            });
-        Self { role }
-    }
-}
 
 pub(super) fn receiver_video_routes<'a>(
     state: &RoomState,
@@ -72,13 +30,13 @@ pub(super) fn receiver_video_routes<'a>(
         {
             continue;
         }
-        let layout_intent = state.receiver_video_layout_intent(
+        let layout_role = state.receiver_video_layout_role(
             &route.key.receiver,
             source,
             &input.featured_source_user_ids,
         );
         if source.policy().adaptation() == SourceAdaptationPolicy::ScalableVideo
-            && layout_intent.counts_toward_visible_budget()
+            && layout_role.counts_toward_visible_budget()
         {
             *visible_scalable_route_counts
                 .entry(route.key.receiver.clone())
@@ -90,7 +48,7 @@ pub(super) fn receiver_video_routes<'a>(
             key: route.key,
             route: route.route,
             current_selection: route.selection,
-            layout_intent,
+            layout_role,
             visible_scalable_route_count: 1,
             active_speaker_rank: input
                 .active_speaker_rank_by_user
@@ -127,7 +85,7 @@ pub(super) struct ReceiverVideoRouteInput<'a> {
     pub(super) key: &'a SubscriptionKey,
     pub(super) route: &'a TransportConsumerRoute,
     pub(super) current_selection: ConsumerSourceSelection,
-    pub(super) layout_intent: ReceiverVideoLayoutIntent,
+    pub(super) layout_role: SourceRoomPolicySelector,
     pub(super) visible_scalable_route_count: usize,
     pub(super) active_speaker_rank: Option<usize>,
     pub(super) receiver_bandwidth: Option<Bitrate>,
@@ -137,37 +95,37 @@ pub(super) struct ReceiverVideoRouteInput<'a> {
 
 impl RoomState {
     #[must_use]
-    pub(in crate::engine::room) fn receiver_video_layout_intent(
+    pub(in crate::engine::room) fn receiver_video_layout_role(
         &self,
         consumer_user_id: &UserId,
         source: &PublishedSourceDescriptor,
         active_speaker_source_user_ids: &BTreeSet<UserId>,
-    ) -> ReceiverVideoLayoutIntent {
+    ) -> SourceRoomPolicySelector {
         let preference = layout_preference(self, consumer_user_id, source);
-        ReceiverVideoLayoutIntent::resolve(
-            source,
-            preference,
-            active_speaker_source_user_ids.contains(source.owner().user_id()),
-        )
+        source
+            .policy()
+            .layout()
+            .map_or(SourceRoomPolicySelector::Hidden, |policy| {
+                policy.resolve(
+                    preference,
+                    active_speaker_source_user_ids.contains(source.owner().user_id()),
+                )
+            })
     }
 
     #[must_use]
-    pub(in crate::engine::room) fn diagnostics_video_layout_intent(
+    pub(in crate::engine::room) fn diagnostics_video_layout_role(
         &self,
         consumer_user_id: &UserId,
         source: &PublishedSourceDescriptor,
-    ) -> Option<ReceiverVideoLayoutIntent> {
-        source.policy().layout()?;
+    ) -> Option<SourceRoomPolicySelector> {
+        let policy = source.policy().layout()?;
         let preference = layout_preference(self, consumer_user_id, source);
         let active_speaker = self
             .users
             .get(source.owner().user_id())
             .is_some_and(|user| user.featured() == Some(true));
-        Some(ReceiverVideoLayoutIntent::resolve(
-            source,
-            preference,
-            active_speaker,
-        ))
+        Some(policy.resolve(preference, active_speaker))
     }
 }
 

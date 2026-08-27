@@ -550,7 +550,7 @@ fn desired_encoding_index(
     if route.user_count < tuning.multiparty_scalable_video_threshold {
         return allowed_encoding_indices(route.source, source_cap).next_back();
     }
-    let uses_featured_quality = route.layout_intent.uses_featured_quality();
+    let uses_featured_quality = route.layout_role.uses_featured_quality();
     let Some(receiver_bandwidth) = route.receiver_bandwidth else {
         return if uses_featured_quality {
             allowed_encoding_indices(route.source, source_cap).next_back()
@@ -670,7 +670,7 @@ fn active_route_count(routes: &[PlannedReceiverRoute<'_>]) -> usize {
 fn video_download_rank(route: &PlannedReceiverRoute<'_>) -> VideoAdmissionRank {
     let input = route.input;
     VideoAdmissionRank::new(
-        input.layout_intent.priority(),
+        input.layout_role.priority(),
         input.active_speaker_rank,
         input.source.source_id(),
     )
@@ -770,15 +770,15 @@ fn route_can_downgrade(route: &PlannedReceiverRoute<'_>) -> bool {
     route.selection.policy_pause_reason.is_none()
         && input.source.policy().adaptation() == SourceAdaptationPolicy::ScalableVideo
         && matches!(
-            input.layout_intent.priority(),
+            input.layout_role.priority(),
             SourceRoutePriority::VisibleThumbnail | SourceRoutePriority::HiddenOrOverflow
         )
 }
 
 fn pause_reason_for_route(route: &PlannedReceiverRoute<'_>) -> PolicyPauseReason {
-    let intent = route.input.layout_intent;
-    match intent.priority() {
-        SourceRoutePriority::HiddenOrOverflow => match intent.role() {
+    let role = route.input.layout_role;
+    match role.priority() {
+        SourceRoutePriority::HiddenOrOverflow => match role {
             SourceRoomPolicySelector::Hidden => PolicyPauseReason::HiddenTile,
             SourceRoomPolicySelector::Overflow => PolicyPauseReason::OverflowTile,
             _ => PolicyPauseReason::BudgetPressure,

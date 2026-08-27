@@ -222,7 +222,7 @@ impl RoomState {
             );
         };
         VideoAdmissionRank::new(
-            self.receiver_video_layout_intent(target.session.user_id(), source, active_speakers)
+            self.receiver_video_layout_role(target.session.user_id(), source, active_speakers)
                 .priority(),
             None,
             target.source_id,
