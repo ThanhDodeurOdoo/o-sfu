@@ -263,6 +263,8 @@ fn answer_validation_requires_complete_video_repair_topology() {
         &["a=rtpmap:96 VP8/90000", "a=rtcp-fb:96 nack pli"],
     );
     assert!(validate_answer_sdp(&valid_without_repair).is_ok());
+    let wildcard_feedback = format!("{valid_without_repair}a=rtcp-fb:* transport-cc\r\n");
+    assert!(validate_answer_sdp(&wildcard_feedback).is_ok());
     let rid_declaration = valid_pair
         .replace("a=ssrc-group:FID 1234 5678\r\n", "")
         .replace("a=ssrc:1234 cname:test\r\n", "")
@@ -321,12 +323,26 @@ fn answer_validation_requires_complete_video_repair_topology() {
             ),
         ),
         (
+            "extra rtpmap field",
+            valid_pair.replace(
+                "a=rtpmap:96 VP8/90000\r\n",
+                "a=rtpmap:96 VP8/90000 extra\r\n",
+            ),
+        ),
+        (
             "RTX absent from the media formats",
             valid_pair.replace(valid_video_formats, "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"),
         ),
         (
             "invalid FID arity",
             format!("{valid_pair}a=ssrc-group:FID 9000\r\n"),
+        ),
+        (
+            "extra FID member",
+            valid_pair.replace(
+                "a=ssrc-group:FID 1234 5678\r\n",
+                "a=ssrc-group:FID 1234 5678 9000\r\n",
+            ),
         ),
         (
             "ambiguous FID",

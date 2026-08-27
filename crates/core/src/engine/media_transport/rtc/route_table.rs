@@ -56,6 +56,7 @@ use std::{
 };
 
 use active_rank::ActiveSpeakerRank;
+use itertools::Itertools;
 use o_sfu_router::rtp::MediaStream;
 use source::{RemovedConsumerRoute, RouteSource};
 pub(super) use source::{RidReadinessRouteUpdate, RidReadinessSelectedGateUpdate};
@@ -718,18 +719,16 @@ impl RouteTable {
     }
 
     pub(super) fn active_speaker_sources(&self, now: Instant) -> Vec<ActiveSpeakerSource> {
-        let mut sources = self
-            .sources
+        self.sources
             .iter()
             .filter_map(|(source_id, source)| source.active_speaker_source(*source_id, now))
-            .collect::<Vec<_>>();
-        sources.sort_unstable_by_key(|source| {
-            (
-                Reverse(source.observed_at()),
-                source.transport_media_id().as_u64(),
-            )
-        });
-        sources
+            .sorted_unstable_by_key(|source| {
+                (
+                    Reverse(source.observed_at()),
+                    source.transport_media_id().as_u64(),
+                )
+            })
+            .collect()
     }
 
     pub(super) fn active_speaker_diagnostics(

@@ -1375,6 +1375,43 @@ async fn video_download_limit_pauses_lowest_ranked_receiver_routes() {
 }
 
 #[tokio::test]
+async fn video_download_limit_pauses_every_route_beyond_the_limit() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3, 4],
+        RoomMediaLimits::try_new(4, 1).unwrap(),
+    )
+    .await;
+    scenario
+        .publish_audio_and_camera_for_users(&[1, 3, 4])
+        .await;
+    scenario
+        .mark_active_speaker(scenario.audio_media_id(4).await)
+        .await;
+    scenario.refresh_policy_until_upgrades_settle().await;
+
+    for owner in [1, 3] {
+        assert_subscription_policy_pause_reason(
+            &scenario.room,
+            &scenario.adapter,
+            &UserId::Integer(2),
+            &UserId::Integer(owner),
+            TestSourceKind::ScalableVideo,
+            Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
+        )
+        .await;
+    }
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &UserId::Integer(2),
+        &UserId::Integer(4),
+        TestSourceKind::ScalableVideo,
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn constrained_bandwidth_can_pause_a_pinned_route() {
     let scenario = SourcePolicyScenario::three_ready_users().await;
     publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;

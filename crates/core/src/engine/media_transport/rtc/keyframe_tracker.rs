@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use itertools::{Itertools, partition};
 use str0m::media::{KeyframeRequestKind, Rid};
 
 use crate::engine::media_transport::TransportMediaId;
@@ -137,17 +138,14 @@ impl KeyframeRequestTracker {
             let Some(Reverse(deadline)) = self.deadlines.pop() else {
                 break;
             };
-            let Some(index) = self
+            let Some((index, request)) = self
                 .pending
-                .iter()
-                .position(|request| request.matches_deadline(deadline))
+                .iter_mut()
+                .find_position(|request| request.matches_deadline(deadline))
             else {
                 continue;
             };
             drain_budget -= 1;
-            let Some(request) = self.pending.get_mut(index) else {
-                continue;
-            };
             let retry = request.request;
             let reschedule = match &mut request.retry_policy {
                 RetryPolicy::Bounded(attempts_remaining) if *attempts_remaining > 0 => {
@@ -178,18 +176,41 @@ impl KeyframeRequestTracker {
             .map(|Reverse(deadline)| deadline.deadline)
     }
 
-    fn remove_pending(&mut self, mut remove: impl FnMut(&KeyframeRequestState) -> bool) -> usize {
-        let mut removed = 0;
-        let mut index = 0;
-        while let Some(request) = self.pending.get(index) {
-            if remove(request) {
-                let id = self.pending.swap_remove(index).id;
-                self.deadlines.retain(|Reverse(deadline)| deadline.id != id);
-                removed += 1;
-            } else {
-                index += 1;
-            }
+    /// partitions pending requests in place and purges removed deadlines in one retain pass
+    ///
+    /// ```text
+    /// initial `self.pending`
+    ///   +--------------+--------------+--------------+--------------+
+    ///   | req A (keep) | req B (drop) | req C (keep) | req D (drop) |
+    ///   +--------------+--------------+--------------+--------------+
+    ///                          |
+    ///                          v  itertools::partition(&mut pending, !should_remove)
+    ///   +--------------+--------------+--------------+--------------+
+    ///   | req A (keep) | req C (keep) | req B (drop) | req D (drop) |
+    ///   +--------------+--------------+--------------+--------------+
+    ///   <------- retained_len -------><------- removed = 2 --------->
+    ///                          |
+    ///                          v  deadlines.retain(|d| removed.all(id != d.id))
+    ///                          v  pending.truncate(retained_len)
+    /// final `self.pending`
+    ///   +--------------+--------------+
+    ///   | req A (keep) | req C (keep) |
+    ///   +--------------+--------------+
+    /// ```
+    fn remove_pending(&mut self, should_remove: impl Fn(&KeyframeRequestState) -> bool) -> usize {
+        let retained_len = partition(&mut self.pending, |request| !should_remove(request));
+        let removed = self.pending.len() - retained_len;
+        if removed == 0 {
+            return 0;
         }
+        self.deadlines.retain(|Reverse(deadline)| {
+            self.pending
+                .iter()
+                .rev()
+                .take(removed)
+                .all(|request| request.id != deadline.id)
+        });
+        self.pending.truncate(retained_len);
         removed
     }
 }

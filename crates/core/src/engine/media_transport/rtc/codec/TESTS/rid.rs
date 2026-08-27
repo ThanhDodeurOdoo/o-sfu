@@ -148,8 +148,13 @@ fn answer_rejects_duplicate_rid_declaration() {
 }
 
 #[test]
-fn answer_rejects_unmodeled_restrictions() {
-    for restriction in ["max-br=150000;max-width=640", "pt=96;max-br=150000"] {
+fn answer_rejects_multiple_rid_restrictions() {
+    for restriction in [
+        "max-br=150000;max-width=640",
+        "pt=96;max-br=150000",
+        "max-br=150000;max-br=149999",
+        "max-br=150000;",
+    ] {
         let answer = answer("video_0", &[("lo", Some(restriction))], Some("lo"));
 
         assert_eq!(
@@ -181,6 +186,21 @@ fn answer_requires_accepted_simulcast_send_list() {
         send_rids(&answer, &default_upload_encodings()),
         Ok(rids) if rids.is_empty()
     ));
+}
+
+#[test]
+fn answer_rejects_multiple_simulcast_attributes() {
+    let mut answer = answer(
+        "video_0",
+        &[("lo", Some("max-br=150000")), ("hi", Some("max-br=900000"))],
+        Some("lo"),
+    );
+    answer.push_str("a=simulcast:send hi\r\n");
+
+    assert_eq!(
+        send_rids(&answer, &default_upload_encodings()),
+        Err(SimulcastAnswerError)
+    );
 }
 
 #[test]

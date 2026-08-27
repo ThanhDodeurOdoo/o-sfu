@@ -6,6 +6,7 @@
 
 use std::{cmp::Ordering, time::Instant};
 
+use itertools::Itertools;
 use str0m::media::{KeyframeRequest as RtcKeyframeRequest, KeyframeRequestKind, Mid, Rid};
 
 use super::{
@@ -76,6 +77,25 @@ impl ResolvedKeyframeRoute {
 ///
 /// duplicate feedback for one `(src_media, rid)` sends the strongest request once
 /// distinct rids stay separate so simulcast feedback is not widened
+///
+/// ```text
+/// incoming feedback
+///   [(M1, lo, PLI), (M1, lo, FIR), (M1, hi, PLI), (M2, lo, PLI)]
+///                            |
+///                            v  sort_unstable_by(src_media, rid)
+///   [(M1, lo, PLI), (M1, lo, FIR), (M1, hi, PLI), (M2, lo, PLI)]
+///                            |
+///                            v  .coalesce(|current, next| ...)
+///   +-----------------------------------------------------------+
+///   | (M1, lo, PLI) + (M1, lo, FIR) --> Ok((M1, lo, FIR))       |
+///   | (M1, lo, FIR) + (M1, hi, PLI) --> Err --> yield (M1, lo)  |
+///   | (M1, hi, PLI) + (M2, lo, PLI) --> Err --> yield (M1, hi)  |
+///   | stream drain                  --> End --> yield (M2, lo)  |
+///   +-----------------------------------------------------------+
+///                            |
+///                            v
+///             flush_coalesced_kf_req(...) (single flush sink)
+/// ```
 pub fn flush_pending_kf_reqs_at(
     state: &mut PacketLoopState,
     metrics: &RtcMetricsRecorder,
@@ -142,27 +162,14 @@ pub fn flush_pending_kf_reqs_at(
     } else {
         coalesced_reqs.sort_unstable_by_key(|request| request.src_media);
     }
-    let mut current_request: Option<SourceKeyframeRequest> = None;
-    for coalesced_request in coalesced_reqs.drain(..) {
-        match &mut current_request {
-            Some(current)
-                if current.src_media == coalesced_request.src_media
-                    && current.rid == coalesced_request.rid =>
-            {
-                current.kind = coalesce_kf_kind(current.kind, coalesced_request.kind);
-            }
-            Some(_) => {
-                if let Some(request) = current_request.take() {
-                    flush_coalesced_kf_req(state, metrics, request, now);
-                }
-                current_request = Some(coalesced_request);
-            }
-            None => {
-                current_request = Some(coalesced_request);
-            }
+    for request in coalesced_reqs.drain(..).coalesce(|mut current, next| {
+        if current.src_media == next.src_media && current.rid == next.rid {
+            current.kind = coalesce_kf_kind(current.kind, next.kind);
+            Ok(current)
+        } else {
+            Err((current, next))
         }
-    }
-    if let Some(request) = current_request {
+    }) {
         flush_coalesced_kf_req(state, metrics, request, now);
     }
 }

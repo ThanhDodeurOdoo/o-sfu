@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 use o_sfu_rfc::webrtc::{self, sdp};
 use o_sfu_router::rtp::MediaStream;
 use str0m::{
@@ -351,32 +352,31 @@ fn parse_rid_restrictions(
     let Some(restrictions) = restrictions else {
         return Ok(RidMaxBitrate::Absent);
     };
-    let mut max_bitrate = RidMaxBitrate::Absent;
-    for restriction in restrictions.split(sdp::rid_restriction::PARAMETER_SEPARATOR) {
-        let restriction = restriction.trim();
-        if restriction.is_empty() {
-            return Err(SimulcastAnswerError);
-        }
-        let (key, value) = restriction
-            .split_once(sdp::rid_restriction::NAME_VALUE_SEPARATOR)
-            .map_or((restriction, None), |(key, value)| {
-                (key.trim(), Some(value.trim()))
-            });
-        if key != sdp::rid_restriction::MAX_BITRATE || max_bitrate != RidMaxBitrate::Absent {
-            return Err(SimulcastAnswerError);
-        }
-        max_bitrate = match value {
-            Some(value) if !value.is_empty() => RidMaxBitrate::Value(
-                value
-                    .parse::<u64>()
-                    .map(Bitrate::from_bps)
-                    .map_err(|_error| SimulcastAnswerError)?,
-            ),
-            Some(_) => return Err(SimulcastAnswerError),
-            None => RidMaxBitrate::Valueless,
-        };
+    let restriction = restrictions
+        .split(sdp::rid_restriction::PARAMETER_SEPARATOR)
+        .exactly_one()
+        .map_err(|_error| SimulcastAnswerError)?
+        .trim();
+    if restriction.is_empty() {
+        return Err(SimulcastAnswerError);
     }
-    Ok(max_bitrate)
+    let (key, value) = restriction
+        .split_once(sdp::rid_restriction::NAME_VALUE_SEPARATOR)
+        .map_or((restriction, None), |(key, value)| {
+            (key.trim(), Some(value.trim()))
+        });
+    if key != sdp::rid_restriction::MAX_BITRATE {
+        return Err(SimulcastAnswerError);
+    }
+    match value {
+        Some(value) if !value.is_empty() => value
+            .parse::<u64>()
+            .map(Bitrate::from_bps)
+            .map(RidMaxBitrate::Value)
+            .map_err(|_error| SimulcastAnswerError),
+        Some(_) => Err(SimulcastAnswerError),
+        None => Ok(RidMaxBitrate::Valueless),
+    }
 }
 
 #[cfg(test)]

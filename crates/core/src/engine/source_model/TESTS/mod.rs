@@ -258,6 +258,7 @@ fn descriptor_rejects_duplicate_encoding_ids() {
             source_id,
             vec![
                 source_encoding(source_id, encoding_id, "lo"),
+                source_encoding(source_id, SourceEncodingId::from_raw(2), "mid"),
                 source_encoding(source_id, encoding_id, "hi"),
             ],
         )
