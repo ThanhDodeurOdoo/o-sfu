@@ -6,7 +6,7 @@
 use std::{
     collections::BTreeMap,
     future::Future,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
 };
 
@@ -378,16 +378,33 @@ fn stream_id_for_stream_type(stream_type: StreamType) -> &'static str {
 ///
 /// Returns an error when runtime construction or listener binding fails.
 pub async fn spawn_test_server(config: Config) -> Result<TestServer> {
-    let runtime = Runtime::new(&config)?;
-    let media_transport = runtime.media_transport_for_test();
     let listener = TcpListener::bind(config.http.bind_address).await?;
-    let addr = listener
+    spawn_test_server_with_listener(&config, listener)
+}
+
+/// Spawns the production server with a caller-provided listener.
+///
+/// # Errors
+///
+/// Returns an error when runtime construction or listener inspection fails.
+pub fn spawn_test_server_with_listener(
+    config: &Config,
+    listener: TcpListener,
+) -> Result<TestServer> {
+    let runtime = Runtime::new(config)?;
+    let media_transport = runtime.media_transport_for_test();
+    let mut client_addr = listener
         .local_addr()
         .map_err(|error| anyhow!("failed to read test listener address: {error}"))?;
+    client_addr.set_ip(match client_addr.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => Ipv4Addr::LOCALHOST.into(),
+        IpAddr::V6(ip) if ip.is_unspecified() => Ipv6Addr::LOCALHOST.into(),
+        ip => ip,
+    });
     let shutdown = CancellationToken::new();
     let handle = tokio::spawn(runtime.serve_listener(listener, shutdown.clone().cancelled_owned()));
     Ok(TestServer {
-        addr,
+        addr: client_addr,
         handle: AbortOnDropHandle::new(handle),
         media_transport,
         shutdown,

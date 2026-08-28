@@ -7,28 +7,19 @@ use serde::{Deserialize, Serialize};
 
 pub mod route {
     pub const WEBSOCKET: &str = "/";
-    /// `GET` Prometheus text scrape with no application-layer authentication.
-    ///
-    /// this endpoint exposes samples and is not a `PromQL` query API.
-    /// see [`crate::http::telemetry::metrics`] for its query catalog and examples.
+    /// Prometheus scrape endpoint, not a `PromQL` API.
+    /// See [`crate::http::telemetry::metrics`] for queries and examples.
     pub const METRICS: &str = "/metrics";
 
     pub mod v1 {
         pub const NOOP: &str = "/v1/noop";
+        /// Compatibility channel statistics.
         pub const STATS: &str = "/v1/stats";
         pub const CHANNEL: &str = "/v1/channel";
         pub const DISCONNECT: &str = "/v1/disconnect";
     }
 
-    /// diagnostics `GET` routes.
-    ///
-    /// requests require `Authorization: Bearer <token>` when a diagnostics
-    /// token is configured.
-    /// without a configured token, the server permits access only when its HTTP
-    /// listener is bound to a loopback address.
-    /// rejected requests return `401 Unauthorized` for a missing or invalid
-    /// configured token and `403 Forbidden` for a public listener without one.
-    /// successful requests return `200 OK` JSON.
+    /// Diagnostics `GET` routes.
     pub mod diagnostics {
         /// returns [`crate::http::telemetry::diagnostics::DiagnosticsSummaryResponse`].
         pub const SUMMARY: &str = "/internal/diagnostics/summary";

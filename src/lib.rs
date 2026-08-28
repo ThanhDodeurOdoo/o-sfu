@@ -36,11 +36,14 @@
 //!                                      |
 //!                                      v
 //!                                MediaTransport
-//!                                      |
-//!                                      v
-//!                             RTC worker packet loops
-//!                                      |
-//!                        UDP in -> RTP fanout -> UDP out
+//!                                 |    |    |
+//!                                 v    v    v
+//!                          RTC workers / packet loops
+//!                         |            |              |
+//!                      UDP:40001   UDP:40002      UDP:40003
+//!                         |            |              |
+//!                         v            v              v
+//!                      fanout        fanout        fanout
 //! ```
 //!
 //! # Admission Edge
@@ -52,8 +55,35 @@
 //! JWT authentication before admission.
 //!
 //! ```text
-//! App GET /v1/channel -> verify auth -> RoomManager::serve_room
-//! WebSocket client connect -> verify auth -> SfuCore::admit_user -> MediaSession
+//!                     +----------------------------------------+
+//!                     |     Incoming HTTP / WebSocket I/O      |
+//!                     +----------------------------------------+
+//!                                         |
+//!                                         v
+//!                     +----------------------------------------+
+//!                     |              Axum Router               |
+//!                     +----------------------------------------+
+//!                                         |
+//!        +--------------------+-----------+-----------+--------------------+
+//!        |                    |                       |                    |
+//!        v                    v                       v                    v
+//!  [ GET /v1/noop ]  [ GET /v1/channel ]     [ WebSocket / ]   [ Operator Routes ]   <-- Routes
+//!  (Public Liveness) [ POST /v1/disconnect ] (Signaling Path)  - GET /v1/stats
+//!        |                    |                     |          - GET /metrics
+//!        |                    |                     |          - GET /internal/...
+//!        |                    v                     v                  |
+//!        |           +---------------+     +---------------+   +---------------+
+//!        |           | VerifiedRoom  |     | Upgrade       |   | OperatorAccess|     <-- Extractors
+//!        |           | VerifiedClaims|     | ConnectInfo   |   | (Route Layer) |
+//!        |           | (JWT Header)  |     | 1st-Frame JWT |   | (Bearer/Local)|
+//!        |           +---------------+     +---------------+   +---------------+
+//!        |                    |                     |                  |
+//!        v                    v                     v                  v
+//!  +---------------+ +---------------+     +---------------+   +---------------+
+//!  | noop          | | room          |     | upgrade       |   | stats         |     <-- Handlers
+//!  |               | | disconnect    |     | -> admit_user |   | metrics       |
+//!  | -> 200 JSON   | | -> Room State |     | -> WS Session |   | diagnostics_* |
+//!  +---------------+ +---------------+     +---------------+   +---------------+
 //! ```
 //!
 //! - **HTTP**: Parses server-to-server requests using [`http::CreateRoomQuery`]. Verifies [`auth::HttpRoomClaims`]. The request that creates the current room fixes its signing key.
@@ -151,9 +181,7 @@
 //! HTTP and WebSocket are served in plaintext in process. HTTPS and WSS are
 //! terminated by an external reverse proxy, so a forwarded scheme and client
 //! address are trusted only when the proxy is trusted through [`config`]
-//! (`PROXY`). Diagnostics require a bearer token or a loopback listener. The
-//! metrics endpoint carries no application authentication and must be restricted
-//! at the deployment boundary.
+//! (`PROXY`). Operator route access is documented by [`http`].
 //!
 //! # Room and Router Ownership
 //!
@@ -305,6 +333,12 @@ pub mod auth {
     };
 }
 
+/// HTTP route and payload contracts.
+///
+/// `/v1/stats`, `/metrics` and diagnostics require the configured
+/// [`crate::config::DiagnosticsConfig::auth_token`] on every listener. Without
+/// one, the actual listener must be loopback. Missing or invalid tokens return
+/// `401 Unauthorized`. Tokenless non-loopback access returns `403 Forbidden`.
 pub mod http {
     pub use crate::runtime::{
         http_server::contract::{
@@ -319,9 +353,7 @@ pub mod http {
         /// Prometheus metric scrape contract.
         ///
         /// `GET` [`metrics::PATH`] returns `200 OK` Prometheus text exposition
-        /// with [`metrics::CONTENT_TYPE`] and requires no application-layer
-        /// authentication.
-        /// Operators should restrict access at the deployment boundary.
+        /// with [`metrics::CONTENT_TYPE`].
         ///
         /// This is a scrape endpoint.
         /// Configure Prometheus to scrape [`metrics::PATH`], then issue `PromQL`
@@ -331,14 +363,19 @@ pub mod http {
         ///
         /// # Scrape and Query
         ///
-        /// Prometheus scrapes o-sfu directly.
-        ///
         /// ```yaml
         /// scrape_configs:
         ///   - job_name: o-sfu
+        ///     scheme: https
         ///     metrics_path: /metrics
+        ///     authorization:
+        ///       type: Bearer
+        ///       credentials_file: /run/secrets/o_sfu_diagnostics_token
+        ///     tls_config:
+        ///       ca_file: /run/secrets/o_sfu_observability_ca
+        ///       server_name: o-sfu-observability.internal
         ///     static_configs:
-        ///       - targets: ["o-sfu:8070"]
+        ///       - targets: ["o-sfu-observability.internal:443"]
         /// ```
         ///
         /// The endpoint returns Prometheus text exposition.
@@ -378,12 +415,8 @@ pub mod http {
 
         /// JSON diagnostics contract.
         ///
-        /// Every constant in [`diagnostics::route`] is a `GET` endpoint.
-        /// When a diagnostics token is configured, requests must send it as an
-        /// `Authorization: Bearer <token>` header.
-        /// Without a configured token, the server permits access only when its
-        /// HTTP listener is bound to a loopback address.
-        /// Successful requests return `200 OK` JSON.
+        /// Every constant in [`diagnostics::route`] is a `GET` endpoint returning
+        /// `200 OK` JSON on success.
         ///
         /// # Routes and Parameters
         ///
@@ -402,11 +435,11 @@ pub mod http {
         /// `userKey` is always the string to put into `{id}`.
         /// URL-encode both path values before substitution.
         ///
-        /// # Summary Request and Response
+        /// # Summary Request and Response over HTTPS
         ///
         /// ```text
         /// GET /internal/diagnostics/summary HTTP/1.1
-        /// Host: o-sfu:8070
+        /// Host: o-sfu-observability.internal
         /// Authorization: Bearer <diagnostics-token>
         /// Accept: application/json
         ///
@@ -431,7 +464,7 @@ pub mod http {
         /// # JavaScript Fetch Example
         ///
         /// ```javascript
-        /// const origin = "http://o-sfu:8070";
+        /// const origin = "https://o-sfu-observability.internal";
         /// const headers = {
         ///   Authorization: `Bearer ${process.env.DIAGNOSTICS_AUTH_TOKEN}`,
         /// };

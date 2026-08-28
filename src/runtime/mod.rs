@@ -134,6 +134,8 @@ impl Runtime {
 
     /// Serves a caller-provided listener until `shutdown` resolves.
     ///
+    /// Tokenless operator access follows the listener's actual local address.
+    ///
     /// # Errors
     ///
     /// Returns [`ServeError::Io`] for serving failures or

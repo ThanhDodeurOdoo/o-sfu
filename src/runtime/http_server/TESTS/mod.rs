@@ -1,3 +1,5 @@
+#[path = "access_route_tests.rs"]
+mod access_route_tests;
 #[path = "app_tests.rs"]
 mod app_tests;
 #[path = "diagnostics_route_tests.rs"]

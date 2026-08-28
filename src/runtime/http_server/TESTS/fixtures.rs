@@ -98,7 +98,12 @@ pub(super) async fn response(
     request: Request<Body>,
     context: &'static str,
 ) -> TestResult<AxumResponse> {
-    require_ok(app(state.clone()).oneshot(request).await, context)
+    require_ok(
+        app(state.clone(), state.config.http.bind_address)
+            .oneshot(request)
+            .await,
+        context,
+    )
 }
 
 pub(super) async fn route_response(

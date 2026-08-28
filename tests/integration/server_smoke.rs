@@ -3,9 +3,9 @@
     reason = "integration tests use panic-based assertions for clear failures"
 )]
 
-use std::{collections::BTreeMap, future::Future, pin::Pin};
+use std::{collections::BTreeMap, future::Future, net::SocketAddr, pin::Pin};
 
-use o_sfu::config::Config;
+use o_sfu::{config::Config, http::route};
 use o_sfu_protocol::wire::{
     ClientBroadcastPayload, ClientMessage, DownloadStates, ServerMessage, ServerRequest,
     SubscribePayload, UserId,
@@ -14,15 +14,24 @@ use o_sfu_tests::support::{
     TEST_ROOM_KEY, TestResult, TestServer, connect_websocket, create_room,
     disconnect_sessions_via_http, metrics_text,
     protocol_harness::{ProtocolWebSocketClient, connect_protocol_pair, read_until_server_message},
-    read_close_code, require_some, signed_connect_claims, spawn_test_server, test_config,
+    read_close_code, require_some, signed_connect_claims, spawn_test_server,
+    spawn_test_server_with_listener, test_config,
 };
 use reqwest::StatusCode;
 use str0m::change::SdpOffer;
-use tokio::time::{Duration, timeout};
+use tokio::{
+    net::TcpListener,
+    time::{Duration, timeout},
+};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 const SLOW_CONSUMER_BATCH_LEN: usize = 64;
 const SLOW_CONSUMER_PAYLOAD_BYTES: usize = 1_024;
+const OPERATOR_ROUTES: [&str; 3] = [
+    route::v1::STATS,
+    route::METRICS,
+    route::diagnostics::SUMMARY,
+];
 
 async fn server_with_room(issuer: &str) -> TestResult<(TestServer, String)> {
     server_with_configured_room(test_config(1_000, 10), issuer).await
@@ -119,6 +128,34 @@ async fn runtime_shutdown_drains_pending_and_admitted_websockets() -> TestResult
     assert_eq!(admitted_close, Some(CloseCode::Away));
     assert!(connect_websocket(&server).await.is_none());
     server.join().await
+}
+
+#[tokio::test]
+async fn operator_access_uses_listener_address() -> TestResult {
+    let mut loopback_config = test_config(1_000, 10);
+    loopback_config.http.bind_address = SocketAddr::from(([127, 0, 0, 1], 0));
+    let wildcard_listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await?;
+    let wildcard_server = spawn_test_server_with_listener(&loopback_config, wildcard_listener)?;
+
+    for path in OPERATOR_ROUTES {
+        let response = reqwest::get(format!("{}{path}", wildcard_server.http_base_url())).await?;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    let path = route::v1::NOOP;
+    let response = reqwest::get(format!("{}{path}", wildcard_server.http_base_url())).await?;
+    assert_eq!(response.status(), StatusCode::OK, "{path}");
+    wildcard_server.join().await?;
+
+    let mut wildcard_config = test_config(1_000, 10);
+    wildcard_config.http.bind_address = SocketAddr::from(([0, 0, 0, 0], 0));
+    let loopback_listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+    let loopback_server = spawn_test_server_with_listener(&wildcard_config, loopback_listener)?;
+
+    for path in OPERATOR_ROUTES {
+        let response = reqwest::get(format!("{}{path}", loopback_server.http_base_url())).await?;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+    loopback_server.join().await
 }
 
 #[tokio::test]

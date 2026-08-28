@@ -24,8 +24,8 @@ use crate::{
                 UsersStatsResponse, route,
             },
             extractors::{
-                DiagnosticsAccess, DiagnosticsServices, MetricsServices, RoomServices,
-                VerifiedDisconnectClaims, VerifiedRoomRequest,
+                DiagnosticsServices, MetricsServices, OperatorAccess, OperatorAccessPolicy,
+                RoomServices, VerifiedDisconnectClaims, VerifiedRoomRequest,
             },
         },
         metrics::{HttpRoute, RuntimeMetrics},
@@ -61,32 +61,44 @@ pub(crate) async fn serve_http_on(
     );
     axum::serve(
         listener,
-        app(state).into_make_service_with_connect_info::<SocketAddr>(),
+        app(state, local_address).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_token.cancelled_owned())
     .await
 }
 
 /// builds the Axum router for the HTTP control plane and WebSocket listener
-pub(crate) fn app(state: RuntimeState) -> Router {
+pub(crate) fn app(state: RuntimeState, listener_address: SocketAddr) -> Router {
     let metrics = Arc::clone(&state.metrics);
+    let operator_policy = OperatorAccessPolicy::new(
+        state.config.diagnostics.auth_token.as_deref(),
+        listener_address,
+    );
     Router::new()
         .route(route::WEBSOCKET, get(websocket_server::upgrade))
-        .merge(http_router(metrics))
-        .merge(diagnostics_router(state.clone()))
+        .merge(http_router(metrics, operator_policy.clone()))
+        .merge(diagnostics_router(operator_policy))
         .with_state(state)
 }
 
-fn http_router(runtime_metrics: Arc<RuntimeMetrics>) -> Router<RuntimeState> {
+fn http_router(
+    runtime_metrics: Arc<RuntimeMetrics>,
+    operator_policy: OperatorAccessPolicy,
+) -> Router<RuntimeState> {
+    let operator_layer =
+        middleware::from_extractor_with_state::<OperatorAccess, _>(operator_policy);
     Router::new()
         .route(route::v1::NOOP, get(noop))
-        .route(route::v1::STATS, get(stats))
+        .route(
+            route::v1::STATS,
+            get(stats).route_layer(operator_layer.clone()),
+        )
         .route(route::v1::CHANNEL, get(room))
         .route(
             route::v1::DISCONNECT,
             post(disconnect).layer(DefaultBodyLimit::max(MAX_DISCONNECT_BODY_BYTES)),
         )
-        .route(route::METRICS, get(metrics))
+        .route(route::METRICS, get(metrics).route_layer(operator_layer))
         .route_layer(middleware::from_fn_with_state(
             runtime_metrics,
             track_http_request,
@@ -111,8 +123,7 @@ async fn track_http_request(
     next.run(request).await
 }
 
-/// diagnostics route group protected by [`DiagnosticsAccess`]
-fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
+fn diagnostics_router(operator_policy: OperatorAccessPolicy) -> Router<RuntimeState> {
     Router::new()
         .route(route::diagnostics::SUMMARY, get(diagnostics_summary))
         .route(route::diagnostics::ROOMS, get(diagnostics_rooms))
@@ -122,7 +133,9 @@ fn diagnostics_router(state: RuntimeState) -> Router<RuntimeState> {
         .route(route::diagnostics::ROOM_USER, get(diagnostics_user_detail))
         .route(route::diagnostics::ROOM_GRAPH, get(diagnostics_room_graph))
         .route(route::diagnostics::USER_GRAPH, get(diagnostics_user_graph))
-        .route_layer(middleware::from_extractor_with_state::<DiagnosticsAccess, _>(state))
+        .route_layer(middleware::from_extractor_with_state::<OperatorAccess, _>(
+            operator_policy,
+        ))
 }
 
 /// liveness endpoint for a cheap control-plane round trip

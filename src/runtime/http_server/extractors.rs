@@ -1,4 +1,4 @@
-use std::{str, sync::Arc};
+use std::{net::SocketAddr, str, sync::Arc};
 
 use axum::{
     body::Bytes,
@@ -46,12 +46,24 @@ pub(super) struct VerifiedRoomRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct VerifiedDisconnectClaims(pub(super) HttpDisconnectClaims);
 
-/// authorizes diagnostics routes with a configured bearer token or loopback-only fallback
-///
-/// configured tokens take precedence over loopback access so public listeners
-/// cannot bypass operator auth
-#[derive(Debug, Clone, Copy)]
-pub(super) struct DiagnosticsAccess;
+/// Operator authorization bound to the listener that serves the router.
+#[derive(Clone)]
+pub(super) struct OperatorAccessPolicy {
+    auth_token: Option<Arc<str>>,
+    listener_is_loopback: bool,
+}
+
+impl OperatorAccessPolicy {
+    pub(super) fn new(auth_token: Option<&str>, listener_address: SocketAddr) -> Self {
+        Self {
+            auth_token: auth_token.map(Arc::from),
+            listener_is_loopback: listener_address.ip().is_loopback(),
+        }
+    }
+}
+
+/// A configured token disables the loopback fallback.
+pub(super) struct OperatorAccess;
 
 impl FromRef<RuntimeState> for RoomServices {
     fn from_ref(state: &RuntimeState) -> Self {
@@ -156,20 +168,20 @@ impl FromRequest<RuntimeState> for VerifiedDisconnectClaims {
     }
 }
 
-impl FromRequestParts<RuntimeState> for DiagnosticsAccess {
+impl FromRequestParts<OperatorAccessPolicy> for OperatorAccess {
     type Rejection = StatusCode;
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &RuntimeState,
+        policy: &OperatorAccessPolicy,
     ) -> Result<Self, Self::Rejection> {
-        if let Some(expected_token) = state.config.diagnostics.auth_token.as_deref() {
+        if let Some(expected_token) = policy.auth_token.as_deref() {
             return match bearer_authorization_token(&parts.headers) {
                 Some(actual_token) if tokens_match(actual_token, expected_token) => Ok(Self),
                 _ => Err(StatusCode::UNAUTHORIZED),
             };
         }
-        if state.config.http.bind_address.ip().is_loopback() {
+        if policy.listener_is_loopback {
             Ok(Self)
         } else {
             Err(StatusCode::FORBIDDEN)
