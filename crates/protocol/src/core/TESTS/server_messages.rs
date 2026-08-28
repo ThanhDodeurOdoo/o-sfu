@@ -229,19 +229,29 @@ fn protocol_core_emits_peer_and_recording_updates_from_server_messages() {
     );
     assert_eq!(
         core.on_ws_message(&recording_frame).as_slice(),
-        &[Command::EmitEvent {
-            event: ProtocolEvent::RecordingStateChanged {
-                state: RecordingStateUpdate {
-                    state: RecordingState {
-                        recording: Some(false),
-                        audio: Some(false),
-                        transcription: Some(false),
-                        video: Some(false),
-                    },
-                    stop_code: Some(StopCode::UserRequest),
+        &[
+            Command::SetRecordingState {
+                state: RecordingState {
+                    recording: Some(false),
+                    audio: Some(false),
+                    transcription: Some(false),
+                    video: Some(false),
                 },
             },
-        }]
+            Command::EmitEvent {
+                event: ProtocolEvent::RecordingStateChanged {
+                    state: RecordingStateUpdate {
+                        state: RecordingState {
+                            recording: Some(false),
+                            audio: Some(false),
+                            transcription: Some(false),
+                            video: Some(false),
+                        },
+                        stop_code: Some(StopCode::UserRequest),
+                    },
+                },
+            },
+        ]
     );
 }
 

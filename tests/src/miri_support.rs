@@ -27,9 +27,9 @@ pub fn empty_welcome_payload() -> WelcomePayload {
 
 #[must_use]
 pub fn decode_sent_batch(commands: &[Command]) -> EnvelopeBatch {
-    let Some(Command::SendWebSocket(frame)) = commands
+    let Some(Command::SendWebSocket { frame }) = commands
         .iter()
-        .find(|command| matches!(command, Command::SendWebSocket(_)))
+        .find(|command| matches!(command, Command::SendWebSocket { .. }))
     else {
         return Vec::new();
     };

@@ -98,5 +98,12 @@ export default defineConfig([
                 }
             ]
         }
+    },
+    {
+        files: ["src/sfu_client.ts"],
+        rules: {
+            // The interface adds typed EventTarget overloads to the same class symbol.
+            "@typescript-eslint/no-unsafe-declaration-merging": "off"
+        }
     }
 ]);

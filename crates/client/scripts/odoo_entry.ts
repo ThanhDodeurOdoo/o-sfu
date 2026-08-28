@@ -1,11 +1,4 @@
-/**
- * Odoo bundle entrypoint that initializes the generated WASM module once and
- * connects the bundle to the default WASM protocol-core provider
- */
-import {
-    configureDefaultWasmProtocolCoreProvider,
-    type ProtocolCoreBindings
-} from "../src/runtime_contract.ts";
+import { configureDefaultWasmProtocolCoreProvider } from "../src/runtime_contract.js";
 import { ProtocolCoreWasm, initSync } from "../generated/o_sfu_protocol.js";
 import wasmModule from "../generated/o_sfu_protocol_bg.wasm";
 
@@ -16,10 +9,50 @@ configureDefaultWasmProtocolCoreProvider(() => {
         initSync({ module: wasmModule });
         protocolModuleInitialized = true;
     }
-    // wasm-bindgen widens `state` to `string`, so this cast restores the
-    // handwritten `ProtocolCoreBindings` contract
-    return new ProtocolCoreWasm() as unknown as ProtocolCoreBindings;
+    return new ProtocolCoreWasm();
 });
 
-export * from "../src/public_api.ts";
-export * from "../src/sfu_client.ts";
+export { CLIENT_UPDATE, SFU_CLIENT_STATE } from "../src/public_api.js";
+export type {
+    AvailableFeatures,
+    BroadcastUpdateDetail,
+    ChannelInfoChangeDetail,
+    ClientLogDetail,
+    ClientLogLevel,
+    ClientUpdateDetail,
+    ClientUpdateName,
+    ConnectOptions,
+    ConnectionState,
+    ConsumerCompat,
+    ConsumersCompat,
+    DisconnectUpdateDetail,
+    DownloadStates,
+    HandledErrorDetail,
+    InfoChangeUpdateDetail,
+    JsonValue,
+    RecordingOptions,
+    RecordingStopCode,
+    SessionId,
+    SessionInfo,
+    SfuClientEventMap,
+    SfuClientState,
+    SfuRecordingState,
+    SfuStats,
+    StateChangeDetail,
+    StreamType,
+    TrackUpdateDetail,
+    UpdateInfoOptions,
+    VideoLayoutIntent
+} from "../src/public_api.js";
+export { SfuClient } from "../src/sfu_client.js";
+
+/** Build identity for the released client artifact. */
+export interface BundleInfo {
+    date: string;
+    hash: string;
+    url: string;
+    version: string;
+}
+
+/** Metadata for the source revision that produced this bundle. */
+export declare const __info__: BundleInfo;

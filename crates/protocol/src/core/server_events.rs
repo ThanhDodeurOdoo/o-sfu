@@ -29,12 +29,14 @@ pub(super) fn handle_server_message(core: &mut ProtocolCore, message: ServerMess
                 message: payload.message,
             },
         }],
-        ServerMessage::RecordingChange(payload) => {
-            core.recording_state = payload.state.clone();
-            vec![Command::EmitEvent {
+        ServerMessage::RecordingChange(payload) => vec![
+            Command::SetRecordingState {
+                state: payload.state.clone(),
+            },
+            Command::EmitEvent {
                 event: ProtocolEvent::RecordingStateChanged { state: payload },
-            }]
-        }
+            },
+        ],
     }
 }
 

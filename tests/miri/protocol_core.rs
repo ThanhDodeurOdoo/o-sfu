@@ -1,34 +1,38 @@
 use o_sfu_protocol::{
     host::{
-        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest,
-        PendingRequestKind, ProtocolCore, ProtocolEvent,
+        Command, ConnectionState, NegotiationKind, PendingRequest, ProtocolCore, ProtocolEvent,
     },
     wire::{
-        AuthPayload, ClientEnvelope, ClientMessage, ClientResponse, DownloadStates,
-        RecordingOptions, RequestId, ServerEnvelope, ServerMessage, ServerRequest,
-        SessionDescriptionPayload, StreamIntentPayload, StreamType, SubscribePayload, TrackBinding,
-        UserId, UserInfo, WebSocketCloseCode,
+        AuthPayload, AvailableFeatures, ClientEnvelope, ClientMessage, ClientResponse,
+        DownloadStates, RecordingOptions, RecordingState, RequestId, ServerEnvelope, ServerMessage,
+        ServerRequest, SessionDescriptionPayload, StreamIntentPayload, StreamType,
+        SubscribePayload, TrackBinding, UserId, UserInfo, WebSocketCloseCode,
     },
 };
 use o_sfu_tests::miri_support::{
     decode_sent_client_envelopes, empty_welcome_payload, encode_server_batch,
 };
 
-fn extract_pending_request(
-    commands: &CommandBatch,
-    kind: PendingRequestKind,
-) -> Option<&PendingRequest> {
-    let Some(Command::BeginPendingRequest { request }) = commands.as_slice().first() else {
-        return None;
-    };
-    assert_eq!(request.kind, kind);
-    Some(request)
+fn extract_pending_request(commands: &[Command]) -> Option<&PendingRequest> {
+    commands.iter().find_map(|command| match command {
+        Command::BeginPendingRequest { request } => Some(request),
+        _ => None,
+    })
 }
 
-fn welcome(core: &mut ProtocolCore) -> CommandBatch {
+fn welcome(core: &mut ProtocolCore) -> Vec<Command> {
     core.on_ws_message(&encode_server_batch(ServerEnvelope::Message(
         ServerMessage::Welcome(empty_welcome_payload()),
     )))
+}
+
+fn neutral_features() -> AvailableFeatures {
+    AvailableFeatures {
+        rtc: false,
+        transcription: false,
+        audio_recording: false,
+        video_recording: false,
+    }
 }
 
 #[test]
@@ -39,6 +43,12 @@ fn recovery_replay_splits_session_and_publication_phases() {
         core.connect("wss://sfu.example.com/socket", "signed-token", None)
             .as_slice(),
         &[
+            Command::SetAvailableFeatures {
+                features: neutral_features(),
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Connecting,
                 cause: None,
@@ -80,7 +90,7 @@ fn recovery_replay_splits_session_and_publication_phases() {
 
     let welcome_commands = welcome(&mut core);
     assert_eq!(
-        welcome_commands.first(),
+        welcome_commands.get(2),
         Some(&Command::EmitStateChange {
             state: ConnectionState::Authenticated,
             cause: None,
@@ -135,44 +145,32 @@ fn request_timeouts_ignore_unrelated_timer_ids_and_resolve_only_matching_request
         video: Some(true),
         transcription: None,
     });
-    let Some(start_request) =
-        extract_pending_request(&start_result, PendingRequestKind::StartRecording)
-    else {
+    let Some(start_request) = extract_pending_request(&start_result) else {
         return;
     };
 
     let stop_result = core.stop_recording();
-    let Some(stop_request) =
-        extract_pending_request(&stop_result, PendingRequestKind::StopRecording)
-    else {
+    let Some(stop_request) = extract_pending_request(&stop_result) else {
         return;
     };
 
     assert!(core.on_timer(99_999).is_empty());
     assert_eq!(
         core.on_timer(stop_request.timeout_timer_id).as_slice(),
-        &[
-            Command::CancelTimer {
-                id: stop_request.timeout_timer_id,
-            },
-            Command::ResolvePendingRequest {
-                request_id: stop_request.request_id.clone(),
-                ok: false,
-            },
-        ]
+        &[Command::CompletePendingRequest {
+            request_id: stop_request.request_id.clone(),
+            timeout_timer_id: stop_request.timeout_timer_id,
+            ok: false,
+        }]
     );
     assert!(core.on_timer(stop_request.timeout_timer_id).is_empty());
     assert_eq!(
         core.on_timer(start_request.timeout_timer_id).as_slice(),
-        &[
-            Command::CancelTimer {
-                id: start_request.timeout_timer_id,
-            },
-            Command::ResolvePendingRequest {
-                request_id: start_request.request_id.clone(),
-                ok: false,
-            },
-        ]
+        &[Command::CompletePendingRequest {
+            request_id: start_request.request_id.clone(),
+            timeout_timer_id: start_request.timeout_timer_id,
+            ok: false,
+        }]
     );
 }
 
@@ -191,15 +189,12 @@ fn negotiation_answer_mismatches_do_not_resolve_pending_request() {
     });
     assert_eq!(
         core.on_ws_message(&offer_frame).as_slice(),
-        &[
-            Command::CreatePeerConnection,
-            Command::ApplyNegotiation {
-                request_id: RequestId::new("offer-1"),
-                kind: NegotiationKind::Offer,
-                sdp: "v=0\r\ns=offer\r\n".to_owned(),
-                upload_slots: Vec::new(),
-            },
-        ]
+        &[Command::ApplyNegotiation {
+            request_id: RequestId::new("offer-1"),
+            kind: NegotiationKind::Offer,
+            sdp: "v=0\r\ns=offer\r\n".to_owned(),
+            upload_slots: Vec::new(),
+        }]
     );
 
     assert!(
@@ -294,9 +289,7 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
         video: None,
         transcription: None,
     });
-    let Some(request) =
-        extract_pending_request(&request_result, PendingRequestKind::StartRecording)
-    else {
+    let Some(request) = extract_pending_request(&request_result) else {
         return;
     };
 
@@ -305,11 +298,9 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
         &[
             Command::CancelTimer { id: 1 },
             Command::CancelTimer { id: 2 },
-            Command::CancelTimer {
-                id: request.timeout_timer_id,
-            },
-            Command::ResolvePendingRequest {
+            Command::CompletePendingRequest {
                 request_id: request.request_id.clone(),
+                timeout_timer_id: request.timeout_timer_id,
                 ok: false,
             },
             Command::EmitEvent {
@@ -319,6 +310,12 @@ fn disconnect_clears_pending_requests_snapshots_and_runtime_obligations() {
             },
             Command::CloseWebSocket { code: 1000 },
             Command::ClosePeerConnection,
+            Command::SetAvailableFeatures {
+                features: neutral_features(),
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Disconnected,
                 cause: None,

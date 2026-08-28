@@ -177,9 +177,9 @@
 //!
 //! Browsers use `SfuClient` for connection, publication, subscription and room
 //! control. Signaling state stays in [`o_sfu_protocol::host::ProtocolCore`] and
-//! yields ordered [`o_sfu_protocol::host::CommandBatch`] values. The WASM bridge
-//! projects these into [`o_sfu_protocol::host::HostCommand`] values that drive
-//! browser `WebSocket`, `RTCPeerConnection` and timer APIs.
+//! yields ordered [`o_sfu_protocol::host::Command`] values. The WASM bridge
+//! serializes those commands then maps protocol events to Odoo bundle updates
+//! that drive browser `WebSocket`, `RTCPeerConnection` and timer APIs.
 //!
 //! ```text
 //! SfuClient (public API)
@@ -188,10 +188,10 @@
 //! BrowserRuntime
 //!        |
 //!        v
-//! ProtocolCore (sans-I/O) -> CommandBatch
+//! ProtocolCore (sans-I/O) -> Vec<Command>
 //!        |
 //!        v
-//! WASM projection -> HostCommand
+//! WASM serialization -> TypeScript command union
 //!        |
 //!        v
 //! BrowserRuntime -> WebSocket, RTCPeerConnection, timers

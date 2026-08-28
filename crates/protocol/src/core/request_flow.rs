@@ -1,13 +1,13 @@
 use super::{
-    Command, CommandBatch, Commands, FlushMode, NegotiationKind, NegotiationRejection,
-    PendingRequest, PendingRequestKind, ProtocolCore, REQUEST_TIMEOUT_MS,
+    Command, Commands, FlushMode, NegotiationKind, NegotiationRejection, PendingRequest,
+    PendingRequestKind, ProtocolCore, REQUEST_TIMEOUT_MS, close_for_protocol_error,
 };
 use crate::signaling::{
     ClientEnvelope, ClientRequest, ClientResponse, RecordingOptions, RequestId, ServerRequest,
     ServerResponse, SessionDescriptionPayload,
 };
 
-pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions) -> CommandBatch {
+pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions) -> Commands {
     begin_request(
         core,
         ClientRequest::StartRecording(options),
@@ -15,7 +15,7 @@ pub(super) fn start_recording(core: &mut ProtocolCore, options: RecordingOptions
     )
 }
 
-pub(super) fn stop_recording(core: &mut ProtocolCore) -> CommandBatch {
+pub(super) fn stop_recording(core: &mut ProtocolCore) -> Commands {
     begin_request(
         core,
         ClientRequest::StopRecording,
@@ -100,29 +100,31 @@ fn handle_negotiation_request(
         Ok(()) => {}
         Err(NegotiationRejection::Ignored) => return Vec::new(),
         Err(NegotiationRejection::ProtocolError) => {
-            return CommandBatch::close_for_protocol_error().into_vec();
+            return close_for_protocol_error();
         }
     }
-    match kind {
-        NegotiationKind::Offer => CommandBatch::initial_offer(request_id, payload),
-        NegotiationKind::Renegotiate => CommandBatch::renegotiation(request_id, payload),
-    }
-    .into_vec()
+    vec![Command::ApplyNegotiation {
+        request_id,
+        kind,
+        sdp: payload.sdp,
+        upload_slots: payload.upload_slots,
+    }]
 }
 
 fn begin_request(
     core: &mut ProtocolCore,
     request: ClientRequest,
     kind: PendingRequestKind,
-) -> CommandBatch {
-    if !core.can_send_client_messages() || core.request_tracker.has_pending_kind(kind) {
-        return CommandBatch::default();
+) -> Commands {
+    if !core.can_send_client_messages() {
+        return Vec::new();
     }
-    let request_start = core.request_tracker.begin_request(kind);
+    let Some(request_start) = core.request_tracker.try_begin(kind) else {
+        return Vec::new();
+    };
     let request_id = request_start.request_id;
     let pending_request = PendingRequest {
         request_id: request_id.clone(),
-        kind: request_start.kind,
         timeout_timer_id: request_start.timeout_timer_id.raw(),
         timeout_ms: REQUEST_TIMEOUT_MS,
     };
@@ -132,14 +134,14 @@ fn begin_request(
     }
     .into_envelope()
     .ok() else {
-        return CommandBatch::default();
+        return Vec::new();
     };
 
     let mut commands = vec![Command::BeginPendingRequest {
         request: pending_request,
     }];
     commands.extend(core.enqueue_envelope(envelope, FlushMode::Batched));
-    CommandBatch::from_core_commands(commands)
+    commands
 }
 
 fn resolve_request(

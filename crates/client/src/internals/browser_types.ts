@@ -5,21 +5,6 @@ export type MediaTrack = MediaStreamTrack;
 
 export type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-export type PendingRequestCallbacks = {
-    reject: (error: Error) => void;
-    resolve: (ok: boolean) => void;
-};
-
-export type ConsumerCompat = {
-    track: MediaTrack | null;
-};
-
-export type ConsumersCompat = {
-    audio: ConsumerCompat | null;
-    camera: ConsumerCompat | null;
-    screen: ConsumerCompat | null;
-};
-
 export interface ClientWebSocket {
     close(code?: number): void;
     onclose: ((event: { code: number }) => void) | null;
@@ -88,14 +73,6 @@ export const EMPTY_FEATURES = {
     audioRecording: false,
     videoRecording: false
 };
-
-export function createEmptyConsumers(): ConsumersCompat {
-    return {
-        audio: null,
-        camera: null,
-        screen: null
-    };
-}
 
 export const STREAM_KIND: Record<StreamType, "audio" | "video"> = {
     audio: "audio",

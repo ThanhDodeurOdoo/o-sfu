@@ -143,6 +143,7 @@ tag pushes matching `v*` create a GitHub release with:
 
 - `o-sfu-server-<tag>-linux-amd64.tar.gz`
 - `o-sfu-client-<tag>.js`
+- `o-sfu-client-<tag>.d.ts`
 - `o-sfu-image-<tag>.sbom.json`
 - `SHA256SUMS`
 
@@ -152,7 +153,10 @@ prerelease and is not marked latest
 
 the server asset contains the release Linux `o-sfu` binary
 
-the client asset is the Odoo-compatible `odoo_sfu.js` bundle with embedded WASM
+the client JavaScript asset is the Odoo-compatible `odoo_sfu.js` bundle with
+embedded WASM. the same-basename declaration asset carries its public types and
+API documentation for TypeScript and editor tooling. see the
+[client API reference](crates/client/API.md)
 
 the SBOM asset is extracted from the version-tag container image SBOM
 

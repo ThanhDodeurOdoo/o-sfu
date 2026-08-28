@@ -2,22 +2,22 @@ import type { TrackBinding } from "../protocol_contract.js";
 import {
     CLIENT_UPDATE,
     type ClientUpdateDetail,
+    type ConsumersCompat,
     type DownloadStates,
     type SessionId,
     type StreamType
 } from "../public_api.js";
-import {
-    createEmptyConsumers,
-    type ConsumersCompat,
-    type MediaTrack,
-    type PeerConnectionTrackEvent
-} from "./browser_types.js";
+import type { MediaTrack, PeerConnectionTrackEvent } from "./browser_types.js";
 import { mergeDownloadStates } from "./validation.js";
 
 type TrackUpdateEmitter = (update: ClientUpdateDetail) => void;
 
 type SlotBinding = Pick<TrackBinding, "active" | "sessionId" | "type">;
-type RemoteMediaSlot = { binding?: SlotBinding; track?: MediaTrack; unbindTrack?: () => void };
+type RemoteMediaSlot = {
+    binding?: SlotBinding;
+    track?: MediaTrack;
+    removeTrackListeners?: () => void;
+};
 
 export class RemoteMedia {
     public readonly consumers = new Map<SessionId, ConsumersCompat>();
@@ -25,12 +25,12 @@ export class RemoteMedia {
     private _slots = new Map<string, RemoteMediaSlot>();
     private _subscriptionStates = new Map<SessionId, DownloadStates>();
 
-    resetAll(): void {
-        this.clearPeerConnectionState();
+    clearSessionState(): void {
+        this.clearPeerMedia();
         this._subscriptionStates.clear();
     }
 
-    clearPeerConnectionState(): void {
+    clearPeerMedia(): void {
         this.consumers.clear();
         for (const slot of this._slots.values()) {
             this.clearSlotTrack(slot);
@@ -80,8 +80,11 @@ export class RemoteMedia {
             if (slot.binding?.sessionId !== sessionId) {
                 continue;
             }
-            const previous = this.applyState(slot.binding, previousStates);
-            this.publishSlot(slot, previous, emitUpdate);
+            const previousEffectiveBinding = this.applySubscriptionState(
+                slot.binding,
+                previousStates
+            );
+            this.projectTrackSlot(slot, previousEffectiveBinding, emitUpdate);
         }
     }
 
@@ -91,68 +94,78 @@ export class RemoteMedia {
             return;
         }
         const slot = this.getOrCreateSlot(mid);
-        const previous = slot.binding ? this.currentBinding(slot.binding) : undefined;
+        const previousEffectiveBinding = slot.binding
+            ? this.effectiveBinding(slot.binding)
+            : undefined;
         this.clearSlotTrack(slot);
         slot.track = event.track;
-        this.bindTrackLifecycle(slot, mid, event.track, emitUpdate);
-        this.publishSlot(slot, previous, emitUpdate);
+        this.attachTrackListeners(slot, mid, event.track, emitUpdate);
+        this.projectTrackSlot(slot, previousEffectiveBinding, emitUpdate);
     }
 
     private applyBinding(mid: string, binding: TrackBinding, emitUpdate: TrackUpdateEmitter): void {
         const slot = this.getOrCreateSlot(mid);
-        const previous = slot.binding ? this.currentBinding(slot.binding) : undefined;
+        const previousEffectiveBinding = slot.binding
+            ? this.effectiveBinding(slot.binding)
+            : undefined;
         const { active, sessionId, type } = binding;
         const rebinding =
-            previous !== undefined && (previous.sessionId !== sessionId || previous.type !== type);
+            previousEffectiveBinding !== undefined &&
+            (previousEffectiveBinding.sessionId !== sessionId ||
+                previousEffectiveBinding.type !== type);
         if (rebinding) {
-            this.clearConsumer(previous.sessionId, previous.type);
+            this.clearConsumer(previousEffectiveBinding.sessionId, previousEffectiveBinding.type);
             this.clearSlotTrack(slot);
         }
         slot.binding = { active, sessionId, type };
         if (!rebinding) {
-            this.publishSlot(slot, previous, emitUpdate);
+            this.projectTrackSlot(slot, previousEffectiveBinding, emitUpdate);
         }
     }
 
-    private publishSlot(
+    private projectTrackSlot(
         slot: RemoteMediaSlot,
-        previous: SlotBinding | undefined,
+        previousEffectiveBinding: SlotBinding | undefined,
         emitUpdate: TrackUpdateEmitter,
-        force = false
+        forceEmit = false
     ): void {
         const { binding, track } = slot;
         if (!binding || !track) {
             return;
         }
-        const appliedBinding = this.currentBinding(binding);
+        const effectiveBinding = this.effectiveBinding(binding);
         if (
-            !force &&
-            previous &&
-            previous.active === appliedBinding.active &&
-            previous.sessionId === appliedBinding.sessionId &&
-            previous.type === appliedBinding.type &&
-            this.consumers.get(appliedBinding.sessionId)?.[appliedBinding.type]?.track === track
+            !forceEmit &&
+            previousEffectiveBinding &&
+            previousEffectiveBinding.active === effectiveBinding.active &&
+            previousEffectiveBinding.sessionId === effectiveBinding.sessionId &&
+            previousEffectiveBinding.type === effectiveBinding.type &&
+            this.consumers.get(effectiveBinding.sessionId)?.[effectiveBinding.type]?.track === track
         ) {
             return;
         }
-        if (previous) {
-            this.clearConsumer(previous.sessionId, previous.type);
+        if (previousEffectiveBinding) {
+            this.clearConsumer(previousEffectiveBinding.sessionId, previousEffectiveBinding.type);
         }
-        const consumers = this.consumers.get(appliedBinding.sessionId) ?? createEmptyConsumers();
-        consumers[appliedBinding.type] = { track };
-        this.consumers.set(appliedBinding.sessionId, consumers);
+        const consumers: ConsumersCompat = this.consumers.get(effectiveBinding.sessionId) ?? {
+            audio: null,
+            camera: null,
+            screen: null
+        };
+        consumers[effectiveBinding.type] = { track };
+        this.consumers.set(effectiveBinding.sessionId, consumers);
         emitUpdate({
             name: CLIENT_UPDATE.TRACK,
             payload: {
-                active: appliedBinding.active,
-                sessionId: appliedBinding.sessionId,
+                active: effectiveBinding.active,
+                sessionId: effectiveBinding.sessionId,
                 track,
-                type: appliedBinding.type
+                type: effectiveBinding.type
             }
         });
     }
 
-    private bindTrackLifecycle(
+    private attachTrackListeners(
         currentSlot: RemoteMediaSlot,
         mid: string,
         track: MediaTrack,
@@ -166,22 +179,28 @@ export class RemoteMedia {
             if (!slot?.binding || slot.track !== track) {
                 return;
             }
-            const previous = this.currentBinding(slot.binding);
-            this.publishSlot(slot, previous, emitUpdate, true);
+            const previousEffectiveBinding = this.effectiveBinding(slot.binding);
+            this.projectTrackSlot(slot, previousEffectiveBinding, emitUpdate, true);
         };
         track.addEventListener("mute", emitTrackUpdate);
         track.addEventListener("unmute", emitTrackUpdate);
-        currentSlot.unbindTrack = () => {
+        currentSlot.removeTrackListeners = () => {
             track.removeEventListener("mute", emitTrackUpdate);
             track.removeEventListener("unmute", emitTrackUpdate);
         };
     }
 
-    private currentBinding(binding: SlotBinding): SlotBinding {
-        return this.applyState(binding, this._subscriptionStates.get(binding.sessionId));
+    private effectiveBinding(binding: SlotBinding): SlotBinding {
+        return this.applySubscriptionState(
+            binding,
+            this._subscriptionStates.get(binding.sessionId)
+        );
     }
 
-    private applyState(binding: SlotBinding, states: DownloadStates | undefined): SlotBinding {
+    private applySubscriptionState(
+        binding: SlotBinding,
+        states: DownloadStates | undefined
+    ): SlotBinding {
         return {
             active: binding.active && (states?.[binding.type] ?? true),
             sessionId: binding.sessionId,
@@ -212,8 +231,8 @@ export class RemoteMedia {
     }
 
     private clearSlotTrack(slot: RemoteMediaSlot): void {
-        slot.unbindTrack?.();
-        slot.unbindTrack = undefined;
+        slot.removeTrackListeners?.();
+        slot.removeTrackListeners = undefined;
         slot.track = undefined;
     }
 

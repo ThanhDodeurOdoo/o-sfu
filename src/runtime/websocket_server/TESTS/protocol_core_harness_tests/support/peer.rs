@@ -5,18 +5,15 @@ use std::{
 
 use futures_util::SinkExt;
 use o_sfu_protocol::{
-    host::{
-        Command, CommandBatch, HostCommand, NegotiationKind, PendingRequest, ProtocolCore,
-        project_commands, test_support::command_batch,
-    },
+    host::{Command, NegotiationKind, PendingRequest, ProtocolCore, project_protocol_event},
     wire::RecordingOptions,
 };
 use tokio_tungstenite::{connect_async, tungstenite};
 
 use super::{
-    BATCH_FLUSH_DELAY_MS, BTreeMap, BundleStateChange, BundleUpdate, Duration,
-    ProtocolDownloadStates, ProtocolSessionId, ProtocolSessionInfo, ProtocolStreamType, RequestId,
-    TestWebSocket, read_text_message,
+    AvailableFeatures, BATCH_FLUSH_DELAY_MS, BTreeMap, BundleStateChange, BundleUpdate, Duration,
+    ProtocolDownloadStates, ProtocolSessionId, ProtocolSessionInfo, ProtocolStreamType,
+    RecordingState, RequestId, TestWebSocket, read_text_message,
     rtc::{ProtocolHarnessRtcPeer, ProtocolHarnessRtcPeerFactory, default_protocol_harness_rtc},
 };
 
@@ -34,6 +31,8 @@ pub(crate) struct ProtocolHarnessPeer {
     pub(crate) pending_request_starts: Vec<PendingRequest>,
     pub(crate) pending_request_resolutions: Vec<(RequestId, bool)>,
     pub(crate) pending_negotiations: VecDeque<PendingHarnessNegotiation>,
+    pub(crate) available_features: AvailableFeatures,
+    pub(crate) recording_state: RecordingState,
     rtc_peer_factory: Option<ProtocolHarnessRtcPeerFactory>,
     rtc_peer: Option<ProtocolHarnessRtcPeer>,
     pub(crate) state_changes: Vec<BundleStateChange>,
@@ -54,6 +53,13 @@ impl Default for ProtocolHarnessPeer {
             pending_request_starts: Vec::new(),
             pending_request_resolutions: Vec::new(),
             pending_negotiations: VecDeque::new(),
+            available_features: AvailableFeatures {
+                rtc: false,
+                transcription: false,
+                audio_recording: false,
+                video_recording: false,
+            },
+            recording_state: RecordingState::default(),
             rtc_peer_factory: Some(rtc_peer_factory),
             rtc_peer: rtc_peer_factory.build_peer(),
             state_changes: Vec::new(),
@@ -201,21 +207,21 @@ impl ProtocolHarnessPeer {
         let commands =
             self.core
                 .submit_negotiation_answer(&pending.request_id, pending.kind, &answer_sdp);
-        let mut raw_commands = commands.into_vec();
-        raw_commands.extend(self.core.on_transport_ready());
-        self.run_commands(command_batch(raw_commands).ok()?).await
+        let mut commands = commands;
+        commands.extend(self.core.on_transport_ready());
+        self.run_commands(commands).await
     }
 
-    pub(crate) async fn run_commands(&mut self, commands: CommandBatch) -> Option<()> {
-        let mut pending: VecDeque<_> = commands.into_vec().into();
+    pub(crate) async fn run_commands(&mut self, commands: Vec<Command>) -> Option<()> {
+        let mut pending: VecDeque<_> = commands.into();
         while let Some(command) = pending.pop_front() {
             let follow_up = match command {
                 Command::Connect { url } => {
                     let websocket = connect_async(url).await.ok()?;
                     self.websocket = Some(websocket.0);
-                    self.core.on_ws_open().into_vec()
+                    self.core.on_ws_open()
                 }
-                Command::SendWebSocket(frame) => {
+                Command::SendWebSocket { frame } => {
                     self.websocket
                         .as_mut()?
                         .send(tungstenite::Message::Text(frame.into()))
@@ -227,26 +233,22 @@ impl ProtocolHarnessPeer {
                     self.state_changes.push(BundleStateChange { state, cause });
                     Vec::new()
                 }
-                command @ Command::EmitEvent { .. } => {
-                    let batch = command_batch(vec![command]).ok()?;
-                    for host_command in project_commands(batch) {
-                        if let HostCommand::EmitUpdate { update } = host_command {
-                            self.updates.push(update);
-                        }
-                    }
+                Command::SetAvailableFeatures { features } => {
+                    self.available_features = features;
+                    Vec::new()
+                }
+                Command::SetRecordingState { state } => {
+                    self.recording_state = state;
+                    Vec::new()
+                }
+                Command::EmitEvent { event } => {
+                    self.updates.push(project_protocol_event(event));
                     Vec::new()
                 }
                 Command::BeginPendingRequest { request } => {
                     self.timers
                         .insert(request.timeout_timer_id, request.timeout_ms);
                     self.pending_request_starts.push(request);
-                    Vec::new()
-                }
-                Command::CreatePeerConnection => {
-                    if let Some(factory) = self.rtc_peer_factory {
-                        self.rtc_peer = factory.build_peer();
-                        let _ = self.rtc_peer.as_ref()?;
-                    }
                     Vec::new()
                 }
                 Command::ClosePeerConnection => {
@@ -258,7 +260,15 @@ impl ProtocolHarnessPeer {
                     kind,
                     sdp,
                     upload_slots: _,
-                } => self.handle_negotiation_command(request_id, kind, sdp)?,
+                } => {
+                    if kind == NegotiationKind::Offer
+                        && let Some(factory) = self.rtc_peer_factory
+                    {
+                        self.rtc_peer = factory.build_peer();
+                        let _ = self.rtc_peer.as_ref()?;
+                    }
+                    self.handle_negotiation_command(request_id, kind, sdp)?
+                }
                 Command::ScheduleTimer { id, ms } => {
                     self.timers.insert(id, ms);
                     Vec::new()
@@ -271,7 +281,12 @@ impl ProtocolHarnessPeer {
                     self.websocket.as_mut()?.close(None).await.ok()?;
                     Vec::new()
                 }
-                Command::ResolvePendingRequest { request_id, ok } => {
+                Command::CompletePendingRequest {
+                    request_id,
+                    timeout_timer_id,
+                    ok,
+                } => {
+                    self.timers.remove(&timeout_timer_id);
                     self.pending_request_resolutions.push((request_id, ok));
                     Vec::new()
                 }
@@ -294,8 +309,7 @@ impl ProtocolHarnessPeer {
             };
             let mut follow_up = self
                 .core
-                .submit_negotiation_answer(&request_id, kind, &answer_sdp)
-                .into_vec();
+                .submit_negotiation_answer(&request_id, kind, &answer_sdp);
             follow_up.extend(self.core.on_transport_ready());
             return Some(follow_up);
         }

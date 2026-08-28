@@ -1,0 +1,15 @@
+{
+  "compilationOptions": {
+    "preferredConfigPath": "./tsconfig.bundle.json"
+  },
+  "entries": [
+    {
+      "filePath": "./scripts/odoo_entry.ts",
+      "outFile": "./dist/odoo_sfu.d.ts",
+      "output": {
+        "exportReferencedTypes": false,
+        "noBanner": true
+      }
+    }
+  ]
+}

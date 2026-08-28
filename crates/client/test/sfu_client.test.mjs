@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CLIENT_UPDATE } from "../dist/index.js";
-import { COMMAND_KIND, PENDING_REQUEST_KIND, WS_CLOSE_CODE } from "../dist/protocol_contract.js";
-import { createProtocolCore } from "../dist/runtime_contract.js";
+import { CLIENT_UPDATE } from "../dist/public_api.js";
+import { COMMAND_KIND, WS_CLOSE_CODE } from "../dist/protocol_contract.js";
+import { createProtocolCore } from "./support/real_protocol_core.mjs";
 import { FakeMediaTrack, FakePeerConnection, FakeSender } from "./support/browser_fakes.mjs";
 import {
     EMPTY_FEATURES,
@@ -25,6 +25,19 @@ import {
     videoMedia,
     videoUploadSlot
 } from "./support/negotiation_fixtures.mjs";
+
+const WELCOME_FEATURES = {
+    rtc: true,
+    transcription: false,
+    audioRecording: false,
+    videoRecording: true
+};
+const WELCOME_RECORDING_STATE = {
+    recording: false,
+    audio: false,
+    transcription: false,
+    video: false
+};
 
 test("connect normalizes the URL and sends auth on WebSocket open", async () => {
     const { sockets, connect, open } = createSfuClientHarness();
@@ -60,6 +73,130 @@ test("ignored duplicate connect keeps the accepted ICE server config", async () 
     await emitMessage(buildNegotiationFrame("offer", "7", "1"));
 
     assert.deepEqual(peerConnections[0].config.iceServers, iceServers);
+});
+
+test("public state changes are visible before their events", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, sockets } = harness;
+    const stateSnapshots = [];
+    let recordingStateDuringUpdate;
+    client.addEventListener("stateChange", (event) => {
+        stateSnapshots.push({
+            state: event.detail.state,
+            availableFeatures: client.availableFeatures,
+            recordingState: client.recordingState
+        });
+    });
+    client.addEventListener("update", (event) => {
+        if (event.detail.name === CLIENT_UPDATE.CHANNEL_INFO_CHANGE) {
+            recordingStateDuringUpdate = client.recordingState;
+        }
+    });
+
+    await connectRealWithWelcome(harness);
+    assert.deepEqual(stateSnapshots.at(-1), {
+        state: "authenticated",
+        availableFeatures: WELCOME_FEATURES,
+        recordingState: WELCOME_RECORDING_STATE
+    });
+
+    const activeRecordingState = {
+        recording: true,
+        audio: true,
+        transcription: false,
+        video: true
+    };
+    await emitMessage(
+        JSON.stringify([
+            {
+                t: "recordingchange",
+                p: { state: activeRecordingState }
+            }
+        ])
+    );
+    assert.deepEqual(recordingStateDuringUpdate, activeRecordingState);
+
+    sockets[0].emitClose(1011);
+    await tick();
+    assert.deepEqual(stateSnapshots.at(-1), {
+        state: "recovering",
+        availableFeatures: WELCOME_FEATURES,
+        recordingState: activeRecordingState
+    });
+
+    client.disconnect();
+    await tick();
+    assert.deepEqual(stateSnapshots.at(-1), {
+        state: "disconnected",
+        availableFeatures: EMPTY_FEATURES,
+        recordingState: {}
+    });
+});
+
+test("batched public state exposes ordered snapshots", async () => {
+    const harness = createRecoveryHarness();
+    const { client, connect, emitMessage, open } = harness;
+    const snapshots = [];
+    const activeRecordingState = {
+        recording: true,
+        audio: true,
+        transcription: false,
+        video: true
+    };
+    client.addEventListener("stateChange", (event) => {
+        if (event.detail.state === "authenticated") {
+            snapshots.push({ event: "authenticated", recordingState: client.recordingState });
+        }
+    });
+    client.addEventListener("update", (event) => {
+        if (event.detail.name === CLIENT_UPDATE.CHANNEL_INFO_CHANGE) {
+            snapshots.push({ event: "recording", recordingState: client.recordingState });
+        }
+    });
+
+    await connect("ws://example.test/ws", "jwt-token", { channelUUID: "channel-a" });
+    await open();
+    const [welcome] = JSON.parse(buildWelcomeFrame());
+    await emitMessage(
+        JSON.stringify([
+            welcome,
+            {
+                t: "recordingchange",
+                p: { state: activeRecordingState }
+            }
+        ])
+    );
+
+    assert.deepEqual(snapshots, [
+        { event: "authenticated", recordingState: WELCOME_RECORDING_STATE },
+        { event: "recording", recordingState: activeRecordingState }
+    ]);
+});
+
+test("welcome public state is atomic across microtasks", async () => {
+    const harness = createRecoveryHarness();
+    const { client, connect, open, sockets } = harness;
+    const snapshots = [];
+
+    await connect("ws://example.test/ws", "jwt-token", { channelUUID: "channel-a" });
+    await open();
+    sockets[0].emitMessage(buildWelcomeFrame());
+    queueMicrotask(() => {
+        snapshots.push({
+            availableFeatures: client.availableFeatures,
+            recordingState: client.recordingState,
+            state: client.state
+        });
+    });
+    await tick();
+
+    assert.deepEqual(snapshots, [
+        {
+            availableFeatures: WELCOME_FEATURES,
+            recordingState: WELCOME_RECORDING_STATE,
+            state: "authenticated"
+        }
+    ]);
 });
 
 test("immediate disconnect prevents pending connect and subscription", async () => {
@@ -211,7 +348,6 @@ test("duplicate recording request id is handled as a runtime error", async () =>
         {
             kind: COMMAND_KIND.BEGIN_PENDING_REQUEST,
             request: {
-                kind: PENDING_REQUEST_KIND.START_RECORDING,
                 requestId: "record-1",
                 timeoutMs: 5000,
                 timeoutTimerId: 10000
@@ -336,7 +472,9 @@ async function resolveRealRecordingRequest(startRequest, ok) {
 
     const [request] = decodeSentFrame(sockets[0], sockets[0].sent.length - 1);
     await emitMessage(JSON.stringify([{ t: request.t, r: request.q, p: { ok } }]));
-    return resultPromise;
+    const result = await resultPromise;
+    assert.equal(timers.hasDelay(5000), false);
+    return result;
 }
 
 async function connectRealWithWelcome(harness) {
@@ -952,7 +1090,6 @@ test("initial peer creation keeps earlier binding snapshots", async () => {
     core.onWsMessage = (frame) => {
         if (frame === "offer-without-track-bindings") {
             return core._withPendingNegotiationKind([
-                { kind: COMMAND_KIND.CREATE_PEER_CONNECTION },
                 {
                     kind: COMMAND_KIND.APPLY_NEGOTIATION,
                     negotiationKind: "offer",
@@ -2259,14 +2396,39 @@ test("broadcast snapshots nested payloads at call time", async () => {
     assert.deepEqual(core.broadcasts, [{ metadata: { label: "before" } }]);
 });
 
-test("broadcast clone failures use the runtime error boundary", async () => {
+test("cyclic broadcast input leaves the real protocol core reusable", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, handledErrors, open, sockets } = harness;
+    const message = {};
+    message.self = message;
+
+    await connectRealWithWelcome(harness);
+    client.broadcast(message);
+    await tick();
+
+    assert.equal(handledErrors.length, 1);
+    assert.equal(handledErrors[0].name, "TypeError");
+    assert.equal(client.state, "disconnected");
+    assert.deepEqual(client.availableFeatures, EMPTY_FEATURES);
+    assert.deepEqual(client.recordingState, {});
+
+    client.connect("ws://example.test/ws", "jwt-token", { channelUUID: "channel-a" });
+    await tick();
+    assert.equal(sockets.length, 2);
+    await open(1);
+    await emitMessage(buildWelcomeFrame(), 1);
+
+    assert.equal(client.state, "authenticated");
+});
+
+test("broadcast serialization failures use the runtime error boundary", async () => {
     const { client, handledErrors } = createSfuClientHarness();
 
     client.broadcast(() => undefined);
     await tick();
 
     assert.equal(handledErrors.length, 1);
-    assert.equal(handledErrors[0].name, "DataCloneError");
+    assert.equal(handledErrors[0].name, "TypeError");
 });
 
 test("same-turn disconnect preserves fatal cleanup effects", async () => {
@@ -2282,6 +2444,33 @@ test("same-turn disconnect preserves fatal cleanup effects", async () => {
 
     assert.equal(handledErrors.length, 1);
     assert.equal(stateChanges.at(-1), "disconnected");
+});
+
+test("fatal input after same-turn disconnect observes the installed cleanup state", async () => {
+    const harness = createRecoveryHarness();
+    const { client } = harness;
+    const handledErrorSurfaces = [];
+
+    await connectRealWithWelcome(harness);
+    client.addEventListener("handledError", () => {
+        handledErrorSurfaces.push({
+            availableFeatures: client.availableFeatures,
+            recordingState: client.recordingState,
+            state: client.state
+        });
+    });
+
+    client.disconnect();
+    client.broadcast(() => undefined);
+    await tick();
+
+    assert.deepEqual(handledErrorSurfaces, [
+        {
+            availableFeatures: EMPTY_FEATURES,
+            recordingState: {},
+            state: "disconnected"
+        }
+    ]);
 });
 
 test("fatal cleanup runs before a reconnect requested by teardown callbacks", async () => {
@@ -2336,7 +2525,6 @@ test("fatal teardown clears the active peer before logging", async () => {
             client.broadcast(() => undefined);
         }
     });
-
     client.broadcast(() => undefined);
     await tick();
 
@@ -2344,12 +2532,52 @@ test("fatal teardown clears the active peer before logging", async () => {
     assert.equal(handledErrors.length, 2);
 });
 
+test("disconnect exposes cleanup state before peer-close callbacks", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage } = harness;
+    const handledErrorSurfaces = [];
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+    client.addEventListener("log", (event) => {
+        if (event.detail.message === "closed RTCPeerConnection") {
+            client.broadcast(() => undefined);
+        }
+    });
+    client.addEventListener("handledError", () => {
+        handledErrorSurfaces.push({
+            availableFeatures: client.availableFeatures,
+            recordingState: client.recordingState,
+            state: client.state
+        });
+    });
+
+    client.disconnect();
+    await tick();
+
+    assert.deepEqual(handledErrorSurfaces, [
+        {
+            availableFeatures: EMPTY_FEATURES,
+            recordingState: {},
+            state: "disconnected"
+        }
+    ]);
+});
+
 test("fatal runtime errors reset the public client surface", async () => {
     const { client, core, emitMessage, handledErrors, open, peerConnections, sockets, connect } =
         createSfuClientHarness();
     const stateChanges = [];
+    const handledErrorSurfaces = [];
     client.addEventListener("stateChange", (event) => {
         stateChanges.push(event.detail);
+    });
+    client.addEventListener("handledError", () => {
+        handledErrorSurfaces.push({
+            availableFeatures: client.availableFeatures,
+            recordingState: client.recordingState,
+            state: client.state
+        });
     });
 
     await connect();
@@ -2370,6 +2598,13 @@ test("fatal runtime errors reset the public client surface", async () => {
     assert.equal(client.errors.length, 1);
     assert.equal(client.errors[0] instanceof Error, true);
     assert.equal(handledErrors[0], client.errors[0]);
+    assert.deepEqual(handledErrorSurfaces, [
+        {
+            availableFeatures: EMPTY_FEATURES,
+            recordingState: {},
+            state: "disconnected"
+        }
+    ]);
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
     assert.deepEqual(core.wsCloseCodes, []);
@@ -2408,6 +2643,25 @@ test(
     }
 );
 
+test("disconnect from peer creation stops negotiation before WebRTC effects", async () => {
+    const harness = createRecoveryHarness();
+    const { client, emitMessage, handledErrors, peerConnections, sockets } = harness;
+    client.addEventListener("log", (event) => {
+        if (event.detail.message === "created RTCPeerConnection") {
+            client.disconnect();
+        }
+    });
+
+    await connectRealWithWelcome(harness);
+    await emitMessage(buildNegotiationFrame("offer", "7", "1"));
+
+    assert.equal(peerConnections[0].remoteDescriptions.length, 0);
+    assert.equal(client.state, "disconnected");
+    assert.equal(peerConnections[0].closed, true);
+    assert.equal(sockets[0].sent.length, 1);
+    assert.deepEqual(handledErrors, []);
+});
+
 test("fatal abort ignores late negotiation failures", async () => {
     const { promise: remoteDescription, reject: rejectRemoteDescription } = Promise.withResolvers();
     const { client, connectWithWelcome, emitMessage, handledErrors } = createSfuClientHarness({
@@ -2437,9 +2691,20 @@ test("fatal runtime errors keep the original error when protocol disconnect fail
     const { client, connect, emitMessage, handledErrors, open, sockets } = createSfuClientHarness({
         protocolCore: core
     });
+    const handledErrorSurfaces = [];
+    const stateChanges = [];
+    client.addEventListener("stateChange", (event) => stateChanges.push(event.detail.state));
+    client.addEventListener("handledError", () => {
+        handledErrorSurfaces.push({
+            availableFeatures: client.availableFeatures,
+            recordingState: client.recordingState,
+            state: client.state
+        });
+    });
 
     await connect();
     await open();
+    await emitMessage("welcome");
 
     await emitMessage("explode");
 
@@ -2449,6 +2714,55 @@ test("fatal runtime errors keep the original error when protocol disconnect fail
     assert.equal(core.disconnectCalls, 1);
     assert.equal(sockets[0].closeCode, 4000);
     assert.equal(sockets[0].readyState, 3);
+    assert.equal(stateChanges.at(-1), "disconnected");
+    assert.deepEqual(handledErrorSurfaces, [
+        {
+            availableFeatures: EMPTY_FEATURES,
+            recordingState: {},
+            state: "disconnected"
+        }
+    ]);
+});
+
+test("fatal errors invalidate active recovery cleanup when disconnect fails", async () => {
+    const core = new FakeProtocolCore();
+    core.onWsClose = () => {
+        core.state = "recovering";
+        return [
+            { kind: COMMAND_KIND.CLOSE_PEER_CONNECTION },
+            { kind: COMMAND_KIND.EMIT_STATE_CHANGE, state: "recovering" },
+            { kind: COMMAND_KIND.SCHEDULE_TIMER, id: 1, ms: 1000 }
+        ];
+    };
+    const disconnect = core.disconnect.bind(core);
+    core.disconnect = () => {
+        disconnect();
+        throw new Error("disconnect failure");
+    };
+    const timers = createManualTimers();
+    const harness = createSfuClientHarness({
+        clearTimer: timers.clearTimer,
+        protocolCore: core,
+        setTimer: timers.setTimer
+    });
+    const { client, connect, emitMessage, handledErrors, open, sockets } = harness;
+
+    await connect();
+    await open();
+    await emitMessage("welcome");
+    await emitMessage("offer");
+    client.addEventListener("log", (event) => {
+        if (event.detail.message === "closed RTCPeerConnection") {
+            client.broadcast(() => undefined);
+        }
+    });
+
+    sockets[0].emitClose(1011);
+    await tick();
+
+    assert.equal(client.state, "disconnected");
+    assert.equal(timers.hasDelay(1000), false);
+    assert.equal(handledErrors.length, 1);
 });
 
 test("fatal runtime errors drop already queued browser commands", async () => {

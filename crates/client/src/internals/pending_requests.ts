@@ -1,6 +1,10 @@
 import { COMMAND_KIND } from "../protocol_contract.js";
 import type { HostCommand, PendingRequest } from "../runtime_contract.js";
-import type { PendingRequestCallbacks } from "./browser_types.js";
+
+type PendingRequestCallbacks = {
+    reject: (error: Error) => void;
+    resolve: (ok: boolean) => void;
+};
 
 export class PendingRequests {
     private _pendingRequestResolvers = new Map<string, PendingRequestCallbacks>();
@@ -14,13 +18,13 @@ export class PendingRequests {
         let completion: Promise<boolean> | undefined;
         return this._enqueueRequest(() => {
             const commands = getCommands();
-            const first = commands[0];
-            if (first?.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
+            const begin = commands[0];
+            if (begin?.kind !== COMMAND_KIND.BEGIN_PENDING_REQUEST) {
                 return commands;
             }
-            completion = this.register(first.request);
+            completion = this.register(begin.request);
             void completion.catch(() => undefined);
-            this._scheduleTimer(first.request.timeoutTimerId, first.request.timeoutMs);
+            this._scheduleTimer(begin.request.timeoutTimerId, begin.request.timeoutMs);
             return commands.slice(1);
         }).then(
             () => completion ?? false,
@@ -39,11 +43,8 @@ export class PendingRequests {
 
     resolve(requestId: string, ok: boolean): void {
         const callbacks = this._pendingRequestResolvers.get(requestId);
-        if (!callbacks) {
-            return;
-        }
         this._pendingRequestResolvers.delete(requestId);
-        callbacks.resolve(ok);
+        callbacks?.resolve(ok);
     }
 
     rejectAll(error: Error): void {

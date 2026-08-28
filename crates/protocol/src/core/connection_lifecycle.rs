@@ -2,7 +2,7 @@
 //!
 //! [`connect`] starts a user attempt and clears replayable intent
 //! [`disconnect`] ends that attempt and suppresses recovery
-//! [`on_ws_close`] maps terminal codes to [`BundleConnectionState::Closed`]
+//! [`on_ws_close`] maps terminal codes to [`ConnectionState::Closed`]
 //! while transient closes preserve the connect context for [`handle_recovery_timer`]
 //!
 //! welcome messages enter through [`ProtocolCore::on_ws_message`]
@@ -10,12 +10,10 @@
 //! each transition returns ordered [`Command`] values for the host
 
 use super::{
-    Command, Commands, ConnectContext, INITIAL_RECOVERY_DELAY_MS, ProtocolCore, RECOVERY_TIMER_ID,
-    empty_features, next_recovery_delay,
+    Command, Commands, ConnectContext, ConnectionState, INITIAL_RECOVERY_DELAY_MS, ProtocolCore,
+    RECOVERY_TIMER_ID, empty_features, next_recovery_delay,
 };
-use crate::{
-    bundle_api::BundleConnectionState, shared::RecordingState, signaling::WebSocketCloseCode,
-};
+use crate::{shared::RecordingState, signaling::WebSocketCloseCode};
 
 /// host-visible reason attached to a terminal lifecycle state change
 ///
@@ -50,12 +48,18 @@ fn lifecycle_close_cause_label(cause: LifecycleCloseCause) -> &'static str {
     }
 }
 
-fn reset_welcome_snapshot(core: &mut ProtocolCore) {
-    core.features = empty_features();
-    core.recording_state = RecordingState::default();
+fn reset_public_state(commands: &mut Commands) {
+    commands.extend([
+        Command::SetAvailableFeatures {
+            features: empty_features(),
+        },
+        Command::SetRecordingState {
+            state: RecordingState::default(),
+        },
+    ]);
 }
 
-fn state_change(state: BundleConnectionState, cause: Option<LifecycleCloseCause>) -> Command {
+fn state_change(state: ConnectionState, cause: Option<LifecycleCloseCause>) -> Command {
     Command::EmitStateChange {
         state,
         cause: cause.map(lifecycle_close_cause_label).map(str::to_owned),
@@ -71,7 +75,7 @@ fn state_change(state: BundleConnectionState, cause: Option<LifecycleCloseCause>
 ///
 /// calls from live admission states are ignored so the host cannot accidentally
 /// stack overlapping connection attempts on top of an already-live user
-/// a call from [`BundleConnectionState::Recovering`] also cancels the stale recovery timer before the
+/// a call from [`ConnectionState::Recovering`] also cancels the stale recovery timer before the
 /// new socket attempt starts
 ///
 /// ```text
@@ -86,8 +90,8 @@ pub(super) fn connect(
     room: Option<String>,
 ) -> Commands {
     let mut commands = match core.state() {
-        BundleConnectionState::Disconnected | BundleConnectionState::Closed => Vec::new(),
-        BundleConnectionState::Recovering => vec![Command::CancelTimer {
+        ConnectionState::Disconnected | ConnectionState::Closed => Vec::new(),
+        ConnectionState::Recovering => vec![Command::CancelTimer {
             id: RECOVERY_TIMER_ID,
         }],
         _ => return Vec::new(),
@@ -96,10 +100,10 @@ pub(super) fn connect(
     core.connect_context = Some(ConnectContext { url, jwt, room });
     core.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
     core.phase
-        .apply_lifecycle_state(BundleConnectionState::Connecting);
-    reset_welcome_snapshot(core);
+        .apply_lifecycle_state(ConnectionState::Connecting);
     core.clear_runtime_state();
     core.clear_sticky_state();
+    reset_public_state(&mut commands);
     commands.push(state_change(core.state(), None));
     commands.push(Command::Connect { url: connect_url });
     commands
@@ -115,24 +119,24 @@ pub(super) fn connect(
 pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
     if matches!(
         core.state(),
-        BundleConnectionState::Disconnected | BundleConnectionState::Closed
+        ConnectionState::Disconnected | ConnectionState::Closed
     ) {
         return Vec::new();
     }
     core.phase
-        .apply_lifecycle_state(BundleConnectionState::Disconnected);
+        .apply_lifecycle_state(ConnectionState::Disconnected);
     core.connect_context = None;
     core.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
     let mut commands = vec![Command::CancelTimer {
         id: RECOVERY_TIMER_ID,
     }];
-    reset_welcome_snapshot(core);
-    commands.extend(core.clear_runtime_state_with_commands());
+    commands.extend(core.teardown_runtime_state());
     core.clear_sticky_state();
     commands.push(Command::CloseWebSocket {
         code: u16::from(WebSocketCloseCode::Clean),
     });
     commands.push(Command::ClosePeerConnection);
+    reset_public_state(&mut commands);
     commands.push(state_change(core.state(), None));
     commands
 }
@@ -142,12 +146,12 @@ pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
 /// there are three different cases here and mixing them up is the main way to
 /// break reconnect behavior:
 ///
-/// - terminal close codes move to [`BundleConnectionState::Closed`], clear the saved connect context,
+/// - terminal close codes move to [`ConnectionState::Closed`], clear the saved connect context,
 ///   and suppress recovery
-/// - non-terminal closes with saved connect context move to [`BundleConnectionState::Recovering`] and
+/// - non-terminal closes with saved connect context move to [`ConnectionState::Recovering`] and
 ///   schedule the recovery timer
 /// - non-terminal closes without saved connect context fall back to
-///   [`BundleConnectionState::Disconnected`], because there is nothing safe to reconnect to
+///   [`ConnectionState::Disconnected`], because there is nothing safe to reconnect to
 ///
 /// example:
 ///
@@ -158,7 +162,7 @@ pub(super) fn disconnect(core: &mut ProtocolCore) -> Commands {
 pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands {
     if matches!(
         core.state(),
-        BundleConnectionState::Disconnected | BundleConnectionState::Closed
+        ConnectionState::Disconnected | ConnectionState::Closed
     ) {
         return Vec::new();
     }
@@ -170,16 +174,15 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
         | WebSocketCloseCode::RoomFull),
     ) = WebSocketCloseCode::from_u16(close_code)
     {
-        core.phase
-            .apply_lifecycle_state(BundleConnectionState::Closed);
+        core.phase.apply_lifecycle_state(ConnectionState::Closed);
         core.connect_context = None;
         core.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
-        reset_welcome_snapshot(core);
-        let mut commands = core.clear_runtime_state_with_commands();
+        let mut commands = core.teardown_runtime_state();
         commands.push(Command::CancelTimer {
             id: RECOVERY_TIMER_ID,
         });
         commands.push(Command::ClosePeerConnection);
+        reset_public_state(&mut commands);
         commands.push(state_change(
             core.state(),
             terminal_close_cause(terminal_code),
@@ -189,8 +192,9 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
 
     if core.connect_context.is_none() {
         core.phase
-            .apply_lifecycle_state(BundleConnectionState::Disconnected);
-        let mut commands = core.clear_runtime_state_with_commands();
+            .apply_lifecycle_state(ConnectionState::Disconnected);
+        let mut commands = core.teardown_runtime_state();
+        reset_public_state(&mut commands);
         commands.push(state_change(core.state(), None));
         return commands;
     }
@@ -198,8 +202,8 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
     let scheduled_delay_ms = core.recovery_delay_ms;
     core.recovery_delay_ms = next_recovery_delay(scheduled_delay_ms);
     core.phase
-        .apply_lifecycle_state(BundleConnectionState::Recovering);
-    let mut commands = core.clear_runtime_state_with_commands();
+        .apply_lifecycle_state(ConnectionState::Recovering);
+    let mut commands = core.teardown_runtime_state();
     commands.push(Command::ClosePeerConnection);
     commands.push(state_change(core.state(), None));
     commands.push(Command::ScheduleTimer {
@@ -212,7 +216,7 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
 /// retries the saved websocket connection after a recovery delay
 ///
 /// this is narrow
-/// only [`BundleConnectionState::Recovering`] may consume the recovery timer
+/// only [`ConnectionState::Recovering`] may consume the recovery timer
 /// a stale timer firing after a successful reconnect or explicit
 /// disconnect must do nothing, otherwise old scheduled work can restart an
 /// inactive attempt
@@ -225,7 +229,7 @@ pub(super) fn on_ws_close(core: &mut ProtocolCore, close_code: u16) -> Commands 
 /// Connected --handle_recovery_timer()--> no-op
 /// ```
 pub(super) fn handle_recovery_timer(core: &mut ProtocolCore) -> Commands {
-    if core.state() != BundleConnectionState::Recovering {
+    if core.state() != ConnectionState::Recovering {
         return Vec::new();
     }
     let Some(connect_context) = core.connect_context.as_ref() else {
@@ -233,7 +237,7 @@ pub(super) fn handle_recovery_timer(core: &mut ProtocolCore) -> Commands {
     };
     let connect_url = connect_context.url.clone();
     core.phase
-        .apply_lifecycle_state(BundleConnectionState::Connecting);
+        .apply_lifecycle_state(ConnectionState::Connecting);
     let mut commands = vec![state_change(core.state(), None)];
     commands.push(Command::Connect { url: connect_url });
     commands

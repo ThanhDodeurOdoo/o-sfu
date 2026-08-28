@@ -97,32 +97,30 @@ fn protocol_core_disconnect_cleans_up_connected_session() -> Result<(), String> 
             Command::CancelTimer {
                 id: RECOVERY_TIMER_ID,
             },
-            Command::CancelTimer {
-                id: timeout_timer_id,
-            },
-            Command::ResolvePendingRequest {
+            Command::CompletePendingRequest {
                 request_id,
+                timeout_timer_id,
                 ok: false,
             },
             Command::CloseWebSocket { code: 1000 },
             Command::ClosePeerConnection,
+            Command::SetAvailableFeatures {
+                features: AvailableFeatures {
+                    rtc: false,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: false,
+                },
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Disconnected,
                 cause: None,
             },
         ]
     );
-    assert_eq!(
-        core.features(),
-        &AvailableFeatures {
-            rtc: false,
-            transcription: false,
-            audio_recording: false,
-            video_recording: false,
-        }
-    );
-    let recording_state = serde_json::to_value(core.recording_state());
-    assert_eq!(recording_state.unwrap_or_default(), empty_recording_json());
     Ok(())
 }
 
@@ -184,17 +182,26 @@ fn protocol_core_terminal_close_resolves_request_before_recovery_cancel() -> Res
     assert_eq!(
         commands.as_slice(),
         &[
-            Command::CancelTimer {
-                id: timeout_timer_id,
-            },
-            Command::ResolvePendingRequest {
+            Command::CompletePendingRequest {
                 request_id,
+                timeout_timer_id,
                 ok: false,
             },
             Command::CancelTimer {
                 id: RECOVERY_TIMER_ID,
             },
             Command::ClosePeerConnection,
+            Command::SetAvailableFeatures {
+                features: AvailableFeatures {
+                    rtc: false,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: false,
+                },
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Closed,
                 cause: None,
@@ -222,7 +229,6 @@ fn start_flushed_recording_request(core: &mut ProtocolCore) -> Result<(RequestId
     else {
         return Err(format!("expected recording request start, got {result:?}"));
     };
-    assert_eq!(pending_request.kind, PendingRequestKind::StartRecording);
     assert_eq!(pending_request.timeout_ms, REQUEST_TIMEOUT_MS);
     let _ = core.on_timer(*flush_timer_id);
     Ok((
@@ -320,7 +326,7 @@ fn protocol_core_replays_sticky_session_intents_after_recovery_authentication() 
 
     assert_eq!(core.state(), ConnectionState::Authenticated);
     assert_eq!(
-        commands.first(),
+        commands.get(2),
         Some(&Command::EmitStateChange {
             state: ConnectionState::Authenticated,
             cause: None,
@@ -534,6 +540,17 @@ fn protocol_core_fresh_connect_supersedes_pending_recovery() {
             Command::CancelTimer {
                 id: RECOVERY_TIMER_ID,
             },
+            Command::SetAvailableFeatures {
+                features: AvailableFeatures {
+                    rtc: false,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: false,
+                },
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Connecting,
                 cause: None,
@@ -603,6 +620,17 @@ fn protocol_core_terminal_close_enters_closed_with_cause() {
                 id: RECOVERY_TIMER_ID,
             },
             Command::ClosePeerConnection,
+            Command::SetAvailableFeatures {
+                features: AvailableFeatures {
+                    rtc: false,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: false,
+                },
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Closed,
                 cause: Some(String::from("full")),
@@ -628,6 +656,17 @@ fn protocol_core_protocol_error_close_is_terminal() {
                 id: RECOVERY_TIMER_ID,
             },
             Command::ClosePeerConnection,
+            Command::SetAvailableFeatures {
+                features: AvailableFeatures {
+                    rtc: false,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: false,
+                },
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Closed,
                 cause: None,

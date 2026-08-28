@@ -2,7 +2,7 @@
 //!
 //! `o-sfu-protocol` keeps client-side protocol state pure
 //! the core state machine accepts host events and returns ordered command
-//! batches that the embedding host executes through its own WebSocket,
+//! vectors that the embedding host executes through its own WebSocket,
 //! `RTCPeerConnection` and timer APIs
 //!
 //! the crate has 3 public facades:
@@ -11,10 +11,10 @@
 //! - `wire` contains JSON envelope and signaling payload types
 //! - `bundle` preserves the browser bundle compatibility API used by Odoo
 //!
-//! Hosts execute every command in each returned batch before reporting the
+//! Hosts execute every command in each returned vector before reporting the
 //! resulting socket and peer-connection events to the same
-//! [`host::ProtocolCore`]. Initial negotiation creates the peer connection
-//! before applying the offer. While that negotiation is pending, the host
+//! [`host::ProtocolCore`]. The host creates the peer connection when applying
+//! an initial offer. While that negotiation is pending, the host
 //! submits its correlated answer then reports readiness after the peer
 //! connection becomes usable.
 //!
@@ -26,28 +26,27 @@
 //! assert!(matches!(
 //!     connect.as_slice(),
 //!     [
+//!         Command::SetAvailableFeatures { .. },
+//!         Command::SetRecordingState { .. },
 //!         Command::EmitStateChange { state: ConnectionState::Connecting, .. },
 //!         Command::Connect { .. },
 //!     ]
 //! ));
 //!
 //! let auth = core.on_ws_open();
-//! assert!(matches!(auth.as_slice(), [Command::SendWebSocket(_)]));
+//! assert!(matches!(auth.as_slice(), [Command::SendWebSocket { .. }]));
 //! # let welcome = concat!(
 //! #     r#"[{"t":"welcome","p":{"features":{"rtc":true,"transcription":false,"#,
 //! #     r#""audioRecording":false,"videoRecording":false},"recording":{},"peers":[]}}]"#,
 //! # );
 //! let welcome = core.on_ws_message(welcome);
-//! assert!(matches!(welcome.first(),
+//! assert!(matches!(welcome.get(2),
 //!     Some(Command::EmitStateChange { state: ConnectionState::Authenticated, .. })
 //! ));
 //!
 //! let offer = r#"[{"t":"offer","q":"offer-1","p":{"sdp":"v=0\r\n","uploadSlots":[]}}]"#;
 //! let negotiation = core.on_ws_message(offer);
-//! let [
-//!     Command::CreatePeerConnection,
-//!     Command::ApplyNegotiation { request_id, kind, .. },
-//! ] = negotiation.as_slice()
+//! let [Command::ApplyNegotiation { request_id, kind, .. }] = negotiation.as_slice()
 //! else {
 //!     return Err("unexpected negotiation command order".into());
 //! };
@@ -56,7 +55,7 @@
 //!
 //! let answer = core.submit_negotiation_answer(request_id, *kind, "v=0\r\ns=answer\r\n");
 //! assert_eq!(*kind, NegotiationKind::Offer);
-//! assert!(matches!(answer.as_slice(), [Command::SendWebSocket(_)]));
+//! assert!(matches!(answer.as_slice(), [Command::SendWebSocket { .. }]));
 //!
 //! // The host sends `answer` then waits until the peer connection is usable.
 //! let ready = core.on_transport_ready();
@@ -80,8 +79,8 @@ pub mod wasm;
 ///
 /// hosts drive `ProtocolCore` by reporting WebSocket, timer and peer-connection
 /// events
-/// every transition returns `CommandBatch`, so side effects stay explicit and
-/// ordered at the host boundary
+/// every transition returns ordered commands, so side effects stay explicit at
+/// the host boundary
 pub mod host {
     pub use crate::{core::*, host_bridge::*};
 }

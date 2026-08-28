@@ -8,9 +8,9 @@ import { CLIENT_UPDATE, SFU_CLIENT_STATE, SfuClient, __info__ } from "/bundle/od
 const sfu = new SfuClient();
 ```
 
-The Odoo bundle public surface is the client facade plus the public API
-catalogs. Browser integrations should not construct websocket protocol
-envelopes directly from this bundle.
+The JavaScript module exports exactly `SfuClient`, `SFU_CLIENT_STATE`,
+`CLIENT_UPDATE` and `__info__`. Browser integrations should not construct
+WebSocket protocol envelopes directly from this bundle.
 
 The compatibility bundle is built with:
 
@@ -18,9 +18,17 @@ The compatibility bundle is built with:
 npm --prefix crates/client run build:odoo
 ```
 
+The build also emits `dist/odoo_sfu.d.ts`. Keep it beside `odoo_sfu.js` under
+the same basename. TypeScript and compatible editors use this declaration for
+the public types, method documentation and typed event payloads. Test-only
+constructor dependencies and protocol bindings are excluded.
+
+`STREAM_TYPES` and `VIDEO_LAYOUT_INTENTS` below describe the accepted type
+values. They are not additional JavaScript exports.
+
 ## Bundle Metadata
 
-the Odoo bundle exports build metadata through `__info__`
+The Odoo bundle exports build metadata through `__info__`.
 
 ```js
 console.log(__info__.version, __info__.hash, __info__.date);
@@ -37,8 +45,8 @@ interface BundleInfo {
 }
 ```
 
-`version` comes from the root `o-sfu` cargo package
-`hash` is the short git commit hash used when `build:odoo` generated the asset
+`version` comes from the root `o-sfu` Cargo package. `hash` is the short Git
+commit hash used when `build:odoo` generated the asset.
 
 The bundle is intentionally close to the old Node SFU client API. New code should
 prefer `publish()` and `subscribe()`. The legacy `updateUpload()` and
@@ -86,6 +94,10 @@ sfu.connect("https://sfu.example.com/ws", jsonWebToken, {
 The client accepts `http:` and `https:` URLs and normalizes them to `ws:` or
 `wss:` before opening the websocket.
 
+The method validates its options synchronously then returns before
+authentication and media negotiation finish. Observe `stateChange` and
+`handledError` for the result.
+
 Options:
 
 ```ts
@@ -100,14 +112,14 @@ interface ConnectOptions {
 
 ## disconnect()
 
-Requests a clean SFU disconnect.
+Ends the current connection attempt and clears `errors`.
 
 ```js
 sfu.disconnect();
 ```
 
-The client eventually emits a `"stateChange"` event and moves back to a terminal
-or disconnected state according to the protocol state machine.
+An active session emits a final disconnected `stateChange`. Calling the method
+while already disconnected or closed has no protocol effect.
 
 ## publish(type, track)
 
@@ -122,6 +134,7 @@ sfu.publish("camera", cameraTrack);
 sfu.publish("screen", screenTrack);
 
 sfu.publish("camera", null);
+sfu.publish("screen", undefined);
 ```
 
 `type` must be one of:
@@ -136,6 +149,8 @@ The supplied track must match the stream type:
 - `audio` requires an audio `MediaStreamTrack`
 - `camera` requires a video `MediaStreamTrack`
 - `screen` requires a video `MediaStreamTrack`
+
+An unknown stream type or a mismatched track throws synchronously.
 
 The first non-null track may require SDP negotiation. The server classifies an
 inactive request when it applies it. A queued or staged first publication is
@@ -173,6 +188,9 @@ sfu.subscribe(remoteSessionId, {
 
 `states` is a partial object. Omitted fields keep their previous value for that
 remote session.
+
+Unknown fields, non-boolean download flags and invalid layout values throw
+synchronously.
 
 ```ts
 interface DownloadStates {
@@ -356,6 +374,9 @@ sfu.broadcast({ type: "reaction", value: "raised-hand" });
 Other clients receive it through the `"update"` event with
 `CLIENT_UPDATE.BROADCAST`.
 
+The method serializes a JSON-compatible snapshot at call time. Serialization
+failures are reported through `handledError` and can end the session.
+
 ## getStats()
 
 Returns WebRTC stats reports for the peer connection and local senders when
@@ -386,7 +407,7 @@ interface SfuStats {
 ```
 
 `uploadStats` and `downloadStats` are compatibility names for the peer
-connection stats report.
+connection stats report. The method returns an empty object before negotiation.
 
 ## Recording
 
@@ -410,6 +431,10 @@ const allowed = await sfu.startRecording({
 const stopped = await sfu.stopRecording();
 ```
 
+Each promise resolves to the server acceptance result. It resolves `false` for
+refusal, timeout, teardown or when no request starts. A fatal runtime failure
+rejects the promise and emits `handledError`.
+
 Options:
 
 ```ts
@@ -423,13 +448,22 @@ interface RecordingOptions {
 Current recording state is exposed through `sfu.recordingState` and updated by
 `CLIENT_UPDATE.CHANNEL_INFO_CHANGE` events.
 
+```ts
+interface SfuRecordingState {
+    recording?: boolean;
+    audio?: boolean;
+    video?: boolean;
+    transcription?: boolean;
+}
+```
+
 ## Events
 
 The client emits four event types:
 
 - `"stateChange"` for connection-state transitions
 - `"update"` for SFU protocol updates
-- `"handledError"` after a recoverable runtime error is captured by the client
+- `"handledError"` after a runtime error is captured by the client
 - `"log"` for client/runtime diagnostics
 
 ### update
@@ -506,8 +540,9 @@ sfu.addEventListener("log", ({ detail }) => {
 
 ## Public Properties
 
-`SfuClient` exposes `state`, `errors`, `availableFeatures` and `recordingState`
-as public properties.
+`SfuClient` exposes `state`, `errors`, `availableFeatures`, `recordingState` and
+the compatibility-only `_consumers` view. `connect()` and `disconnect()` clear
+`errors` before starting their transition.
 
 `availableFeatures` has this shape:
 

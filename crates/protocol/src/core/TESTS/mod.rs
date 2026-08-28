@@ -1,8 +1,6 @@
-use serde_json::json;
-
 pub(super) use super::{
-    BATCH_FLUSH_TIMER_ID, Command, ConnectionState, NegotiationKind, PendingRequestKind,
-    ProtocolCore, ProtocolEvent, RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS, StickyReplayState,
+    BATCH_FLUSH_TIMER_ID, Command, ConnectionState, NegotiationKind, ProtocolCore, ProtocolEvent,
+    RECOVERY_TIMER_ID, REQUEST_TIMEOUT_MS, StickyReplayState,
 };
 pub(super) use crate::{
     shared::{
@@ -50,9 +48,9 @@ pub(super) fn sample_welcome_payload() -> WelcomePayload {
 }
 
 pub(super) fn decode_sent_batch(commands: &[Command]) -> EnvelopeBatch {
-    let Some(Command::SendWebSocket(frame)) = commands
+    let Some(Command::SendWebSocket { frame }) = commands
         .iter()
-        .find(|command| matches!(command, Command::SendWebSocket(_)))
+        .find(|command| matches!(command, Command::SendWebSocket { .. }))
     else {
         return Vec::new();
     };
@@ -80,7 +78,4 @@ pub(super) fn encode_server_batch(envelope: ServerEnvelope) -> String {
     };
     serde_json::to_string(&vec![envelope]).unwrap_or_default()
 }
-
-pub(super) fn empty_recording_json() -> serde_json::Value {
-    json!({})
-}
+use serde_json::json;

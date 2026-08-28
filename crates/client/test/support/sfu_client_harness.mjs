@@ -1,4 +1,4 @@
-import { SfuClient } from "../../dist/index.js";
+import { SfuClient } from "../../dist/sfu_client.js";
 import { FakePeerConnection, FakeWebSocket } from "./browser_fakes.mjs";
 import { FakeProtocolCore, tick } from "./protocol_fakes.mjs";
 

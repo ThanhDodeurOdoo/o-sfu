@@ -1,32 +1,14 @@
 //! Pure client-side signaling state machine for the `o-sfu` protocol.
 //!
-//! [`ProtocolCore`] never performs I/O directly. Every public transition returns
-//! [`CommandBatch`], an ordered batch of side effects for the host to execute in
-//! sequence. The host keeps the actual WebSocket, peer connection and timer
-//! integration, then feeds the resulting events back into the core.
-//!
-//! we have to coordinate transport lifecycle, negotiation, timers and
-//! host-visible state changes without hiding side effects inside the state
-//! machine itself.
-//! Returning commands allow three things that are hard to keep at the same time otherwise:
-//!
-//! 1. Deterministic tests: transitions can be asserted as pure input/output
-//!    steps without a live socket, browser API or async runtime.
-//! 2. Runtime independence: the same core can drive wasm, native and test
-//!    hosts because it describes *what* must happen, not *how* that host does it.
-//! 3. Explicit ordering and cleanup: reconnects, request timeouts and teardown
-//!    paths expose every required side effect, which avoids hidden partial work
-//!    and makes it obvious when the host still owes a timer cancel or close.
-//!
-//! The command system is more cumbersome than inlining I/O calls, but that
-//! cost is what keeps the protocol verifiable and portable. Browser hosts
-//! should consume the commands as [`CommandBatch`] values.
+//! [`ProtocolCore`] performs no I/O. Each transition returns ordered [`Command`]
+//! values for the host to execute before reporting follow-up events. This keeps
+//! transitions deterministic and lets Wasm, native and test hosts share the
+//! same lifecycle rules.
 
 use std::{collections::BTreeMap, mem::replace};
 
 use serde::{Deserialize, Serialize};
 
-mod command_batch;
 mod connection_lifecycle;
 mod outbound_batch;
 mod request_flow;
@@ -35,20 +17,12 @@ mod server_events;
 mod sticky_replay;
 mod timers;
 
-pub use command_batch::CommandBatch;
-
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_support {
-    pub use super::command_batch::test_support::command_batch;
-}
 use outbound_batch::{FlushMode, OutboundBatcher};
 use request_tracker::RequestTracker;
 use sticky_replay::StickyReplayState;
 use timers::RequestTimeoutId;
 
-pub use crate::bundle_api::BundleConnectionState as ConnectionState;
 use crate::{
-    bundle_api::BundleConnectionState,
     shared::{
         AvailableFeatures, DownloadStates, JsonPayload, RecordingState, RecordingStateUpdate,
         StreamType, UserId, UserInfo,
@@ -56,8 +30,8 @@ use crate::{
     signaling::{
         AuthPayload, ClientBroadcastPayload, ClientEnvelope, ClientMessage, Envelope,
         MAX_ENVELOPE_BATCH_LEN, NegotiationUploadSlot, PeerSnapshot, RecordingOptions, RequestId,
-        ServerEnvelope, StreamIntentPayload, SubscribePayload, TrackBinding, WelcomePayload,
-        decode_envelope_batch,
+        ServerEnvelope, StreamIntentPayload, SubscribePayload, TrackBinding, WebSocketCloseCode,
+        WelcomePayload, decode_envelope_batch,
     },
     wire::ServerMessage,
 };
@@ -71,25 +45,26 @@ const BATCH_FLUSH_DELAY_MS: u32 = 100;
 const REQUEST_TIMEOUT_MS: u32 = 5_000;
 const MAX_OUTBOUND_BATCH_LEN: usize = 16;
 
-/// One side-effect intent emitted by [`ProtocolCore`].
+/// One ordered side effect for the host that drives [`ProtocolCore`].
 ///
-/// The state machine itself is pure: it never touches I/O. Instead each
-/// transition returns [`CommandBatch`] that the host (wasm glue, native driver,
-/// test harness) must execute in order. That keeps transport work, timers, and
-/// projection updates visible at the protocol boundary instead of being buried
-/// in host-specific control flow.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The host must execute each returned vector before reporting follow-up events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Command {
     /// Serialize and send a JSON frame over the WebSocket.
-    SendWebSocket(String),
+    SendWebSocket {
+        frame: String,
+    },
     /// Apply a remote SDP offer to the local `RTCPeerConnection`.
     ApplyNegotiation {
+        #[serde(rename = "requestId")]
         request_id: RequestId,
+        #[serde(rename = "negotiationKind")]
         kind: NegotiationKind,
         sdp: String,
+        #[serde(rename = "uploadSlots")]
         upload_slots: Vec<NegotiationUploadSlot>,
     },
-    CreatePeerConnection,
     ClosePeerConnection,
     CloseWebSocket {
         code: u16,
@@ -100,15 +75,30 @@ pub enum Command {
         state: ConnectionState,
         cause: Option<String>,
     },
+    SetAvailableFeatures {
+        features: AvailableFeatures,
+    },
+    SetRecordingState {
+        state: RecordingState,
+    },
     /// Emit a protocol-domain event for the host projection layer.
+    #[serde(rename = "emitUpdate")]
     EmitEvent {
+        #[serde(
+            rename = "update",
+            serialize_with = "crate::host_bridge::serialize_protocol_event"
+        )]
         event: ProtocolEvent,
     },
     BeginPendingRequest {
         request: PendingRequest,
     },
-    ResolvePendingRequest {
+    /// Cancel `timeout_timer_id` before resolving `request_id`.
+    CompletePendingRequest {
+        #[serde(rename = "requestId")]
         request_id: RequestId,
+        #[serde(rename = "timeoutTimerId")]
+        timeout_timer_id: u32,
         ok: bool,
     },
     /// Start a one-shot timer; the host must call [`ProtocolCore::on_timer`]
@@ -127,6 +117,17 @@ pub enum Command {
 }
 
 pub(crate) type Commands = Vec<Command>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionState {
+    Disconnected,
+    Connecting,
+    Authenticated,
+    Connected,
+    Recovering,
+    Closed,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolEvent {
@@ -159,9 +160,8 @@ pub enum NegotiationKind {
     Renegotiate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PendingRequestKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingRequestKind {
     StartRecording,
     StopRecording,
 }
@@ -170,7 +170,6 @@ pub enum PendingRequestKind {
 #[serde(rename_all = "camelCase")]
 pub struct PendingRequest {
     pub request_id: RequestId,
-    pub kind: PendingRequestKind,
     pub timeout_timer_id: u32,
     pub timeout_ms: u32,
 }
@@ -201,12 +200,12 @@ enum ProtocolPhase {
 impl ProtocolPhase {
     const fn connection_state(&self) -> ConnectionState {
         match self {
-            Self::Disconnected => BundleConnectionState::Disconnected,
-            Self::Connecting => BundleConnectionState::Connecting,
-            Self::Authenticated(_) => BundleConnectionState::Authenticated,
-            Self::Connected(_) => BundleConnectionState::Connected,
-            Self::Recovering => BundleConnectionState::Recovering,
-            Self::Closed => BundleConnectionState::Closed,
+            Self::Disconnected => ConnectionState::Disconnected,
+            Self::Connecting => ConnectionState::Connecting,
+            Self::Authenticated(_) => ConnectionState::Authenticated,
+            Self::Connected(_) => ConnectionState::Connected,
+            Self::Recovering => ConnectionState::Recovering,
+            Self::Closed => ConnectionState::Closed,
         }
     }
 
@@ -220,13 +219,13 @@ impl ProtocolPhase {
         }
         let current = replace(self, Self::Disconnected);
         *self = match (current, state) {
-            (Self::Authenticated(slot), BundleConnectionState::Connected) => Self::Connected(slot),
-            (_, BundleConnectionState::Disconnected) => Self::Disconnected,
-            (_, BundleConnectionState::Connecting) => Self::Connecting,
-            (_, BundleConnectionState::Authenticated) => Self::Authenticated(NegotiationSlot::Idle),
-            (_, BundleConnectionState::Connected) => Self::Connected(NegotiationSlot::Idle),
-            (_, BundleConnectionState::Recovering) => Self::Recovering,
-            (_, BundleConnectionState::Closed) => Self::Closed,
+            (Self::Authenticated(slot), ConnectionState::Connected) => Self::Connected(slot),
+            (_, ConnectionState::Disconnected) => Self::Disconnected,
+            (_, ConnectionState::Connecting) => Self::Connecting,
+            (_, ConnectionState::Authenticated) => Self::Authenticated(NegotiationSlot::Idle),
+            (_, ConnectionState::Connected) => Self::Connected(NegotiationSlot::Idle),
+            (_, ConnectionState::Recovering) => Self::Recovering,
+            (_, ConnectionState::Closed) => Self::Closed,
         };
     }
 
@@ -310,25 +309,13 @@ pub(super) enum NegotiationRejection {
 }
 
 /// The stored state falls into three groups:
-///   - session snapshots accepted from the server
+///   - session state needed to interpret later protocol messages
 ///   - remembered client intent that should survive reconnects
 ///   - in-flight host work that must be cancelled or resolved during cleanup
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolCore {
     /// Lifecycle and server-driven negotiation state.
     phase: ProtocolPhase,
-    /// Feature snapshot from the last accepted welcome payload.
-    ///
-    /// Until a welcome is accepted this remains empty. It is reset on fresh
-    /// connects and terminal cleanup so callers never read capabilities from a
-    /// previous room or credential context.
-    features: AvailableFeatures,
-    /// Recording snapshot from the server.
-    ///
-    /// Welcome payloads make this authoritative after authentication. Later
-    /// recording-change messages update it incrementally, while fresh connects
-    /// and terminal cleanup reset it back to the neutral default.
-    recording_state: RecordingState,
     /// Current server-maintained mapping from SDP mid to stream binding metadata.
     ///
     /// The map is replaced by track snapshots and trimmed when peers leave. It
@@ -385,8 +372,6 @@ impl ProtocolCore {
     pub fn new() -> Self {
         Self {
             phase: ProtocolPhase::Disconnected,
-            features: empty_features(),
-            recording_state: RecordingState::default(),
             track_bindings: BTreeMap::new(),
             sticky_replay: StickyReplayState::new(),
             connect_context: None,
@@ -401,22 +386,12 @@ impl ProtocolCore {
         self.phase.connection_state()
     }
 
-    #[must_use]
-    pub const fn features(&self) -> &AvailableFeatures {
-        &self.features
-    }
-
-    #[must_use]
-    pub const fn recording_state(&self) -> &RecordingState {
-        &self.recording_state
-    }
-
     /// Starts a fresh connection attempt when the current state permits one.
     ///
     /// Accepts [`ConnectionState::Disconnected`], [`ConnectionState::Closed`] and
     /// [`ConnectionState::Recovering`]. Calls from [`ConnectionState::Connecting`],
     /// [`ConnectionState::Authenticated`] and [`ConnectionState::Connected`] return
-    /// an empty [`CommandBatch`] without replacing the saved admission context.
+    /// no commands without replacing the saved admission context.
     ///
     /// This is stricter than a reconnect path: it clears sticky
     /// replay and runtime state so a caller switching rooms or credentials cannot
@@ -426,36 +401,31 @@ impl ProtocolCore {
         url: impl Into<String>,
         jwt: impl Into<String>,
         room: Option<String>,
-    ) -> CommandBatch {
-        command_batch(connection_lifecycle::connect(
-            self,
-            url.into(),
-            jwt.into(),
-            room,
-        ))
+    ) -> Vec<Command> {
+        connection_lifecycle::connect(self, url.into(), jwt.into(), room)
     }
 
     /// Authenticates a newly opened socket with the stored connect context.
     ///
     /// Recovery reuses the same JWT and optional room that [`ProtocolCore::connect`] captured,
     /// which keeps every socket attempt tied to one explicit admission context.
-    pub fn on_ws_open(&mut self) -> CommandBatch {
+    pub fn on_ws_open(&mut self) -> Vec<Command> {
         if !matches!(
             self.phase.connection_state(),
-            BundleConnectionState::Connecting | BundleConnectionState::Recovering
+            ConnectionState::Connecting | ConnectionState::Recovering
         ) {
-            return CommandBatch::default();
+            return Vec::new();
         }
         let Some(connect_context) = self.connect_context.as_ref() else {
-            return CommandBatch::default();
+            return Vec::new();
         };
-        command_batch(self.enqueue_client_message(
+        self.enqueue_client_message(
             ClientMessage::Auth(AuthPayload {
                 jwt: connect_context.jwt.clone(),
                 channel: connect_context.room.clone(),
             }),
             FlushMode::Immediate,
-        ))
+        )
     }
 
     /// handle ws message
@@ -463,16 +433,16 @@ impl ProtocolCore {
     /// Malformed batches or envelopes are treated as protocol violations.
     /// The whole batch is decoded before any envelope is applied so partially
     /// applied server state cannot survive after a later decode error.
-    pub fn on_ws_message(&mut self, frame: &str) -> CommandBatch {
+    pub fn on_ws_message(&mut self, frame: &str) -> Vec<Command> {
         let Ok(batch) = decode_envelope_batch(frame, MAX_ENVELOPE_BATCH_LEN) else {
-            return CommandBatch::close_for_protocol_error();
+            return close_for_protocol_error();
         };
         let Ok(envelopes) = batch
             .into_iter()
             .map(ServerEnvelope::decode)
             .collect::<Result<Vec<_>, _>>()
         else {
-            return CommandBatch::close_for_protocol_error();
+            return close_for_protocol_error();
         };
         let mut commands = Vec::new();
         for envelope in envelopes {
@@ -481,7 +451,7 @@ impl ProtocolCore {
                     if self.phase.is_awaiting_welcome()
                         && !matches!(message, ServerMessage::Welcome(_))
                     {
-                        return CommandBatch::close_for_protocol_error();
+                        return close_for_protocol_error();
                     }
                     commands.extend(server_events::handle_server_message(self, message));
                 }
@@ -505,31 +475,36 @@ impl ProtocolCore {
                 }
             }
         }
-        command_batch(commands)
+        commands
     }
 
     fn accept_welcome(&mut self, payload: WelcomePayload) -> Commands {
         if !matches!(
             self.phase.connection_state(),
-            BundleConnectionState::Connecting | BundleConnectionState::Recovering
+            ConnectionState::Connecting | ConnectionState::Recovering
         ) {
             return Vec::new();
         }
-        self.features = payload.features;
-        self.recording_state = payload.recording;
+        let WelcomePayload {
+            features,
+            recording,
+            peers,
+        } = payload;
         self.recovery_delay_ms = INITIAL_RECOVERY_DELAY_MS;
         self.phase
-            .apply_lifecycle_state(BundleConnectionState::Authenticated);
+            .apply_lifecycle_state(ConnectionState::Authenticated);
 
-        let mut commands = vec![Command::EmitStateChange {
-            state: self.phase.connection_state(),
-            cause: None,
-        }];
-        if !payload.peers.is_empty() {
+        let mut commands = vec![
+            Command::SetAvailableFeatures { features },
+            Command::SetRecordingState { state: recording },
+            Command::EmitStateChange {
+                state: self.phase.connection_state(),
+                cause: None,
+            },
+        ];
+        if !peers.is_empty() {
             commands.push(Command::EmitEvent {
-                event: ProtocolEvent::PeerSnapshot {
-                    peers: payload.peers,
-                },
+                event: ProtocolEvent::PeerSnapshot { peers },
             });
         }
         commands.extend(self.replay_session_state());
@@ -541,35 +516,34 @@ impl ProtocolCore {
     /// The host should call this only once the peer connection is usable for
     /// media, because it is what upgrades the core from authenticated signaling
     /// state to a fully connected user.
-    pub fn on_transport_ready(&mut self) -> CommandBatch {
+    pub fn on_transport_ready(&mut self) -> Vec<Command> {
         if !self.phase.can_enter_connected() {
-            return CommandBatch::default();
+            return Vec::new();
         }
-        self.phase
-            .apply_lifecycle_state(BundleConnectionState::Connected);
+        self.phase.apply_lifecycle_state(ConnectionState::Connected);
         let mut commands = vec![Command::EmitStateChange {
             state: self.state(),
             cause: None,
         }];
         commands.extend(self.replay_publication_state());
-        command_batch(commands)
+        commands
     }
 
     /// Stores the desired publication state and sends it when the media transport is ready.
     ///
     /// Publish intent is sticky across reconnects, which lets UI toggles be issued
     /// before authentication completes without losing the latest desired state.
-    pub fn publish(&mut self, stream_type: StreamType, active: bool) -> CommandBatch {
+    pub fn publish(&mut self, stream_type: StreamType, active: bool) -> Vec<Command> {
         self.sticky_replay.set_publish_active(stream_type, active);
         if !matches!(&self.phase, ProtocolPhase::Connected(_)) {
-            return CommandBatch::default();
+            return Vec::new();
         }
         let message = if active {
             ClientMessage::Publish(StreamIntentPayload { stream_type })
         } else {
             ClientMessage::Unpublish(StreamIntentPayload { stream_type })
         };
-        command_batch(self.enqueue_client_message(message, FlushMode::Batched))
+        self.enqueue_client_message(message, FlushMode::Batched)
     }
 
     /// Remembers the latest per-peer subscription intent for reconnect replay.
@@ -577,50 +551,50 @@ impl ProtocolCore {
     /// Repeated updates merge at the sticky layer, so callers can send partial
     /// audio/camera/screen adjustments without rebuilding the full preference set
     /// on every change or after recovery.
-    pub fn subscribe(&mut self, user_id: UserId, states: DownloadStates) -> CommandBatch {
+    pub fn subscribe(&mut self, user_id: UserId, states: DownloadStates) -> Vec<Command> {
         self.sticky_replay
             .remember_subscription_states(&user_id, &states);
         if !self.can_send_client_messages() {
-            return CommandBatch::default();
+            return Vec::new();
         }
-        command_batch(self.enqueue_client_message(
+        self.enqueue_client_message(
             ClientMessage::Subscribe(SubscribePayload { user_id, states }),
             FlushMode::Batched,
-        ))
+        )
     }
 
-    /// Persists the laetst local user metadata patch for the current room.
+    /// Persists the latest local user metadata patch for the current room.
     ///
     /// User info is replayed after reconnect so transient transport failures do
-    /// not silently reset presence indicators such as mute, hand raise, or camera
+    /// not silently reset presence indicators such as mute, hand raise or camera
     /// state back to server defaults.
-    pub fn update_info(&mut self, info: UserInfo) -> CommandBatch {
+    pub fn update_info(&mut self, info: UserInfo) -> Vec<Command> {
         self.sticky_replay.remember_info(&info);
         if !self.can_send_client_messages() {
-            return CommandBatch::default();
+            return Vec::new();
         }
-        command_batch(self.enqueue_client_message(ClientMessage::Info(info), FlushMode::Batched))
+        self.enqueue_client_message(ClientMessage::Info(info), FlushMode::Batched)
     }
 
     /// Sends a best-effort broadcast to the current room.
     ///
     /// Broadcast payloads are not sticky: if the client is not yet
     /// authenticated, the message is dropped instead of being replayed later out
-    /// of its original conversational contexte.
-    pub fn broadcast(&mut self, message: JsonPayload) -> CommandBatch {
+    /// of its original conversational context.
+    pub fn broadcast(&mut self, message: JsonPayload) -> Vec<Command> {
         if !self.can_send_client_messages() {
-            return CommandBatch::default();
+            return Vec::new();
         }
-        command_batch(self.enqueue_client_message(
+        self.enqueue_client_message(
             ClientMessage::Broadcast(ClientBroadcastPayload { message }),
             FlushMode::Batched,
-        ))
+        )
     }
 
-    pub fn start_recording(&mut self, options: RecordingOptions) -> CommandBatch {
+    pub fn start_recording(&mut self, options: RecordingOptions) -> Vec<Command> {
         request_flow::start_recording(self, options)
     }
-    pub fn stop_recording(&mut self) -> CommandBatch {
+    pub fn stop_recording(&mut self) -> Vec<Command> {
         request_flow::stop_recording(self)
     }
 
@@ -634,18 +608,16 @@ impl ProtocolCore {
         request_id: &RequestId,
         kind: NegotiationKind,
         sdp: impl Into<String>,
-    ) -> CommandBatch {
-        command_batch(request_flow::submit_negotiation_answer(
-            self, request_id, kind, sdp,
-        ))
+    ) -> Vec<Command> {
+        request_flow::submit_negotiation_answer(self, request_id, kind, sdp)
     }
 
-    pub fn disconnect(&mut self) -> CommandBatch {
-        command_batch(connection_lifecycle::disconnect(self))
+    pub fn disconnect(&mut self) -> Vec<Command> {
+        connection_lifecycle::disconnect(self)
     }
 
-    pub fn on_ws_close(&mut self, code: u16) -> CommandBatch {
-        command_batch(connection_lifecycle::on_ws_close(self, code))
+    pub fn on_ws_close(&mut self, code: u16) -> Vec<Command> {
+        connection_lifecycle::on_ws_close(self, code)
     }
 
     /// Dispatches all timer callbacks through one entry point.
@@ -653,19 +625,19 @@ impl ProtocolCore {
     /// Timer ids are part of the protocol-core contract: recovery, outbound batch
     /// flushing, and request timeouts each reserve their own namespace and must be
     /// routed back here by the host in the order they fire.
-    pub fn on_timer(&mut self, timer_id: u32) -> CommandBatch {
+    pub fn on_timer(&mut self, timer_id: u32) -> Vec<Command> {
         if timer_id == RECOVERY_TIMER_ID {
-            return command_batch(connection_lifecycle::handle_recovery_timer(self));
+            return connection_lifecycle::handle_recovery_timer(self);
         }
         if timer_id == BATCH_FLUSH_TIMER_ID {
-            return command_batch(self.flush_pending_batch(false));
+            return self.flush_pending_batch(false);
         }
         if let Some(commands) = RequestTimeoutId::try_from_raw(timer_id)
             .and_then(|timeout_id| self.request_tracker.resolve_timeout(timeout_id))
         {
-            return command_batch(commands);
+            return commands;
         }
-        CommandBatch::default()
+        Vec::new()
     }
 
     fn enqueue_envelope(&mut self, envelope: Envelope, mode: FlushMode) -> Commands {
@@ -694,9 +666,9 @@ impl ProtocolCore {
     /// This is used on disconnect and terminal close paths where queued batches,
     /// timeout timers, and pending requests must be cancelled explicitly instead of
     /// being forgotten inside the pure state machine.
-    fn clear_runtime_state_with_commands(&mut self) -> Commands {
-        let mut commands = self.outbound_batch.clear_with_commands();
-        commands.extend(self.request_tracker.clear_with_commands());
+    fn teardown_runtime_state(&mut self) -> Commands {
+        let mut commands = self.outbound_batch.discard_pending();
+        commands.extend(self.request_tracker.fail_all());
         if !self.track_bindings.is_empty() {
             self.track_bindings.clear();
             commands.push(Command::EmitEvent {
@@ -766,8 +738,10 @@ fn empty_features() -> AvailableFeatures {
     }
 }
 
-fn command_batch(commands: Commands) -> CommandBatch {
-    CommandBatch::from_core_commands(commands)
+fn close_for_protocol_error() -> Commands {
+    vec![Command::CloseWebSocket {
+        code: u16::from(WebSocketCloseCode::ProtocolError),
+    }]
 }
 
 /// Grows reconnect delay by 1.5x while keeping the backoff bounded.

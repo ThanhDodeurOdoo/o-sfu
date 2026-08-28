@@ -12,7 +12,7 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() -> TestResult
 
     assert_eq!(peer.core.state(), BundleConnectionState::Authenticated);
     assert_eq!(
-        peer.core.features(),
+        &peer.available_features,
         &AvailableFeatures {
             rtc: true,
             transcription: false,
@@ -21,7 +21,7 @@ async fn protocol_core_replays_real_server_welcome_peer_snapshot() -> TestResult
         }
     );
     assert_eq!(
-        peer.core.recording_state(),
+        &peer.recording_state,
         &RecordingState {
             recording: Some(false),
             audio: Some(false),

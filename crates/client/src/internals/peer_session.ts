@@ -13,6 +13,7 @@ import type { ClientPeerConnection } from "./browser_types.js";
 import { LocalUploads, type UploadSlot } from "./local_uploads.js";
 import type { RemoteMedia } from "./remote_media.js";
 import { localDescriptionHasOnlyInactiveMedia } from "./sdp_media_direction.js";
+import type { TurnGuard } from "./turn_queue.js";
 
 type RuntimeLog = (level: ClientLogDetail["level"], message: string) => void;
 
@@ -93,7 +94,7 @@ export class PeerSession {
         };
     }
 
-    create(): void {
+    private create(): void {
         if (this._activePeer) {
             this.close();
         }
@@ -120,7 +121,7 @@ export class PeerSession {
         const peer = this._activePeer;
         this._activePeer = null;
         this._uploads.clearPeerConnectionState();
-        this._media.clearPeerConnectionState();
+        this._media.clearPeerMedia();
         if (peer) {
             peer.close();
             this._log(CLIENT_LOG_LEVEL.INFO, "closed RTCPeerConnection");
@@ -155,8 +156,15 @@ export class PeerSession {
         requestId: string,
         negotiationKind: NegotiationKind,
         offerSdp: string,
-        uploadSlots: UploadSlot[]
+        uploadSlots: UploadSlot[],
+        isCurrent: TurnGuard
     ): Promise<NegotiationAnswer | null> {
+        if (negotiationKind === "offer") {
+            this.create();
+        }
+        if (!isCurrent()) {
+            return null;
+        }
         const peer = this._activePeer;
         if (!peer) {
             throw new Error("received negotiation command without an active peer connection");
@@ -165,23 +173,26 @@ export class PeerSession {
             CLIENT_LOG_LEVEL.DEBUG,
             `applying ${negotiationKind} negotiation request ${requestId}`
         );
+        if (!isCurrent() || !this.isActive(peer)) {
+            return null;
+        }
         await peer.setRemoteDescription({
             sdp: offerSdp,
             type: "offer"
         });
-        if (!this.isActive(peer)) {
+        if (!isCurrent() || !this.isActive(peer)) {
             return null;
         }
         await this._uploads.attachPendingTracks(peer, uploadSlots, offerSdp);
-        if (!this.isActive(peer)) {
+        if (!isCurrent() || !this.isActive(peer)) {
             return null;
         }
         const answer = await peer.createAnswer();
-        if (!this.isActive(peer)) {
+        if (!isCurrent() || !this.isActive(peer)) {
             return null;
         }
         await peer.setLocalDescription(answer);
-        if (!this.isActive(peer)) {
+        if (!isCurrent() || !this.isActive(peer)) {
             return null;
         }
         const answerSdp = peer.localDescription?.sdp;

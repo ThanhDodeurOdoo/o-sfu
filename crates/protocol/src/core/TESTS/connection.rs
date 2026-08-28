@@ -14,6 +14,17 @@ fn protocol_core_connect_emits_connecting_state_and_socket_command() {
     assert_eq!(
         commands.as_slice(),
         &[
+            Command::SetAvailableFeatures {
+                features: AvailableFeatures {
+                    rtc: false,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: false,
+                },
+            },
+            Command::SetRecordingState {
+                state: RecordingState::default(),
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Connecting,
                 cause: None,
@@ -47,7 +58,10 @@ fn protocol_core_ws_open_sends_auth_frame_immediately() {
 
     let commands = core.on_ws_open();
 
-    assert!(matches!(commands.as_slice(), [Command::SendWebSocket(_)]));
+    assert!(matches!(
+        commands.as_slice(),
+        [Command::SendWebSocket { .. }]
+    ));
     let batch = decode_sent_batch(&commands);
     assert_eq!(batch.len(), 1);
     let Some(envelope) = batch.into_iter().next() else {
@@ -70,11 +84,25 @@ fn protocol_core_welcome_transitions_to_authenticated_and_emits_peer_snapshot() 
     let commands = core.accept_welcome(sample_welcome_payload());
 
     assert_eq!(core.state(), ConnectionState::Authenticated);
-    assert!(core.features().video_recording);
-    assert_eq!(core.recording_state().recording, Some(false));
     assert_eq!(
         commands.as_slice(),
         &[
+            Command::SetAvailableFeatures {
+                features: AvailableFeatures {
+                    rtc: true,
+                    transcription: false,
+                    audio_recording: false,
+                    video_recording: true,
+                },
+            },
+            Command::SetRecordingState {
+                state: RecordingState {
+                    recording: Some(false),
+                    audio: Some(false),
+                    transcription: Some(false),
+                    video: Some(false),
+                },
+            },
             Command::EmitStateChange {
                 state: ConnectionState::Authenticated,
                 cause: None,
@@ -155,19 +183,6 @@ fn protocol_core_rejects_malformed_batch_without_partial_state() -> serde_json::
         }]
     );
     assert_eq!(core.state(), ConnectionState::Connecting);
-    assert_eq!(
-        core.features(),
-        &AvailableFeatures {
-            rtc: false,
-            transcription: false,
-            audio_recording: false,
-            video_recording: false,
-        }
-    );
-    assert_eq!(
-        serde_json::to_value(core.recording_state()).unwrap_or_default(),
-        empty_recording_json()
-    );
     Ok(())
 }
 
