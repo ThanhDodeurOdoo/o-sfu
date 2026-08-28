@@ -36,16 +36,7 @@
 
 ## Style guidelines
 
-### General Rules
-(some of the rules are enforced by lint like clippy)
-
-- **No Low-Value Comments**: Avoid trivial comments that describe obvious code or that is just a rephrase of a function or variable name. Only write comments for necessary complex logic or obscure implementation / standard docstring / header comment (for files that need a global explanation).
-- **Justify Overrides**: Any override of a linter rule MUST be justified with a descriptive comment.
-- **Avoid literals**: like magic numbers or string literals, use constants, static vars or enums with a meaningful name instead.
-- **Document non-obvious code**: If you couldn't write the simple/naive/obvious approach, add a comment to explain it. This also applies to fixing bugs, often bugs exist because the naive approach was not good enough in a non-obvious way, which should be commented.
-- **Document unhandled errors**: Errors that are thrown, or `Result` types in Rust, must have their errors documented.
-- **Tests**: Every new feature must include corresponding tests (meaningful tests, not noisy trivial checks) / proof / fuzzing / ... (depending on the changes).
-- Failing the performance CI isn't necessarily breaking, but the commit message should include a `performance` section that justifies why.
+For coding and design guidelines, see [coding_guidelines.md](/.github/coding_guidelines.md).
 
 ### Rust
 
@@ -63,16 +54,17 @@
 
 - **Formatting**: `cargo +nightly fmt`, Always run it before committing (we use nightly for the import ordering). Our rules can be found at [rustfmt.toml](/rustfmt.toml), more information on the defaults can be found at the [rustfmt documentation](https://rust-lang.github.io/rustfmt/).
 - **Linting**: Run `cargo clippy --locked --all-targets --all-features`. We use Clippy with strict rules. The enforced rules can be found in [Cargo.toml](/Cargo.toml). See the [Clippy documentation](https://rust-lang.github.io/rust-clippy/) for explanations. Note that the CI will also deny warnings (`-D warnings`), some rules are put in warnings only for developer convenience when prototyping/drafting code, but no warning are accepted when merging.
-- **Justify overrides**: Any override of a rule MUST be justified with a "reason".
 
 ### TypeScript & JavaScript (Bundle)
 
 - **No lazy typing**: The use of the `any` type is strictly forbidden. Use proper interfaces or types.
 - **No double Assertions**: Avoid `as unknown as`. If you must use it, provide a justifying comment (it id jusifiable when the type is really unknown (eg: external API)).
 - **Defined Assertions**: Use the `!` operator only when you are absolutely certain the value is neither `null` nor `undefined`. It may require a comment.
-- **Enforce immutability**: When possible, enforce immutability (`as const` / `readonly`).
 
 ## Verification
+
+Every new feature must include meaningful verification suited to the change,
+such as tests, proofs or fuzz targets. You may just extend or update existing tests depending on the scope of the PR. Do not add trivial checks that only restate the implementation.
 
 Verification commands and the `tests/` layout are at [tests/README.md](/tests/README.md).
 
