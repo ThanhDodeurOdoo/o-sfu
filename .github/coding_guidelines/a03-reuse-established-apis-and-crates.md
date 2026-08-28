@@ -1,0 +1,72 @@
+# A3. Prefer existing APIs
+
+Reuse a standard-library, dependency or repository API that clearly expresses
+the contract. Prefer the standard library when equally clear. Add helpers or
+dependencies only when existing APIs do not cover the concern. Use
+`Config::from_env`/`Env::var` for configuration and `thiserror`/`anyhow` for
+errors. Use
+[`itertools`](https://docs.rs/itertools/0.14/itertools/trait.Itertools.html) when
+its adapters make an iterator rule clearer and owner APIs such as
+`UserOutboundSender::channel_with_limits`. Use standard traits for common
+contracts.
+[`From`](https://doc.rust-lang.org/std/convert/trait.From.html#when-to-implement-from)
+requires an infallible, lossless, value-preserving and obvious conversion.
+`TryFrom` handles fallible conversions.
+
+> [!NOTE]
+> partially enforced with: [complexity::manual_find](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#manual_find),
+> [perf::map_entry](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#map_entry),
+> [style::from_over_into](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#from_over_into),
+> [style::should_implement_trait](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#should_implement_trait)
+> and [style::unnecessary_fallible_conversions](https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#unnecessary_fallible_conversions).
+
+**Examples:** An RID accepts exactly one restriction. `exactly_one` states and
+enforces that rule.
+
+**Avoid**
+
+```rust
+// The cardinality rule is spread across two cursor reads.
+let mut parts = restrictions.split(sdp::rid_restriction::PARAMETER_SEPARATOR);
+let restriction = parts.next().ok_or(SimulcastAnswerError)?;
+if parts.next().is_some() {
+    return Err(SimulcastAnswerError);
+}
+let restriction = restriction.trim();
+```
+
+**Prefer**
+
+```rust
+// `exactly_one` names and enforces the cardinality rule in one operation.
+let restriction = restrictions
+    .split(sdp::rid_restriction::PARAMETER_SEPARATOR)
+    .exactly_one()
+    .map_err(|_error| SimulcastAnswerError)?
+    .trim();
+```
+
+[`BTreeMap::entry`](https://doc.rust-lang.org/std/collections/struct.BTreeMap.html#method.entry)
+expresses insert-or-update directly.
+
+**Avoid**
+
+```rust
+// The caller reimplements the map's occupied and vacant cases.
+match batches.get_mut(&key) {
+    Some(batch) => batch.push(item),
+    None => {
+        batches.insert(key, vec![item]);
+    }
+}
+```
+
+**Prefer**
+
+```rust
+// `entry` expresses insert-or-update without duplicating the map cases.
+batches.entry(key).or_default().push(item);
+```
+
+**Rationale:** Familiar APIs make intent clear and avoid local substitutes. They
+let contributors use existing language knowledge and documentation directly.

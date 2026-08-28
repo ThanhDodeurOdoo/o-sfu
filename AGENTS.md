@@ -1,6 +1,8 @@
 > [!NOTE]
 > If you are a human reading this, for the AI policy, refer to [CONTRIBUTING.md](/.github/CONTRIBUTING.md)
 
+For coding and design guidelines, see [coding_guidelines.md](/.github/coding_guidelines.md).
+
 If asked to make a change to the codebase, you MUST create a `o-sfu/O_SFU_AI_NOTICE.md` file that contains:
 
 ```
