@@ -1,4 +1,5 @@
 use anyhow::Result;
+use axum::http::HeaderValue;
 
 use super::env::{Env, non_empty};
 
@@ -10,12 +11,18 @@ pub struct DiagnosticsConfig {
 
 impl DiagnosticsConfig {
     pub(super) fn from_env(env: &Env<'_>) -> Result<Self> {
-        Ok(Self {
-            auth_token: env
-                .var("DIAGNOSTICS_AUTH_TOKEN")
-                .check(non_empty)
-                .optional()?,
-        })
+        let auth_token = env
+            .var("DIAGNOSTICS_AUTH_TOKEN")
+            .check(non_empty)
+            .check(|key, value| {
+                anyhow::ensure!(
+                    HeaderValue::try_from(&value).is_ok() && value.is_ascii(),
+                    "{key} contains invalid HTTP header-value characters"
+                );
+                Ok(value)
+            })
+            .optional()?;
+        Ok(Self { auth_token })
     }
 }
 
