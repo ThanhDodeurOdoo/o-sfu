@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { build } from "esbuild";
@@ -9,8 +9,24 @@ const repositoryUrl = "https://github.com/ThanhDodeurOdoo/o-sfu";
 const repositoryDirectory = fileURLToPath(new URL("../../..", import.meta.url));
 const repositoryManifestPath = fileURLToPath(new URL("../../../Cargo.toml", import.meta.url));
 const clientDirectory = fileURLToPath(new URL("..", import.meta.url));
+const declarationConfigPath = fileURLToPath(new URL("../dts-bundle.config.json", import.meta.url));
+const declarationGeneratorPath = fileURLToPath(
+    new URL(
+        "../node_modules/dts-bundle-generator/dist/bin/dts-bundle-generator.js",
+        import.meta.url
+    )
+);
+const declarationPath = fileURLToPath(new URL("../dist/odoo_sfu.d.ts", import.meta.url));
 const entryPoint = fileURLToPath(new URL("./odoo_entry.ts", import.meta.url));
 const outputPath = fileURLToPath(new URL("../dist/odoo_sfu.js", import.meta.url));
+const retiredOutputPaths = [
+    "index.d.ts",
+    "index.js",
+    "protocol.d.ts",
+    "protocol.js",
+    "wasm_runtime.d.ts",
+    "wasm_runtime.js"
+].map((name) => fileURLToPath(new URL(`../dist/${name}`, import.meta.url)));
 
 function commandOutput(command, args) {
     return execFileSync(command, args, {
@@ -39,6 +55,7 @@ const bundleInfo = {
 };
 
 await mkdir(fileURLToPath(new URL("../dist", import.meta.url)), { recursive: true });
+await Promise.all(retiredOutputPaths.map((path) => rm(path, { force: true })));
 
 await build({
     bundle: true,
@@ -60,7 +77,13 @@ await build({
     absWorkingDir: clientDirectory
 });
 
+execFileSync(process.execPath, [declarationGeneratorPath, "--config", declarationConfigPath], {
+    cwd: repositoryDirectory,
+    stdio: "inherit"
+});
+
 const output = await readFile(outputPath, "utf8");
+const declaration = await readFile(declarationPath, "utf8");
 assert.match(output, /^\/\* @odoo-module \*\//, "the Odoo bundle must start as an Odoo module");
 assert.equal(
     output.includes("import.meta"),
@@ -79,11 +102,33 @@ assert.equal(
 );
 
 const bundleModule = await import(`${pathToFileURL(outputPath).href}?t=${Date.now()}`);
+assert.deepEqual(Object.keys(bundleModule).sort(), [
+    "CLIENT_UPDATE",
+    "SFU_CLIENT_STATE",
+    "SfuClient",
+    "__info__"
+]);
 assert.equal(typeof bundleModule.SfuClient, "function");
 assert.equal(bundleModule.CLIENT_UPDATE.TRACK, "track");
 assert.equal(bundleModule.SFU_CLIENT_STATE.CONNECTED, "connected");
-assert.equal(Object.hasOwn(bundleModule, "createProtocolCore"), false);
-assert.equal(Object.hasOwn(bundleModule, "WS_CLOSE_CODE"), false);
 assert.deepEqual(bundleModule.__info__, bundleInfo);
 
-console.log(`Built Odoo SFU bundle at ${outputPath}`);
+assert.match(declaration, /Browser facade for one O-SFU call session/);
+assert.match(declaration, /export declare class SfuClient extends EventTarget/);
+assert.match(declaration, /constructor\(\);/);
+assert.match(declaration, /export declare const __info__: BundleInfo/);
+assert.equal(declaration.includes("$1"), false, "the Odoo declaration must use public type names");
+for (const internalName of [
+    "HostCommand",
+    "ProtocolCoreBindings",
+    "SfuClientDependencies",
+    "createProtocolCore"
+]) {
+    assert.equal(
+        declaration.includes(internalName),
+        false,
+        `the Odoo declaration must not expose ${internalName}`
+    );
+}
+
+console.log(`Built Odoo SFU bundle at ${outputPath} with declarations at ${declarationPath}`);

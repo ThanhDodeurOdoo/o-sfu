@@ -178,7 +178,7 @@ export async function connectPeer(page, { channelUuid, iceServers, jwt, url = TE
             };
 
             const harness = globalThis.__liveHarness;
-            const { SfuClient } = await import("/dist/index.js");
+            const { SfuClient } = await import("/dist/odoo_sfu.js");
             const client = new SfuClient();
             harness.client = client;
             harness.errors = [];

@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CLIENT_UPDATE, SFU_CLIENT_STATE } from "../dist/index.js";
-import {
-    COMMAND_KIND,
-    NEGOTIATION_KIND,
-    PENDING_REQUEST_KIND,
-    WS_CLOSE_CODE
-} from "../dist/protocol_contract.js";
-import { createProtocolCore } from "../dist/runtime_contract.js";
+import { CLIENT_UPDATE, SFU_CLIENT_STATE } from "../dist/public_api.js";
+import { COMMAND_KIND, NEGOTIATION_KIND, WS_CLOSE_CODE } from "../dist/protocol_contract.js";
+import { createProtocolCore } from "./support/real_protocol_core.mjs";
 import { audioMedia, sdp, videoMedia, videoUploadSlot } from "./support/negotiation_fixtures.mjs";
 
 const EMPTY_FEATURES = {
@@ -56,11 +51,13 @@ test("generated Wasm conforms to the complete host-command contract", () => {
         return actual;
     };
 
-    assert.equal(core.state, SFU_CLIENT_STATE.DISCONNECTED);
-    assert.deepEqual(core.features, EMPTY_FEATURES);
-    assert.deepEqual(core.recordingState, {});
+    assert.equal("state" in core, false);
+    assert.equal("features" in core, false);
+    assert.equal("recordingState" in core, false);
 
     assertCommands(core.connect("ws://example.test/ws", "jwt-token", "channel-a"), [
+        { kind: COMMAND_KIND.SET_AVAILABLE_FEATURES, features: EMPTY_FEATURES },
+        { kind: COMMAND_KIND.SET_RECORDING_STATE, state: {} },
         stateChange(SFU_CLIENT_STATE.CONNECTING),
         { kind: COMMAND_KIND.CONNECT, url: "ws://example.test/ws" }
     ]);
@@ -81,6 +78,8 @@ test("generated Wasm conforms to the complete host-command contract", () => {
             })
         ),
         [
+            { kind: COMMAND_KIND.SET_AVAILABLE_FEATURES, features: AVAILABLE_FEATURES },
+            { kind: COMMAND_KIND.SET_RECORDING_STATE, state: RECORDING_STATE },
             stateChange(SFU_CLIENT_STATE.AUTHENTICATED),
             {
                 kind: COMMAND_KIND.EMIT_UPDATE,
@@ -91,10 +90,7 @@ test("generated Wasm conforms to the complete host-command contract", () => {
             }
         ]
     );
-    assert.equal(Object.getPrototypeOf(welcomeCommands[1].update.payload), Object.prototype);
-    assert.equal(core.state, SFU_CLIENT_STATE.AUTHENTICATED);
-    assert.deepEqual(core.features, AVAILABLE_FEATURES);
-    assert.deepEqual(core.recordingState, RECORDING_STATE);
+    assert.equal(Object.getPrototypeOf(welcomeCommands[3].update.payload), Object.prototype);
 
     const offerSdp = sdp(audioMedia("0"), videoMedia("1"));
     const uploadSlot = videoUploadSlot("1");
@@ -107,7 +103,6 @@ test("generated Wasm conforms to the complete host-command contract", () => {
             })
         ),
         [
-            { kind: COMMAND_KIND.CREATE_PEER_CONNECTION },
             {
                 kind: COMMAND_KIND.APPLY_NEGOTIATION,
                 requestId: "offer-7",
@@ -123,7 +118,6 @@ test("generated Wasm conforms to the complete host-command contract", () => {
         sendWebSocket({ t: "offer", p: { sdp: answerSdp }, r: "offer-7" })
     ]);
     assertCommands(core.onTransportReady(), [stateChange(SFU_CLIENT_STATE.CONNECTED)]);
-    assert.equal(core.state, SFU_CLIENT_STATE.CONNECTED);
 
     const recordingCommands = core.startRecording({ audio: true });
     const { requestId, timeoutTimerId } = requireCommand(
@@ -140,7 +134,6 @@ test("generated Wasm conforms to the complete host-command contract", () => {
             kind: COMMAND_KIND.BEGIN_PENDING_REQUEST,
             request: {
                 requestId,
-                kind: PENDING_REQUEST_KIND.START_RECORDING,
                 timeoutTimerId,
                 timeoutMs: 5000
             }
@@ -163,10 +156,10 @@ test("generated Wasm conforms to the complete host-command contract", () => {
             })
         ),
         [
-            { kind: COMMAND_KIND.CANCEL_TIMER, id: timeoutTimerId },
             {
-                kind: COMMAND_KIND.RESOLVE_PENDING_REQUEST,
+                kind: COMMAND_KIND.COMPLETE_PENDING_REQUEST,
                 requestId,
+                timeoutTimerId,
                 ok: true
             }
         ]
@@ -188,11 +181,9 @@ test("generated Wasm conforms to the complete host-command contract", () => {
         { kind: COMMAND_KIND.CANCEL_TIMER, id: recoveryTimerId },
         { kind: COMMAND_KIND.CLOSE_WEB_SOCKET, code: WS_CLOSE_CODE.CLEAN },
         { kind: COMMAND_KIND.CLOSE_PEER_CONNECTION },
+        { kind: COMMAND_KIND.SET_AVAILABLE_FEATURES, features: EMPTY_FEATURES },
+        { kind: COMMAND_KIND.SET_RECORDING_STATE, state: {} },
         stateChange(SFU_CLIENT_STATE.DISCONNECTED)
     ]);
-
-    assert.equal(core.state, SFU_CLIENT_STATE.DISCONNECTED);
-    assert.deepEqual(core.features, EMPTY_FEATURES);
-    assert.deepEqual(core.recordingState, {});
     assert.deepEqual([...seenKinds].sort(), Object.values(COMMAND_KIND).sort());
 });

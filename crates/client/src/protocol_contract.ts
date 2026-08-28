@@ -31,24 +31,18 @@ export const NEGOTIATION_KIND = {
 
 export type NegotiationKind = (typeof NEGOTIATION_KIND)[keyof typeof NEGOTIATION_KIND];
 
-export const PENDING_REQUEST_KIND = {
-    START_RECORDING: "startRecording",
-    STOP_RECORDING: "stopRecording"
-} as const;
-
-export type PendingRequestKind = (typeof PENDING_REQUEST_KIND)[keyof typeof PENDING_REQUEST_KIND];
-
 export const COMMAND_KIND = {
     CONNECT: "connect",
     SEND_WEB_SOCKET: "sendWebSocket",
     CLOSE_WEB_SOCKET: "closeWebSocket",
     APPLY_NEGOTIATION: "applyNegotiation",
-    CREATE_PEER_CONNECTION: "createPeerConnection",
     CLOSE_PEER_CONNECTION: "closePeerConnection",
+    SET_AVAILABLE_FEATURES: "setAvailableFeatures",
+    SET_RECORDING_STATE: "setRecordingState",
     EMIT_STATE_CHANGE: "emitStateChange",
     EMIT_UPDATE: "emitUpdate",
     BEGIN_PENDING_REQUEST: "beginPendingRequest",
-    RESOLVE_PENDING_REQUEST: "resolvePendingRequest",
+    COMPLETE_PENDING_REQUEST: "completePendingRequest",
     SCHEDULE_TIMER: "scheduleTimer",
     CANCEL_TIMER: "cancelTimer"
 } as const;

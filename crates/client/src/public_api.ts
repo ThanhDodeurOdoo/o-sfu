@@ -1,5 +1,8 @@
 export type SessionId = number | string;
 
+export type JsonValue =
+    string | number | boolean | null | { [key: string]: JsonValue } | JsonValue[];
+
 export const SFU_CLIENT_STATE = {
     DISCONNECTED: "disconnected",
     CONNECTING: "connecting",
@@ -8,6 +11,8 @@ export const SFU_CLIENT_STATE = {
     RECOVERING: "recovering",
     CLOSED: "closed"
 } as const;
+
+export type SFU_CLIENT_STATE = typeof SFU_CLIENT_STATE;
 
 export type ConnectionState = (typeof SFU_CLIENT_STATE)[keyof typeof SFU_CLIENT_STATE];
 
@@ -63,7 +68,7 @@ export interface AvailableFeatures {
     videoRecording: boolean;
 }
 
-export interface RecordingState {
+export interface SfuRecordingState {
     recording?: boolean;
     audio?: boolean;
     video?: boolean;
@@ -136,11 +141,11 @@ export type InfoChangeUpdateDetail = Record<string, SessionInfo>;
 
 export interface BroadcastUpdateDetail {
     senderId: SessionId;
-    message: unknown;
+    message: JsonValue;
 }
 
 export interface ChannelInfoChangeDetail {
-    state: RecordingState;
+    state: SfuRecordingState;
     stopCode?: RecordingStopCode;
 }
 
@@ -157,4 +162,28 @@ export type ClientUpdateDetail =
 export interface StateChangeDetail {
     state: ConnectionState;
     cause?: string;
+}
+
+export interface HandledErrorDetail {
+    error: Error;
+}
+
+export interface ConsumerCompat {
+    closed?: boolean;
+    paused?: boolean;
+    track: MediaStreamTrack | null;
+}
+
+export interface ConsumersCompat {
+    audio: ConsumerCompat | null;
+    camera: ConsumerCompat | null;
+    screen: ConsumerCompat | null;
+}
+
+/** Event names and payloads emitted by {@link SfuClient}. */
+export interface SfuClientEventMap {
+    handledError: CustomEvent<HandledErrorDetail>;
+    log: CustomEvent<ClientLogDetail>;
+    stateChange: CustomEvent<StateChangeDetail>;
+    update: CustomEvent<ClientUpdateDetail>;
 }

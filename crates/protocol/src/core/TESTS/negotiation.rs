@@ -9,15 +9,12 @@ fn protocol_core_emits_negotiation_command_and_accepts_matching_answer() {
 
     assert_eq!(
         offer_commands.as_slice(),
-        &[
-            Command::CreatePeerConnection,
-            Command::ApplyNegotiation {
-                request_id: RequestId::new("offer-1"),
-                kind: NegotiationKind::Offer,
-                sdp: String::from("v=0\r\ns=offer\r\n"),
-                upload_slots: Vec::new(),
-            },
-        ]
+        &[Command::ApplyNegotiation {
+            request_id: RequestId::new("offer-1"),
+            kind: NegotiationKind::Offer,
+            sdp: String::from("v=0\r\ns=offer\r\n"),
+            upload_slots: Vec::new(),
+        }]
     );
 
     let answer_commands = core.submit_negotiation_answer(

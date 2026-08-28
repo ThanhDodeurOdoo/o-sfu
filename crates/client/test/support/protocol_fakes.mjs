@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { CLIENT_UPDATE } from "../../dist/index.js";
+import { CLIENT_UPDATE } from "../../dist/public_api.js";
 import {
     audioMedia,
     audioUploadSlot,
@@ -29,11 +29,12 @@ const remoteMediaUpdate = (bindings) => ({
     update: { name: "remote_media", payload: { bindings } }
 });
 
+const setAvailableFeatures = (features) => ({ kind: "setAvailableFeatures", features });
+const setRecordingState = (state) => ({ kind: "setRecordingState", state });
+
 export class FakeProtocolCore {
     constructor() {
-        this.features = { ...EMPTY_FEATURES };
         this.broadcasts = [];
-        this.recordingState = {};
         this.state = "disconnected";
         this.disconnectCalls = 0;
         this.pendingNegotiationKind = null;
@@ -47,23 +48,30 @@ export class FakeProtocolCore {
         this.wsCloseCodes = [];
     }
 
-    broadcast(message) {
-        this.broadcasts.push(message);
+    broadcast(messageJson) {
+        this.broadcasts.push(JSON.parse(messageJson));
         return [];
     }
 
     connect(url) {
         this.state = "connecting";
-        return [{ kind: "connect", url }];
+        return [
+            setAvailableFeatures({ ...EMPTY_FEATURES }),
+            setRecordingState({}),
+            { kind: "emitStateChange", state: "connecting" },
+            { kind: "connect", url }
+        ];
     }
 
     disconnect() {
         this.disconnectCalls += 1;
         this.state = "disconnected";
-        this.features = { ...EMPTY_FEATURES };
-        this.recordingState = {};
         this.trackBindings.clear();
-        return [{ kind: "emitStateChange", state: "disconnected" }];
+        return [
+            setAvailableFeatures({ ...EMPTY_FEATURES }),
+            setRecordingState({}),
+            { kind: "emitStateChange", state: "disconnected" }
+        ];
     }
 
     onTimer() {
@@ -92,16 +100,23 @@ export class FakeProtocolCore {
         switch (frame) {
             case "welcome":
                 this.state = "authenticated";
-                this.features = {
-                    rtc: true,
-                    transcription: false,
-                    audioRecording: true,
-                    videoRecording: false
-                };
-                return [{ kind: "emitStateChange", state: "authenticated" }];
+                return [
+                    setAvailableFeatures({
+                        rtc: true,
+                        transcription: false,
+                        audioRecording: true,
+                        videoRecording: false
+                    }),
+                    setRecordingState({
+                        recording: false,
+                        audio: false,
+                        transcription: false,
+                        video: false
+                    }),
+                    { kind: "emitStateChange", state: "authenticated" }
+                ];
             case "offer":
                 return this._withPendingNegotiationKind([
-                    { kind: "createPeerConnection" },
                     initialOfferCommand("7"),
                     ...this._remoteMediaSnapshot()
                 ]);
@@ -149,11 +164,11 @@ export class FakeProtocolCore {
     }
 
     startRecording() {
-        return beginRecordingRequest("startRecording");
+        return beginRecordingRequest();
     }
 
     stopRecording() {
-        return beginRecordingRequest("stopRecording");
+        return beginRecordingRequest();
     }
 
     submitNegotiationAnswer(requestId, negotiationKind, sdp) {
@@ -189,12 +204,11 @@ export class FakeProtocolCore {
     }
 }
 
-const beginRecordingRequest = (kind) => [
+const beginRecordingRequest = () => [
     {
         kind: "beginPendingRequest",
         request: {
             requestId: "record-1",
-            kind,
             timeoutMs: 5000,
             timeoutTimerId: 10000
         }

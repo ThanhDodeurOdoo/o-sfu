@@ -1,4 +1,4 @@
-use o_sfu_protocol::{host::PendingRequest, wire::UserPermissions};
+use o_sfu_protocol::wire::UserPermissions;
 
 use super::*;
 
@@ -28,12 +28,11 @@ fn has_channel_info_update(updates: &[BundleUpdate]) -> bool {
 
 async fn drain_peer_until_pending_request_resolution(
     peer: &mut ProtocolHarnessPeer,
-    kind: PendingRequestKind,
     ok: bool,
 ) -> Option<RequestId> {
     timeout(Duration::from_secs(1), async {
         loop {
-            let Some(request) = find_pending_request(&peer.pending_request_starts, kind) else {
+            let Some(request) = peer.pending_request_starts.first() else {
                 peer.read_server_frame().await?;
                 continue;
             };
@@ -67,21 +66,13 @@ pub(crate) async fn connect_protocol_recording_peer(
     Some(peer)
 }
 
-fn find_pending_request(
-    requests: &[PendingRequest],
-    kind: PendingRequestKind,
-) -> Option<&PendingRequest> {
-    requests.iter().find(|request| request.kind == kind)
-}
-
 pub(crate) async fn assert_recording_request_rejected(
     peer: &mut ProtocolHarnessPeer,
-    kind: PendingRequestKind,
 ) -> Option<RequestId> {
-    let request = find_pending_request(&peer.pending_request_starts, kind)?;
+    let request = peer.pending_request_starts.first()?;
     if peer.timers.get(&request.timeout_timer_id) != Some(&request.timeout_ms) {
         return None;
     }
-    let request_id = drain_peer_until_pending_request_resolution(peer, kind, false).await?;
+    let request_id = drain_peer_until_pending_request_resolution(peer, false).await?;
     (!has_channel_info_update(&peer.updates)).then_some(request_id)
 }

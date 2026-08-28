@@ -210,6 +210,7 @@ jobs:
             echo "image_ref=${image}:${safe_tag}"
             echo "server_asset=o-sfu-server-${safe_tag}-linux-amd64.tar.gz"
             echo "client_asset=o-sfu-client-${safe_tag}.js"
+            echo "client_types_asset=o-sfu-client-${safe_tag}.d.ts"
             echo "sbom_asset=o-sfu-image-${safe_tag}.sbom.json"
           } >> "$GITHUB_OUTPUT"
 
@@ -321,6 +322,7 @@ jobs:
           mkdir -p release
           tar -C target/release -czf "release/${{ steps.release.outputs.server_asset }}" o-sfu
           cp crates/client/dist/odoo_sfu.js "release/${{ steps.release.outputs.client_asset }}"
+          cp crates/client/dist/odoo_sfu.d.ts "release/${{ steps.release.outputs.client_types_asset }}"
           docker buildx imagetools inspect "${{ steps.release.outputs.image_ref }}" \
             --format "{{json .SBOM}}" > "release/${{ steps.release.outputs.sbom_asset }}"
           if [[ ! -s "release/${{ steps.release.outputs.sbom_asset }}" ]] \
@@ -333,11 +335,13 @@ jobs:
             sha256sum \
               "${{ steps.release.outputs.server_asset }}" \
               "${{ steps.release.outputs.client_asset }}" \
+              "${{ steps.release.outputs.client_types_asset }}" \
               "${{ steps.release.outputs.sbom_asset }}" > SHA256SUMS
           )
           {
             echo "server=release/${{ steps.release.outputs.server_asset }}"
             echo "client=release/${{ steps.release.outputs.client_asset }}"
+            echo "client_types=release/${{ steps.release.outputs.client_types_asset }}"
             echo "sbom=release/${{ steps.release.outputs.sbom_asset }}"
             echo "checksums=release/SHA256SUMS"
           } >> "$GITHUB_OUTPUT"
@@ -410,6 +414,7 @@ jobs:
           \`\`\`bash
           gh attestation verify ${{ steps.release.outputs.server_asset }} -R ${{ steps.release.outputs.repo }}
           gh attestation verify ${{ steps.release.outputs.client_asset }} -R ${{ steps.release.outputs.repo }}
+          gh attestation verify ${{ steps.release.outputs.client_types_asset }} -R ${{ steps.release.outputs.repo }}
           gh attestation verify ${{ steps.release.outputs.sbom_asset }} -R ${{ steps.release.outputs.repo }}
           sha256sum -c SHA256SUMS
           \`\`\`
@@ -449,6 +454,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "${{ steps.assets.outputs.server }}" \
             "${{ steps.assets.outputs.client }}" \
+            "${{ steps.assets.outputs.client_types }}" \
             "${{ steps.assets.outputs.sbom }}" \
             "${{ steps.assets.outputs.checksums }}" \
             --title "o-sfu ${GITHUB_REF_NAME}" \

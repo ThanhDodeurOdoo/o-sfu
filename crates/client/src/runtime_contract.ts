@@ -1,9 +1,6 @@
 import type {
-    AvailableFeatures,
-    ConnectionState,
     DownloadStates,
     RecordingOptions,
-    RecordingState,
     SessionId,
     SessionInfo,
     StreamType
@@ -14,10 +11,6 @@ import type { HostCommand } from "./protocol_host_commands.js";
 export type { HostCommand, PendingRequest } from "./protocol_host_commands.js";
 
 export interface ProtocolCoreBindings {
-    readonly state: ConnectionState;
-    readonly features: AvailableFeatures;
-    readonly recordingState: RecordingState;
-
     connect(url: string, jwt: string, room?: string | null): HostCommand[];
     onWsOpen(): HostCommand[];
     onWsMessage(frame: string): HostCommand[];
@@ -27,7 +20,7 @@ export interface ProtocolCoreBindings {
     publish(type: StreamType, active: boolean): HostCommand[];
     subscribe(sessionId: SessionId, states: DownloadStates): HostCommand[];
     updateInfo(info: SessionInfo): HostCommand[];
-    broadcast(message: unknown): HostCommand[];
+    broadcast(messageJson: string): HostCommand[];
     startRecording(options?: RecordingOptions): HostCommand[];
     stopRecording(): HostCommand[];
     submitNegotiationAnswer(
@@ -48,9 +41,7 @@ export function configureDefaultWasmProtocolCoreProvider(provider: ProtocolCoreP
 
 export function createProtocolCore(): ProtocolCoreBindings {
     if (!defaultWasmProtocolCoreProvider) {
-        throw new Error(
-            "default WASM protocol core provider is not configured; import the package entrypoint or configure one explicitly"
-        );
+        throw new Error("default WASM protocol core provider is not configured");
     }
     return defaultWasmProtocolCoreProvider();
 }

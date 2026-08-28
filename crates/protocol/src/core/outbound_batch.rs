@@ -72,7 +72,7 @@ impl OutboundBatcher {
                 id: BATCH_FLUSH_TIMER_ID,
             });
         }
-        commands.push(Command::SendWebSocket(frame));
+        commands.push(Command::SendWebSocket { frame });
         commands
     }
 
@@ -81,7 +81,7 @@ impl OutboundBatcher {
         self.flush_scheduled = false;
     }
 
-    pub(super) fn clear_with_commands(&mut self) -> Commands {
+    pub(super) fn discard_pending(&mut self) -> Commands {
         let commands = if self.flush_scheduled {
             vec![Command::CancelTimer {
                 id: BATCH_FLUSH_TIMER_ID,

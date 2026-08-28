@@ -92,6 +92,7 @@ export class FakePeerConnection {
         this.onicecandidateerror = null;
         this.ontrack = null;
         this.peerConnectionStats = peerConnectionStats;
+        this.remoteDescriptions = [];
         this.senderOptionsByMid = senderOptionsByMid;
         this.transceivers = [this._transceiver("0", "audio"), this._transceiver("1", "video")];
     }
@@ -124,6 +125,7 @@ export class FakePeerConnection {
     }
 
     async setRemoteDescription(description) {
+        this.remoteDescriptions.push(description);
         this._addRemoteTransceiver(description, "2", "video");
         this._addRemoteTransceiver(description, "3", "video");
         if (

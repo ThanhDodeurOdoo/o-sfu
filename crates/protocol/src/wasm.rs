@@ -2,14 +2,13 @@ use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 use crate::{
-    core::{NegotiationKind, ProtocolCore},
-    host_bridge::{connection_state_tag, project_commands},
-    shared::StreamType,
+    core::{Command, NegotiationKind, ProtocolCore},
+    shared::{JsonPayload, StreamType},
 };
 
 /// wasm-bindgen facade for the browser [`ProtocolCore`] contract
 ///
-/// protocol transitions return projected host commands as plain JS objects for
+/// protocol transitions return serialized commands as plain JS objects for
 /// the TypeScript browser runtime to execute outside [`ProtocolCore`]
 #[wasm_bindgen(js_name = ProtocolCoreWasm)]
 pub struct WasmProtocolCore {
@@ -25,86 +24,72 @@ impl WasmProtocolCore {
         }
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn state(&self) -> String {
-        connection_state_tag(self.inner.state()).to_owned()
-    }
-
-    #[wasm_bindgen(getter, js_name = features)]
-    pub fn features_js(&self) -> Result<JsValue, JsValue> {
-        to_js(self.inner.features())
-    }
-
-    #[wasm_bindgen(getter, js_name = recordingState)]
-    pub fn recording_state_js(&self) -> Result<JsValue, JsValue> {
-        to_js(self.inner.recording_state())
-    }
-
     pub fn connect(
         &mut self,
         url: String,
         jwt: String,
         room: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.connect(url, jwt, room)))
+        commands_to_js(self.inner.connect(url, jwt, room))
     }
 
     #[wasm_bindgen(js_name = onWsOpen)]
     pub fn on_ws_open(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.on_ws_open()))
+        commands_to_js(self.inner.on_ws_open())
     }
 
     #[wasm_bindgen(js_name = onWsMessage)]
     pub fn on_ws_message(&mut self, frame: String) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.on_ws_message(&frame)))
+        commands_to_js(self.inner.on_ws_message(&frame))
     }
 
     #[wasm_bindgen(js_name = onTransportReady)]
     pub fn on_transport_ready(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.on_transport_ready()))
+        commands_to_js(self.inner.on_transport_ready())
     }
 
     #[wasm_bindgen(js_name = onWsClose)]
     pub fn on_ws_close(&mut self, code: u16) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.on_ws_close(code)))
+        commands_to_js(self.inner.on_ws_close(code))
     }
 
     #[wasm_bindgen(js_name = onTimer)]
     pub fn on_timer(&mut self, timer_id: u32) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.on_timer(timer_id)))
+        commands_to_js(self.inner.on_timer(timer_id))
     }
 
     pub fn publish(&mut self, stream_type: &str, active: bool) -> Result<JsValue, JsValue> {
         let stream_type: StreamType = from_js(JsValue::from_str(stream_type))?;
-        to_js(&project_commands(self.inner.publish(stream_type, active)))
+        commands_to_js(self.inner.publish(stream_type, active))
     }
 
     pub fn subscribe(&mut self, user_id: JsValue, states: JsValue) -> Result<JsValue, JsValue> {
         let user_id = from_js(user_id)?;
         let states = from_js(states)?;
-        to_js(&project_commands(self.inner.subscribe(user_id, states)))
+        commands_to_js(self.inner.subscribe(user_id, states))
     }
 
     #[wasm_bindgen(js_name = updateInfo)]
     pub fn update_info(&mut self, info: JsValue) -> Result<JsValue, JsValue> {
         let info = from_js(info)?;
-        to_js(&project_commands(self.inner.update_info(info)))
+        commands_to_js(self.inner.update_info(info))
     }
 
-    pub fn broadcast(&mut self, message: JsValue) -> Result<JsValue, JsValue> {
-        let message = from_js(message)?;
-        to_js(&project_commands(self.inner.broadcast(message)))
+    pub fn broadcast(&mut self, message_json: &str) -> Result<JsValue, JsValue> {
+        let message: JsonPayload =
+            serde_json::from_str(message_json).map_err(|error| js_error(error.to_string()))?;
+        commands_to_js(self.inner.broadcast(message))
     }
 
     #[wasm_bindgen(js_name = startRecording)]
     pub fn start_recording(&mut self, options: Option<JsValue>) -> Result<JsValue, JsValue> {
         let options = from_optional_js(options)?;
-        to_js(&project_commands(self.inner.start_recording(options)))
+        commands_to_js(self.inner.start_recording(options))
     }
 
     #[wasm_bindgen(js_name = stopRecording)]
     pub fn stop_recording(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.stop_recording()))
+        commands_to_js(self.inner.stop_recording())
     }
 
     #[wasm_bindgen(js_name = submitNegotiationAnswer)]
@@ -115,19 +100,23 @@ impl WasmProtocolCore {
         sdp: String,
     ) -> Result<JsValue, JsValue> {
         let kind: NegotiationKind = from_js(JsValue::from_str(negotiation_kind))?;
-        to_js(&project_commands(self.inner.submit_negotiation_answer(
+        commands_to_js(self.inner.submit_negotiation_answer(
             &crate::signaling::RequestId::new(request_id),
             kind,
             sdp,
-        )))
+        ))
     }
 
     pub fn disconnect(&mut self) -> Result<JsValue, JsValue> {
-        to_js(&project_commands(self.inner.disconnect()))
+        commands_to_js(self.inner.disconnect())
     }
 }
 
-fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+fn commands_to_js(commands: Vec<Command>) -> Result<JsValue, JsValue> {
+    to_js(&commands)
+}
+
+fn to_js<T: Serialize + ?Sized>(value: &T) -> Result<JsValue, JsValue> {
     value
         .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
         .map_err(|error| js_error(error.to_string()))

@@ -7,21 +7,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::core::ConnectionState as BundleConnectionState;
 use crate::{
     shared::{JsonPayload, RecordingStateUpdate, UserId, UserInfo},
     signaling::TrackBinding,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BundleConnectionState {
-    Disconnected,
-    Connecting,
-    Authenticated,
-    Connected,
-    Recovering,
-    Closed,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleStateChange {

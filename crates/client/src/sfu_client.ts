@@ -1,27 +1,25 @@
 import {
     CLIENT_UPDATE,
     CLIENT_LOG_LEVEL,
-    SFU_CLIENT_STATE,
     type AvailableFeatures,
     type ClientLogDetail,
     type ClientUpdateDetail,
     type ConnectOptions,
     type ConnectionState,
+    type ConsumersCompat,
     type DownloadStates,
+    type JsonValue,
     type RecordingOptions,
-    type RecordingState,
+    type SfuRecordingState,
     type SessionId,
     type SessionInfo,
+    type SfuClientEventMap,
     type SfuStats,
     type StreamType,
     type UpdateInfoOptions
 } from "./public_api.js";
 import { BrowserRuntime } from "./internals/browser_runtime.js";
-import {
-    EMPTY_FEATURES,
-    type ConsumersCompat,
-    type SfuClientDependencies
-} from "./internals/browser_types.js";
+import type { SfuClientDependencies } from "./internals/browser_types.js";
 import {
     cloneIceServers,
     normalizeWebSocketUrl,
@@ -32,27 +30,33 @@ import {
 
 const CLIENT_LOG_SOURCE = "sfu_client";
 
+/**
+ * Browser facade for one O-SFU call session.
+ *
+ * The client emits `stateChange`, `update`, `handledError` and `log` events.
+ * Runtime failures are reported through `handledError` and retained in
+ * {@link errors}. A handled failure can still end the session.
+ */
 export class SfuClient extends EventTarget {
-    public availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
+    /** Runtime errors captured since the latest {@link connect} or {@link disconnect} call. */
     public errors: Error[] = [];
-    public recordingState: RecordingState = {};
+
+    /**
+     * Odoo compatibility view of remote media grouped by session and stream type.
+     * New integrations should consume `update` events.
+     */
     public readonly _consumers: ReadonlyMap<SessionId, ConsumersCompat>;
 
     private readonly _runtime: BrowserRuntime;
 
-    private _state: ConnectionState = SFU_CLIENT_STATE.DISCONNECTED;
-
+    /** Creates a disconnected client. */
+    constructor();
     constructor(dependencies: SfuClientDependencies = {}) {
         super();
         this._runtime = new BrowserRuntime(
             {
                 onLog: (detail) => this._emitRuntimeLog(detail),
                 onRuntimeError: (error) => this._handleRuntimeError(error),
-                onPublicState: ({ state, features, recordingState }) => {
-                    this._state = state;
-                    this.availableFeatures = features;
-                    this.recordingState = recordingState;
-                },
                 onStateChange: (state, cause) => this._emitStateChange(state, cause),
                 onUpdate: (update) => this._emitUpdate(update)
             },
@@ -61,10 +65,30 @@ export class SfuClient extends EventTarget {
         this._consumers = this._runtime.consumers;
     }
 
-    get state(): ConnectionState {
-        return this._state;
+    /** Capabilities accepted from the latest welcome message or all `false` before one. */
+    get availableFeatures(): AvailableFeatures {
+        return this._runtime.availableFeatures;
     }
 
+    /** Latest recording snapshot accepted from the server. */
+    get recordingState(): SfuRecordingState {
+        return this._runtime.recordingState;
+    }
+
+    /** Current signaling and transport lifecycle state. */
+    get state(): ConnectionState {
+        return this._runtime.state;
+    }
+
+    /**
+     * Starts a connection attempt.
+     *
+     * `http:` and `https:` URLs are normalized to WebSocket schemes. The call
+     * returns before authentication and media negotiation finish. Observe
+     * `stateChange` and `handledError` for the result.
+     *
+     * @throws Error if `channelUUID` or an ICE server has an invalid shape.
+     */
     connect(url: string, jwt: string, options: ConnectOptions = {}): void {
         validateConnectOptions(options);
         const iceServers = cloneIceServers(options.iceServers);
@@ -81,17 +105,39 @@ export class SfuClient extends EventTarget {
         );
     }
 
+    /**
+     * Ends the current attempt and clears caller-visible errors.
+     *
+     * Active sessions emit a final disconnected `stateChange`. Calling this
+     * while already disconnected or closed has no protocol effect.
+     */
     disconnect(): void {
         this.errors = [];
         this._emitLog(CLIENT_LOG_LEVEL.INFO, "disconnect requested");
         this._runtime.disconnect();
     }
 
+    /**
+     * Sets the desired local track for a stream.
+     *
+     * `null` and `undefined` pause or cancel publication. Publication intent is
+     * replayed after transient recovery until an explicit disconnect or fresh
+     * connection clears it.
+     *
+     * @throws Error if `type` is unknown or the track kind does not match it.
+     */
     publish(type: StreamType, track: MediaStreamTrack | null | undefined): void {
         validateTrackForStreamType(type, track);
         this._runtime.publish(type, track ?? null);
     }
 
+    /**
+     * Applies a partial download preference update for one remote session.
+     * Omitted fields keep their previous values and the merged preference is
+     * replayed after transient recovery.
+     *
+     * @throws Error if a field name or value is invalid.
+     */
     subscribe(sessionId: SessionId, states: DownloadStates): void {
         validateDownloadStates(states);
         this._emitLog(
@@ -111,67 +157,69 @@ export class SfuClient extends EventTarget {
         this.subscribe(sessionId, states);
     }
 
+    /** Sends a partial local participant-info update. */
     updateInfo(info: SessionInfo, _options: UpdateInfoOptions = {}): void {
         this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `updating user info: ${JSON.stringify(info)}`);
         this._runtime.updateInfo(info);
     }
 
-    async getStats(): Promise<SfuStats> {
+    /**
+     * Returns peer-connection and local-sender WebRTC stats when available.
+     * Returns an empty object before negotiation.
+     */
+    getStats(): Promise<SfuStats> {
         return this._runtime.getStats();
     }
 
-    broadcast(message: unknown): void {
-        this._emitLog(CLIENT_LOG_LEVEL.DEBUG, `broadcast requested: ${JSON.stringify(message)}`);
+    /**
+     * Sends a JSON snapshot of an application message.
+     * Serialization failures are reported through `handledError` and can end the session.
+     */
+    broadcast(message: JsonValue): void {
+        this._emitLog(CLIENT_LOG_LEVEL.DEBUG, "broadcast requested");
         this._runtime.broadcast(message);
     }
 
+    /**
+     * Requests recording with the selected media types.
+     *
+     * Resolves `true` when the server accepts the request. It resolves `false`
+     * for refusal, timeout, teardown or when no request was registered. Runtime
+     * failures reject the promise and also emit `handledError`.
+     */
     startRecording(options: RecordingOptions = {}): Promise<boolean> {
         return this._runtime.startRecording(options);
     }
 
+    /**
+     * Requests recording shutdown with the same completion rules as
+     * {@link startRecording}.
+     */
     stopRecording(): Promise<boolean> {
         return this._runtime.stopRecording();
     }
 
     private _emitStateChange(state: ConnectionState, cause?: string): void {
-        this._state = state;
         this._emitLog(
             CLIENT_LOG_LEVEL.INFO,
             cause ? `state changed to ${state} (cause: ${cause})` : `state changed to ${state}`
         );
-        this.dispatchEvent(
-            new CustomEvent("stateChange", {
-                detail: {
-                    cause,
-                    state
-                }
-            })
-        );
+        this._dispatch("stateChange", { cause, state });
     }
 
     private _emitUpdate(update: ClientUpdateDetail): void {
         this._logUpdate(update);
-        this.dispatchEvent(
-            new CustomEvent("update", {
-                detail: update
-            })
-        );
+        this._dispatch("update", update);
     }
 
     private _handleRuntimeError(error: Error): void {
         this.errors.push(error);
         this._emitLog(CLIENT_LOG_LEVEL.ERROR, `runtime error: ${error.message}`);
-        this.dispatchEvent(
-            new CustomEvent("handledError", {
-                detail: {
-                    error
-                }
-            })
-        );
+        this._dispatch("handledError", { error });
     }
 
     private _emitRuntimeLog(detail: ClientLogDetail): void {
-        this.dispatchEvent(new CustomEvent("log", { detail }));
+        this._dispatch("log", detail);
     }
 
     private _emitLog(level: ClientLogDetail["level"], message: string): void {
@@ -182,35 +230,60 @@ export class SfuClient extends EventTarget {
         });
     }
 
+    private _dispatch<K extends keyof SfuClientEventMap>(
+        type: K,
+        detail: SfuClientEventMap[K]["detail"]
+    ): void {
+        this.dispatchEvent(new CustomEvent(type, { detail }));
+    }
+
     private _logUpdate(update: ClientUpdateDetail): void {
         switch (update.name) {
             case CLIENT_UPDATE.TRACK:
-                this._emitLog(
+                return this._emitLog(
                     CLIENT_LOG_LEVEL.DEBUG,
                     `remote ${update.payload.type} track update for session ${update.payload.sessionId}: active=${update.payload.active}, muted=${update.payload.track.muted}, readyState=${update.payload.track.readyState}`
                 );
-                break;
             case CLIENT_UPDATE.DISCONNECT:
-                this._emitLog(
+                return this._emitLog(
                     CLIENT_LOG_LEVEL.INFO,
                     `session ${update.payload.sessionId} disconnected`
                 );
-                break;
             case CLIENT_UPDATE.INFO_CHANGE:
-                this._emitLog(
+                return this._emitLog(
                     CLIENT_LOG_LEVEL.DEBUG,
                     `received remote user info update: ${JSON.stringify(update.payload)}`
                 );
-                break;
             case CLIENT_UPDATE.BROADCAST:
-                this._emitLog(
+                return this._emitLog(
                     CLIENT_LOG_LEVEL.DEBUG,
                     `received broadcast from user ${update.payload.senderId}`
                 );
-                break;
             case CLIENT_UPDATE.CHANNEL_INFO_CHANGE:
-                this._emitLog(CLIENT_LOG_LEVEL.DEBUG, "received channel info update");
-                break;
+                return this._emitLog(CLIENT_LOG_LEVEL.DEBUG, "received channel info update");
         }
     }
+}
+
+export interface SfuClient {
+    addEventListener<K extends keyof SfuClientEventMap>(
+        type: K,
+        listener: ((this: SfuClient, event: SfuClientEventMap[K]) => unknown) | null,
+        options?: boolean | AddEventListenerOptions
+    ): void;
+    addEventListener(
+        type: string,
+        callback: EventListenerOrEventListenerObject | null,
+        options?: boolean | AddEventListenerOptions
+    ): void;
+    removeEventListener<K extends keyof SfuClientEventMap>(
+        type: K,
+        listener: ((this: SfuClient, event: SfuClientEventMap[K]) => unknown) | null,
+        options?: boolean | EventListenerOptions
+    ): void;
+    removeEventListener(
+        type: string,
+        callback: EventListenerOrEventListenerObject | null,
+        options?: boolean | EventListenerOptions
+    ): void;
 }

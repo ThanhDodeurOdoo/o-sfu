@@ -21,7 +21,7 @@ use libfuzzer_sys::{
     fuzz_target,
 };
 use o_sfu_protocol::{
-    host::{Command, ConnectionState, PendingRequestKind, ProtocolCore, RECOVERY_TIMER_ID},
+    host::{Command, ConnectionState, ProtocolCore, RECOVERY_TIMER_ID},
     wire::{
         AvailableFeatures, PeerInfoPayload, PeerLeftPayload, PeerSnapshot, RecordingActionResult,
         RecordingOptions, RecordingState, RecordingStateUpdate, RequestId, ServerBroadcastPayload,
@@ -44,6 +44,12 @@ const CHANNEL_PATH: &str = "/socket";
 const ANSWER_SDP: &str = "v=0\r\ns=answer-seq\r\n";
 const REQUEST_ID_SEED: &str = "req-seq";
 const ALPHANUMERIC: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+
+#[derive(Debug, Clone, Copy)]
+enum PendingRequestKind {
+    StartRecording,
+    StopRecording,
+}
 
 #[derive(Debug)]
 struct Scenario {
@@ -359,11 +365,21 @@ fuzz_target!(|scenario: Scenario| {
             }
             Step::StartRecording { options, followup } => {
                 let commands = core.start_recording(options.into_protocol());
-                process_pending_request_followup(&mut core, commands.as_slice(), followup);
+                process_pending_request_followup(
+                    &mut core,
+                    commands.as_slice(),
+                    PendingRequestKind::StartRecording,
+                    followup,
+                );
             }
             Step::StopRecording { followup } => {
                 let commands = core.stop_recording();
-                process_pending_request_followup(&mut core, commands.as_slice(), followup);
+                process_pending_request_followup(
+                    &mut core,
+                    commands.as_slice(),
+                    PendingRequestKind::StopRecording,
+                    followup,
+                );
             }
             Step::Connect(connect) => {
                 connect_core(&mut core, &connect);
@@ -753,13 +769,13 @@ fn process_negotiation_followup(
 fn process_pending_request_followup(
     core: &mut ProtocolCore,
     commands: &[Command],
+    kind: PendingRequestKind,
     followup: PendingRequestFollowup,
 ) {
     let Some(Command::BeginPendingRequest { request }) = commands.first() else {
         return;
     };
-    if let Some(frame) = pending_request_response_frame(&request.request_id, request.kind, followup)
-    {
+    if let Some(frame) = pending_request_response_frame(&request.request_id, kind, followup) {
         let _ = core.on_ws_message(&frame);
     }
 }

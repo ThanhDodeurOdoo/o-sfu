@@ -2,11 +2,15 @@ import {
     CLIENT_LOG_LEVEL,
     CLIENT_UPDATE,
     SFU_CLIENT_STATE,
+    type AvailableFeatures,
     type ClientLogDetail,
     type ClientUpdateDetail,
     type ConnectionState,
+    type ConsumersCompat,
     type DownloadStates,
+    type JsonValue,
     type RecordingOptions,
+    type SfuRecordingState,
     type SessionId,
     type SessionInfo,
     type SfuStats,
@@ -19,12 +23,12 @@ import {
 } from "../runtime_contract.js";
 import { REMOTE_MEDIA_UPDATE } from "../protocol_host_commands.js";
 import { COMMAND_KIND } from "../protocol_contract.js";
-import type {
-    ClientPeerConnection,
-    ClientWebSocket,
-    ConsumersCompat,
-    SfuClientDependencies,
-    TimerHandle
+import {
+    EMPTY_FEATURES,
+    type ClientPeerConnection,
+    type ClientWebSocket,
+    type SfuClientDependencies,
+    type TimerHandle
 } from "./browser_types.js";
 import { PendingRequests } from "./pending_requests.js";
 import { PeerSession } from "./peer_session.js";
@@ -34,13 +38,10 @@ import { TurnQueue, type TurnGuard } from "./turn_queue.js";
 
 type BrowserRuntimeContext = {
     onLog: (detail: ClientLogDetail) => void;
-    onPublicState: (state: PublicState) => void;
     onRuntimeError: (error: Error) => void;
     onStateChange: (state: ConnectionState, cause?: string) => void;
     onUpdate: (update: ClientUpdateDetail) => void;
 };
-
-type PublicState = Pick<ProtocolCoreBindings, "state" | "features" | "recordingState">;
 
 const TURN_POLICY = {
     DROP_ON_RECOVERY: "dropOnRecovery",
@@ -75,6 +76,9 @@ export class BrowserRuntime {
     private readonly _context: BrowserRuntimeContext;
 
     private _timerHandles = new Map<number, TimerHandle>();
+    private _availableFeatures: AvailableFeatures = { ...EMPTY_FEATURES };
+    private _recordingState: SfuRecordingState = {};
+    private _state: ConnectionState = SFU_CLIENT_STATE.DISCONNECTED;
 
     constructor(context: BrowserRuntimeContext, dependencies: SfuClientDependencies = {}) {
         this._context = context;
@@ -104,7 +108,18 @@ export class BrowserRuntime {
             },
             log
         );
-        this.syncPublicState();
+    }
+
+    get availableFeatures(): AvailableFeatures {
+        return this._availableFeatures;
+    }
+
+    get recordingState(): SfuRecordingState {
+        return this._recordingState;
+    }
+
+    get state(): ConnectionState {
+        return this._state;
     }
 
     connect(url: string, jwt: string, room: string | null, iceServers?: RTCIceServer[]): void {
@@ -112,7 +127,7 @@ export class BrowserRuntime {
             const commands = this._core.connect(url, jwt, room);
             if (commands.some((command) => command.kind === COMMAND_KIND.CONNECT)) {
                 this._peerSession.clearPublications();
-                this._media.resetAll();
+                this._media.clearSessionState();
                 this._peerSession.setIceServers(iceServers);
             }
             return commands;
@@ -130,7 +145,7 @@ export class BrowserRuntime {
         if (!commands) {
             return;
         }
-        this.interrupt(commands, false);
+        this.interrupt(commands);
     }
 
     subscribe(sessionId: SessionId, states: DownloadStates): void {
@@ -153,10 +168,13 @@ export class BrowserRuntime {
         );
     }
 
-    broadcast(message: unknown): void {
+    broadcast(message: JsonValue): void {
         try {
-            const snapshot = structuredClone(message);
-            this.enqueueProtocolCommands(() => this._core.broadcast(snapshot));
+            const messageJson = JSON.stringify(message);
+            if (messageJson === undefined) {
+                throw new TypeError("broadcast message must be JSON serializable");
+            }
+            this.enqueueProtocolCommands(() => this._core.broadcast(messageJson));
         } catch (error) {
             this.handleRuntimeError(error);
         }
@@ -171,17 +189,13 @@ export class BrowserRuntime {
         return this._pendingRequests.drainRequestCommands(() => this._core.stopRecording());
     }
 
-    async getStats(): Promise<SfuStats> {
+    getStats(): Promise<SfuStats> {
         return this._peerSession.getStats();
     }
 
     publish(type: StreamType, track: MediaStreamTrack | null): void {
         this._turnQueue.enqueue(async (isCurrent) => {
-            const { active, peerTask } = this._peerSession.setPublication(
-                type,
-                track,
-                this._core.state
-            );
+            const { active, peerTask } = this._peerSession.setPublication(type, track, this._state);
             if (!isCurrent()) {
                 return;
             }
@@ -200,7 +214,7 @@ export class BrowserRuntime {
         this._timerHandles.clear();
         this._peerSession.close();
         this._peerSession.clearPublications();
-        this._media.resetAll();
+        this._media.clearSessionState();
         this._socketSession.abort(CLIENT_RECOVERABLE_CLOSE_CODE);
     }
 
@@ -219,7 +233,7 @@ export class BrowserRuntime {
         if (!commands?.length) {
             return;
         }
-        this.interrupt(commands, this._core.state === SFU_CLIENT_STATE.RECOVERING);
+        this.interrupt(commands);
     }
 
     private tryControlTransition(getCommands: () => HostCommand[]): HostCommand[] | undefined {
@@ -231,7 +245,11 @@ export class BrowserRuntime {
         }
     }
 
-    private interrupt(commands: HostCommand[], recovering: boolean, error?: Error): void {
+    private interrupt(commands: HostCommand[], error?: Error): void {
+        for (const command of commands) {
+            this.applyPublicStateCommand(command);
+        }
+        const recovering = this._state === SFU_CLIENT_STATE.RECOVERING;
         if (commands.length === 0 && this._turnQueue.hasControlTurn) {
             this._turnQueue.cancelPending(error);
             return;
@@ -243,65 +261,67 @@ export class BrowserRuntime {
         );
     }
 
-    private async processCommands(commands: HostCommand[], isCurrent: TurnGuard): Promise<void> {
+    private async processCommands(pending: HostCommand[], isCurrent: TurnGuard): Promise<void> {
         if (!isCurrent()) {
             return;
         }
-        const pending = [...commands];
-        if (pending.length === 0) {
-            this.syncPublicState();
-            return;
-        }
+        this.applyPublicStateBeforeTeardown(pending);
         for (let index = 0; index < pending.length; index += 1) {
             if (!isCurrent()) {
                 return;
             }
             const command = pending[index];
-            const followUp = await this.executeCommand(command, isCurrent);
+            const commandResult = this.executeCommand(command, isCurrent);
+            const followUpCommands =
+                commandResult instanceof Promise ? await commandResult : commandResult;
             if (!isCurrent()) {
                 return;
             }
-            this.syncPublicState();
-            pending.push(...followUp);
+            this.applyPublicStateBeforeTeardown(followUpCommands);
+            pending.push(...followUpCommands);
         }
     }
 
-    private async executeCommand(
+    private executeCommand(
         command: HostCommand,
         isCurrent: TurnGuard
-    ): Promise<HostCommand[]> {
+    ): HostCommand[] | Promise<HostCommand[]> {
+        this.applyPublicStateCommand(command);
         switch (command.kind) {
             case COMMAND_KIND.SEND_WEB_SOCKET:
                 this._socketSession.send(command.frame);
                 return [];
-            case COMMAND_KIND.APPLY_NEGOTIATION: {
-                const result = await this._peerSession.negotiate(
-                    command.requestId,
-                    command.negotiationKind,
-                    command.sdp,
-                    command.uploadSlots
-                );
-                if (!result || !isCurrent()) {
-                    return [];
-                }
-                const commands = this._core.submitNegotiationAnswer(
-                    command.requestId,
-                    command.negotiationKind,
-                    result.answerSdp
-                );
-                if (result.shouldSignalTransportReady) {
-                    commands.push(...this.onTransportReady());
-                }
-                return commands;
-            }
-            case COMMAND_KIND.CREATE_PEER_CONNECTION:
-                this._peerSession.create();
-                return [];
+            case COMMAND_KIND.APPLY_NEGOTIATION:
+                return this._peerSession
+                    .negotiate(
+                        command.requestId,
+                        command.negotiationKind,
+                        command.sdp,
+                        command.uploadSlots,
+                        isCurrent
+                    )
+                    .then((answer) => {
+                        if (!answer || !isCurrent()) {
+                            return [];
+                        }
+                        const commands = this._core.submitNegotiationAnswer(
+                            command.requestId,
+                            command.negotiationKind,
+                            answer.answerSdp
+                        );
+                        if (answer.shouldSignalTransportReady) {
+                            commands.push(...this.onTransportReady());
+                        }
+                        return commands;
+                    });
             case COMMAND_KIND.CLOSE_PEER_CONNECTION:
                 this._peerSession.close();
                 return [];
             case COMMAND_KIND.CLOSE_WEB_SOCKET:
                 this._socketSession.close(command.code);
+                return [];
+            case COMMAND_KIND.SET_AVAILABLE_FEATURES:
+            case COMMAND_KIND.SET_RECORDING_STATE:
                 return [];
             case COMMAND_KIND.EMIT_STATE_CHANGE:
                 if (
@@ -309,7 +329,7 @@ export class BrowserRuntime {
                     command.state === SFU_CLIENT_STATE.DISCONNECTED
                 ) {
                     this._peerSession.clearPublications();
-                    this._media.resetAll();
+                    this._media.clearSessionState();
                 }
                 this._context.onStateChange(command.state, command.cause);
                 return [];
@@ -324,12 +344,12 @@ export class BrowserRuntime {
                 if (command.update.name === CLIENT_UPDATE.DISCONNECT) {
                     this._media.removeSession(command.update.payload.sessionId);
                 }
-                this.syncPublicState();
                 this._context.onUpdate(command.update);
                 return [];
             case COMMAND_KIND.BEGIN_PENDING_REQUEST:
                 throw new Error("beginPendingRequest is only valid for request command drains");
-            case COMMAND_KIND.RESOLVE_PENDING_REQUEST:
+            case COMMAND_KIND.COMPLETE_PENDING_REQUEST:
+                this.cancelTimer(command.timeoutTimerId);
                 this._pendingRequests.resolve(command.requestId, command.ok);
                 return [];
             case COMMAND_KIND.SCHEDULE_TIMER:
@@ -341,6 +361,30 @@ export class BrowserRuntime {
             case COMMAND_KIND.CONNECT:
                 this._socketSession.open(command.url);
                 return [];
+        }
+    }
+
+    private applyPublicStateCommand(command: HostCommand): void {
+        switch (command.kind) {
+            case COMMAND_KIND.SET_AVAILABLE_FEATURES:
+                this._availableFeatures = command.features;
+                break;
+            case COMMAND_KIND.SET_RECORDING_STATE:
+                this._recordingState = command.state;
+                break;
+            case COMMAND_KIND.EMIT_STATE_CHANGE:
+                this._state = command.state;
+                break;
+        }
+    }
+
+    private applyPublicStateBeforeTeardown(commands: HostCommand[]): void {
+        if (!commands.some((command) => command.kind === COMMAND_KIND.CLOSE_PEER_CONNECTION)) {
+            return;
+        }
+        // The lifecycle transition is committed before host teardown can re-enter through callbacks.
+        for (const command of commands) {
+            this.applyPublicStateCommand(command);
         }
     }
 
@@ -362,36 +406,41 @@ export class BrowserRuntime {
         this.cancelTimer(id);
         this._timerHandles.set(
             id,
-            this._setTimer(() => {
-                this.enqueueProtocolCommands(() => this._core.onTimer(id));
-            }, ms)
+            this._setTimer(() => this.enqueueProtocolCommands(() => this._core.onTimer(id)), ms)
         );
     }
 
     private handleRuntimeError(error: unknown): void {
         const resolvedError = error instanceof Error ? error : new Error(String(error));
         this._pendingRequests.rejectAll(resolvedError);
-        let disconnectCommands: HostCommand[] | undefined;
+        let disconnectCommands: HostCommand[];
+        let disconnectFailure: { error: unknown } | undefined;
         try {
             disconnectCommands = this._core.disconnect();
         } catch (disconnectError) {
+            disconnectFailure = { error: disconnectError };
+            // A failed core teardown cannot emit the commands that commit browser state.
+            disconnectCommands = [
+                {
+                    kind: COMMAND_KIND.SET_AVAILABLE_FEATURES,
+                    features: { ...EMPTY_FEATURES }
+                },
+                { kind: COMMAND_KIND.SET_RECORDING_STATE, state: {} },
+                {
+                    kind: COMMAND_KIND.EMIT_STATE_CHANGE,
+                    state: SFU_CLIENT_STATE.DISCONNECTED
+                }
+            ];
+        }
+        this.interrupt(disconnectCommands, resolvedError);
+        if (disconnectFailure) {
             this.log(
                 CLIENT_LOG_LEVEL.ERROR,
-                `protocol disconnect failed: ${String(disconnectError)}`
+                `protocol disconnect failed: ${String(disconnectFailure.error)}`
             );
         }
-        this.interrupt(disconnectCommands ?? [], false, resolvedError);
         this.abortResources();
-        this.syncPublicState();
         this._context.onRuntimeError(resolvedError);
-    }
-
-    private syncPublicState(): void {
-        this._context.onPublicState({
-            features: this._core.features,
-            recordingState: this._core.recordingState,
-            state: this._core.state
-        });
     }
 
     private log(level: ClientLogDetail["level"], message: string): void {

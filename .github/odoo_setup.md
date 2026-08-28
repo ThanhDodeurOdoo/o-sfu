@@ -54,7 +54,19 @@ This document explains how to set up the SFU server for development to work with
     npm run build:odoo
     ```
 
-4. Move the generated bundle (`crates/client/dist/odoo_sfu.js`) to the corresponding directory in your Odoo source code (`community/addons/mail/static/lib/odoo_sfu`).
+4. Move the generated bundle (`crates/client/dist/odoo_sfu.js`) to the
+   corresponding directory in your Odoo source code
+   (`community/addons/mail/static/lib/odoo_sfu`). Keep
+   `crates/client/dist/odoo_sfu.d.ts` beside copies used by TypeScript tooling so
+   editor documentation resolves for the module.
+
+   Checked JavaScript can type the bundle module and compatibility state
+   catalog as follows:
+
+    ```js
+    /** @typedef {typeof import("./odoo_sfu")} SfuModule */
+    /** @typedef {import("./odoo_sfu").SFU_CLIENT_STATE} SfuClientStateCatalog */
+    ```
 
 ---
 

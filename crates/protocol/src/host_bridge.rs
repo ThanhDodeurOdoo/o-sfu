@@ -1,66 +1,40 @@
-use serde::Serialize;
+use std::{borrow::Cow, collections::BTreeMap};
+
+use serde::{Serialize, Serializer};
 
 use crate::{
     bundle_api::{
-        BundleBroadcastUpdate, BundleConnectionState, BundleDisconnectUpdate,
-        BundleRemoteMediaUpdate, BundleSessionInfoSnapshotById, BundleUpdate,
-        bundle_session_info_key,
+        BundleBroadcastUpdate, BundleDisconnectUpdate, BundleRemoteMediaUpdate,
+        BundleSessionInfoSnapshotById, BundleUpdate, bundle_session_info_key,
     },
-    core::{
-        Command, CommandBatch, ConnectionState, NegotiationKind, PendingRequest, ProtocolEvent,
-    },
-    signaling::{NegotiationUploadSlot, RequestId},
+    core::ProtocolEvent,
+    shared::{JsonPayload, RecordingStateUpdate, UserId, UserInfo},
+    signaling::TrackBinding,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum HostCommand {
-    SendWebSocket {
-        frame: String,
+#[derive(Serialize)]
+#[serde(tag = "name", content = "payload", rename_all = "snake_case")]
+enum BundleUpdateRef<'a> {
+    RemoteMedia {
+        bindings: &'a [TrackBinding],
     },
-    ApplyNegotiation {
-        #[serde(rename = "requestId")]
-        request_id: RequestId,
-        #[serde(rename = "negotiationKind")]
-        negotiation_kind: NegotiationKind,
-        sdp: String,
-        #[serde(rename = "uploadSlots")]
-        upload_slots: Vec<NegotiationUploadSlot>,
+    Broadcast {
+        #[serde(rename = "senderId")]
+        sender_id: &'a UserId,
+        message: &'a JsonPayload,
     },
-    CreatePeerConnection,
-    ClosePeerConnection,
-    CloseWebSocket {
-        code: u16,
+    Disconnect {
+        #[serde(rename = "sessionId")]
+        user_id: &'a UserId,
     },
-    EmitStateChange {
-        state: String,
-        cause: Option<String>,
-    },
-    EmitUpdate {
-        update: BundleUpdate,
-    },
-    BeginPendingRequest {
-        request: PendingRequest,
-    },
-    ResolvePendingRequest {
-        #[serde(rename = "requestId")]
-        request_id: RequestId,
-        ok: bool,
-    },
-    ScheduleTimer {
-        id: u32,
-        ms: u32,
-    },
-    CancelTimer {
-        id: u32,
-    },
-    Connect {
-        url: String,
-    },
+    #[serde(rename = "info_change")]
+    SessionInfoChange(BTreeMap<Cow<'a, str>, &'a UserInfo>),
+    ChannelInfoChange(&'a RecordingStateUpdate),
 }
 
-fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: ProtocolEvent) {
-    let update = match event {
+#[must_use]
+pub fn project_protocol_event(event: ProtocolEvent) -> BundleUpdate {
+    match event {
         ProtocolEvent::TrackSnapshot { bindings } => {
             BundleUpdate::RemoteMedia(BundleRemoteMediaUpdate { bindings })
         }
@@ -80,71 +54,34 @@ fn push_host_commands_for_event(host_commands: &mut Vec<HostCommand>, event: Pro
             BundleUpdate::Broadcast(BundleBroadcastUpdate { sender_id, message })
         }
         ProtocolEvent::RecordingStateChanged { state } => BundleUpdate::ChannelInfoChange(state),
-    };
-    host_commands.push(HostCommand::EmitUpdate { update });
+    }
 }
 
-#[must_use]
-pub fn project_commands(core_commands: CommandBatch) -> Vec<HostCommand> {
-    let mut host_commands = Vec::with_capacity(core_commands.len());
-    for command in core_commands {
-        match command {
-            Command::SendWebSocket(frame) => {
-                host_commands.push(HostCommand::SendWebSocket { frame });
-            }
-            Command::ApplyNegotiation {
-                request_id,
-                kind,
-                sdp,
-                upload_slots,
-            } => host_commands.push(HostCommand::ApplyNegotiation {
-                request_id,
-                negotiation_kind: kind,
-                sdp,
-                upload_slots,
-            }),
-            Command::CreatePeerConnection => {
-                host_commands.push(HostCommand::CreatePeerConnection);
-            }
-            Command::ClosePeerConnection => host_commands.push(HostCommand::ClosePeerConnection),
-            Command::CloseWebSocket { code } => {
-                host_commands.push(HostCommand::CloseWebSocket { code });
-            }
-            Command::EmitStateChange { state, cause } => {
-                host_commands.push(HostCommand::EmitStateChange {
-                    state: connection_state_tag(state).to_owned(),
-                    cause,
-                });
-            }
-            Command::EmitEvent { event } => {
-                push_host_commands_for_event(&mut host_commands, event);
-            }
-            Command::BeginPendingRequest { request } => {
-                host_commands.push(HostCommand::BeginPendingRequest { request });
-            }
-            Command::ResolvePendingRequest { request_id, ok } => {
-                host_commands.push(HostCommand::ResolvePendingRequest { request_id, ok });
-            }
-            Command::ScheduleTimer { id, ms } => {
-                host_commands.push(HostCommand::ScheduleTimer { id, ms });
-            }
-            Command::CancelTimer { id } => host_commands.push(HostCommand::CancelTimer { id }),
-            Command::Connect { url } => host_commands.push(HostCommand::Connect { url }),
+pub(crate) fn serialize_protocol_event<S>(
+    event: &ProtocolEvent,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let update = match event {
+        ProtocolEvent::TrackSnapshot { bindings } => BundleUpdateRef::RemoteMedia { bindings },
+        ProtocolEvent::PeerSnapshot { peers } => BundleUpdateRef::SessionInfoChange(
+            peers
+                .iter()
+                .map(|peer| (peer.user_id.path_segment(), &peer.info))
+                .collect(),
+        ),
+        ProtocolEvent::PeerInfo { user_id, info } => {
+            BundleUpdateRef::SessionInfoChange(BTreeMap::from([(user_id.path_segment(), info)]))
         }
-    }
-    host_commands
-}
-
-#[must_use]
-pub fn connection_state_tag(state: ConnectionState) -> &'static str {
-    match state {
-        BundleConnectionState::Disconnected => "disconnected",
-        BundleConnectionState::Connecting => "connecting",
-        BundleConnectionState::Authenticated => "authenticated",
-        BundleConnectionState::Connected => "connected",
-        BundleConnectionState::Recovering => "recovering",
-        BundleConnectionState::Closed => "closed",
-    }
+        ProtocolEvent::PeerLeft { user_id } => BundleUpdateRef::Disconnect { user_id },
+        ProtocolEvent::Broadcast { sender_id, message } => {
+            BundleUpdateRef::Broadcast { sender_id, message }
+        }
+        ProtocolEvent::RecordingStateChanged { state } => BundleUpdateRef::ChannelInfoChange(state),
+    };
+    update.serialize(serializer)
 }
 
 #[cfg(test)]
