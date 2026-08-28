@@ -1,13 +1,49 @@
 //! Logical subscriptions and their transport realization.
 //!
 //! Explicit receiver intent survives while no publication is attached. A
-//! current publication realizes as `Absent -> Pending -> Committed`. Rejected
-//! declarations and receiver replacement return realization to `Absent`.
-//! Reservation IDs reject async completion after source detach or replacement.
+//! current publication realizes as `Absent -> Pending -> Committed`. Current
+//! setup failures, router rejection and receiver replacement return realization
+//! to `Absent`. Reservation IDs reject async completion after source detach or
+//! replacement.
+//!
+//! ```text
+//! logical subscription realization:
+//!      publication attached
+//!              |
+//!              v
+//!   +--------------------+  reserve setup
+//!   | ConsumerRealization| ------------------> +-------------------------------------+
+//!   |      Absent        |                     | ConsumerRealization::Pending        |
+//!   +--------------------+ <------------------ | (RouteReservationId, Option<Relay>) |
+//!              ^       setup fails/rejected    +-------------------------------------+
+//!              |                                                  |
+//!              |              decline/replace                     v setup accepted
+//!              +---------------------------------- +---------------------------------+
+//!                                                  | ConsumerRealization::Committed  |
+//!                                                  +---------------------------------+
+//!
+//! cross-worker relay sharing:
+//!   receiver 1 (worker B) \
+//!   receiver 2 (worker B)  --> [ RelayRouteKey (source worker A -> worker B) ]
+//!   receiver 3 (worker B) /               |
+//!                                         v
+//!                         shared relay channel (worker A -> B)
+//!                                         |
+//!                             +-----------+-----------+
+//!                             v           v           v
+//!                          recv 1      recv 2      recv 3 (local fanout on worker B)
+//! ```
+//!
+//! Intent without a current publication keeps `Subscription.current` at `None`.
+//! Accepted setup requires a current identity, a successful transport declaration
+//! and router dependency acceptance. Source detach returns to `None` while
+//! retaining intent. `remove_receiver` deletes the record and its intent.
 //!
 //! Cross-worker relays are shared by subscriptions with the same source and
 //! target worker. A relay remains active while any owner has active receiver
-//! intent.
+//! intent. An active first owner emits `Install` followed by
+//! `SetActivity(Active)`. Later aggregate activity changes emit `SetActivity`.
+//! Removing the last owner emits `Release`.
 
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},

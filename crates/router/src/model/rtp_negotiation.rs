@@ -1,16 +1,48 @@
 //! RTP capability matching between producers, routers, and consumers.
 //!
-//! - This module negotiates an internal typed RTP model (`MediaStream`,
-//!   `MediaFormat`, `HeaderExtension`, `StreamBinding`).
-//! - It is not a full SDP offer/answer engine.
-//! - Rules that depend on SDP session structure (m-line ordering, rejected
-//!   m-sections, extmap direction, BUNDLE-wide extmap id consistency, etc.)
-//!   must be enforced at the signaling / SDP edge, not here.
+//! Separates negotiation into two distinct stages to keep producer codecs
+//! decoupled from consumer capabilities:
 //!
-//! Why:
-//! - it keeps router-core pure
-//! - protocol-shaped negotiation details stay at the edge or in dedicated
-//!   adapters instead of leaking SDP mechanics into the router model.
+//! 1. **Ingress Normalization**: Producer formats are matched against router capabilities
+//!    to produce a standardized `Consumable` stream.
+//! 2. **Egress Selection**: Consumer capabilities are intersected with the `Consumable` stream
+//!    to determine supported formats, RTCP feedback, and congestion control modes.
+//!
+//! ```text
+//!                   Producer Stream                     Router Capabilities
+//!                          \                                   /
+//!                           v                                 v
+//!                +-------------------------------------------------------+
+//!                | Stage 1: Ingress Normalization                        |
+//!                | - Match primary codecs & assign router payload types  |
+//!                | - Remap RTX `apt` to negotiated primary payload types |
+//!                | - Intersect supported header extensions               |
+//!                +-------------------------------------------------------+
+//!                                            |
+//!                                            v
+//!                                Consumable MediaStream
+//!                                            |
+//!                                            +--------------------+
+//!                                            |                    |
+//!                                            v                    v
+//!                                  Consumer 1 Capabilities    Consumer 2 Capabilities
+//!                                            |                    |
+//!                                            v                    v
+//!                              +-----------------------+ +-----------------------+
+//!                              | Stage 2: Egress Match | | Stage 2: Egress Match |
+//!                              | - Codec intersection  | | - Codec intersection  |
+//!                              | - RTCP feedback match | | - RTCP feedback match |
+//!                              | - BWE policy (TWCC)   | | - BWE policy (REMB)   |
+//!                              +-----------------------+ +-----------------------+
+//!                                            |                    |
+//!                                            v                    v
+//!                                Consumer 1 Egress Stream    Consumer 2 Egress Stream
+//! ```
+//!
+//! This module operates purely on the typed domain model (`MediaStream`, `MediaFormat`,
+//! `HeaderExtension`, `StreamBinding`). Rules that depend on raw SDP session structure
+//! (m-line ordering, rejected m-sections, BUNDLE extmap consistency) are outside this module
+//! and belong at the signaling edge.
 
 use std::collections::HashSet;
 
@@ -91,20 +123,38 @@ impl ParseDiagnostic for RtpNegotiationError {
     }
 }
 
-/// Derive the router-consumable stream from producer parameters
+/// Derives the router-consumable media stream from producer parameters.
 ///
-/// Algorithm:
-/// 1. Negotiate primary media codecs first.
-/// 2. Build a producer PT -> router PT mapping for surviving primary codecs.
-/// 3. Negotiate RTX only after the associated primary codec is known to survive.
-/// 4. Keep only router header extensions that the producer can actually supply.
-/// 5. Remap stream bindings so payload-type-bound bindings stay aligned with the
-///    negotiated primary payload types.
+/// # Two-Pass Codec Resolution
 ///
-/// This split is intentional: RFC 4588 ties RTX to an already negotiated
-/// primary codec via `apt`, so RTX cannot be validated correctly until the
-/// primary codec set is known. See
-/// <https://www.rfc-editor.org/rfc/rfc4588.html#section-8.1>.
+/// Retransmission (RTX) formats depend on an associated primary codec via RFC 4588 `apt`.
+/// Negotiation therefore executes in two passes:
+/// 1. **Pass 1 (Primary Codecs)**: Match primary media formats against router capabilities,
+///    assigning router-normalized payload types and building a translation map.
+/// 2. **Pass 2 (RTX Codecs)**: Match RTX repair formats, resolve their `apt` references against
+///    the translation map, and omit valid formats with no matching router RTX capability.
+///
+/// ```text
+/// Incoming Producer Formats:
+///   [ Format 0: RTX (PT 97, apt=96) ] <---+ (references PT 96)
+///   [ Format 1: VP8 (PT 96)         ] ----+
+///
+/// Pass 1: Primary Codec Matching (Skip RTX)
+///   Format 1 (VP8, PT 96) matches Router Capability (VP8, PT 100)
+///     ==> Consumable Primary: VP8 (PT 100)
+///     ==> Translation Map: [ Producer PT 96 -> Router PT 100 ]
+///
+/// Pass 2: RTX Matching & `apt` Rewriting
+///   Format 0 (RTX, PT 97, apt=96):
+///     - Lookup `apt=96` in Translation Map ==> matches Router PT 100
+///     - Match Router Capability for RTX with apt=100 ==> Router PT 101
+///     ==> Consumable Repair: RTX (PT 101, apt=100)
+///
+/// Final Consumable Stream:
+///   [ Primary: VP8 (PT 100) ] + [ Repair: RTX (PT 101, apt=100) ]
+/// ```
+///
+/// The final repair pair is retained only when the primary format also retains Generic NACK.
 ///
 /// # Errors
 ///
@@ -702,12 +752,29 @@ enum BweFeedbackPolicy {
 }
 
 /// Selects a local forwarding policy for mutually exclusive bandwidth-estimation
-/// feedback families
+/// feedback families.
 ///
-/// This is an implementation policy choice, not a pure codec-compatibility rule:
-/// - if transport-wide CC is available, prefer transport-cc
-/// - otherwise, if abs-send-time is available, prefer goog-remb
-/// - otherwise advertise neither
+/// Resolves conflicting congestion control feedback modes by removing feedback only:
+/// - if transport-wide CC is available, prefer `transport-cc` and strip `goog-remb`
+/// - otherwise, if abs-send-time is available, prefer `goog-remb` and strip `transport-cc`
+/// - otherwise strip both feedback families
+///
+/// ```text
+///                Negotiated Header Extensions
+///                             |
+///            +----------------+----------------+
+///            |                                 |
+///   Contains TWCC extension?          Otherwise abs-send-time?
+///            |                                 |
+///            v (yes)                           v (yes)
+///  [ PreferTransportCc ]              [ PreferGoogRemb ]
+///            |                                 |
+///            v                                 v
+///  - Keep `transport-cc` feedback     - Keep `goog-remb` feedback
+///  - Strip conflicting `goog-remb`    - Strip `transport-cc`
+/// ```
+///
+/// If neither extension is present, [`BweFeedbackPolicy::DisableBoth`] strips both families.
 fn bwe_feedback_policy(header_extensions: &[HeaderExtension]) -> BweFeedbackPolicy {
     if header_extensions.iter().any(|extension| {
         matches!(

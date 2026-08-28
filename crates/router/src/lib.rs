@@ -1,19 +1,62 @@
-//! pure room router for placement and routed media lifetimes
+//! Pure topology and capability negotiation engine for O-SFU.
 //!
-//! [`Router`] is the sole stateful facade. it owns the exact user-to-connection
-//! placement relation and a private graph for each attached router
+//! `o-sfu-router` is the isolated, deterministic brain of the SFU. It models room
+//! membership, multi-worker router placements, producer-consumer dependency graphs,
+//! and typed RTP codec negotiation without touching networks, threads, or raw wire protocols.
+//!
+//! # Why is the Router Isolated?
+//!
+//! Traditional SFU architectures often interleave signaling protocols (SDP offer/answer),
+//! routing topology, and RTP packet loops into monolithic async engines. `o-sfu-router`
+//! enforces a strict architectural boundary:
+//!
+//! 1. **Complete Determinism (Zero I/O)**: Contains zero async runtimes, zero threads,
+//!    and zero socket syscalls. All state transitions are synchronous and deterministic.
+//! 2. **SDP-Free Domain Modeling**: Sits cleanly behind `o-sfu-core`'s SDP edge. It does not
+//!    parse raw SDP text or manage ICE candidates; it operates on strongly-typed topology
+//!    and RTP models ([`rtp::MediaStream`], [`rtp::MediaCapabilities`]).
+//! 3. **Isolated Placement & Teardowns**: Tracks cross-router subscriptions via foreign session
+//!    shadows. When a client reconnects or leaves, the router cleans its dependent graph
+//!    without affecting other active publishers.
+//! 4. **Direct Testability**: Because the crate has zero I/O, complex multi-router reconnects,
+//!    cascading disconnects, and codec negotiation edge cases can be tested directly.
+//!
+//! # System Architecture
 //!
 //! ```text
-//! Router
-//!   +- committed user -> connection -> home router
-//!   +- local router
-//!      +- home session -> producer -> dependent consumers
-//!      +- foreign session -> consumers
+//!                       +------------------------------------------+
+//!                       |       Signaling Edge / Clients           |
+//!                       | (HTTP, WebSocket, SDP Offer/Answer Bags) |
+//!                       +------------------------------------------+
+//!                                            |
+//!                     core adapts SDP to     |  request placement,
+//!                     MediaStream / Caps     |  publish, subscribe
+//!                                            v
+//! +===================================================================================+
+//! |                              o-sfu-router (Pure Core)                             |
+//! |                                                                                   |
+//! |  * 100% Synchronous & Deterministic (Zero async, Zero I/O, Zero RTP transport)    |
+//! |                                                                                   |
+//! |  +-------------------------------------+   +------------------------------------+ |
+//! |  | Multi-Router Routing Topology       |   | Typed RTP Capability Matching      | |
+//! |  | - User -> Connection -> Home Router |   | - Ingress normalization            | |
+//! |  | - Producer -> Dependent Consumers   |   | - Egress codec intersection        | |
+//! |  | - Cross-Router Session Shadows      |   | - RFC 4588 RTX `apt` remapping     | |
+//! |  +-------------------------------------+   +------------------------------------+ |
+//! +===================================================================================+
+//!                                            |
+//!                  routed identities, worker |  deterministic
+//!                     lookups, RTP specs     |  graph mutations
+//!                                            v
+//! +-----------------------------------------------------------------------------------+
+//! |                            o-sfu-core (Runtime & Engine)                          |
+//! |                                                                                   |
+//! |  * Async Tokio Runtimes, Media Transport Workers, UDP Demuxing, str0m Packet Loop |
+//! +-----------------------------------------------------------------------------------+
 //! ```
 //!
-//! foreign sessions are the receiver shadows required by cross-router routes
-//! they disappear with their final consumer. Replacing a receiver connection
-//! removes its shadows without removing another user's producers
+//! The [`Router`] struct is the sole stateful facade. It owns the exact user-to-connection
+//! placement relation and manages local and foreign session graphs across attached routers.
 //!
 //! # Examples
 //!

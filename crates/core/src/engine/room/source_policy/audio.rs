@@ -11,6 +11,50 @@ const AUDIO_PAUSE_REASONS: [PolicyPauseReason; 2] = [
     PolicyPauseReason::ReceiverDeafened,
 ];
 
+/// Evaluates and stages audio forwarding activity for active room audio routes.
+///
+/// The policy computes one room-wide admitted active-speaker set and applies it
+/// to every considered receiver route.
+///
+/// # Policy Invariants
+///
+/// 1. **Deafness Dominance**: If a receiver is deafened, each considered audio route is paused
+///    with [`PolicyPauseReason::ReceiverDeafened`]. When undeafened, routes are not blindly
+///    resumed; they are re-evaluated against the current active speaker quota.
+/// 2. **Low-Latency Voice Onset**: For a receiver that is not deafened, sources outside the
+///    room-wide active-source set remain unpaused by audio route policy. Worker-local VAD gating
+///    is separate and opens before destination planning on a VAD-true packet, so that packet does
+///    not wait for a policy turn.
+/// 3. **Active Speaker Admission**: When the room has more active speakers than
+///    `max_active_audio_speakers`, screen-sharers are admitted first. Sources otherwise retain
+///    room ranking by newest observation, audio level and media ID. Sources beyond the limit are
+///    paused with [`PolicyPauseReason::AudioSpeakerLimit`].
+/// 4. **Pause Reason Ownership**: Audio policy sets only reasons in [`AUDIO_PAUSE_REASONS`].
+///    It clears a pause only when the current reason belongs to that set.
+///
+/// ```text
+///                     Incoming Audio Route (Receiver, Source)
+///                                         |
+///                                         v
+///                         +-------------------------------+
+///                         |   Is Receiver Deafened?       | -- yes --> [ Pause: ReceiverDeafened ]
+///                         +-------------------------------+
+///                                         | no
+///                                         v
+///                         +-------------------------------+
+///                         |   Is Source in Room Active    | -- no  --> [ No Audio-Owned Pause ]
+///                         |   Set?                        |             (VAD gate is separate)
+///                         +-------------------------------+
+///                                         | yes
+///                                         v
+///                         +-------------------------------+
+///                         |   Within Active Speaker Cap?  | -- yes --> [ No Audio-Owned Pause ]
+///                         |  (Screen-sharers prioritized) |
+///                         +-------------------------------+
+///                                         | no
+///                                         v
+///                             [ Pause: AudioSpeakerLimit ]
+/// ```
 pub(super) fn append_audio_route_activity(
     tx: &mut SourcePolicyTransaction,
     input: &SourcePolicySnapshot<'_>,

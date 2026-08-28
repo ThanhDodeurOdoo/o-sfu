@@ -1,4 +1,39 @@
-//! room-local routed topology
+//! Room-local routed topology and media placement lifetimes.
+//!
+//! [`Router`] coordinates user sessions across one or more routers. Each user
+//! holds a **Home Session** on their assigned placement router where their published
+//! producers live.
+//!
+//! # Cross-Router Routing & Foreign Shadows
+//!
+//! When User 2 (placed on Router 2) subscribes to User 1's producer (published on Router 1):
+//! 1. Producer P1 lives on Router 1.
+//! 2. Router 1 uses a **Foreign Session Shadow** for User 2 (using User 2's connection ID),
+//!    creating it only when absent.
+//! 3. Consumer C2 is created inside this shadow session on Router 1, attached directly to Producer P1.
+//! 4. The router records the C2-to-P1 dependency and `o-sfu-core` forwards to User 2's media worker.
+//!
+//! ```text
+//!   RouterId 1 (Publisher Placement)                RouterId 2 (Subscriber Placement)
+//! +------------------------------------+          +------------------------------------+
+//! | Home Session (User 1):             |          | Home Session (User 2):             |
+//! |   Producer P1 dependent IDs:       |          |   Connection Conn_2                |
+//! |     |                              |          |     ^                              |
+//! |     +--> C1 (User 3 home session)  |          |     |                              |
+//! |     |                              |          |     |                              |
+//! |     +--> C2 dependency             |          |     |                              |
+//! |          (Conn_2 foreign shadow)   | -------->|-----+ (Core forwards to worker)    |
+//! +------------------------------------+          +------------------------------------+
+//!
+//! Lifecycle & Cascade Teardowns:
+//!   - Producer P1 Removed (`Router::remove_producer`):
+//!     -> Cascades down to remove local C1 and foreign C2 on Router 1.
+//!     -> The shadow session for Conn_2 becomes empty and is automatically pruned.
+//!   - User 2 Disconnects / Replaces Connection:
+//!     -> Removes User 2's Home Session on Router 2.
+//!     -> Removes C2 from P1's dependents and prunes the foreign shadow on Router 1.
+//!     -> User 1's Producer P1 and local Consumer C1 remain active and unaffected.
+//! ```
 
 use std::{
     collections::{BTreeMap, BTreeSet},

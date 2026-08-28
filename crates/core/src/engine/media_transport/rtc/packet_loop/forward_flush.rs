@@ -5,12 +5,45 @@
 //! can change route state. This prevents a later decoder refresh from admitting
 //! an earlier delta packet in the same batch.
 //!
-//! - learn producer MID, SSRC and RID bindings from RTP headers
+//! ```text
+//! staged RTP packets (local str0m output + relay mailbox)
+//!                     |
+//!                     v
+//!   +---------------------------------------------------+
+//!   | 1. resolve_facts(packet)                          |
+//!   |    - resolve source media, RID and audio facts    |
+//!   |    - inspect codec / decoder-refresh marker       |
+//!   +---------------------------------------------------+
+//!                     |
+//!                     v
+//!   +---------------------------------------------------+
+//!   | 2. packet observations & gate activation          |
+//!   |    - observe_audio_activity (voice level & rank)  |
+//!   |    - observe_decoder_refresh (clear retry tail)   |
+//!   |    - apply_src_decoder_ready when applicable      |
+//!   +---------------------------------------------------+
+//!                     |
+//!                     v
+//!   +---------------------------------------------------+
+//!   | 3. plan_forwards(packet, route_table)             |
+//!   |    - append origin sink, then gate routed fanout  |
+//!   +---------------------------------------------------+
+//!                     |
+//!                     v
+//!   +---------------------------------------------------+
+//!   | 4. flush_packet_forwards                          |
+//!   |    +--> packet sink (recording / monitoring)      |
+//!   |    +--> relay mailbox (cross-worker mpsc channel) |
+//!   |    +--> local RTC (str0m session send queue)      |
+//!   +---------------------------------------------------+
+//! ```
+//!
+//! - use MID to learn the packet SSRC and optional RID binding
 //! - cache codec-neutral decoder and rewrite facts once per packet
 //! - update active-speaker and incoming bitrate observations
-//! - request recovery keyframes when video ingress starts or resumes
-//! - drain a bounded number of relay packets into the local batch
-//! - send each planned packet to local RTC, packet sink or relay destinations
+//! - stage broad ingress recovery and request RID recovery during observation
+//! - drain the staged relay wake packet and a bounded relay batch
+//! - send each planned packet to packet sink, relay or local RTC destinations
 //!
 //! Room policy decisions must already be projected into route-control state.
 //! This module observes packets and executes planned sends. It does not decide
@@ -60,8 +93,8 @@ pub(super) fn record_incoming_stats(
         record_incoming_packet(state, control, rtp, buffers, packet);
     }
     buffers.pending_packets = pending_packets;
-    // Finish only after every packet has updated RID readiness. Gate transitions
-    // can then suppress the broad ingress PLI and coalesce source-policy wakeups.
+    // Finish after every applicable RID-readiness observation in the batch. Gate
+    // transitions can then suppress the broad ingress PLI and coalesce policy wakeups.
     finish_incoming_stats(state, source_policy_signal, control, buffers);
 }
 
@@ -103,8 +136,8 @@ fn learn_producer_packet_binding(
 /// Records source identity, activity, decoder readiness and bitrate for one
 /// incoming packet.
 ///
-/// Packets without a resolvable source are ignored. Recovery and source-policy
-/// work is staged in `buffers`.
+/// Packets without a resolvable source are ignored. `buffers` stages policy
+/// wakeups and broad recovery while RID recovery may be requested immediately.
 pub(super) fn record_incoming_packet(
     state: &mut PacketLoopState,
     control: &RtcMetricsRecorder,
