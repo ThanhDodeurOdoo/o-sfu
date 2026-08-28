@@ -118,6 +118,51 @@ impl<'a> Iterator for CandidateSessionKeys<'a> {
 /// Routes one datagram against the current worker topology.
 ///
 /// Malformed, unowned and throttled datagrams are recorded then dropped.
+///
+/// ```text
+/// incoming UDP datagram (source_addr, packet)
+///                     |
+///                     v
+///      +------------------------------+
+///      | learned pin still accepts?   | -- yes --> [ fast-path: indexed route ]
+///      +------------------------------+
+///                     | no
+///                     v
+///      +------------------------------+
+///      | source cooldown rate-limit?  | -- yes --> [ drop: SourceRateLimited ]
+///      +------------------------------+
+///                     | no
+///                     v
+///      +------------------------------+
+///      | in recent negative cache?    | -- yes --> [ drop: RecentMissCache ]
+///      +------------------------------+
+///                     | no
+///                     v
+///      +------------------------------+
+///      | header probing (N sessions)  |
+///      | - STUN local ICE ufrag       |
+///      | - other mux remote candidate |
+///      +------------------------------+
+///                     |
+///                     v
+///      +------------------------------+
+///      | candidate str0m::accepts()   |
+///      | - 1 session: direct test     |
+///      | - N sessions: probe-narrowed |
+///      +------------------------------+
+///            |                  |
+///         matched            no match
+///            |                  |
+///            v                  v
+///     [ pin source addr ]    [ record miss, maybe cooldown ]
+///     [ route to Rtc ]       [ drop: NoUser ]
+/// ```
+///
+/// The one-session branch precedes recovery indexing. Input construction failure
+/// is `Malformed`. RTCP budget rejection skips `handle_input` but retains or
+/// learns the accepted pin. A handling error clears ingress context but retains
+/// the pin. Successful fallback clears its miss and source cooldown. `Indexed`
+/// and `Scan` are [`RtcDatagramRoutePath`] metric values.
 pub fn route_pkt_to_session_at(
     state: &mut PacketLoopState,
     demux: &mut DemuxRecoveryState,

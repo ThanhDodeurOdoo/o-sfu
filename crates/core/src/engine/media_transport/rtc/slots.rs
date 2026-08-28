@@ -103,12 +103,70 @@ impl<Tag> Default for SlotHandle<Tag> {
 
 /// dense reusable storage for one worker-local identity class
 ///
-/// this is the raw slot table for state that only needs worker-local identity
-/// callers keep generation-checked handles while the store keeps ownership of
-/// the values and their reuse policy
+/// `SlotStore` provides O(1) generational array access for packet-loop hot paths.
+/// Callers hold lightweight `Copy` access tokens ([`SlotHandle`]) while the store
+/// manages entry allocation, free-list recycling, and ABA safety.
 ///
-/// indices are recycled after removal to keep handles small and cache-friendly
-/// generation checks make that reuse compatible with delayed packet-loop work
+/// # Generational Indexing & ABA Safety
+///
+/// In an asynchronous packet loop, scheduler queues, timeout heaps, and route tables
+/// may hold references to an occupant after it has been removed. A bare array index
+/// would allow delayed work for a removed occupant to mistakenly corrupt a new occupant
+/// that recycled the same index (the classic ABA problem).
+///
+/// `SlotStore` uses these checks during one slot's generation cycle:
+/// 1. Each slot tracks an independent `generation: u64` counter alongside `value: Option<T>`.
+/// 2. `insert` assigns the slot's current generation to the returned `SlotHandle`.
+/// 3. `get` / `get_mut` validate `handle.generation == entry.generation` before granting access.
+/// 4. `remove` takes the value, advances the slot's generation, and returns the index to the LIFO `free` list.
+/// 5. Any delayed work attempting access with an older `SlotHandle` fails the generation check
+///    and evaluates to `None`, safely turning stale queue items into no-ops.
+///
+/// A generation value may be shared by separate slot indices. For one slot index, a
+/// generation can repeat only after its `u64` counter wraps.
+///
+/// # Type-Safe Tagging
+///
+/// The `Tag` marker parameter ([`SessionSlot`], [`MediaSlot`], [`ConsumerStreamSlot`]) ensures
+/// distinct identity-class handle types at compile time with zero memory overhead
+/// (`PhantomData<fn() -> Tag>`). It does not identify a particular store instance, so callers
+/// must use a handle only with the store that created it.
+///
+/// ```text
+/// 1. Initial State (2 active sessions, 1 free slot):
+///    entries:
+///      [0] generation: 1 | value: Some(Session A) <--- SlotHandle { idx: 0, gen: 1 } (active)
+///      [1] generation: 3 | value: Some(Session B) <--- SlotHandle { idx: 1, gen: 3 } (active)
+///      [2] generation: 2 | value: None
+///    free stack: [ 2 ]
+///
+/// 2. Session A is Removed (`remove(handle)`):
+///    - value taken -> None
+///    - generation advanced -> 2
+///    - index 0 pushed to free stack
+///    entries:
+///      [0] generation: 2 | value: None
+///      [1] generation: 3 | value: Some(Session B)
+///      [2] generation: 2 | value: None
+///    free stack: [ 2, 0 ]
+///
+/// 3. Session C is Inserted (`insert(Session C)`):
+///    - index 0 popped from free stack
+///    - value set -> Some(Session C)
+///    - generation retained -> 2
+///    entries:
+///      [0] generation: 2 | value: Some(Session C) <--- SlotHandle { idx: 0, gen: 2 } (new handle)
+///      [1] generation: 3 | value: Some(Session B)
+///      [2] generation: 2 | value: None
+///    free stack: [ 2 ]
+///
+/// 4. Delayed Stale Queue Item Executes:
+///    - queue item holds stale SlotHandle { idx: 0, gen: 1 } (from Session A)
+///    - check: handle.gen (1) == entry.gen (2) ?
+///                       |
+///                       v  (mismatch)
+///    - access returns `None` --> stale work safely discarded with 0 side-effects
+/// ```
 pub(super) struct SlotStore<T, Tag> {
     entries: Vec<SlotEntry<T>>,
     free: Vec<usize>,
@@ -191,14 +249,24 @@ impl<T, Tag> SlotStore<T, Tag> {
 
 /// public-key index backed by generation slots
 ///
-/// use the key API at worker boundaries where callers speak in transport ids
-/// convert to handles only for work that must survive in packet-loop queues,
-/// heaps or route-local state
+/// `KeyedSlotStore` bridges public identity at worker boundaries ([`TransportSessionKey`],
+/// [`TransportMediaId`]) with worker-internal generational slots ([`SlotHandle`]).
 ///
-/// the key is stored inside the slot so a live handle can be translated back
-/// when the packet loop must report ready public sessions
-/// if translation fails, the handle is stale and the queued work is already
-/// obsolete
+/// ```text
+/// Public Boundary (O(log N) tree):
+///   TransportSessionKey("user-1", conn_id) ---> BTreeMap lookup ---> SlotHandle { idx: 0, gen: 2 }
+///                                                                          |
+/// Packet-Loop Hot Path (O(1) direct slot):                                 |
+///   SlotStore entries[0] --------------------------------------------------+
+///     - KeyedSlot { key: TransportSessionKey(...), value: RtcSessionState }
+/// ```
+///
+/// - **Worker Boundary**: Callers query by public key (`get(&key)`). `handle_for_key`
+///   resolves that key to its current slot handle through the `BTreeMap`.
+/// - **Packet Loop**: Queues and heaps store lightweight `SlotHandle` copies, avoiding
+///   per-packet map lookups.
+/// - **Reverse Translation**: `key_for_handle` translates a live handle back to its public
+///   key in O(1) time by reading `KeyedSlot.key`.
 pub(super) struct KeyedSlotStore<K, V, Tag> {
     by_key: BTreeMap<K, SlotHandle<Tag>>,
     slots: SlotStore<KeyedSlot<K, V>, Tag>,

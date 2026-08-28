@@ -52,6 +52,44 @@ impl<'a> RoomEffectContext<'a> {
     }
 }
 
+/// batches post-lock transport, signaling and policy side-effects for room state transitions
+///
+/// ```text
+/// room state mutation (holds RoomState write lock)
+///   - mutate in-memory graph
+///   - return commit data
+///             |
+///             v  drop RoomState write lock
+/// RoomEffects::from_*(commit) -> execute_inner
+///             |
+///             v  step 1: transport execution
+///   +-----------------------------------------------------------+
+///   | - create/remove local consumer routes on workers          |
+///   | - register/remove cross-worker relay route targets        |
+///   | - dispatch session teardowns                              |
+///   +-----------------------------------------------------------+
+///             |
+///             v  step 2: RoomOutputPlan pre-policy fanout
+///   +-----------------------------------------------------------+
+///   | - send track snapshots and presence user-info fanout      |
+///   +-----------------------------------------------------------+
+///             |
+///             v  step 3: source policy turn
+///   +-----------------------------------------------------------+
+///   | - re-evaluate audio admission and video bandwidth solver  |
+///   | - commit packet gate and BWE target updates               |
+///   +-----------------------------------------------------------+
+///             |
+///             v  step 4: RoomOutputPlan post-policy fanout
+///   +-----------------------------------------------------------+
+///   | - send user-info and lifecycle close/track/fanout output  |
+///   +-----------------------------------------------------------+
+/// ```
+///
+/// The diagram shows the normal batch order. Only an active `ProducerActivityCommit` from
+/// `from_publication_activity` runs its pre-policy user-info output and source policy before transport.
+/// Callers of `from_publish` and `from_publication_activity` use
+/// `execute_with_source_policy_guard` while holding `source_policy_turn`.
 #[derive(Debug, Default)]
 #[must_use = "room effect batches must be executed after the state transition commits"]
 pub struct RoomEffects {

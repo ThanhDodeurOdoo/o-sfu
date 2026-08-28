@@ -1,6 +1,6 @@
 //! receiver-video policy turn
 //!
-//! [`SourcePolicyTransaction`]: input -> adapt -> admit -> budget -> hysteresis -> projection
+//! [`SourcePolicyTransaction`]: filter -> budget -> plan -> admit -> fit -> hysteresis -> projection
 //! packet-gate changes stay behind [`projection`] so planning never builds transport gates directly
 
 use std::{cmp::Reverse, collections::BTreeMap};
@@ -262,6 +262,67 @@ pub(in crate::engine::room::source_policy) fn append_receiver_video_policy(
     tx.set_receiver_bwe_targets(receiver_bwe_targets.into_values().collect());
 }
 
+/// Solves video subscription quality for a receiver based on layout intent and network capacity.
+///
+/// [`receiver_video_routes`] first retains video routes with an adaptation policy or source bitrate
+/// cap. This function computes the optional video budget before calling `route_plan` for each
+/// retained route.
+///
+/// Balances visual experience against available bandwidth through a multi-pass allocation:
+///
+/// 1. **Desired Quality Target**: Builds each route's selection from its policy-specific facts.
+///    An unpaused selector with no bitrate is paused as
+///    [`PolicyPauseReason::MissingUsableLayer`].
+/// 2. **Stream Count Capping**: Enforces the receiver download limit across planned routes. Lowest-priority
+///    streams are paused before bandwidth sharing. Equal ranks use active-route position.
+/// 3. **Bandwidth Fitting**: When aggregate bitrate exceeds optional downlink headroom after the
+///    audio reserve, secondary streams are stepped down layer-by-layer. If demand still exceeds
+///    budget after eligible step-downs, the lowest-priority streams are paused. Each pass stops once
+///    demand fits.
+/// 4. **Hysteresis Smoothing**: `scalable_plan` applies selector hysteresis. `resolve_hysteresis`
+///    delays soft pauses and most resumes. New download-limit and source-cap pauses apply
+///    immediately. A route resuming from [`PolicyPauseReason::VideoDownloadLimit`] also resumes
+///    immediately.
+/// 5. **Decision Emission**: Projection returns an optional packet-selection update. The caller
+///    stages it as a transport effect or state-only update.
+///
+/// ```text
+///      Policy-Managed Video Routes                Downlink Bandwidth Estimate
+///                    \                                   /
+///                     v                                 v
+///          +-------------------------------------------------------+
+///          | 1. Desired Quality Target                             |
+///          |    - Multiparty featured --> featured-quality layer   |
+///          |    - Multiparty secondary --> thumbnail-biased layer  |
+///          +-------------------------------------------------------+
+///                                     |
+///                                     v
+///          +-------------------------------------------------------+
+///          | 2. Stream Count Capping (Top-N)                       |
+///          |    - Active planned streams > receiver limit?         |
+///          |      yes -> pause lowest-ranked excess positions      |
+///          |      no  -> keep planned streams active               |
+///          +-------------------------------------------------------+
+///                                     |
+///                                     v
+///          +-------------------------------------------------------+
+///          | 3. Bandwidth Fitting & Degradation                    |
+///          |    - Total bitrate <= bandwidth budget?               |
+///          |      yes -> fit as-is                                 |
+///          |      no  -> step down eligible layers one-by-one      |
+///          |             pause lowest-priority tiles if congested  |
+///          +-------------------------------------------------------+
+///                                     |
+///                                     v
+///          +-------------------------------------------------------+
+///          | 4. Hysteresis Smoothing                               |
+///          |    - Smooth selector changes and route oscillation    |
+///          |    - Delay soft pauses and most resumes               |
+///          +-------------------------------------------------------+
+///                                     |
+///                                     v
+///              Selection Updates + Allocated Bandwidth
+/// ```
 fn append_receiver_policy_updates<'a>(
     tx: &mut SourcePolicyTransaction,
     receiver_routes: &'a [ReceiverVideoRouteInput<'a>],

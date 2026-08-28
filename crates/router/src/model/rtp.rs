@@ -480,10 +480,26 @@ impl MediaFormat {
 
 /// Routing bridge between a negotiated media format and a physical stream.
 ///
-/// It ties the codec format to the RID or primary and repair SSRCs that
-/// identify the stream. A repair SSRC is the SSRC-multiplexed RTX source from
-/// <https://www.rfc-editor.org/rfc/rfc4588.html#section-4>, signaled with the
-/// FID form in <https://www.rfc-editor.org/rfc/rfc5576.html#section-7>.
+/// Ties logical codec formats to the physical multiplexing identifiers (primary SSRC,
+/// repair SSRC, or simulcast RID) resolved from RTP packet headers and SDP.
+///
+/// ```text
+/// Wire RTP Packet Multiplexing:
+///   Primary Stream:  [ RTP Header: SSRC 1000 ] ------------+
+///                                                          |
+///   RTX Repair:      [ RTP Header: SSRC 1001 ] (FID/RRID)  +--> StreamBinding
+///                                                          |    - SSRC: 1000
+///   Simulcast Layer: [ Header Ext: RID "h"   ] ------------+    - Repair SSRC: 1001
+///                                                               - RID: "h"
+///                                                               - PayloadType: 96
+/// ```
+///
+/// FID supplies `repair_ssrc`. RID and repaired RID associate packets through `rid`.
+///
+/// References:
+/// - RFC 4588 section 5 (RTX source association): <https://www.rfc-editor.org/rfc/rfc4588.html#section-5>
+/// - RFC 5576 section 4.2 (SDP FID grouping): <https://www.rfc-editor.org/rfc/rfc5576.html#section-4.2>
+/// - RFC 8852 section 3.3 (RID-based repair): <https://www.rfc-editor.org/rfc/rfc8852.html#section-3.3>
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StreamBinding {
     ssrc: Option<Ssrc>,
@@ -506,8 +522,8 @@ impl StreamBinding {
     }
 
     /// Associates an RTX source with its primary per
-    /// <https://www.rfc-editor.org/rfc/rfc4588.html#section-4> and the FID form
-    /// in <https://www.rfc-editor.org/rfc/rfc5576.html#section-7>.
+    /// <https://www.rfc-editor.org/rfc/rfc4588.html#section-5> and the FID form
+    /// in <https://www.rfc-editor.org/rfc/rfc5576.html#section-4.2>.
     #[must_use]
     pub fn with_repair_ssrc(mut self, repair_ssrc: impl Into<Ssrc>) -> Self {
         self.repair_ssrc = Some(repair_ssrc.into());

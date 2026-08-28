@@ -229,14 +229,57 @@ impl ConsumerStreamStore {
 
     /// Projects one source packet into receiver RTP and codec identity.
     ///
+    /// The browser receiver sees one RTP identity as the SFU dynamically switches upstream
+    /// publishers, switches simulcast RID layers, or unpauses delivery.
+    ///
+    /// # Projection Rules
+    ///
+    /// 1. **Steady State (Same SSRC)**: Consecutive packets advance receiver sequence numbers
+    ///    by 1 and preserve source inter-frame timestamp deltas:
+    ///    `dst_ts = dst_ts_anchor + (source_ts - src_ts_anchor)`.
+    /// 2. **Source Gaps or Reordering (Same SSRC)**: Sequence numbers and timestamps use
+    ///    their source-anchor deltas. Accepted repairs therefore keep their projected
+    ///    identity instead of advancing the receiver high-water marks.
+    /// 3. **SSRC Switch or Route Resume (New Layer / Epoch)**: Layer switches (e.g. simulcast
+    ///    upswitch) or SFU unpauses advance receiver sequence by 1 and re-anchor timestamps
+    ///    (`dst_ts = highest_ts + 1`), compacting intentional SFU gaps.
+    ///
     /// ```text
-    /// source loss or reordering -> preserve the source delta
-    /// new delivery generation   -> compact the SFU-filtered gap
-    /// source SSRC switch        -> continue receiver identity
+    /// incoming source streams:
+    ///   publisher A (SSRC 1000): [ seq: 10, ts: 1000 ] -> [ seq: 11, ts: 1960 ] (steady state)
+    ///                                 |
+    ///                    (publisher or simulcast switch)
+    ///                                 v
+    ///   new source (SSRC 2000):  [ seq:  1, ts: 5000 ] -> [ seq:  2, ts: 5960 ] (independent SSRC/clock)
+    ///
+    /// ConsumerStream timeline mapping:
+    ///   +-------------------------------------------------------------------------+
+    ///   | Case 1: Same SSRC (in-order)                                            |
+    ///   |   dst_seq = next_seq_no++                                               |
+    ///   |   dst_ts  = dst_ts_anchor + (src_ts - src_ts_anchor)                    |
+    ///   +-------------------------------------------------------------------------+
+    ///   | Case 2: SSRC Switch or New Generation (re-anchor)                       |
+    ///   |   dst_seq = next_seq_no++                                               |
+    ///   |   dst_ts  = highest_ts + 1  (monotonic re-anchor)                       |
+    ///   |   re-anchor: src_seq_anchor = src_seq, dst_seq_anchor = dst_seq         |
+    ///   |              src_ts_anchor  = src_ts,  dst_ts_anchor  = dst_ts          |
+    ///   +-------------------------------------------------------------------------+
+    ///                                 |
+    ///                                 v
+    /// receiver projected egress:
+    ///   [ seq: 100, ts: 90000 ] <--- from SSRC 1000 (existing destination anchor)
+    ///   [ seq: 101, ts: 90960 ] <--- from SSRC 1000 (delta +960 preserved)
+    ///   [ seq: 102, ts: 90961 ] <--- from SSRC 2000 (switched: +1 step, re-anchor)
+    ///   [ seq: 103, ts: 91921 ] <--- from SSRC 2000 (delta +960 preserved)
     /// ```
     ///
-    /// Returns `None` for a stale handle, an older delivery generation or a
-    /// source sequence outside the representable projection range.
+    /// Source gaps, reordered packets and accepted repairs use anchor-relative sequence
+    /// numbers, so receiver sequence numbers are not globally monotonic in arrival order.
+    /// A repair is accepted only for an earlier sequence in the active same-SSRC and
+    /// delivery-generation projection window. This does not prove that packet was lost.
+    ///
+    /// Returns `None` for a stale handle, an older delivery generation, a repair outside
+    /// that window or a source sequence outside the representable projection range.
     pub(super) fn project_identity(
         &mut self,
         stream_handle: ConsumerStreamHandle,
@@ -348,8 +391,9 @@ impl ConsumerStream {
         source_ssrc: Ssrc,
         source_seq_no: SeqNo,
     ) -> bool {
-        // str0m restores the RFC 4588 OSN before this boundary. O-SFU accepts
-        // repair only for a primary RTP gap in the same SSRC and delivery epoch.
+        // str0m restores the RFC 4588 OSN before this boundary. O-SFU admits an
+        // earlier sequence in the active SSRC and delivery epoch's projection
+        // window. It does not track whether that primary packet was delivered.
         // https://www.rfc-editor.org/rfc/rfc4588.html#section-4
         delivery_generation == self.delivery_generation
             && matches!(
