@@ -74,8 +74,10 @@ see: https://github.com/ThanhDodeurOdoo/o-sfu/releases
 ### 3. Logging & Observability
 
 - **Operational Logs**: Server logs (stdout/stderr) record connection lifecycle events, IP addresses, and user IDs for debugging, performance monitoring, and abuse detection. Media content and secret keys are never logged.
-- **Metrics**: Aggregate Prometheus metrics (`/metrics`) contain only high-level operational counters and never expose IP addresses, user IDs, or room names.
-- **Diagnostics**: Detailed internal runtime diagnostics are protected by authentication and restricted to private administrative access.
+- **Statistics**: `/v1/stats` exposes room UUIDs, remote addresses and participant media counts to authorized operators.
+- **Metrics**: Aggregate Prometheus metrics (`/metrics`) contain only high-level operational counters and never expose IP addresses, user IDs or room names.
+- **Diagnostics**: Detailed internal runtime diagnostics expose current room and user facts to authorized operators.
+- **Observation Access**: `/v1/stats`, `/metrics` and diagnostics require the configured bearer token on every listener. Without one, the actual listener must be loopback.
 
 ### 4. Operator Privacy Responsibilities
 
@@ -83,4 +85,5 @@ Operators hosting `o-sfu` control their deployment environment and should ensure
 
 - **Log Retention**: Configure appropriate log rotation and retention limits on host or container logging systems to manage IP and identifier storage.
 - **Transport Security**: Deploy `o-sfu` behind a trusted reverse proxy with TLS/WSS enabled for signaling traffic.
-- **Access Control**: Restrict access to internal diagnostic endpoints and securely manage shared authentication keys.
+- **Access Control**: Keep observation routes private and securely manage their bearer token plus shared authentication keys.
+- **Observation Transport**: Send the observation bearer token only over same-host loopback, an isolated same-host container network, TLS or an authenticated encrypted transport. Only trusted telemetry services may join the container network. The `o-sfu` HTTP listener does not terminate TLS.

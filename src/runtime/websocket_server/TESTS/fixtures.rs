@@ -191,7 +191,7 @@ impl TestServerBuilder {
         )
         .ok()?;
         let handle = tokio::spawn(async move {
-            let result = axum::serve(listener, app(state_for_server)).await;
+            let result = axum::serve(listener, app(state_for_server, addr)).await;
             assert!(
                 result.is_ok(),
                 "test server should stop cleanly: {result:?}"

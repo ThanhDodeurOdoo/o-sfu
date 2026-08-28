@@ -32,12 +32,6 @@ RTC Server URL = https://<sfu-domain>
 RTC server KEY = <same value as AUTH_KEY>
 ```
 
-`AUTH_KEY` must be valid base64 that decodes to at least 32 bytes and should be generated from cryptographically safe randomness
-
-```bash
-openssl rand -base64 32
-```
-
 ## basic production environment
 
 ```env
@@ -51,30 +45,61 @@ TELEMETRY_LOG_FORMAT=json
 TELEMETRY_DEPLOYMENT_ENVIRONMENT=production
 ```
 
-`PROXY=true` is valid only when the trusted public proxy overwrites forwarded headers before requests reach `o-sfu`
-
 `RTC_MIN_PORT` and `RTC_MAX_PORT` must match the cloud firewall, host firewall and container or service binding
 
 `TELEMETRY_DEPLOYMENT_ENVIRONMENT=production` setting it to `production` makes the tracing switch to ratio-based sampling so only a subset of traces is captured to reduce load on the tracing system
 
 `ROOM_MAX_LOCAL_ROUTERS` must be less than or equal to `RTC_MEDIA_WORKER_COUNT`
 
-> [!WARNING]
-> IO_URING
->
-> io_uring is known to be a security risk:
-> see https://i.blackhat.com/BH-US-23/Presentations/US-23-Lin-bad_io_uring.pdf
->
-> that being said, there is no indication that it leads to vulnerabilities in o-sfu use case,
-> and io_uring is "commonly" used in many high throughput systems.
->
-> If you know what you are doing and want to enable it, use `RTC_UDP_IO_BACKEND=io_uring`.
->
-> If you're running inside docker, docker must be explicitely configured in `unconfined` mode.
->```
->security_opt:
->      - seccomp=unconfined
->```
+## security
+
+see [SECURITY.md](SECURITY.md) for privacy and vulnerability reporting
+
+### credentials
+
+`AUTH_KEY` must match Odoo and be valid base64 that decodes to at least 32
+cryptographically random bytes. Generate it and `DIAGNOSTICS_AUTH_TOKEN`
+independently by running this command for each:
+
+```bash
+openssl rand -base64 32
+```
+
+### network and proxy trust
+
+keep port `8070` unreachable from untrusted networks. Bind it to loopback for a
+host proxy or expose it only on an isolated same-host container network
+
+set `PROXY=true` only when the trusted public proxy strips or overwrites
+client-supplied forwarded headers. Use `$proxy_add_x_forwarded_for` only when a
+trusted upstream has already stripped client input
+
+`/v1/stats`, `/metrics` and `/internal/diagnostics/...` require
+`DIAGNOSTICS_AUTH_TOKEN` on every request when configured. Without it, the
+actual listener must use loopback. A same-host reverse proxy can reach that
+fallback, so configure the token and block these routes at every public edge
+
+port `8070` serves plaintext HTTP. Keep bearer traffic on loopback or an
+isolated same-host network limited to trusted services. Otherwise use a
+TLS-terminating proxy or authenticated encrypted overlay. A firewall alone
+does not protect plaintext credentials
+
+### io_uring
+
+Docker's [default seccomp profile](https://docs.docker.com/engine/security/seccomp/)
+blocks the `io_uring` system calls. Keep the default `tokio` backend unless the
+container has a reviewed seccomp policy. `seccomp=unconfined` permits those
+calls by removing the default syscall filter:
+
+```yaml
+security_opt:
+  - seccomp=unconfined
+```
+
+### release integrity
+
+promote only non-prerelease release-tag images and assets after completing the
+verification steps under [image](#image) and [release assets](#release-assets)
 
 ## image
 
@@ -308,12 +333,6 @@ common fields it needs and tolerate unknown extra keys
 the reviewed event and field catalog lives in `crates/telemetry/src/schema.rs`
 the formatter is in `crates/telemetry/src/setup.rs`
 
-### systemd deployment
-
-when NGINX and Prometheus run on the same host, set
-`BIND_ADDRESS=127.0.0.1:8070`. Remote Prometheus requires a private interface
-and a source-restricted firewall. Port `8070` must reject public access
-
 ## NGINX public edge
 
 ```nginx
@@ -330,6 +349,10 @@ server {
     ssl_certificate_key <certificate-key-path>;
 
     location = /metrics {
+        return 404;
+    }
+
+    location = /v1/stats {
         return 404;
     }
 
@@ -354,43 +377,47 @@ server {
 }
 ```
 
-do not use `$proxy_add_x_forwarded_for` at the public edge unless an upstream trusted proxy already stripped client-supplied forwarding headers
-
-`o-sfu` uses forwarded headers for proxy-aware request metadata when `PROXY=true`, so those headers must not preserve untrusted client input
-
 ## private observability
-
-### query reference
 
 use the telemetry reference for exact queries and response shapes:
 
 - [Prometheus metrics](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/http/telemetry/metrics/index.html)
 - [HTTP diagnostics](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/http/telemetry/diagnostics/index.html)
 
-public routes:
+remote Prometheus scrape through a private TLS endpoint when
+`DIAGNOSTICS_AUTH_TOKEN` is configured:
 
-```text
-/v1/noop -> allowed
-/metrics -> blocked
-/internal/diagnostics/... -> blocked
+```yaml
+scrape_configs:
+  - job_name: o-sfu
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/o_sfu_diagnostics_token
+    tls_config:
+      ca_file: /run/secrets/o_sfu_observability_ca
+      server_name: o-sfu-observability.internal
+    static_configs:
+      - targets: ["o-sfu-observability.internal:443"]
 ```
 
-private Prometheus scrape:
+the private endpoint proxies operator routes to `http://127.0.0.1:8070`
 
-```text
-http://<private-sfu-address>:8070/metrics
-```
+private stats and diagnostics access:
 
-private diagnostics access:
-
-```text
-Authorization: Bearer <diagnostics-token>
+```bash
+curl -H 'Authorization: Bearer <diagnostics-token>' \
+  https://o-sfu-observability.internal/v1/stats
+curl -H 'Authorization: Bearer <diagnostics-token>' \
+  https://o-sfu-observability.internal/internal/diagnostics/summary
 ```
 
 ## rollout validation
 
 ```bash
 curl -i https://<sfu-domain>/v1/noop
+curl -i https://<sfu-domain>/v1/stats
 curl -i https://<sfu-domain>/metrics
 curl -i https://<sfu-domain>/internal/diagnostics/summary
 ```
@@ -399,13 +426,14 @@ expected:
 
 ```text
 /v1/noop -> 200 with {"result":"ok"}
+/v1/stats -> 404
 /metrics -> 404
 /internal/diagnostics/summary -> 404
 ```
 
-confirm direct port `8070` is unreachable from untrusted networks and the
-permitted private scrape returns `200`. Then validate a real browser join from
-Odoo because HTTP health does not validate the UDP media path
+confirm direct port `8070` is unreachable from untrusted networks and authorized
+private operator requests return `200`. Then validate a real browser join
+from Odoo because HTTP health does not validate the UDP media path
 
 ## deployment checklist
 
@@ -426,8 +454,7 @@ proxy:
 - NGINX uses HTTP/1.1 upstream for WebSocket upgrade support
 - NGINX forwards `Upgrade` and `Connection`
 - NGINX overwrites `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP` and `Host`
-- `/metrics` is not public
-- `/internal/diagnostics/...` is not public
+- `/v1/stats`, `/metrics` and `/internal/diagnostics/...` are not public
 
 runtime:
 
@@ -440,16 +467,15 @@ runtime:
 - `PROXY=true` is set only behind the trusted NGINX edge
 - `AUTH_KEY` matches the Odoo caller configuration
 - `AUTH_KEY` decodes to at least 32 bytes generated with cryptographically safe randomness
-- `DIAGNOSTICS_AUTH_TOKEN` is set for operator routes
+- `DIAGNOSTICS_AUTH_TOKEN` is generated independently from at least 32 random bytes
 - `RTC_MEDIA_WORKER_COUNT` fits the VM capacity
 - `ROOM_MAX_LOCAL_ROUTERS` does not exceed `RTC_MEDIA_WORKER_COUNT`
 
 validation:
 
 - `GET /v1/noop` succeeds through HTTPS
-- public `/metrics` returns `404`
-- public `/internal/diagnostics/summary` returns `404`
-- private Prometheus can scrape `/metrics`
+- public `/v1/stats`, `/metrics` and `/internal/diagnostics/summary` return `404`
+- private operator requests send `DIAGNOSTICS_AUTH_TOKEN` over a confidential transport
 - browser join through Odoo succeeds
 - if HTTP succeeds but media fails, check UDP firewalls and the `sfu-server` tag first
 
@@ -462,13 +488,13 @@ required:
 | `ANNOUNCED_IP` | required | concrete advertised IP address used in ICE-lite SDP |
 | `AUTH_KEY` | required | base64 key with at least 32 decoded bytes used to sign and verify SFU JWTs |
 
-HTTP, proxy and diagnostics:
+HTTP and operator access:
 
 | variable | default | description |
 | --- | --- | --- |
 | `BIND_ADDRESS` | `0.0.0.0:8070` | HTTP and WebSocket listening address |
 | `PROXY` | `false` | trusts proxy-provided request metadata when `true` |
-| `DIAGNOSTICS_AUTH_TOKEN` | unset | bearer token for `/internal/diagnostics/...`, diagnostics are allowed only on loopback listeners when unset |
+| `DIAGNOSTICS_AUTH_TOKEN` | unset | bearer token for `/v1/stats`, `/metrics` and `/internal/diagnostics/...`. Tokenless access requires the actual listener to use loopback |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | positive total deadline in milliseconds for listener, WebSocket session, background task and RTC worker drainage |
 
 authentication and websocket admission:

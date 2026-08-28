@@ -4,6 +4,7 @@ use super::env::{Env, non_empty};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiagnosticsConfig {
+    /// Bearer token required on every listener when configured.
     pub auth_token: Option<String>,
 }
 
