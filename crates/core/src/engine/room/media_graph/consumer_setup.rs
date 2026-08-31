@@ -62,7 +62,7 @@ pub struct CommittedConsumerSetup {
     pub(super) transport_activity_update: Option<bool>,
 }
 
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "consumer setup outcomes are returned and matched immediately so boxing the committed setup would allocate on every successful consumer setup"
 )]

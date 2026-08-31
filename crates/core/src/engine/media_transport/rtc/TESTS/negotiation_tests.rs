@@ -275,7 +275,7 @@ async fn rtc_initial_session_offer_advertises_h264_simulcast_when_h264_leads() {
     assert_eq!(video_slot.simulcast_encodings[1].resolution_scale, None);
 }
 
-#[allow(
+#[expect(
     clippy::redundant_closure_for_method_calls,
     reason = "str0m keeps the media-line type private so its method cannot be named here"
 )]

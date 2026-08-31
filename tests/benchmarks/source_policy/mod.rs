@@ -158,7 +158,7 @@ impl SourcePolicyFixture {
     ///
     /// one warm-up turn at full headroom settles the initial selections so the
     /// measured turns are all bandwidth-driven changes
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "benchmark setup must fail loudly when deterministic room setup is invalid"
     )]
@@ -172,7 +172,7 @@ impl SourcePolicyFixture {
     }
 
     /// runs the measured source-policy turns and returns the accumulated work
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "benchmark execution must fail loudly when the fixed room flow stops being valid"
     )]
@@ -207,7 +207,7 @@ impl SourcePolicyFixture {
     /// subscription is not on the top layer" are true even with no bandwidth at
     /// all, because thumbnails are supposed to sit on a low layer. only comparing
     /// a relaxed run against a pressured one proves the budget changed the plan
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "a scenario that stopped constraining the plan must fail loudly"
     )]
@@ -229,7 +229,7 @@ impl SourcePolicyFixture {
     }
 }
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "benchmark setup must fail loudly when the current-thread runtime cannot boot"
 )]

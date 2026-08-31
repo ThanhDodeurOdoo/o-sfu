@@ -1,8 +1,10 @@
 #![allow(
-    clippy::indexing_slicing,
     clippy::panic,
+    reason = "diagnostics route tests use panic for malformed response failures"
+)]
+#![expect(
+    clippy::indexing_slicing,
     clippy::too_many_lines,
-    clippy::use_self,
     reason = "the diagnostics route tests keep one end-to-end diagnostics scenario with direct field assertions"
 )]
 

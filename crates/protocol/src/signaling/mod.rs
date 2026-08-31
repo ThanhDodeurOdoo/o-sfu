@@ -1,7 +1,7 @@
 //! Native signaling protocol surface and wire codec.
 
 #[cfg(test)]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 mod catalog;
 mod codec;

@@ -107,7 +107,7 @@ impl UserId {
 /// the room advertises
 /// which features exist for the call, then per-user permissions decide who may
 /// actually start or change a restricted feature
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "feature flags mirror the compatibility startup surface with explicit optional room capabilities"
 )]

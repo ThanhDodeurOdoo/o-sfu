@@ -205,7 +205,7 @@ fn drain_ready_sessions(state: &mut PacketLoopState) -> Vec<TransportSessionKey>
     collect_ready_session_keys(state, Instant::now())
 }
 
-#[allow(
+#[expect(
     clippy::expect_used,
     reason = "test setup helpers should fail loudly when a required RTC fixture cannot be built"
 )]
@@ -382,7 +382,7 @@ fn run_packet_loop_io_test(
         .block_on(test)
 }
 
-#[allow(
+#[expect(
     clippy::expect_used,
     reason = "test setup helpers should fail loudly when a required RTC fixture is missing"
 )]
@@ -553,7 +553,7 @@ fn set_source_route_active(
     state.routes.set_source_active(src_media, active).is_ok()
 }
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "test setup helpers should fail loudly when a fixture queues the wrong command"
 )]
@@ -572,11 +572,7 @@ fn drain_remote_packet_gate_setup(control_rx: &mut mpsc::Receiver<RtcWorkerComma
     }
 }
 
-#[allow(
-    clippy::expect_used,
-    reason = "test setup helpers should fail loudly when a saturated remote keyframe fixture cannot be built"
-)]
-#[allow(
+#[expect(
     clippy::panic,
     reason = "test assertion helpers should fail loudly when the command shape is wrong"
 )]
@@ -632,7 +628,7 @@ fn assert_remote_keyframe_request(
     assert_eq!(actual_kind, kind);
 }
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "test assertion helpers should fail loudly when an unexpected command is queued"
 )]
@@ -809,7 +805,7 @@ impl PacketLoopHarness {
         }
     }
 
-    #[allow(
+    #[expect(
         clippy::expect_used,
         reason = "test setup helpers should fail loudly when a required remote keyframe fixture cannot be built"
     )]
@@ -881,7 +877,7 @@ impl PacketLoopHarness {
 }
 
 fn packet_loop_config_for_test() -> PacketLoopConfig {
-    #![allow(
+    #![expect(
         clippy::panic,
         reason = "packet-loop test configs cannot return Result and must fail loudly when no RTC ports are available"
     )]

@@ -1,6 +1,6 @@
 //! pure routed topology plus the RTP models used at its boundary
 #[cfg(test)]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod diagnostic;

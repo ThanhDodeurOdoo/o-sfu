@@ -41,7 +41,7 @@ pub const WORKER_PACKET_COMMAND_MIX_PACKETS: usize = 512;
 const PACKETS_PER_LIFECYCLE_BURST: usize = 32;
 const WORKER_PACKET_COMMAND_MIX_FANOUT: usize = 8;
 
-#[allow(
+#[expect(
     clippy::expect_used,
     reason = "benchmark setup must fail when its RTC profile or worker cannot start"
 )]
@@ -82,7 +82,7 @@ impl WorkerLoopBenchFixture {
     /// panics when the benchmark runtime cannot be created or when the worker
     /// cannot create its bootstrap offer
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "benchmark setup must fail loudly when the current-thread worker cannot boot"
     )]
@@ -125,10 +125,6 @@ impl WorkerLoopBenchFixture {
         })
     }
 
-    #[allow(
-        clippy::panic,
-        reason = "benchmark setup must fail loudly when the worker cannot create its bootstrap offer"
-    )]
     fn bootstrap_worker(&self) {
         let result = self.runtime.block_on(
             self.worker
@@ -175,7 +171,7 @@ impl WorkerPacketCommandMixBenchFixture {
     /// panics when the benchmark runtime cannot be created or when a worker
     /// command unexpectedly fails
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "benchmark setup must fail loudly when the current-thread worker cannot boot"
     )]
@@ -235,10 +231,6 @@ impl WorkerPacketCommandMixBenchFixture {
         observed
     }
 
-    #[allow(
-        clippy::panic,
-        reason = "benchmark setup must fail loudly when the base worker session cannot boot"
-    )]
     fn bootstrap_base_session(&self) {
         let result = self.runtime.block_on(
             self.worker
@@ -309,7 +301,7 @@ fn audio_rtp_parameters(mid: &str, ssrc: u32) -> RouterRtpParameters {
     .with_mid(mid.to_owned())
 }
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "benchmark setup and measurement should fail loudly when required worker commands fail"
 )]

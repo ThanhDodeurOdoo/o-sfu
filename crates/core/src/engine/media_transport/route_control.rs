@@ -218,7 +218,7 @@ struct MediaControlExecution<P, C> {
     consumer_results: Vec<(C, ConsumerRouteControlOutcome)>,
 }
 
-#[allow(
+#[expect(
     clippy::indexing_slicing,
     reason = "plan indexes are created by enumerate alongside their result slots"
 )]

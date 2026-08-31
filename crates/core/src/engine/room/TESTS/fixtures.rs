@@ -65,10 +65,6 @@ pub(super) fn test_sender() -> (UserOutboundSender, UserOutboundReceiver) {
     UserOutboundSender::channel(1024, Arc::new(RuntimeMetrics::default()))
 }
 
-#[allow(
-    clippy::panic,
-    reason = "the room test fixture uses a valid RTC config and should fail loudly if it stops being valid"
-)]
 pub(super) fn real_adapter() -> MediaTransport {
     real_adapter_with_metrics(Arc::new(RuntimeMetrics::default()))
 }

@@ -103,7 +103,7 @@ impl Default for GeneralCallFixture {
 }
 
 impl GeneralCallFixture {
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "benchmark setup must fail loudly when deterministic core-room setup is invalid"
     )]
@@ -116,7 +116,7 @@ impl GeneralCallFixture {
         Self { runtime, scenario }
     }
 
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "benchmark execution must fail loudly when the fixed room flow stops being valid"
     )]
@@ -129,7 +129,7 @@ impl GeneralCallFixture {
     }
 }
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "benchmark setup must fail loudly when the current-thread runtime cannot boot"
 )]

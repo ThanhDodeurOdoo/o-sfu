@@ -18,7 +18,7 @@ mod subscription;
 mod topology;
 
 #[cfg(test)]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 #[cfg(test)]
 #[path = "TESTS/route_graph.rs"]

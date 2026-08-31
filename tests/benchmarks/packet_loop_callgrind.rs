@@ -18,7 +18,7 @@
 //! keyframe-request coalescing without mixing socket waits into the instruction
 //! count
 
-#![allow(
+#![expect(
     clippy::exit,
     clippy::must_use_candidate,
     clippy::needless_pass_by_value,
@@ -191,7 +191,6 @@ fn packet_sink_512(mut fixture: PacketSinkFanoutBenchFixture) -> usize {
 //
 // this protects dense room policy changes from adding per-consumer lookup cost
 // beyond the required destination validation and one aggregate source refresh
-#[allow(clippy::panic, reason = "invalid fixtures must fail the benchmark")]
 fn validate_route_gate_batch(fixture: ConsumerGateBatchBenchFixture) {
     assert!(fixture.updates_applied());
 }
@@ -243,10 +242,6 @@ fn local_rewrite_4096(mut fixture: LocalRewriteBenchFixture) -> u64 {
 //
 // this protects the destination-session lookup and counter update paid after
 // str0m accepts each forwarded packet
-#[allow(
-    clippy::panic,
-    reason = "invalid local-send accounting must fail the benchmark"
-)]
 fn validate_local_send(fixture: LocalSendBenchFixture) {
     assert!(fixture.accounting_matches());
 }

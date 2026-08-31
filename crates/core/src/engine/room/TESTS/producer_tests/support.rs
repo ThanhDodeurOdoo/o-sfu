@@ -437,7 +437,7 @@ pub(super) fn build_real_rtc_media_transport() -> MediaTransport {
     build_real_rtc_media_transport_with_metrics(Arc::new(RuntimeMetrics::default()))
 }
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "the RTC room test fixture uses a valid test configuration and should fail loudly if it stops being valid"
 )]

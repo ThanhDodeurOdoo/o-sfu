@@ -19,7 +19,7 @@
 //! `Callgrind` instrumentation starts after fixture setup and warmup
 //! instrumentation stops before control returns to the generated harness
 
-#![allow(
+#![expect(
     clippy::exit,
     clippy::must_use_candidate,
     clippy::needless_pass_by_value,

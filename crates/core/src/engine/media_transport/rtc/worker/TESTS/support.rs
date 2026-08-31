@@ -392,7 +392,7 @@ impl RtcWorkerTestBuilder {
     }
 
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::expect_used,
         reason = "test setup must fail when its RTC profile or worker cannot start"
     )]

@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "room test helpers are compiled in normal builds so downstream integration tests can use core test APIs"
-)]
-
 use std::collections::BTreeMap;
 
 use o_sfu_router::MediaKind;

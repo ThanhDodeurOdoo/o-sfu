@@ -101,7 +101,7 @@
 //! - [`buffers`] owns the reusable allocation surface used by the whole turn.
 
 #[cfg(test)]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 mod buffers;
 mod delay;

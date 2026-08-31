@@ -62,7 +62,7 @@ impl WorkerCommandContext<'_> {
 }
 
 /// Applies one production command to worker-local RTC state.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "one exhaustive command match keeps dispatch compiler checked and auditable"
 )]

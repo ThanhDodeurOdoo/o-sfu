@@ -58,10 +58,6 @@ impl IncomingObservationBenchFixture {
     ///
     /// Panics when the static VP8 packets do not match the negotiated fixture.
     #[must_use]
-    #[allow(
-        clippy::panic,
-        reason = "benchmark setup must reject malformed negotiated VP8 packets before measurement"
-    )]
     pub fn negotiated_vp8() -> Self {
         let parameters = RouterRtpParameters::new(
             vec![MediaFormat::new(
