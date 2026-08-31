@@ -23,7 +23,7 @@ pub fn prepare_source_session(
     prepare_source_session_with_rid(state, src_key, src_mid, ssrc, None)
 }
 
-#[allow(
+#[expect(
     clippy::panic,
     reason = "invalid session setup must fail route fixtures"
 )]

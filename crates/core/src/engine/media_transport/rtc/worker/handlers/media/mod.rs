@@ -1,7 +1,7 @@
 //! Worker-local media mutation boundary
 
 #[cfg(test)]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 mod control;
 mod keyframe;

@@ -29,10 +29,6 @@ pub mod event {
     pub const TRANSPORT_HEALTH_CHANGED: &str = "transport.health.changed";
 }
 
-#[allow(
-    dead_code,
-    reason = "The field catalog intentionally grows ahead of broad JSON-log and trace rollout so correlation names stay centralized."
-)]
 pub mod field {
     pub const ROOM_ID: &str = "room_id";
     pub const CLOSE_CODE: &str = "close_code";

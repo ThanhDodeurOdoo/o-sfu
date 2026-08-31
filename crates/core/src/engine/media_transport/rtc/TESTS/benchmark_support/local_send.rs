@@ -51,7 +51,7 @@ impl LocalSendBenchFixture {
     ///
     /// Panics when the RTC session or its warm-up send cannot be constructed.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::expect_used,
         clippy::panic,
         reason = "benchmark setup must fail when the RTC send fixture cannot be built"

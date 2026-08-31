@@ -25,7 +25,7 @@ use crate::engine::MediaWorkerId;
 use crate::engine::{ConnectionId, UserId, UserInfo, media_transport::TransportTeardown};
 
 #[cfg(test)]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 
 #[derive(Debug, Default)]
@@ -69,7 +69,7 @@ pub struct JoinCommit {
     pub transport_plan: RoomTransportPlan,
 }
 
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "connection close is cold and boxing the room transport plan would add allocation without simplifying ownership"
 )]

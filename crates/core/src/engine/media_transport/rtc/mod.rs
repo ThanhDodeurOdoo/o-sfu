@@ -30,7 +30,7 @@ use std::{sync::Arc, time::Duration};
 use crate::{SessionBitrateLimits, VideoBitrateLimits};
 
 #[cfg(test)]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 mod TESTS;
 #[cfg(feature = "internal-benchmarks")]
 #[path = "TESTS/benchmark_support/mod.rs"]

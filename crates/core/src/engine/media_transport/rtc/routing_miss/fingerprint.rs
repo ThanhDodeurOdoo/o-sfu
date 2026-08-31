@@ -74,7 +74,7 @@ mod simd {
             uint8x16_t, uint64x2_t, vgetq_lane_u64, vld1q_u8, vreinterpretq_u64_u8,
         };
 
-        #[allow(
+        #[expect(
             unsafe_code,
             reason = "we need it because SIMD fingerprinting requires NEON intrinsics,
                       it is safe because aarch64 has NEON enabled by default and
@@ -95,7 +95,7 @@ mod simd {
             uint8x16_t, uint64x2_t, vgetq_lane_u64, vld1q_u8, vreinterpretq_u64_u8,
         };
 
-        #[allow(
+        #[expect(
             unsafe_code,
             reason = "we need it because SIMD fingerprinting requires NEON intrinsics,
                       it is safe because aarch64 has NEON enabled by default and
@@ -114,7 +114,7 @@ mod simd {
     fn first_u64(packet: &[u8]) -> u64 {
         use std::arch::x86_64::{__m128i, _mm_cvtsi128_si64, _mm_loadu_si128};
 
-        #[allow(
+        #[expect(
             unsafe_code,
             reason = "we need it because SIMD fingerprinting requires SSE2 intrinsics,
                       it is safe because x86_64 guarantees SSE2 availability and
@@ -122,7 +122,7 @@ mod simd {
                       16-byte unaligned load is strictly in-bounds"
         )]
         unsafe {
-            #[allow(
+            #[expect(
                 clippy::cast_ptr_alignment,
                 reason = "_mm_loadu_si128 requires a __m128i pointer type while performing an unaligned load"
             )]
@@ -136,7 +136,7 @@ mod simd {
     fn last_u64(packet: &[u8]) -> u64 {
         use std::arch::x86_64::{__m128i, _mm_cvtsi128_si64, _mm_loadu_si128, _mm_srli_si128};
 
-        #[allow(
+        #[expect(
             unsafe_code,
             reason = "we need it because SIMD fingerprinting requires SSE2 intrinsics,
                       it is safe because x86_64 guarantees SSE2 availability and
@@ -144,7 +144,7 @@ mod simd {
                       ensuring the 16-byte unaligned load is entirely in-bounds"
         )]
         unsafe {
-            #[allow(
+            #[expect(
                 clippy::cast_ptr_alignment,
                 reason = "_mm_loadu_si128 requires a __m128i pointer type while performing an unaligned load"
             )]

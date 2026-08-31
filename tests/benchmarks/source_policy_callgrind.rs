@@ -8,10 +8,13 @@
 //! needs a `RoomState` the packet loop never sees
 
 #![allow(
+    clippy::needless_pass_by_value,
+    reason = "Gungraun's generated harness owns setup values"
+)]
+#![expect(
     clippy::exit,
     clippy::must_use_candidate,
-    clippy::needless_pass_by_value,
-    reason = "Gungraun's generated harness owns setup values, returns measured outputs and exits with the runner status"
+    reason = "Gungraun's generated harness returns measured outputs and exits with the runner status"
 )]
 
 mod source_policy;

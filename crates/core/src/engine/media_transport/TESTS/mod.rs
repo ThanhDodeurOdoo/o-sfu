@@ -328,7 +328,7 @@ async fn assert_media_control_batch_bound(
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines, reason = "one phase-order scenario")]
+#[expect(clippy::too_many_lines, reason = "one phase-order scenario")]
 async fn media_transport_plan_updates_source_route() {
     let adapter = test_media_transport(3, test_rtc_port_range());
     let source_session = test_session_key(60, 1, 1, UserId::Integer(1));

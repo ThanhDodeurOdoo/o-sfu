@@ -129,7 +129,7 @@ impl RuntimeTestBuilder {
         self
     }
 
-    #[allow(
+    #[expect(
         clippy::panic,
         reason = "runtime tests use validated in-process RTC fixtures and should fail loudly if construction becomes invalid"
     )]

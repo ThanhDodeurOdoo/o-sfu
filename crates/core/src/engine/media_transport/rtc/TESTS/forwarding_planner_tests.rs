@@ -464,10 +464,6 @@ fn plan_forwards_only_relays_the_registered_source_media() {
     );
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the two-consumer route matrix is clearer as one complete planner regression"
-)]
 #[test]
 fn plan_forwards_enforces_per_consumer_rid_gates_after_aggregate_admits() {
     let producer_session = test_transport_session_key(81, 0, 82, UserId::Integer(83));
@@ -522,10 +518,6 @@ fn plan_forwards_enforces_per_consumer_rid_gates_after_aggregate_admits() {
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the two-relay-target matrix is clearer as one complete planner regression"
-)]
 #[test]
 fn plan_forwards_enforces_per_relay_target_gates_after_aggregate_admits() {
     let producer_session = test_transport_session_key(91, 0, 92, UserId::Integer(93));
@@ -588,10 +580,6 @@ fn plan_forwards_enforces_per_relay_target_gates_after_aggregate_admits() {
     assert_eq!(snapshot.rtc_route_control_layer_dropped(), 0);
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the mixed local-plus-remote routing setup is easiest to audit when the full source-to-destination matrix stays inline in one regression test"
-)]
 #[test]
 fn plan_forwards_gates_only_the_selected_source_media() {
     let gated_producer_session = test_transport_session_key(61, 0, 62, UserId::Integer(63));

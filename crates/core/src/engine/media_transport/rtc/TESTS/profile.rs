@@ -81,7 +81,7 @@ fn all_codec_sets_keep_profile_views_aligned() {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "the complete wire contract is clearer as one exact profile regression"
 )]
@@ -225,7 +225,7 @@ fn all_enabled_profile_keeps_the_browser_wire_contract() {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "the malformed topology table shares one valid repair fixture"
 )]

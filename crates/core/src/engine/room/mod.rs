@@ -11,7 +11,7 @@
 //! snapshots.
 
 #[cfg(any(test, feature = "testing-transport"))]
-#[allow(non_snake_case, reason = "test modules map to local TESTS directories")]
+#[expect(non_snake_case, reason = "test modules map to local TESTS directories")]
 pub(crate) mod TESTS;
 mod definition;
 mod directory;

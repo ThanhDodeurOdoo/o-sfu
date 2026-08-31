@@ -325,7 +325,7 @@ impl AuthenticatedSession {
     }
 
     /// Checks transport health before each ping so RTC teardown closes idle sessions.
-    #[allow(
+    #[expect(
         clippy::cognitive_complexity,
         reason = "all session wake sources stay in one owner loop"
     )]
