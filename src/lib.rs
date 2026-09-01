@@ -106,8 +106,9 @@
 //!
 //! Tokens are `HS256` only. [`auth::verify`] rejects any other `alg`, checks the
 //! HMAC in constant time and enforces `exp`, `nbf` plus an `iat` future-skew
-//! bound. It caps token size at [`auth::MAX_JWT_TOKEN_BYTES`]. Two keys scope
-//! trust:
+//! bound. It caps token size at [`auth::MAX_JWT_TOKEN_BYTES`].
+//!
+//! There are two different keys:
 //!
 //! - **Server-to-server key**: `AUTH_KEY` (base64, at least 32 bytes) verifies
 //!   the HTTP [`http::CreateRoomQuery`] path through [`auth::HttpRoomClaims`] and
@@ -118,9 +119,9 @@
 //!   `AUTH_KEY` and provided seed using the following KDF:
 //!   ```text
 //!   room_key = Base64StdPad(HMAC-SHA256(
-//!                  key = Base64Decode(AUTH_KEY),
-//!                  message = Base64Decode(keySeed)
-//!              ))
+//!       key = Base64Decode(AUTH_KEY),
+//!       message = Base64Decode(keySeed)
+//!   ))
 //!   ```
 //!   WebSocket [`auth::WebSocketConnectClaims`] verify against that room key,
 //!   never against `AUTH_KEY`.
@@ -163,7 +164,7 @@
 //!
 //! ## Media Transport
 //!
-//! `str0m` terminates ICE, DTLS and SRTP over UDP with the `aws-lc-rs` crypto
+//! `str0m` terminates ICE, DTLS and SRTP over UDP with the [`aws-lc-rs`](https://github.com/aws/aws-lc-rs) crypto
 //! backend. `o-sfu` builds and drives the `str0m` session but implements no DTLS
 //! or SRTP itself: it forwards already-decrypted RTP between sessions and hands
 //! outbound RTP back to `str0m` for SRTP protection.
