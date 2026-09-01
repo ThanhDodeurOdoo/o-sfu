@@ -377,3 +377,25 @@ async fn room_route_reuses_a_reservation_that_repeats_key_and_config() -> TestRe
     assert_eq!(test_state.state.metrics.snapshot().http_room_conflict(), 0);
     Ok(())
 }
+
+#[tokio::test]
+async fn malformed_room_route_query_counts_as_bad_request() -> TestResult {
+    let state = test_state();
+    let token = room_token(Some("issuer-malformed-query"), Some(TEST_ROOM_KEY), None)?;
+
+    route_status(
+        &state,
+        Request::get(format!("{}?webRTC=invalid", route::v1::CHANNEL))
+            .header(header::HOST, "sfu.example.com")
+            .header(header::AUTHORIZATION, format!("Bearer {token}")),
+        Body::empty(),
+        StatusCode::BAD_REQUEST,
+        "authorized room request with malformed query should fail",
+    )
+    .await?;
+
+    let metrics = state.metrics.snapshot();
+    assert_eq!(metrics.http_room_requests(), 1);
+    assert_eq!(metrics.http_room_bad_request(), 1);
+    Ok(())
+}
