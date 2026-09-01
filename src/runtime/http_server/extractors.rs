@@ -106,7 +106,7 @@ impl FromRequestParts<RuntimeState> for VerifiedRoomRequest {
         };
         let Query(query) = Query::<CreateRoomQuery>::from_request_parts(parts, state)
             .await
-            .map_err(|_error| StatusCode::BAD_REQUEST)?;
+            .map_err(|_error| record_room_rejection(state, StatusCode::BAD_REQUEST))?;
         let Some(token) = room_authorization_token(&parts.headers) else {
             return Err(record_room_rejection(state, StatusCode::UNAUTHORIZED));
         };
