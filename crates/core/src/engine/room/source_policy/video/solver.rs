@@ -247,16 +247,16 @@ pub(in crate::engine::room::source_policy) fn append_receiver_video_policy(
             continue;
         };
         let consumer_user_id = &first_route.key.receiver;
-        let selected_video = append_receiver_policy_updates(
+        let video_demand = append_receiver_policy_updates(
             tx,
             receiver_routes,
             max_video_downloads_per_receiver,
             tuning,
         );
-        // The target is seeded with this receiver's audio reserve, so add the
-        // selected video to report the full send allocation to str0m's BWE.
+        // The target is seeded with this receiver's audio reserve. Add eventual
+        // admitted video demand so str0m can probe while overload pauses routes.
         if let Some(update) = receiver_bwe_targets.get_mut(consumer_user_id) {
-            update.set_target(update.target().saturating_add(selected_video));
+            update.set_target(update.target().saturating_add(video_demand));
         }
     }
     tx.set_receiver_bwe_targets(receiver_bwe_targets.into_values().collect());
@@ -321,7 +321,7 @@ pub(in crate::engine::room::source_policy) fn append_receiver_video_policy(
 ///          +-------------------------------------------------------+
 ///                                     |
 ///                                     v
-///              Selection Updates + Allocated Bandwidth
+///              Selection Updates + Receiver BWE Demand
 /// ```
 fn append_receiver_policy_updates<'a>(
     tx: &mut SourcePolicyTransaction,
@@ -346,13 +346,22 @@ fn append_receiver_policy_updates<'a>(
     // Apply the hard route count before sharing bandwidth. Rejected routes must
     // not consume receiver budget or force admitted routes down.
     apply_video_download_limit(&mut planned_routes, max_video_downloads_per_receiver);
+    // str0m caps probes from the desired target. Use each hard-admitted route's
+    // highest allowed layer so current BWE cannot bound future discovery.
+    let eventual_admitted_video_bitrate = admitted_video_bwe_demand(&planned_routes);
     if let Some(video_budget) = video_budget {
         apply_overload_policy(&mut planned_routes, video_budget);
     }
     let budget_diagnostics =
         receiver_video_budget_diagnostics(&planned_routes, receiver_bandwidth, video_budget);
+    let mut routed_video_bitrate = Bitrate::zero();
     for planned_route in planned_routes {
         let selection = resolve_hysteresis(&planned_route, tuning);
+        if selection.policy_pause_reason.is_none() {
+            routed_video_bitrate = routed_video_bitrate.saturating_add(
+                selector_bitrate(planned_route.input, selection.selector).unwrap_or_default(),
+            );
+        }
         let Some(update) = projection::consumer_packet_selection_update(
             &planned_route,
             selection,
@@ -366,7 +375,8 @@ fn append_receiver_policy_updates<'a>(
             tx.push_state_update(update);
         }
     }
-    budget_diagnostics.selected_video_bitrate()
+    // Hysteresis can keep a higher current selector routed for this turn.
+    eventual_admitted_video_bitrate.max(routed_video_bitrate)
 }
 
 fn route_plan(
@@ -460,11 +470,19 @@ fn selector_bitrate(
 }
 
 fn highest_allowed_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverRouteSelection> {
+    let target_selector = highest_allowed_selector(route)?;
+    Some(adaptation_send(
+        target_selector,
+        target_selector != route.current_selection.selector(),
+    ))
+}
+
+fn highest_allowed_selector(route: &ReceiverVideoRouteInput<'_>) -> Option<SourceSelector> {
     let source_cap = route.source.policy().video_bitrate_cap();
     if route.source.selectable_encoding_count() == 0 {
         return source_cap
             .is_none_or(|cap| route.source_bitrate.is_some_and(|rate| rate <= cap))
-            .then(|| adaptation_send(SourceSelector::Open, false));
+            .then_some(SourceSelector::Open);
     }
     let target_index = allowed_encoding_indices(route.source, source_cap)
         .next_back()
@@ -474,15 +492,11 @@ fn highest_allowed_plan(route: &ReceiverVideoRouteInput<'_>) -> Option<ReceiverR
                     .is_some_and(|cap| route.source_bitrate.is_some_and(|rate| rate <= cap)))
             .then_some(0)
         })?;
-    let target_selector = SourceSelector::Encoding(
+    Some(SourceSelector::Encoding(
         route
             .source
             .selectable_encoding_by_rank(target_index)?
             .encoding_id(),
-    );
-    Some(adaptation_send(
-        target_selector,
-        target_selector != route.current_selection.selector(),
     ))
 }
 
@@ -569,9 +583,13 @@ fn scalable_plan(
         return Some(adaptation_send(target_selector, request_keyframe));
     }
     if target_index < current_index {
-        if source_cap.is_some_and(|cap| {
-            selector_bitrate(route, current.selector()).is_some_and(|bitrate| bitrate > cap)
-        }) {
+        // A policy-paused route has no delivered quality transition to smooth.
+        // Downswitch hysteresis would reset the observations needed to resume it.
+        if !current.policy_allows_delivery()
+            || source_cap.is_some_and(|cap| {
+                selector_bitrate(route, current.selector()).is_some_and(|bitrate| bitrate > cap)
+            })
+        {
             return Some(adaptation_send(target_selector, request_keyframe));
         }
         let pressure_limit = tuning.downswitch_pressure_observations;
@@ -823,6 +841,18 @@ fn selected_active_video_bitrate(routes: &[PlannedReceiverRoute<'_>]) -> Bitrate
         .filter(|route| route.selection.policy_pause_reason.is_none())
         .fold(Bitrate::zero(), |total, route| {
             total.saturating_add(route.selected_bitrate)
+        })
+}
+
+fn admitted_video_bwe_demand(routes: &[PlannedReceiverRoute<'_>]) -> Bitrate {
+    routes
+        .iter()
+        .filter(|route| route.selection.policy_pause_reason.is_none())
+        .fold(Bitrate::zero(), |total, route| {
+            let route_demand = highest_allowed_selector(route.input)
+                .and_then(|selector| selector_bitrate(route.input, selector))
+                .unwrap_or(route.selected_bitrate);
+            total.saturating_add(route_demand.max(route.selected_bitrate))
         })
 }
 

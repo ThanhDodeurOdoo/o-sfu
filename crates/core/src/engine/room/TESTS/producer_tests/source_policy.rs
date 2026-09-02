@@ -32,6 +32,40 @@ fn plan_policy(
     )
 }
 
+async fn apply_policy_observations(
+    scenario: &SourcePolicyScenario,
+    bandwidth: &ReceiverBandwidthSnapshot,
+    observations: u8,
+) {
+    for _ in 0..observations {
+        let tx = {
+            let state = scenario.room.state.read().await;
+            plan_policy(&state, &[], bandwidth)
+                .expect("bandwidth observation should produce a policy update")
+        };
+        tx.execute(&scenario.room, &scenario.adapter).await;
+    }
+}
+
+async fn assert_scalable_video_rid_for_publishers(
+    scenario: &SourcePolicyScenario,
+    receiver: &UserId,
+    publishers: impl IntoIterator<Item = i64>,
+    expected_rid: &str,
+) {
+    for publisher in publishers {
+        assert_subscription_selected_rid(
+            &scenario.room,
+            &scenario.adapter,
+            receiver,
+            &UserId::Integer(publisher),
+            TestSourceKind::ScalableVideo,
+            expected_rid,
+        )
+        .await;
+    }
+}
+
 #[tokio::test]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
     let (room, adapter, metrics, mut publisher_rx, mut subscriber_rx) =
@@ -1163,16 +1197,13 @@ async fn per_receiver_audio_reserve_excludes_own_and_counts_only_consumed_audio(
     )
     .await;
 
-    // str0m's desired bitrate is the total send allocation, so it must cover the
-    // 80 kbps of admitted audio on top of the selected video; otherwise BWE
-    // under-probes by exactly the reserved audio.
-    let selected_video =
-        receiver_selected_video_bitrate(&scenario.room, &scenario.adapter, &receiver_user_id).await;
+    // Pressure hysteresis still routes both 900 kbps selectors this turn. The
+    // desired bitrate must cover that 1.8 Mbps plus the 80 kbps audio reserve.
     assert_receiver_bwe_target(
         &scenario.room,
         &scenario.adapter,
         &receiver_user_id,
-        selected_video.saturating_add(Bitrate::from_kbps(80)),
+        Bitrate::from_kbps(1_880),
     )
     .await;
 }
@@ -1409,40 +1440,56 @@ async fn video_download_limit_pauses_every_route_beyond_the_limit() {
         None,
     )
     .await;
+    let receiver = UserId::Integer(2);
+    let selected_video =
+        receiver_selected_video_bitrate(&scenario.room, &scenario.adapter, &receiver).await;
+    assert_receiver_bwe_target(&scenario.room, &scenario.adapter, &receiver, selected_video).await;
 }
 
 #[tokio::test]
-async fn constrained_bandwidth_can_pause_a_pinned_route() {
+async fn constrained_bandwidth_pauses_then_recovers_and_upgrades_a_pinned_route() {
     let scenario = SourcePolicyScenario::three_ready_users().await;
     publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
     scenario
         .set_scalable_video_layout(2, 1, VideoLayoutIntent::Pinned)
         .await;
     let receiver = UserId::Integer(2);
+    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1], "hi").await;
+    let source_media = source_media_id(
+        &scenario.room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
     let connection_id = user_connection_id(&scenario.room, &receiver).await;
     let session_key = scenario
         .room
         .transport_user_key(&receiver, connection_id)
         .await;
+    // The 150 kbps low layer cannot fit, so policy must pause delivery without
+    // removing the demand str0m needs to probe for its recovery.
     let receiver_bandwidth = ReceiverBandwidthSnapshot {
-        per_session: vec![(session_key, Bitrate::zero())],
+        per_session: vec![(session_key.clone(), Bitrate::from_kbps(100))],
     };
     let policy_updates = scenario.adapter.source_policy_subscription();
     let _ = policy_updates.take_pending_updates();
-    for observation in 0..VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS {
-        let tx = {
-            let state = scenario.room.state.read().await;
-            plan_policy(&state, &[], &receiver_bandwidth)
-                .expect("constrained receiver should produce a policy update")
-        };
-        tx.execute(&scenario.room, &scenario.adapter).await;
-        if observation == 0 {
-            let follow_up = timeout(Duration::from_secs(1), policy_updates.wait_for_update())
-                .await
-                .expect("unresolved hysteresis should schedule another policy pass");
-            assert!(follow_up.contains(&scenario.room.instance_id()));
-        }
-    }
+    apply_policy_observations(
+        &scenario,
+        &receiver_bandwidth,
+        VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS,
+    )
+    .await;
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        Bitrate::from_kbps(900),
+    )
+    .await;
+    let follow_up = timeout(Duration::from_secs(1), policy_updates.wait_for_update())
+        .await
+        .expect("unresolved hysteresis should schedule another policy pass");
+    assert!(follow_up.contains(&scenario.room.instance_id()));
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -1453,6 +1500,149 @@ async fn constrained_bandwidth_can_pause_a_pinned_route() {
         Some(DiagnosticsPolicyPauseReason::BudgetPressure),
     )
     .await;
+    assert_eq!(
+        receiver_selected_video_bitrate(&scenario.room, &scenario.adapter, &receiver).await,
+        Bitrate::zero()
+    );
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        Bitrate::from_kbps(900),
+    )
+    .await;
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [source_media]).await,
+        vec![UserId::Integer(3)]
+    );
+
+    let recovered_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key.clone(), Bitrate::from_kbps(200))],
+    };
+    apply_policy_observations(
+        &scenario,
+        &recovered_bandwidth,
+        VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
+    )
+    .await;
+
+    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1], "lo").await;
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [source_media]).await,
+        vec![receiver.clone(), UserId::Integer(3)]
+    );
+
+    let upgraded_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::from_kbps(450))],
+    };
+    apply_policy_observations(
+        &scenario,
+        &upgraded_bandwidth,
+        VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
+    )
+    .await;
+
+    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1], "mid").await;
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        Bitrate::from_kbps(900),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn constrained_bandwidth_preserves_demand_for_two_paused_routes() {
+    let scenario = SourcePolicyScenario::three_ready_users().await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(3), &scenario.adapter).await;
+    let receiver = UserId::Integer(2);
+    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1, 3], "hi").await;
+    let first_source_media = source_media_id(
+        &scenario.room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
+    let third_source_media = source_media_id(
+        &scenario.room,
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
+    let connection_id = user_connection_id(&scenario.room, &receiver).await;
+    let session_key = scenario
+        .room
+        .transport_user_key(&receiver, connection_id)
+        .await;
+    let constrained_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key.clone(), Bitrate::from_kbps(100))],
+    };
+    apply_policy_observations(
+        &scenario,
+        &constrained_bandwidth,
+        VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS,
+    )
+    .await;
+
+    for publisher in [UserId::Integer(1), UserId::Integer(3)] {
+        assert_subscription_policy_pause_reason(
+            &scenario.room,
+            &scenario.adapter,
+            &receiver,
+            &publisher,
+            TestSourceKind::ScalableVideo,
+            Some(DiagnosticsPolicyPauseReason::BudgetPressure),
+        )
+        .await;
+    }
+    assert_eq!(
+        receiver_selected_video_bitrate(&scenario.room, &scenario.adapter, &receiver).await,
+        Bitrate::zero()
+    );
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        Bitrate::from_kbps(1_800),
+    )
+    .await;
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_source_media]).await,
+        vec![UserId::Integer(3)]
+    );
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [third_source_media]).await,
+        vec![UserId::Integer(1)]
+    );
+
+    let recovered_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::from_kbps(300))],
+    };
+    apply_policy_observations(
+        &scenario,
+        &recovered_bandwidth,
+        VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
+    )
+    .await;
+
+    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1, 3], "lo").await;
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        Bitrate::from_kbps(1_800),
+    )
+    .await;
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [first_source_media]).await,
+        vec![UserId::Integer(2), UserId::Integer(3)]
+    );
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [third_source_media]).await,
+        vec![UserId::Integer(1), UserId::Integer(2)]
+    );
 }
 
 #[tokio::test]
