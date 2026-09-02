@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { build } from "esbuild";
 
-const repositoryUrl = "https://github.com/ThanhDodeurOdoo/o-sfu";
+const repositoryUrl = "https://github.com/odoo/o-sfu";
 const repositoryDirectory = fileURLToPath(new URL("../../..", import.meta.url));
 const repositoryManifestPath = fileURLToPath(new URL("../../../Cargo.toml", import.meta.url));
 const clientDirectory = fileURLToPath(new URL("..", import.meta.url));

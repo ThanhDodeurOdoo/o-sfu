@@ -2,12 +2,12 @@
 
 <div align="center">
 
-[![Fuzzing](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/fuzzing.yml)
-[![Cargo Deny](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/cargo-deny.yml)
-[![Dependency Review](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/dependency-review.yml)
-[![CodeQL](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/codeql.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/codeql.yml)
-[![OSV-Scanner](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/osv-scanner.yml)
-[![DevSkim](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/devskim.yml/badge.svg)](https://github.com/ThanhDodeurOdoo/o-sfu/actions/workflows/devskim.yml)
+[![Fuzzing](https://github.com/odoo/o-sfu/actions/workflows/fuzzing.yml/badge.svg)](https://github.com/odoo/o-sfu/actions/workflows/fuzzing.yml)
+[![Cargo Deny](https://github.com/odoo/o-sfu/actions/workflows/cargo-deny.yml/badge.svg)](https://github.com/odoo/o-sfu/actions/workflows/cargo-deny.yml)
+[![Dependency Review](https://github.com/odoo/o-sfu/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/odoo/o-sfu/actions/workflows/dependency-review.yml)
+[![CodeQL](https://github.com/odoo/o-sfu/actions/workflows/codeql.yml/badge.svg)](https://github.com/odoo/o-sfu/actions/workflows/codeql.yml)
+[![OSV-Scanner](https://github.com/odoo/o-sfu/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/odoo/o-sfu/actions/workflows/osv-scanner.yml)
+[![DevSkim](https://github.com/odoo/o-sfu/actions/workflows/devskim.yml/badge.svg)](https://github.com/odoo/o-sfu/actions/workflows/devskim.yml)
 
 </div>
 
@@ -48,7 +48,7 @@ The codebase is protected and continuously audited through automated security to
 - SLSA/Sigstore attestations and a SHA256 checksum for every generated artifact
 - A SBOM in SPDX (ISO/IEC 5962:2021) format
 
-see: https://github.com/ThanhDodeurOdoo/o-sfu/releases
+see: https://github.com/odoo/o-sfu/releases
 
 ---
 

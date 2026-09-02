@@ -381,8 +381,8 @@ server {
 
 use the telemetry reference for exact queries and response shapes:
 
-- [Prometheus metrics](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/http/telemetry/metrics/index.html)
-- [HTTP diagnostics](https://thanhdodeurodoo.github.io/o-sfu/o_sfu/http/telemetry/diagnostics/index.html)
+- [Prometheus metrics](https://odoo.github.io/o-sfu/o_sfu/http/telemetry/metrics/index.html)
+- [HTTP diagnostics](https://odoo.github.io/o-sfu/o_sfu/http/telemetry/diagnostics/index.html)
 
 remote Prometheus scrape through a private TLS endpoint when
 `DIAGNOSTICS_AUTH_TOKEN` is configured:
