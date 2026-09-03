@@ -17,7 +17,7 @@ worker-benchmarks = ["internal-benchmarks"]
 [dependencies]
 bitflags = "2.6"
 futures-util.workspace = true
-itertools = "0.14"
+itertools = "0.15"
 o-sfu-rfc.workspace = true
 o-sfu-model.workspace = true
 o-sfu-router.workspace = true

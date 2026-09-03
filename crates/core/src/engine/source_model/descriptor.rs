@@ -195,8 +195,8 @@ impl PublishedSourceDescriptor {
 fn duplicate_encoding_id(encodings: &[SourceEncodingDescriptor]) -> Option<SourceEncodingId> {
     encodings
         .iter()
-        .tuple_combinations()
-        .find_map(|(left, right)| {
+        .array_combinations()
+        .find_map(|[left, right]| {
             (left.encoding_id() == right.encoding_id()).then_some(left.encoding_id())
         })
 }
