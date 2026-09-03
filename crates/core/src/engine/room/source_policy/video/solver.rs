@@ -8,7 +8,11 @@ use std::{cmp::Reverse, collections::BTreeMap};
 use itertools::Itertools;
 
 use super::{
-    super::{input::SourcePolicySnapshot, turn::SourcePolicyTransaction},
+    super::{
+        action::{ReceiverVideoBudgetPlan, VideoRouteAllocation, VideoRouteAllocationState},
+        input::SourcePolicySnapshot,
+        turn::SourcePolicyTransaction,
+    },
     input::{ReceiverVideoRouteInput, receiver_video_routes},
     projection,
 };
@@ -160,21 +164,10 @@ impl ReceiverRouteSelection {
     }
 }
 
-/// metric outcome produced by budget and admission decisions
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RouteOutcome {
-    /// no downgrade or pause recorded by the video solver
-    Neutral,
-    /// selected layer is lower than the previous committed selector
-    Degraded,
-    /// route is paused by video policy
-    Paused,
-}
-
 /// planned receiver route passed to [`projection`] after admission and budget pressure
 ///
-/// `selected_bitrate`, `selection` and `outcome` must change together through
-/// [`Self::send`] or [`Self::pause`]
+/// `selected_bitrate` and `selection` must change together through
+/// [`Self::apply_resolved_selection`], [`Self::send`] or [`Self::pause`]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PlannedReceiverRoute<'a> {
     /// immutable route facts captured before policy mutation
@@ -183,8 +176,6 @@ pub(super) struct PlannedReceiverRoute<'a> {
     pub(super) selected_bitrate: Bitrate,
     /// candidate selector, pause state and hysteresis state
     pub(super) selection: ReceiverRouteSelection,
-    /// diagnostic outcome attached to projection
-    pub(super) outcome: RouteOutcome,
 }
 
 impl<'a> PlannedReceiverRoute<'a> {
@@ -194,39 +185,33 @@ impl<'a> PlannedReceiverRoute<'a> {
         } else {
             selector_bitrate(input, selection.selector).unwrap_or_default()
         };
-        let current_bitrate =
-            selector_bitrate(input, input.current_selection.selector()).unwrap_or_default();
-        let outcome = if selected_bitrate < current_bitrate {
-            RouteOutcome::Degraded
-        } else {
-            RouteOutcome::Neutral
-        };
         Self {
             input,
             selected_bitrate,
             selection,
-            outcome,
         }
     }
 
-    fn send(&mut self, selector: SourceSelector, selected_bitrate: Bitrate, outcome: RouteOutcome) {
+    fn apply_resolved_selection(&mut self, selection: ReceiverRouteSelection) {
+        *self = Self::new(self.input, selection);
+    }
+
+    fn send(&mut self, selector: SourceSelector, selected_bitrate: Bitrate) {
         self.selected_bitrate = selected_bitrate;
         self.selection = ReceiverRouteSelection::send(
             selector,
             self.selection.counts,
             self.selection.request_keyframe,
         );
-        self.outcome = outcome;
     }
 
-    fn pause(&mut self, reason: PolicyPauseReason, outcome: RouteOutcome) {
+    fn pause(&mut self, reason: PolicyPauseReason) {
         self.selected_bitrate = Bitrate::zero();
         self.selection = ReceiverRouteSelection::pause(
             self.input.current_selection,
             reason,
             self.selection.counts,
         );
-        self.outcome = outcome;
     }
 }
 
@@ -329,20 +314,21 @@ fn append_receiver_policy_updates<'a>(
     max_video_downloads_per_receiver: usize,
     tuning: VideoAdaptationTuning,
 ) -> Bitrate {
+    let Some(first_route) = receiver_routes.first() else {
+        return Bitrate::zero();
+    };
     let receiver_bandwidth = receiver_routes
         .iter()
         .find_map(|route| route.receiver_bandwidth);
-    let audio_reserve = receiver_routes
-        .first()
-        .map_or_else(Bitrate::zero, |route| route.audio_budget_reserve);
+    let audio_reserve = first_route.audio_budget_reserve;
     let video_budget = receiver_bandwidth
         .map(|bandwidth| effective_video_budget(bandwidth, tuning, audio_reserve));
-    let mut planned_routes = receiver_routes
-        .iter()
-        .filter_map(|route| {
-            route_plan(route, tuning).map(|selection| PlannedReceiverRoute::new(route, selection))
-        })
-        .collect::<Vec<_>>();
+    let mut planned_routes = Vec::with_capacity(receiver_routes.len());
+    for route in receiver_routes {
+        if let Some(selection) = route_plan(route, tuning) {
+            planned_routes.push(PlannedReceiverRoute::new(route, selection));
+        }
+    }
     // Apply the hard route count before sharing bandwidth. Rejected routes must
     // not consume receiver budget or force admitted routes down.
     apply_video_download_limit(&mut planned_routes, max_video_downloads_per_receiver);
@@ -352,21 +338,37 @@ fn append_receiver_policy_updates<'a>(
     if let Some(video_budget) = video_budget {
         apply_overload_policy(&mut planned_routes, video_budget);
     }
-    let budget_diagnostics =
+    for route in &mut planned_routes {
+        let selection = resolve_hysteresis(route, tuning);
+        route.apply_resolved_selection(selection);
+    }
+    let planned_budget =
         receiver_video_budget_diagnostics(&planned_routes, receiver_bandwidth, video_budget);
-    let mut routed_video_bitrate = Bitrate::zero();
+    if requires_budget_reconciliation(&planned_routes, planned_budget) {
+        let mut planned_index = 0;
+        let routes = receiver_routes
+            .iter()
+            .map(|input| {
+                let resolved = planned_routes
+                    .get(planned_index)
+                    .filter(|route| route.input.key == input.key);
+                if resolved.is_some() {
+                    planned_index += 1;
+                }
+                video_route_allocation(input, resolved)
+            })
+            .collect();
+        debug_assert_eq!(planned_index, planned_routes.len());
+        tx.push_receiver_video_budget_plan(ReceiverVideoBudgetPlan {
+            receiver: first_route.key.receiver.clone(),
+            planned_budget,
+            routes,
+        });
+    }
     for planned_route in planned_routes {
-        let selection = resolve_hysteresis(&planned_route, tuning);
-        if selection.policy_pause_reason.is_none() {
-            routed_video_bitrate = routed_video_bitrate.saturating_add(
-                selector_bitrate(planned_route.input, selection.selector).unwrap_or_default(),
-            );
-        }
-        let Some(update) = projection::consumer_packet_selection_update(
-            &planned_route,
-            selection,
-            budget_diagnostics,
-        ) else {
+        let Some(update) =
+            projection::consumer_packet_selection_update(&planned_route, planned_budget)
+        else {
             continue;
         };
         if update.requires_media_transport_effect() {
@@ -375,8 +377,46 @@ fn append_receiver_policy_updates<'a>(
             tx.push_state_update(update);
         }
     }
-    // Hysteresis can keep a higher current selector routed for this turn.
-    eventual_admitted_video_bitrate.max(routed_video_bitrate)
+    eventual_admitted_video_bitrate.max(planned_budget.selected_video_bitrate())
+}
+
+fn requires_budget_reconciliation(
+    routes: &[PlannedReceiverRoute<'_>],
+    planned_budget: ReceiverVideoBudgetDiagnostics,
+) -> bool {
+    routes.iter().any(|route| {
+        let current = route.input.current_selection;
+        current.budget() != planned_budget
+            || current.selector() != route.selection.selector
+            || current.policy_pause_reason() != route.selection.policy_pause_reason
+    })
+}
+
+fn video_route_allocation(
+    input: &ReceiverVideoRouteInput<'_>,
+    resolved: Option<&PlannedReceiverRoute<'_>>,
+) -> VideoRouteAllocation {
+    let captured = input.current_selection;
+    let captured_selected_bitrate = if captured.policy_pause_reason().is_some() {
+        Bitrate::zero()
+    } else {
+        selector_bitrate(input, captured.selector()).unwrap_or_default()
+    };
+    VideoRouteAllocation {
+        key: input.key.clone(),
+        source_id: input.source.source_id(),
+        route: input.route.clone(),
+        captured: VideoRouteAllocationState {
+            selector: captured.selector(),
+            policy_pause_reason: captured.policy_pause_reason(),
+            selected_bitrate: captured_selected_bitrate,
+        },
+        planned: resolved.map(|route| VideoRouteAllocationState {
+            selector: route.selection.selector,
+            policy_pause_reason: route.selection.policy_pause_reason,
+            selected_bitrate: route.selected_bitrate,
+        }),
+    }
 }
 
 fn route_plan(
@@ -442,7 +482,7 @@ fn source_exceeds_bitrate_cap(route: &ReceiverVideoRouteInput<'_>, cap: Bitrate)
     )
 }
 
-fn selector_bitrate(
+pub(super) fn selector_bitrate(
     route: &ReceiverVideoRouteInput<'_>,
     selector: SourceSelector,
 ) -> Option<Bitrate> {
@@ -735,7 +775,7 @@ fn apply_video_download_limit(
         .k_largest_by_key(routes_to_pause, |(rank_key, _route)| *rank_key)
         .rev()
     {
-        route.pause(PolicyPauseReason::VideoDownloadLimit, RouteOutcome::Paused);
+        route.pause(PolicyPauseReason::VideoDownloadLimit);
     }
 }
 
@@ -774,7 +814,7 @@ fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], video_budget: 
             break;
         }
         let selected_bitrate = route.selected_bitrate;
-        route.pause(PolicyPauseReason::MissingUsableLayer, RouteOutcome::Neutral);
+        route.pause(PolicyPauseReason::MissingUsableLayer);
         total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
     }
     // Step the least important downgradable route down one layer at a time.
@@ -797,7 +837,7 @@ fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], video_budget: 
         total_bitrate = total_bitrate
             .saturating_sub(selected_bitrate)
             .saturating_add(bitrate);
-        route.send(selector, bitrate, RouteOutcome::Degraded);
+        route.send(selector, bitrate);
     }
     if total_bitrate <= video_budget {
         return;
@@ -816,7 +856,7 @@ fn apply_overload_policy(routes: &mut [PlannedReceiverRoute<'_>], video_budget: 
         }
         let selected_bitrate = route.selected_bitrate;
         let pause_reason = pause_reason_for_route(route);
-        route.pause(pause_reason, RouteOutcome::Paused);
+        route.pause(pause_reason);
         total_bitrate = total_bitrate.saturating_sub(selected_bitrate);
     }
 }

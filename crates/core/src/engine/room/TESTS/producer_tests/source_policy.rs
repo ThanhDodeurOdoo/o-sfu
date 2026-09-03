@@ -1,21 +1,24 @@
 use std::time::Duration;
 
+use o_sfu_telemetry::schema::event as telemetry_event;
+use serde_json::json;
 use tokio::time::timeout;
 
-use super::support::*;
+use super::{super::tracing as test_tracing, support::*};
 use crate::engine::{
     UserInfo,
     media_transport::{
-        ActiveSpeakerSource, ReceiverBandwidthSnapshot, TransportBitrateSnapshot, TransportMediaId,
-        TransportTeardown,
+        ActiveSpeakerSource, ReceiverBandwidthSnapshot, SourcePolicyUpdateSubscription,
+        TransportBitrateSnapshot, TransportMediaId, TransportTeardown,
     },
+    metrics::{MetricName, test_support::RuntimeMetricsSnapshotLookup},
     room::{
         DeactivateIntentOutcome, media_graph::ReceiverRouteActivity,
         source_policy::SourcePolicyTransaction, state::RoomState,
     },
     source_model::{
-        ConsumerSourceSelection, PublishedSourceId, SourceDeactivateIntent, SourcePolicy,
-        SourcePublishIntent,
+        ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId, SourceDeactivateIntent,
+        SourcePolicy, SourcePublishIntent,
     },
 };
 
@@ -66,12 +69,17 @@ async fn assert_scalable_video_rid_for_publishers(
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn two_party_camera_publish_selects_the_highest_consumer_layer() {
     let (room, adapter, metrics, mut publisher_rx, mut subscriber_rx) =
         setup_two_ready_users_with_media_metrics().await;
 
+    let transitions_before = route_transition_counts(&room);
+    let capture = test_tracing::capture().await;
     publish_simulcast_camera(&room, &UserId::Integer(1), &adapter).await;
+    assert_no_route_change_event(&room, &UserId::Integer(2));
+    drop(capture);
+    assert_eq!(route_transition_counts(&room), transitions_before);
 
     assert!(drain_outbound(&mut publisher_rx).is_empty());
     assert_remote_track_snapshot_for_stream(
@@ -1253,13 +1261,13 @@ async fn audio_only_receiver_reports_its_audio_reserve_as_bwe_demand() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn overload_steps_thumbnail_down_one_layer_and_keeps_it_deliverable() {
     // A high multiparty threshold forces each route to start at its top layer, so
     // the aggregate overload loop — not per-route selection — does the stepping.
     let tuning = VideoAdaptationTuning::try_new(99, 2, 2, 3, 0, Bitrate::zero())
         .expect("valid tuning should build");
-    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2, 3], tuning).await;
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2], tuning).await;
     // Three layers (lo=150, mid=450, hi=900 kbps) so one down-step lands on the
     // middle layer rather than the cheapest.
     publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
@@ -1273,7 +1281,7 @@ async fn overload_steps_thumbnail_down_one_layer_and_keeps_it_deliverable() {
         .transport_user_key(&receiver_user_id, receiver_connection_id)
         .await;
     let receiver_bandwidth_snapshot = ReceiverBandwidthSnapshot {
-        per_session: vec![(receiver_session_key, Bitrate::from_kbps(500))],
+        per_session: vec![(receiver_session_key.clone(), Bitrate::from_kbps(500))],
     };
 
     let tx = {
@@ -1281,6 +1289,15 @@ async fn overload_steps_thumbnail_down_one_layer_and_keeps_it_deliverable() {
         plan_policy(&state, &[], &receiver_bandwidth_snapshot)
             .expect("overload should step the thumbnail down")
     };
+    let transitions_before = route_transition_counts(&scenario.room);
+    let selection_updates_before = source_selection_update_count(&scenario.room, "encoding");
+    let source_media = source_media_id(
+        &scenario.room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
+    let capture = test_tracing::capture().await;
     tx.execute(&scenario.room, &scenario.adapter).await;
 
     // The route survives at the middle layer and stays deliverable (no pause),
@@ -1301,6 +1318,83 @@ async fn overload_steps_thumbnail_down_one_layer_and_keeps_it_deliverable() {
         &UserId::Integer(1),
         TestSourceKind::ScalableVideo,
         None,
+    )
+    .await;
+    assert_eq!(
+        route_transition_counts(&scenario.room),
+        RouteTransitionCounts {
+            degraded: transitions_before.degraded + 1,
+            ..transitions_before
+        }
+    );
+    assert_eq!(
+        source_selection_update_count(&scenario.room, "encoding"),
+        selection_updates_before + 1
+    );
+    assert_route_change_event(
+        &scenario,
+        &receiver_user_id,
+        &UserId::Integer(1),
+        &receiver_session_key,
+        source_media,
+        ExpectedRouteChange {
+            outcome: "degraded",
+            reason: None,
+            receiver_bandwidth: Bitrate::from_kbps(500),
+            video_budget: Bitrate::from_kbps(500),
+            active_route_count: 1,
+            selected_video_bitrate: Bitrate::from_kbps(450),
+            selected_estimated_bitrate: Bitrate::from_kbps(450),
+        },
+    )
+    .await;
+    drop(capture);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inactive_route_does_not_report_an_in_flight_degradation() {
+    let tuning = VideoAdaptationTuning::try_new(99, 2, 2, 3, 0, Bitrate::zero())
+        .expect("valid tuning should build");
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2], tuning).await;
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    publish_three_layer_camera(&scenario.room, &publisher, &scenario.adapter).await;
+    let connection_id = user_connection_id(&scenario.room, &receiver).await;
+    let session_key = scenario
+        .room
+        .transport_user_key(&receiver, connection_id)
+        .await;
+    let bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key, Bitrate::from_kbps(500))],
+    };
+    let tx = {
+        let state = scenario.room.state.read().await;
+        plan_policy(&state, &[], &bandwidth).expect("overload should plan one route degradation")
+    };
+    update_subscription_selection(
+        &scenario.room,
+        &receiver,
+        &publisher,
+        TestSourceKind::ScalableVideo,
+        |selection| selection.set_active(false),
+    )
+    .await;
+    let transitions_before = route_transition_counts(&scenario.room);
+    let capture = test_tracing::capture().await;
+
+    tx.execute(&scenario.room, &scenario.adapter).await;
+
+    assert_no_route_change_event(&scenario.room, &receiver);
+    drop(capture);
+    assert_eq!(route_transition_counts(&scenario.room), transitions_before);
+    assert_receiver_video_allocation(
+        &scenario,
+        &receiver,
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(500),
+        1,
+        0,
+        Bitrate::zero(),
     )
     .await;
 }
@@ -1346,6 +1440,96 @@ async fn overload_steps_hidden_route_before_visible_thumbnail() {
         &UserId::Integer(3),
         TestSourceKind::ScalableVideo,
         "hi",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rejected_route_control_reconciles_sibling_budget_to_committed_selection() {
+    let tuning = VideoAdaptationTuning::try_new(99, 2, 2, 3, 0, Bitrate::zero())
+        .expect("valid tuning should build");
+    let scenario = SourcePolicyScenario::with_ready_users_and_tuning(&[1, 2, 3], tuning).await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+    publish_three_layer_camera(&scenario.room, &UserId::Integer(3), &scenario.adapter).await;
+    scenario
+        .set_scalable_video_layout(2, 1, VideoLayoutIntent::Hidden)
+        .await;
+    let receiver = UserId::Integer(2);
+    let connection_id = user_connection_id(&scenario.room, &receiver).await;
+    let session_key = scenario
+        .room
+        .transport_user_key(&receiver, connection_id)
+        .await;
+    let first_source_media = source_media_id(
+        &scenario.room,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
+    let third_source_media = source_media_id(
+        &scenario.room,
+        &UserId::Integer(3),
+        TestSourceKind::ScalableVideo,
+    )
+    .await;
+    let first_consumer_media =
+        consumer_destination_identity(&scenario.adapter, first_source_media, &receiver)
+            .await
+            .0;
+    let bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key.clone(), Bitrate::from_kbps(900))],
+    };
+    let tx = {
+        let state = scenario.room.state.read().await;
+        plan_policy(&state, &[], &bandwidth).expect("overload should plan route degradation")
+    };
+    scenario
+        .adapter
+        .teardown([TransportTeardown::RemoveMedia {
+            session_key: session_key.clone(),
+            transport_media_id: first_consumer_media,
+        }])
+        .await;
+    let transitions_before = route_transition_counts(&scenario.room);
+    let capture = test_tracing::capture().await;
+
+    tx.execute(&scenario.room, &scenario.adapter).await;
+
+    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1], "hi").await;
+    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [3], "mid").await;
+    assert_route_change_event(
+        &scenario,
+        &receiver,
+        &UserId::Integer(3),
+        &session_key,
+        third_source_media,
+        ExpectedRouteChange {
+            outcome: "degraded",
+            reason: None,
+            receiver_bandwidth: Bitrate::from_kbps(900),
+            video_budget: Bitrate::from_kbps(900),
+            active_route_count: 2,
+            selected_video_bitrate: Bitrate::from_kbps(600),
+            selected_estimated_bitrate: Bitrate::from_kbps(450),
+        },
+    )
+    .await;
+    drop(capture);
+    assert_eq!(
+        route_transition_counts(&scenario.room),
+        RouteTransitionCounts {
+            degraded: transitions_before.degraded + 1,
+            ..transitions_before
+        }
+    );
+    assert_receiver_video_allocation(
+        &scenario,
+        &receiver,
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(900),
+        2,
+        2,
+        Bitrate::from_kbps(1_350),
     )
     .await;
 }
@@ -1446,110 +1630,88 @@ async fn video_download_limit_pauses_every_route_beyond_the_limit() {
     assert_receiver_bwe_target(&scenario.room, &scenario.adapter, &receiver, selected_video).await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
+async fn replacing_a_pause_reason_is_not_a_new_pause_transition() {
+    let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
+        &[1, 2, 3],
+        RoomMediaLimits::try_new(4, 1).unwrap(),
+    )
+    .await;
+    scenario.publish_audio_and_camera_for_users(&[1, 3]).await;
+    scenario
+        .set_scalable_video_layout(2, 3, VideoLayoutIntent::Pinned)
+        .await;
+    scenario.refresh_policy_until_upgrades_settle().await;
+    let receiver = UserId::Integer(2);
+    let publisher = UserId::Integer(1);
+    update_subscription_selection(
+        &scenario.room,
+        &receiver,
+        &publisher,
+        TestSourceKind::ScalableVideo,
+        |selection| {
+            selection.set_policy_pause_reason(Some(PolicyPauseReason::BudgetPressure));
+        },
+    )
+    .await;
+    let transitions_before = route_transition_counts(&scenario.room);
+    let capture = test_tracing::capture().await;
+
+    scenario.refresh_policy().await;
+
+    test_tracing::assert_no_event(
+        telemetry_event::SOURCE_POLICY_ROUTE_CHANGED,
+        &[
+            ("room_id", json!(scenario.room.uuid())),
+            ("user_id", json!("2")),
+            ("producer_user_id", json!("1")),
+        ],
+    );
+    drop(capture);
+    assert_eq!(route_transition_counts(&scenario.room), transitions_before);
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        &publisher,
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::VideoDownloadLimit),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn constrained_bandwidth_pauses_then_recovers_and_upgrades_a_pinned_route() {
     let scenario = SourcePolicyScenario::three_ready_users().await;
     publish_three_layer_camera(&scenario.room, &UserId::Integer(1), &scenario.adapter).await;
+    scenario.subscribe_scalable_video(3, 1, false).await;
     scenario
         .set_scalable_video_layout(2, 1, VideoLayoutIntent::Pinned)
         .await;
     let receiver = UserId::Integer(2);
     assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1], "hi").await;
-    let source_media = source_media_id(
-        &scenario.room,
-        &UserId::Integer(1),
-        TestSourceKind::ScalableVideo,
-    )
-    .await;
     let connection_id = user_connection_id(&scenario.room, &receiver).await;
-    let session_key = scenario
-        .room
-        .transport_user_key(&receiver, connection_id)
-        .await;
-    // The 150 kbps low layer cannot fit, so policy must pause delivery without
-    // removing the demand str0m needs to probe for its recovery.
-    let receiver_bandwidth = ReceiverBandwidthSnapshot {
-        per_session: vec![(session_key.clone(), Bitrate::from_kbps(100))],
+    let route = SingleVideoRoute {
+        receiver,
+        session_key: scenario
+            .room
+            .transport_user_key(&UserId::Integer(2), connection_id)
+            .await,
+        source_media: source_media_id(
+            &scenario.room,
+            &UserId::Integer(1),
+            TestSourceKind::ScalableVideo,
+        )
+        .await,
     };
     let policy_updates = scenario.adapter.source_policy_subscription();
     let _ = policy_updates.take_pending_updates();
-    apply_policy_observations(
-        &scenario,
-        &receiver_bandwidth,
-        VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS,
-    )
-    .await;
-    assert_receiver_bwe_target(
-        &scenario.room,
-        &scenario.adapter,
-        &receiver,
-        Bitrate::from_kbps(900),
-    )
-    .await;
-    let follow_up = timeout(Duration::from_secs(1), policy_updates.wait_for_update())
-        .await
-        .expect("unresolved hysteresis should schedule another policy pass");
-    assert!(follow_up.contains(&scenario.room.instance_id()));
-
-    assert_subscription_policy_pause_reason(
-        &scenario.room,
-        &scenario.adapter,
-        &receiver,
-        &UserId::Integer(1),
-        TestSourceKind::ScalableVideo,
-        Some(DiagnosticsPolicyPauseReason::BudgetPressure),
-    )
-    .await;
-    assert_eq!(
-        receiver_selected_video_bitrate(&scenario.room, &scenario.adapter, &receiver).await,
-        Bitrate::zero()
-    );
-    assert_receiver_bwe_target(
-        &scenario.room,
-        &scenario.adapter,
-        &receiver,
-        Bitrate::from_kbps(900),
-    )
-    .await;
-    assert_eq!(
-        active_destination_receivers(&scenario.adapter, [source_media]).await,
-        vec![UserId::Integer(3)]
-    );
-
-    let recovered_bandwidth = ReceiverBandwidthSnapshot {
-        per_session: vec![(session_key.clone(), Bitrate::from_kbps(200))],
-    };
-    apply_policy_observations(
-        &scenario,
-        &recovered_bandwidth,
-        VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
-    )
-    .await;
-
-    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1], "lo").await;
-    assert_eq!(
-        active_destination_receivers(&scenario.adapter, [source_media]).await,
-        vec![receiver.clone(), UserId::Integer(3)]
-    );
-
-    let upgraded_bandwidth = ReceiverBandwidthSnapshot {
-        per_session: vec![(session_key, Bitrate::from_kbps(450))],
-    };
-    apply_policy_observations(
-        &scenario,
-        &upgraded_bandwidth,
-        VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
-    )
-    .await;
-
-    assert_scalable_video_rid_for_publishers(&scenario, &receiver, [1], "mid").await;
-    assert_receiver_bwe_target(
-        &scenario.room,
-        &scenario.adapter,
-        &receiver,
-        Bitrate::from_kbps(900),
-    )
-    .await;
+    let transitions_before = route_transition_counts(&scenario.room);
+    assert_pressure_hysteresis_hold(&scenario, &route, transitions_before).await;
+    let paused = assert_budget_pause(&scenario, &route, &policy_updates, transitions_before).await;
+    assert_repeated_pause_is_silent(&scenario, &route, paused).await;
+    let resumed = assert_recovery_hysteresis_and_resume(&scenario, &route, paused).await;
+    assert_upgrade_is_not_degradation(&scenario, &route, resumed).await;
 }
 
 #[tokio::test]
@@ -1689,6 +1851,89 @@ async fn zero_budget_pauses_observed_ridless_readable_video() {
     .await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn rejected_ridless_pause_preserves_observed_committed_bitrate() {
+    let scenario = SourcePolicyScenario::with_ready_users(&[1, 2]).await;
+    let publisher = UserId::Integer(1);
+    let receiver = UserId::Integer(2);
+    publish_track(
+        &scenario.room,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        MediaKind::Video,
+        test_video_rtp_parameters(),
+        &scenario.adapter,
+    )
+    .await;
+    // Publishing can consume the first pressure observation. Reset the route so
+    // the explicit snapshots straddle the hysteresis threshold.
+    reset_subscription_selection_to_open(
+        &scenario.room,
+        &receiver,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+    )
+    .await;
+    let source_media =
+        source_media_id(&scenario.room, &publisher, TestSourceKind::ReadableVideo).await;
+    let connection_id = user_connection_id(&scenario.room, &receiver).await;
+    let session_key = scenario
+        .room
+        .transport_user_key(&receiver, connection_id)
+        .await;
+    let receiver_bandwidth = ReceiverBandwidthSnapshot {
+        per_session: vec![(session_key.clone(), Bitrate::zero())],
+    };
+    let source_bitrate = TransportBitrateSnapshot {
+        total: Bitrate::from_kbps(500),
+        per_media: vec![(source_media, Bitrate::from_kbps(500))],
+    };
+    for _ in 0..VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS - 1 {
+        let tx = {
+            let state = scenario.room.state.read().await;
+            SourcePolicyTransaction::plan(&state, &[], &receiver_bandwidth, &source_bitrate)
+                .expect("pressure observation should produce a policy update")
+        };
+        tx.execute(&scenario.room, &scenario.adapter).await;
+    }
+    let tx = {
+        let state = scenario.room.state.read().await;
+        SourcePolicyTransaction::plan(&state, &[], &receiver_bandwidth, &source_bitrate)
+            .expect("final pressure observation should plan a pause")
+    };
+    scenario
+        .adapter
+        .teardown([TransportTeardown::CloseSession { session_key }])
+        .await;
+    let transitions_before = route_transition_counts(&scenario.room);
+    let capture = test_tracing::capture().await;
+
+    tx.execute(&scenario.room, &scenario.adapter).await;
+
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &receiver,
+        &publisher,
+        TestSourceKind::ReadableVideo,
+        None,
+    )
+    .await;
+    assert_no_route_change_event(&scenario.room, &receiver);
+    drop(capture);
+    assert_eq!(route_transition_counts(&scenario.room), transitions_before);
+    assert_receiver_video_allocation(
+        &scenario,
+        &receiver,
+        TestSourceKind::ReadableVideo,
+        Bitrate::zero(),
+        1,
+        1,
+        Bitrate::from_kbps(500),
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn pinned_camera_layout_overrides_active_speaker_bias_for_that_receiver() {
     let scenario = SourcePolicyScenario::three_ready_users().await;
@@ -1739,7 +1984,7 @@ async fn screen_share_layout_uses_screen_specific_priority_in_diagnostics() {
     .await;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn source_policy_replaced_route_does_not_commit_stale_selector_update() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],
@@ -1765,7 +2010,17 @@ async fn source_policy_replaced_route_does_not_commit_stale_selector_update() {
             .source_selection_for_test(&receiver, third_camera_source_id)
             .expect("replacement route should select the current publication")
     };
+    let transitions_before = route_transition_counts(&scenario.room);
+    let selection_updates_before = source_selection_update_count(&scenario.room, "encoding");
+    let capture = test_tracing::capture().await;
     tx.execute(&scenario.room, &scenario.adapter).await;
+    assert_no_route_change_event(&scenario.room, &receiver);
+    drop(capture);
+    assert_eq!(route_transition_counts(&scenario.room), transitions_before);
+    assert_eq!(
+        source_selection_update_count(&scenario.room, "encoding"),
+        selection_updates_before
+    );
     let current_selection = {
         let state = scenario.room.state.read().await;
         state
@@ -1775,7 +2030,7 @@ async fn source_policy_replaced_route_does_not_commit_stale_selector_update() {
     assert_eq!(current_selection, Some(replacement_selection));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn source_policy_rejected_transport_gate_does_not_commit_selector_update() {
     let scenario = SourcePolicyScenario::with_ready_users_and_media_limits(
         &[1, 2, 3],
@@ -1796,7 +2051,17 @@ async fn source_policy_rejected_transport_gate_does_not_commit_selector_update()
             session_key: receiver_session_key,
         }])
         .await;
+    let transitions_before = route_transition_counts(&scenario.room);
+    let selection_updates_before = source_selection_update_count(&scenario.room, "encoding");
+    let capture = test_tracing::capture().await;
     tx.execute(&scenario.room, &scenario.adapter).await;
+    assert_no_route_change_event(&scenario.room, &UserId::Integer(2));
+    drop(capture);
+    assert_eq!(route_transition_counts(&scenario.room), transitions_before);
+    assert_eq!(
+        source_selection_update_count(&scenario.room, "encoding"),
+        selection_updates_before
+    );
 
     assert_subscription_policy_pause_reason(
         &scenario.room,
@@ -1890,6 +2155,23 @@ async fn reset_subscription_selection_to_open(
     producer_user_id: &UserId,
     stream_type: TestSourceKind,
 ) {
+    update_subscription_selection(
+        room,
+        consumer_user_id,
+        producer_user_id,
+        stream_type,
+        |selection| *selection = ConsumerSourceSelection::open(true),
+    )
+    .await;
+}
+
+async fn update_subscription_selection(
+    room: &Room,
+    consumer_user_id: &UserId,
+    producer_user_id: &UserId,
+    stream_type: TestSourceKind,
+    update: impl FnOnce(&mut ConsumerSourceSelection),
+) {
     let stream_id = stream_id_for_source(stream_type);
     let state = room.state.read().await;
     let route = state
@@ -1907,14 +2189,10 @@ async fn reset_subscription_selection_to_open(
     drop(state);
 
     let mut state = room.state.write().await;
-    let updated = state.topology.update_consumer_source_selection(
-        &key,
-        source_id,
-        &transport_route,
-        |selection| {
-            *selection = ConsumerSourceSelection::open(true);
-        },
-    );
+    let updated =
+        state
+            .topology
+            .update_consumer_source_selection(&key, source_id, &transport_route, update);
     drop(state);
     assert!(updated);
 }
@@ -1922,4 +2200,398 @@ async fn reset_subscription_selection_to_open(
 fn keyframe_request_count(metrics: &RuntimeMetrics) -> u64 {
     let snapshot = metrics.snapshot();
     snapshot.rtc_keyframe_requests_forwarded() + snapshot.rtc_keyframe_requests_absorbed()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RouteTransitionCounts {
+    degraded: u64,
+    paused: u64,
+    resumed: u64,
+}
+
+fn route_transition_counts(room: &Room) -> RouteTransitionCounts {
+    let snapshot = room.metrics.snapshot();
+    let outcome_count = |value| {
+        snapshot.counter_value(MetricName::BudgetSolverOutcomesTotal, &[("outcome", value)])
+    };
+    RouteTransitionCounts {
+        degraded: outcome_count("degraded"),
+        paused: outcome_count("paused"),
+        resumed: outcome_count("resumed"),
+    }
+}
+
+fn source_selection_update_count(room: &Room, selector: &str) -> u64 {
+    room.metrics.snapshot().counter_value(
+        MetricName::SourceSelectionUpdatesTotal,
+        &[("selector", selector)],
+    )
+}
+
+struct SingleVideoRoute {
+    receiver: UserId,
+    session_key: TransportSessionKey,
+    source_media: TransportMediaId,
+}
+
+impl SingleVideoRoute {
+    fn bandwidth(&self, kbps: u64) -> ReceiverBandwidthSnapshot {
+        ReceiverBandwidthSnapshot {
+            per_session: vec![(self.session_key.clone(), Bitrate::from_kbps(kbps))],
+        }
+    }
+}
+
+async fn assert_pressure_hysteresis_hold(
+    scenario: &SourcePolicyScenario,
+    route: &SingleVideoRoute,
+    expected_transitions: RouteTransitionCounts,
+) {
+    let capture = test_tracing::capture().await;
+    apply_policy_observations(
+        scenario,
+        &route.bandwidth(100),
+        VideoAdaptationTuning::DEFAULT_DOWNSWITCH_PRESSURE_OBSERVATIONS - 1,
+    )
+    .await;
+    assert_no_route_change_event(&scenario.room, &route.receiver);
+    drop(capture);
+    assert_scalable_video_rid_for_publishers(scenario, &route.receiver, [1], "hi").await;
+    assert_receiver_video_allocation(
+        scenario,
+        &route.receiver,
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(100),
+        1,
+        1,
+        Bitrate::from_kbps(900),
+    )
+    .await;
+    assert_eq!(
+        route_transition_counts(&scenario.room),
+        expected_transitions
+    );
+}
+
+async fn assert_budget_pause(
+    scenario: &SourcePolicyScenario,
+    route: &SingleVideoRoute,
+    policy_updates: &SourcePolicyUpdateSubscription,
+    previous_transitions: RouteTransitionCounts,
+) -> RouteTransitionCounts {
+    let capture = test_tracing::capture().await;
+    apply_policy_observations(scenario, &route.bandwidth(100), 1).await;
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &route.receiver,
+        Bitrate::from_kbps(900),
+    )
+    .await;
+    let follow_up = timeout(Duration::from_secs(1), policy_updates.wait_for_update())
+        .await
+        .expect("unresolved hysteresis should schedule another policy pass");
+    assert!(follow_up.contains(&scenario.room.instance_id()));
+    assert_subscription_policy_pause_reason(
+        &scenario.room,
+        &scenario.adapter,
+        &route.receiver,
+        &UserId::Integer(1),
+        TestSourceKind::ScalableVideo,
+        Some(DiagnosticsPolicyPauseReason::BudgetPressure),
+    )
+    .await;
+    assert_receiver_video_allocation(
+        scenario,
+        &route.receiver,
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(100),
+        1,
+        0,
+        Bitrate::zero(),
+    )
+    .await;
+    let transitions = RouteTransitionCounts {
+        paused: previous_transitions.paused + 1,
+        ..previous_transitions
+    };
+    assert_eq!(route_transition_counts(&scenario.room), transitions);
+    assert_route_change_event(
+        scenario,
+        &route.receiver,
+        &UserId::Integer(1),
+        &route.session_key,
+        route.source_media,
+        ExpectedRouteChange {
+            outcome: "paused",
+            reason: Some("budget_pressure"),
+            receiver_bandwidth: Bitrate::from_kbps(100),
+            video_budget: Bitrate::from_kbps(100),
+            active_route_count: 0,
+            selected_video_bitrate: Bitrate::zero(),
+            selected_estimated_bitrate: Bitrate::from_kbps(900),
+        },
+    )
+    .await;
+    drop(capture);
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [route.source_media]).await,
+        Vec::<UserId>::new()
+    );
+    transitions
+}
+
+async fn assert_repeated_pause_is_silent(
+    scenario: &SourcePolicyScenario,
+    route: &SingleVideoRoute,
+    expected_transitions: RouteTransitionCounts,
+) {
+    let capture = test_tracing::capture().await;
+    apply_policy_observations(scenario, &route.bandwidth(90), 1).await;
+    assert_no_route_change_event(&scenario.room, &route.receiver);
+    drop(capture);
+    assert_receiver_video_allocation(
+        scenario,
+        &route.receiver,
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(90),
+        1,
+        0,
+        Bitrate::zero(),
+    )
+    .await;
+    assert_eq!(
+        route_transition_counts(&scenario.room),
+        expected_transitions
+    );
+}
+
+async fn assert_recovery_hysteresis_and_resume(
+    scenario: &SourcePolicyScenario,
+    route: &SingleVideoRoute,
+    paused_transitions: RouteTransitionCounts,
+) -> RouteTransitionCounts {
+    let recovered_bandwidth = route.bandwidth(200);
+    let held_capture = test_tracing::capture().await;
+    apply_policy_observations(
+        scenario,
+        &recovered_bandwidth,
+        VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS - 1,
+    )
+    .await;
+    assert_no_route_change_event(&scenario.room, &route.receiver);
+    drop(held_capture);
+    assert_eq!(route_transition_counts(&scenario.room), paused_transitions);
+    assert_receiver_video_allocation(
+        scenario,
+        &route.receiver,
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(200),
+        1,
+        0,
+        Bitrate::zero(),
+    )
+    .await;
+
+    let resume_capture = test_tracing::capture().await;
+    apply_policy_observations(scenario, &recovered_bandwidth, 1).await;
+    assert_scalable_video_rid_for_publishers(scenario, &route.receiver, [1], "lo").await;
+    let resumed_transitions = RouteTransitionCounts {
+        resumed: paused_transitions.resumed + 1,
+        ..paused_transitions
+    };
+    assert_eq!(route_transition_counts(&scenario.room), resumed_transitions);
+    assert_receiver_video_allocation(
+        scenario,
+        &route.receiver,
+        TestSourceKind::ScalableVideo,
+        Bitrate::from_kbps(200),
+        1,
+        1,
+        Bitrate::from_kbps(150),
+    )
+    .await;
+    assert_route_change_event(
+        scenario,
+        &route.receiver,
+        &UserId::Integer(1),
+        &route.session_key,
+        route.source_media,
+        ExpectedRouteChange {
+            outcome: "resumed",
+            reason: Some("budget_pressure"),
+            receiver_bandwidth: Bitrate::from_kbps(200),
+            video_budget: Bitrate::from_kbps(200),
+            active_route_count: 1,
+            selected_video_bitrate: Bitrate::from_kbps(150),
+            selected_estimated_bitrate: Bitrate::from_kbps(150),
+        },
+    )
+    .await;
+    drop(resume_capture);
+    assert_eq!(
+        active_destination_receivers(&scenario.adapter, [route.source_media]).await,
+        vec![route.receiver.clone()]
+    );
+    resumed_transitions
+}
+
+async fn assert_upgrade_is_not_degradation(
+    scenario: &SourcePolicyScenario,
+    route: &SingleVideoRoute,
+    expected_transitions: RouteTransitionCounts,
+) {
+    let capture = test_tracing::capture().await;
+    apply_policy_observations(
+        scenario,
+        &route.bandwidth(450),
+        VideoAdaptationTuning::DEFAULT_UPSWITCH_STABLE_OBSERVATIONS,
+    )
+    .await;
+    assert_no_route_change_event(&scenario.room, &route.receiver);
+    drop(capture);
+    assert_scalable_video_rid_for_publishers(scenario, &route.receiver, [1], "mid").await;
+    assert_eq!(
+        route_transition_counts(&scenario.room),
+        expected_transitions
+    );
+    assert_receiver_bwe_target(
+        &scenario.room,
+        &scenario.adapter,
+        &route.receiver,
+        Bitrate::from_kbps(900),
+    )
+    .await;
+}
+
+fn assert_no_route_change_event(room: &Room, receiver: &UserId) {
+    test_tracing::assert_no_event(
+        telemetry_event::SOURCE_POLICY_ROUTE_CHANGED,
+        &[
+            ("room_id", json!(room.uuid())),
+            ("user_id", json!(receiver.path_segment())),
+        ],
+    );
+}
+
+async fn assert_receiver_video_allocation(
+    scenario: &SourcePolicyScenario,
+    receiver: &UserId,
+    stream_type: TestSourceKind,
+    video_budget: Bitrate,
+    subscription_count: usize,
+    active_route_count: usize,
+    selected_video_bitrate: Bitrate,
+) {
+    let (users, _) = diagnostics_room_views(&scenario.room, &scenario.adapter).await;
+    let stream_id = stream_id_for_source(stream_type);
+    let subscriptions = users
+        .iter()
+        .find(|user| &user.user_id == receiver)
+        .expect("diagnostics should include the receiver")
+        .subscriptions
+        .iter()
+        .filter(|subscription| subscription.stream_id == stream_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(subscriptions.len(), subscription_count);
+    for subscription in subscriptions {
+        assert_eq!(
+            subscription
+                .selection
+                .latest_receiver_bandwidth_estimate_bps,
+            Some(video_budget.as_bps())
+        );
+        assert_eq!(
+            subscription.selection.selected_video_budget_bps,
+            Some(video_budget.as_bps())
+        );
+        assert_eq!(
+            subscription.selection.active_video_route_count,
+            active_route_count
+        );
+        assert_eq!(
+            subscription.selection.selected_video_bitrate_bps,
+            selected_video_bitrate.as_bps()
+        );
+    }
+}
+
+struct ExpectedRouteChange<'a> {
+    outcome: &'a str,
+    reason: Option<&'a str>,
+    receiver_bandwidth: Bitrate,
+    video_budget: Bitrate,
+    active_route_count: usize,
+    selected_video_bitrate: Bitrate,
+    selected_estimated_bitrate: Bitrate,
+}
+
+async fn assert_route_change_event(
+    scenario: &SourcePolicyScenario,
+    receiver: &UserId,
+    publisher: &UserId,
+    session_key: &TransportSessionKey,
+    source_media_id: TransportMediaId,
+    expected: ExpectedRouteChange<'_>,
+) {
+    let (users, _) = diagnostics_room_views(&scenario.room, &scenario.adapter).await;
+    let stream_id = stream_id_for_source(TestSourceKind::ScalableVideo);
+    let subscription = users
+        .iter()
+        .find(|user| &user.user_id == receiver)
+        .and_then(|user| {
+            user.subscriptions.iter().find(|subscription| {
+                subscription.producer_user_id == *publisher
+                    && subscription.stream_id == stream_id.as_str()
+            })
+        })
+        .expect("diagnostics should include the subscription");
+    let selection = &subscription.selection;
+    let receiver_id = receiver.path_segment();
+    let consumer_media_id = subscription
+        .consumer_transport_media_id
+        .expect("committed subscription should have a transport media id");
+    let encoding_id = selection
+        .selected_encoding_id
+        .expect("scalable route should select an encoding");
+    let mut fields = vec![
+        ("transport_media_id", json!(consumer_media_id)),
+        ("producer_user_id", json!(publisher.path_segment())),
+        ("source_transport_media_id", json!(source_media_id.as_u64())),
+        ("stream_id", json!(stream_id)),
+        ("outcome", json!(expected.outcome)),
+        (
+            "latest_receiver_bandwidth_estimate_bps",
+            json!(expected.receiver_bandwidth.as_bps()),
+        ),
+        (
+            "selected_video_budget_bps",
+            json!(expected.video_budget.as_bps()),
+        ),
+        (
+            "planned_active_video_route_count",
+            json!(expected.active_route_count),
+        ),
+        (
+            "planned_selected_video_bitrate_bps",
+            json!(expected.selected_video_bitrate.as_bps()),
+        ),
+        ("selector", json!("encoding")),
+        ("selected_encoding_id", json!(encoding_id)),
+        (
+            "selected_estimated_bitrate_bps",
+            json!(expected.selected_estimated_bitrate.as_bps()),
+        ),
+    ];
+    if let Some(reason) = expected.reason {
+        fields.push(("reason", json!(reason)));
+    }
+    test_tracing::assert_user_exact(
+        telemetry_event::SOURCE_POLICY_ROUTE_CHANGED,
+        scenario.room.uuid(),
+        receiver_id.as_ref(),
+        session_key.connection_id().as_u64(),
+        session_key.media_worker_id().as_usize(),
+        &fields,
+    );
 }

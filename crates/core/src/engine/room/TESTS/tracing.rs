@@ -100,6 +100,24 @@ pub(crate) fn assert_exact(name: &str, fields: &[(&str, Value)]) {
     );
 }
 
+pub(crate) fn assert_no_event(name: &str, fields: &[(&str, Value)]) {
+    let events = EVENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    for line in events
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let event: Value = serde_json::from_slice(line).expect("tracing event should be JSON");
+        let event_fields = event["fields"]
+            .as_object()
+            .expect("tracing event should contain fields");
+        let matches = event_fields.get("event").and_then(Value::as_str) == Some(name)
+            && fields
+                .iter()
+                .all(|(field, value)| event_fields.get(*field) == Some(value));
+        assert!(!matches, "unexpected tracing event {name}: {event:?}");
+    }
+}
+
 pub(crate) fn assert_user_exact(
     name: &str,
     room_id: &str,

@@ -333,6 +333,20 @@ common fields it needs and tolerate unknown extra keys
 the reviewed event and field catalog lives in `crates/telemetry/src/schema.rs`
 the formatter is in `crates/telemetry/src/setup.rs`
 
+`source_policy.route_changed` reports a receiver video route transition only
+after the media transport and current room topology accept it. `outcome` is
+`degraded`, `paused` or `resumed`. A pause reports the applied policy `reason`.
+A resume reports the policy `reason` that was cleared. Route identity, receiver
+bandwidth, selected budget and selected encoding fields provide the route-level
+context. `planned_active_video_route_count` and
+`planned_selected_video_bitrate_bps` report the final post-hysteresis solver
+snapshot. They can include a sibling route displaced while transport work was
+in flight.
+
+`osfu_budget_solver_outcomes_total` counts the same committed transitions.
+Held hysteresis, pause reason replacements, budget-only updates, initial
+selector resolution and rejected stale work do not increment it.
+
 ## NGINX public edge
 
 ```nginx
