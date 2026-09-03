@@ -883,7 +883,7 @@ metric_catalog! {
     },
     BudgetSolverOutcomesTotal {
         name: "osfu_budget_solver_outcomes_total",
-        help: "Total receiver video budget solver outcomes accepted by room policy.",
+        help: "Total committed receiver video route degradation, pause and resume transitions.",
         kind: Counter,
         samples: |metrics, capture, output| write_counter_family(output, &metrics.budget_solver_outcomes, "outcome")
     },

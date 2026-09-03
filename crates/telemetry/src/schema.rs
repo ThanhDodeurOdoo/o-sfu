@@ -26,6 +26,7 @@ pub mod event {
     pub const SUBSCRIBE_REJECTED: &str = "subscribe.rejected";
     pub const SUBSCRIPTION_ACTIVITY_CHANGED: &str = "subscription.activity_changed";
     pub const PUBLICATION_ACTIVITY_CHANGED: &str = "publication.activity_changed";
+    pub const SOURCE_POLICY_ROUTE_CHANGED: &str = "source_policy.route_changed";
     pub const TRANSPORT_HEALTH_CHANGED: &str = "transport.health.changed";
 }
 

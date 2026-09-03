@@ -1,20 +1,54 @@
 use super::super::media_graph::SubscriptionKey;
-use crate::engine::{
-    ConnectionId, UserId,
-    media_transport::{
-        ConsumerActivity, ConsumerRouteControl, SourcePacketGate, TransportConsumerRoute,
-    },
-    source_model::{
-        ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
-        ReceiverVideoBudgetDiagnostics, SourceSelector,
+use crate::{
+    Bitrate,
+    engine::{
+        ConnectionId, UserId,
+        media_transport::{
+            ConsumerActivity, ConsumerRouteControl, SourcePacketGate, TransportConsumerRoute,
+        },
+        source_model::{
+            ConsumerSourceSelection, PolicyPauseReason, PublishedSourceId,
+            ReceiverVideoBudgetDiagnostics, SourceSelector,
+        },
     },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RouteBudgetOutcome {
+pub(super) enum VideoRouteTransition {
     Degraded,
-    Paused,
-    Resumed,
+    Paused { reason: PolicyPauseReason },
+    Resumed { cleared_reason: PolicyPauseReason },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct VideoRouteAllocationState {
+    pub(super) selector: SourceSelector,
+    pub(super) policy_pause_reason: Option<PolicyPauseReason>,
+    pub(super) selected_bitrate: Bitrate,
+}
+
+impl VideoRouteAllocationState {
+    pub(super) fn matches_selection(self, selection: ConsumerSourceSelection) -> bool {
+        self.selector == selection.selector()
+            && self.policy_pause_reason == selection.policy_pause_reason()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct VideoRouteAllocation {
+    pub(super) key: SubscriptionKey,
+    pub(super) source_id: PublishedSourceId,
+    pub(super) route: TransportConsumerRoute,
+    pub(super) captured: VideoRouteAllocationState,
+    pub(super) planned: Option<VideoRouteAllocationState>,
+}
+
+#[derive(Debug)]
+pub(super) struct ReceiverVideoBudgetPlan {
+    pub(super) receiver: UserId,
+    pub(super) planned_budget: ReceiverVideoBudgetDiagnostics,
+    /// Ordered by [`SubscriptionKey`] for linear reconciliation after transport work.
+    pub(super) routes: Vec<VideoRouteAllocation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,8 +58,9 @@ pub(in crate::engine::room) struct ConsumerPacketSelectionUpdate {
     pub(in crate::engine::room) route: TransportConsumerRoute,
     pub(super) selector: SourceSelector,
     pub(super) policy_pause_reason: Option<PolicyPauseReason>,
-    pub(super) budget: ReceiverVideoBudgetDiagnostics,
-    pub(super) outcome: Option<RouteBudgetOutcome>,
+    pub(super) planned_budget: ReceiverVideoBudgetDiagnostics,
+    pub(super) transition: Option<VideoRouteTransition>,
+    pub(super) selected_estimated_bitrate: Option<Bitrate>,
     pub(super) pressure_observations: u8,
     pub(super) upgrade_observations: u8,
     pub(super) packet_gate: Option<SourcePacketGate>,
@@ -47,8 +82,9 @@ impl ConsumerPacketSelectionUpdate {
             route,
             selector: current_selection.selector(),
             policy_pause_reason,
-            budget: current_selection.budget(),
-            outcome: None,
+            planned_budget: current_selection.budget(),
+            transition: None,
+            selected_estimated_bitrate: None,
             pressure_observations: current_selection.pressure_observations(),
             upgrade_observations: current_selection.upgrade_observations(),
             packet_gate: None,

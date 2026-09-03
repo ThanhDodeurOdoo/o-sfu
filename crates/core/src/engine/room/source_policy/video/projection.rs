@@ -1,8 +1,8 @@
 use o_sfu_router::MediaKind;
 
 use super::{
-    super::action::{ConsumerPacketSelectionUpdate, RouteBudgetOutcome},
-    solver::{AdaptationCounts, PlannedReceiverRoute, ReceiverRouteSelection, RouteOutcome},
+    super::action::{ConsumerPacketSelectionUpdate, VideoRouteTransition},
+    solver::{AdaptationCounts, PlannedReceiverRoute, selector_bitrate},
 };
 use crate::engine::{
     media_transport::SourcePacketGate,
@@ -30,14 +30,13 @@ pub(super) fn source_packet_gate_for_selector(
 
 pub(super) fn consumer_packet_selection_update(
     planned_route: &PlannedReceiverRoute<'_>,
-    selection: ReceiverRouteSelection,
-    budget: ReceiverVideoBudgetDiagnostics,
+    planned_budget: ReceiverVideoBudgetDiagnostics,
 ) -> Option<ConsumerPacketSelectionUpdate> {
     let input = planned_route.input;
+    let selection = planned_route.selection;
     let current_selection = input.current_selection;
     if selection.selector == current_selection.selector()
         && selection.policy_pause_reason == current_selection.policy_pause_reason()
-        && budget == current_selection.budget()
         && selection.counts == AdaptationCounts::from_current(current_selection)
     {
         return None;
@@ -58,15 +57,18 @@ pub(super) fn consumer_packet_selection_update(
         && (selection.request_keyframe
             || selection.selector != current_selection.selector()
             || !current_selection.policy_allows_delivery());
-    let outcome = route_outcome(planned_route, selection);
+    let transition = route_transition(planned_route);
+    let selected_estimated_bitrate =
+        transition.and_then(|_| selector_bitrate(input, selection.selector));
     Some(ConsumerPacketSelectionUpdate {
         key: input.key.clone(),
         source_id: input.source.source_id(),
         route: input.route.clone(),
         selector: selection.selector,
         policy_pause_reason: selection.policy_pause_reason,
-        budget,
-        outcome,
+        planned_budget,
+        transition,
+        selected_estimated_bitrate,
         pressure_observations: selection.counts.pressure,
         upgrade_observations: selection.counts.upgrade,
         packet_gate,
@@ -75,22 +77,28 @@ pub(super) fn consumer_packet_selection_update(
     })
 }
 
-fn route_outcome(
-    route: &PlannedReceiverRoute<'_>,
-    selection: ReceiverRouteSelection,
-) -> Option<RouteBudgetOutcome> {
+fn route_transition(route: &PlannedReceiverRoute<'_>) -> Option<VideoRouteTransition> {
+    let selection = route.selection;
     match (
         selection.policy_pause_reason,
         route.input.current_selection.policy_pause_reason(),
     ) {
-        (None, Some(_reason)) => Some(RouteBudgetOutcome::Resumed),
-        (Some(reason), current_reason) if current_reason != Some(reason) => {
-            Some(RouteBudgetOutcome::Paused)
+        (None, Some(cleared_reason)) => Some(VideoRouteTransition::Resumed { cleared_reason }),
+        (Some(reason), None) => Some(VideoRouteTransition::Paused { reason }),
+        (Some(_), Some(_)) => None,
+        (None, None) if selection.selector == route.input.current_selection.selector() => None,
+        (None, None) => {
+            let current_selector @ SourceSelector::Encoding(_) =
+                route.input.current_selection.selector()
+            else {
+                return None;
+            };
+            let selected_selector @ SourceSelector::Encoding(_) = selection.selector else {
+                return None;
+            };
+            let current_bitrate = selector_bitrate(route.input, current_selector)?;
+            let selected_bitrate = selector_bitrate(route.input, selected_selector)?;
+            (selected_bitrate < current_bitrate).then_some(VideoRouteTransition::Degraded)
         }
-        _ => match route.outcome {
-            RouteOutcome::Neutral => None,
-            RouteOutcome::Degraded => Some(RouteBudgetOutcome::Degraded),
-            RouteOutcome::Paused => Some(RouteBudgetOutcome::Paused),
-        },
     }
 }
