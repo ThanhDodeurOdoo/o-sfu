@@ -110,8 +110,8 @@ create the tag on the updated `master` branch and push only the tag:
 ```bash
 git checkout master
 git pull
-git tag -a v0.3.1 -m "v0.3.1"
-git push origin v0.3.1
+git tag -a v0.11.3 -m "v0.11.3"
+git push origin v0.11.3
 ```
 
 `git tag -a` creates an annotated tag that points at the current `HEAD` commit.

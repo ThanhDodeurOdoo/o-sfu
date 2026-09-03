@@ -147,6 +147,7 @@ jobs:
   release:
     needs: preflight
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
       attestations: write
       # required to mint the OIDC token used by actions/attest
