@@ -27,12 +27,9 @@ release text. the deployment guide link uses `GITHUB_SERVER_URL`,
 `GITHUB_REPOSITORY` and `GITHUB_SHA` so it targets the source of that release.
 
 the public release body also records the version tag, source commit, successful
-Cargo base-version and default-branch ancestry checks, completion of the
-`release` environment job gate, runner OS generation and fixed build inputs.
-Approved human reviewer accounts for the `release` environment are read from
-the workflow-run approval history. the release body reports that no human
-approval was recorded when the history has no matching review. Docker base
-references are read from the tagged `Dockerfile`.
+Cargo base-version and default-branch ancestry checks, runner OS generation and
+fixed build inputs. Docker base references are read from the tagged
+`Dockerfile`.
 
 ## build inputs
 
