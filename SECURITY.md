@@ -68,7 +68,7 @@ see: https://github.com/odoo/o-sfu/releases
 ### 2. Media Confidentiality & Storage
 
 - **In-Memory Forwarding**: Media streams are forwarded in volatile memory only. `o-sfu` does not record, transcode, inspect content, or write media payloads to disk.
-- **Transport Encryption**: All WebRTC media streams are encrypted in transit over UDP using DTLS-SRTP.
+- **Transport Encryption**: All WebRTC media streams are encrypted in transit over UDP using DTLS-SRTP (the crypto backend is [AWS libcrypto](https://github.com/aws/aws-lc-rs)).
 - **Zero Local Persistence**: `o-sfu` has no database or file storage. When a call ends or a participant leaves, all associated routing and session data are immediately erased from memory.
 
 ### 3. Logging & Observability
