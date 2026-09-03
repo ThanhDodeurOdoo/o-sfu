@@ -11,6 +11,7 @@ use super::{
     feature_flags::RuntimeFeatureFlags, telemetry::TelemetryConfig,
 };
 
+pub const DEFAULT_AUTHENTICATION_TIMEOUT_MS: u64 = 10_000;
 pub const DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS: usize = 512;
 pub const DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN: usize = 16;
 

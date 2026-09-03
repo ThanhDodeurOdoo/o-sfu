@@ -8,7 +8,8 @@ use base64::{
 use super::super::transport::default_rtc_media_worker_count;
 use crate::{
     config::{
-        Bitrate, CodecPreferences, Config, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+        Bitrate, CodecPreferences, Config, DEFAULT_AUTHENTICATION_TIMEOUT_MS,
+        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
         DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN, DiagnosticsConfig, MediaCodecFlags,
         RtcPortRange, RuntimeFeatureFlags, TelemetryConfig, VideoBitrateLimits,
     },
@@ -75,7 +76,10 @@ fn config_uses_defaults_and_explicit_values() -> anyhow::Result<()> {
     assert_eq!(config.http.bind_address.to_string(), "0.0.0.0:8070");
     assert_eq!(config.http.shutdown_timeout_ms, 10_000);
     assert_eq!(config.auth.key, TEST_AUTH_KEY);
-    assert_eq!(config.auth.authentication_timeout_ms, 10_000);
+    assert_eq!(
+        config.auth.authentication_timeout_ms,
+        DEFAULT_AUTHENTICATION_TIMEOUT_MS
+    );
     assert_eq!(
         config.auth.max_pre_auth_websocket_sessions,
         DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS

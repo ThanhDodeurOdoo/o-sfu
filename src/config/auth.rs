@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow, ensure};
 use o_sfu_rfc::jwt::HS256_MIN_KEY_BYTES;
 
 use super::{
-    AuthConfig, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+    AuthConfig, DEFAULT_AUTHENTICATION_TIMEOUT_MS, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
     DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN,
     env::{Env, EnvKey, positive},
 };
@@ -12,7 +12,10 @@ impl AuthConfig {
     pub(super) fn from_env(env: &Env<'_>) -> Result<Self> {
         Ok(Self {
             key: env.var("AUTH_KEY").check(validate_auth_key).required()?,
-            authentication_timeout_ms: env.var("AUTHENTICATION_TIMEOUT_MS").default(10_000)?,
+            authentication_timeout_ms: env
+                .var("AUTHENTICATION_TIMEOUT_MS")
+                .check(positive)
+                .default(DEFAULT_AUTHENTICATION_TIMEOUT_MS)?,
             max_pre_auth_websocket_sessions: env
                 .var("MAX_PRE_AUTH_WEBSOCKET_SESSIONS")
                 .check(positive)
