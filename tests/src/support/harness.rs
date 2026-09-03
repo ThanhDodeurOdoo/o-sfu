@@ -18,7 +18,9 @@ use o_sfu::{
         HttpDisconnectClaims, HttpRoomClaims, RegisteredJwtClaims, WebSocketConnectClaims, sign,
     },
     config::{
-        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
+        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config,
+        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN, DiagnosticsConfig, HttpConfig,
         MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
         TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning, VideoBitrateLimits,
     },
@@ -427,8 +429,9 @@ pub fn test_config(authentication_timeout_ms: u64, room_size: usize) -> Config {
         auth: AuthConfig {
             key: TEST_AUTH_KEY.to_owned(),
             authentication_timeout_ms,
-            max_pre_auth_websocket_sessions: 512,
-            max_pre_auth_websocket_sessions_per_origin: 16,
+            max_pre_auth_websocket_sessions: DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+            max_pre_auth_websocket_sessions_per_origin:
+                DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN,
         },
         http: HttpConfig {
             bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),

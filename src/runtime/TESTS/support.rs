@@ -10,9 +10,10 @@ pub(super) use crate::runtime::metrics::test_support::RuntimeMetricsSnapshotTest
 use crate::{
     config::{
         AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config,
-        DEFAULT_AUTHENTICATION_TIMEOUT_MS, DiagnosticsConfig, HttpConfig, MediaCodecFlags,
-        RoomMediaLimits, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags, TelemetryConfig,
-        TransportConfig, UserConfig, VideoAdaptationTuning, VideoBitrateLimits,
+        DEFAULT_AUTHENTICATION_TIMEOUT_MS, DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN, DiagnosticsConfig, HttpConfig,
+        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
+        TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning, VideoBitrateLimits,
     },
     runtime::{
         MediaTransport, RuntimeServices, RuntimeState, build_media_transport, build_room_manager,
@@ -46,8 +47,9 @@ impl RuntimeTestBuilder {
                 auth: AuthConfig {
                     key: TEST_AUTH_KEY.to_owned(),
                     authentication_timeout_ms: DEFAULT_AUTHENTICATION_TIMEOUT_MS,
-                    max_pre_auth_websocket_sessions: 512,
-                    max_pre_auth_websocket_sessions_per_origin: 16,
+                    max_pre_auth_websocket_sessions: DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS,
+                    max_pre_auth_websocket_sessions_per_origin:
+                        DEFAULT_MAX_PRE_AUTH_WEBSOCKET_SESSIONS_PER_ORIGIN,
                 },
                 http: HttpConfig {
                     bind_address: SocketAddr::from(([127, 0, 0, 1], 0)),
