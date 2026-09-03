@@ -9,9 +9,10 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 pub(super) use crate::runtime::metrics::test_support::RuntimeMetricsSnapshotTestExt;
 use crate::{
     config::{
-        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config, DiagnosticsConfig, HttpConfig,
-        MediaCodecFlags, RoomMediaLimits, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags,
-        TelemetryConfig, TransportConfig, UserConfig, VideoAdaptationTuning, VideoBitrateLimits,
+        AuthConfig, Bitrate, CodecConfig, CodecPreferences, Config,
+        DEFAULT_AUTHENTICATION_TIMEOUT_MS, DiagnosticsConfig, HttpConfig, MediaCodecFlags,
+        RoomMediaLimits, RoomWorkerPolicy, RtcUdpIoBackend, RuntimeFeatureFlags, TelemetryConfig,
+        TransportConfig, UserConfig, VideoAdaptationTuning, VideoBitrateLimits,
     },
     runtime::{
         MediaTransport, RuntimeServices, RuntimeState, build_media_transport, build_room_manager,
@@ -44,7 +45,7 @@ impl RuntimeTestBuilder {
             config: Config {
                 auth: AuthConfig {
                     key: TEST_AUTH_KEY.to_owned(),
-                    authentication_timeout_ms: 10_000,
+                    authentication_timeout_ms: DEFAULT_AUTHENTICATION_TIMEOUT_MS,
                     max_pre_auth_websocket_sessions: 512,
                     max_pre_auth_websocket_sessions_per_origin: 16,
                 },
