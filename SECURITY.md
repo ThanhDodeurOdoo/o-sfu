@@ -26,19 +26,18 @@ https://www.odoo.com/security-report
 Only latest. Version support is at the Odoo layer.
 
 ### Security Tooling & Verification
-
-The codebase is protected and continuously audited through automated security tooling across CI and scheduled workflows (see badges above for status):
+(see badges above for status)
 
 - **Dynamic Analysis & Sanitizers**:
     - **AddressSanitizer (ASan)**: Validates runtime execution, protocol handling, and media packet loops to detect memory corruption, buffer overflows, and use-after-free issues.
-    - **Miri (Undefined Behavior Detection)**: Analyzes unsafe blocks, pointer provenance, uninitialized memory, SIMD versus scalar operations, and cross-target endianness (x86_64, aarch64, s390x big-endian).
+    - **Miri (Undefined Behavior Detection)**: Analyzes unsafe blocks, pointer provenance, uninitialized memory, SIMD versus scalar operations, and cross-target endianness.
     - **Fuzzing (`cargo-fuzz` / `libFuzzer`)**: Continuously stresses ingress attack surfaces against malformed input, taregts are: WebSocket protocol decoders, HTTP authentication payloads, SDP negotiation, and RTP packet demuxing.
 - **Static Analysis**:
     - **CodeQL**: Semantic code analysis for common vulnerabilities, taint tracking, and memory safety flaws ([@GitHub/codeql](https://github.com/github/codeql)).
     - **DevSkim**: Static analysis for security anti-patterns and insecure API usage ([@Microsoft/devskim](https://github.com/microsoft/devskim)).
 - **Supply Chain Security**:
-    - **Cargo Deny (`cargo-deny`)**: Enforces license compliance, bans duplicate dependencies, and blocks vulnerable crates reported in the [RustSec Advisory Database](https://rustsec.org/)
-    - **OSV-Scanner & Dependency Review**: Continuously scans dependencies against the OSV database ([@Google/osv-scanner](https://github.com/google/osv-scanner)) on pull requests and scheduled runs.
+    - **Cargo Deny (`cargo-deny`)**: checks license compliance, bans duplicate dependencies, and blocks vulnerable crates reported in the [RustSec Advisory Database](https://rustsec.org/)
+    - **OSV-Scanner & Dependency Review**: scans dependencies against the OSV database ([@Google/osv-scanner](https://github.com/google/osv-scanner)) on pull requests and scheduled runs.
 
 ### Releases
 
@@ -54,7 +53,7 @@ see: https://github.com/odoo/o-sfu/releases
 
 ## Privacy & Data Handling
 
-`o-sfu` is designed as a stateless, in-memory Selective Forwarding Unit (SFU). It acts purely as a real-time router for WebRTC media without persistent storage.
+`o-sfu` only operates in-memory, there is no persistent storage.
 
 ### 1. Data Processed
 
