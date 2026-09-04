@@ -344,7 +344,7 @@ fn append_receiver_policy_updates<'a>(
     }
     let planned_budget =
         receiver_video_budget_diagnostics(&planned_routes, receiver_bandwidth, video_budget);
-    if requires_budget_reconciliation(&planned_routes, planned_budget) {
+    if planned_routes.iter().any(route_controls_changed) {
         let mut planned_index = 0;
         let routes = receiver_routes
             .iter()
@@ -369,6 +369,9 @@ fn append_receiver_policy_updates<'a>(
         let Some(update) =
             projection::consumer_packet_selection_update(&planned_route, planned_budget)
         else {
+            if route_controls_changed(&planned_route) {
+                tx.expect_route_update();
+            }
             continue;
         };
         if update.requires_media_transport_effect() {
@@ -380,16 +383,10 @@ fn append_receiver_policy_updates<'a>(
     eventual_admitted_video_bitrate.max(planned_budget.selected_video_bitrate())
 }
 
-fn requires_budget_reconciliation(
-    routes: &[PlannedReceiverRoute<'_>],
-    planned_budget: ReceiverVideoBudgetDiagnostics,
-) -> bool {
-    routes.iter().any(|route| {
-        let current = route.input.current_selection;
-        current.budget() != planned_budget
-            || current.selector() != route.selection.selector
-            || current.policy_pause_reason() != route.selection.policy_pause_reason
-    })
+fn route_controls_changed(route: &PlannedReceiverRoute<'_>) -> bool {
+    let current = route.input.current_selection;
+    current.selector() != route.selection.selector
+        || current.policy_pause_reason() != route.selection.policy_pause_reason
 }
 
 fn video_route_allocation(
