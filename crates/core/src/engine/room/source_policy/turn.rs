@@ -145,6 +145,8 @@ pub(in crate::engine::room) struct SourcePolicyTransaction {
     state_updates: Vec<ConsumerPacketSelectionUpdate>,
     receiver_video_budget_plans: Vec<ReceiverVideoBudgetPlan>,
     featured_users: Vec<FeaturedUserUpdate>,
+    video_allocation_revision: u64,
+    expected_route_update_count: usize,
 }
 
 impl SourcePolicyTransaction {
@@ -160,7 +162,10 @@ impl SourcePolicyTransaction {
             receiver_bandwidth,
             source_bitrate,
         );
-        let mut tx = Self::default();
+        let mut tx = Self {
+            video_allocation_revision: state.topology.video_allocation_revision(),
+            ..Self::default()
+        };
         audio::append_audio_route_activity(&mut tx, &input);
         let receiver_bwe_targets = mem::take(&mut input.receiver_bwe_targets);
         video::append_receiver_video_policy(&mut tx, state, &input, receiver_bwe_targets);
@@ -173,7 +178,12 @@ impl SourcePolicyTransaction {
     }
 
     pub(super) fn push_route_update(&mut self, update: ConsumerPacketSelectionUpdate) {
+        self.expect_route_update();
         self.route_effects.source_policy_update(update);
+    }
+
+    pub(super) fn expect_route_update(&mut self) {
+        self.expected_route_update_count += 1;
     }
 
     pub(super) fn push_receiver_video_budget_plan(&mut self, plan: ReceiverVideoBudgetPlan) {
@@ -190,12 +200,21 @@ impl SourcePolicyTransaction {
             mut state_updates,
             receiver_video_budget_plans,
             featured_users,
+            video_allocation_revision,
+            expected_route_update_count,
         } = self;
-        if !route_effects.is_empty() {
+        let accepted_route_updates = if route_effects.is_empty() {
+            Vec::new()
+        } else {
             // Only accepted transport controls join state-only updates. Room
             // state must not claim a selection that its worker rejected.
-            state_updates.extend(route_effects.execute(room.uuid(), media_transport).await);
-        }
+            route_effects.execute(room.uuid(), media_transport).await
+        };
+        // Unprojectable route controls increment only the expected count. `execute`
+        // returns every submitted source-policy update except rejected controls.
+        let all_route_controls_accepted =
+            accepted_route_updates.len() == expected_route_update_count;
+        state_updates.extend(accepted_route_updates);
         // Only committed nonzero counters schedule another observation. Rejected
         // or topology-stale work must not advance adaptation hysteresis.
         if commit_accepted_updates(
@@ -203,6 +222,8 @@ impl SourcePolicyTransaction {
             state_updates,
             &receiver_video_budget_plans,
             &featured_users,
+            video_allocation_revision,
+            all_route_controls_accepted,
         )
         .await
         {
@@ -232,6 +253,8 @@ async fn commit_accepted_updates(
     state_updates: Vec<ConsumerPacketSelectionUpdate>,
     receiver_video_budget_plans: &[ReceiverVideoBudgetPlan],
     featured_users: &[FeaturedUserUpdate],
+    video_allocation_revision: u64,
+    all_route_controls_accepted: bool,
 ) -> bool {
     if state_updates.is_empty()
         && receiver_video_budget_plans.is_empty()
@@ -241,8 +264,13 @@ async fn commit_accepted_updates(
     }
     let (committed_updates, info_fanout, requires_follow_up) = {
         let mut state = room.state.write().await;
-        let (committed_updates, requires_follow_up) =
-            commit_packet_updates(&mut state, state_updates, receiver_video_budget_plans);
+        let (committed_updates, requires_follow_up) = commit_packet_updates(
+            &mut state,
+            state_updates,
+            receiver_video_budget_plans,
+            video_allocation_revision,
+            all_route_controls_accepted,
+        );
         let info_fanout = commit_featured_user_updates(&mut state, featured_users);
         drop(state);
         (committed_updates, info_fanout, requires_follow_up)
@@ -339,9 +367,19 @@ fn commit_packet_updates(
     state: &mut RoomState,
     mut updates: Vec<ConsumerPacketSelectionUpdate>,
     receiver_video_budget_plans: &[ReceiverVideoBudgetPlan],
+    video_allocation_revision: u64,
+    all_route_controls_accepted: bool,
 ) -> (Vec<ConsumerPacketSelectionUpdate>, bool) {
-    let mut requires_follow_up = false;
+    let allocation_plan_is_current =
+        state.topology.video_allocation_revision() == video_allocation_revision;
+    let reconcile_planned_budgets = !allocation_plan_is_current || !all_route_controls_accepted;
+    let mut requires_follow_up = !allocation_plan_is_current && !updates.is_empty();
     updates.retain_mut(|update| {
+        let commit_planned_budget = allocation_plan_is_current
+            && (!reconcile_planned_budgets
+                || !receiver_video_budget_plans
+                    .iter()
+                    .any(|plan| plan.receiver == update.key.receiver));
         let committed = state.topology.update_consumer_source_selection(
             &update.key,
             update.source_id,
@@ -349,6 +387,9 @@ fn commit_packet_updates(
             |selection| {
                 selection.set_selector(update.selector);
                 selection.set_policy_pause_reason(update.policy_pause_reason);
+                if commit_planned_budget {
+                    selection.set_budget(update.planned_budget);
+                }
                 selection.set_adaptation_observations(
                     update.pressure_observations,
                     update.upgrade_observations,
@@ -357,6 +398,7 @@ fn commit_packet_updates(
         );
         if committed
             && update.transition.is_some()
+            && !commit_planned_budget
             && !route_transition_remains_observable(state, update)
         {
             update.transition = None;
@@ -364,8 +406,10 @@ fn commit_packet_updates(
         requires_follow_up |= committed && update.requires_follow_up();
         committed
     });
-    for plan in receiver_video_budget_plans {
-        reconcile_receiver_video_budget(state, plan);
+    if reconcile_planned_budgets {
+        for plan in receiver_video_budget_plans {
+            reconcile_receiver_video_budget(state, plan);
+        }
     }
     (updates, requires_follow_up)
 }
@@ -390,9 +434,11 @@ fn route_transition_remains_observable(
 fn reconcile_receiver_video_budget(state: &mut RoomState, plan: &ReceiverVideoBudgetPlan) {
     let receiver = &plan.receiver;
     let receiver_connection_id = state.user_connection_id(receiver);
-    // Async route controls may accept only part of a receiver plan. Rebuild the
-    // shared diagnostics from captured route bitrates because ridless source
-    // observations are unavailable after the transport await.
+    // Async route controls may accept only part of `plan`. Rebuild shared
+    // diagnostics from captured bitrates because ridless observations are
+    // unavailable after the transport await. If any participating route no longer
+    // matches its captured or planned allocation, retain the previous diagnostics
+    // rather than publish a partial receiver-wide view.
     let mut active_route_count = 0;
     let mut selected_video_bitrate = crate::Bitrate::zero();
     let mut update_targets = Vec::with_capacity(plan.routes.len());

@@ -37,6 +37,7 @@ pub(super) fn consumer_packet_selection_update(
     let current_selection = input.current_selection;
     if selection.selector == current_selection.selector()
         && selection.policy_pause_reason == current_selection.policy_pause_reason()
+        && planned_budget == current_selection.budget()
         && selection.counts == AdaptationCounts::from_current(current_selection)
     {
         return None;

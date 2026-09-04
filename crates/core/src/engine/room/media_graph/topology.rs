@@ -52,6 +52,8 @@ pub struct RoomTopology {
     route_graph: RouteGraph,
     router: Router,
     next_producer_id: u64,
+    // Revision of committed video allocation inputs across transport awaits.
+    video_allocation_revision: u64,
 }
 
 /// Receipt acknowledging that [`RoomTopology`] committed a session placement.
@@ -122,7 +124,16 @@ impl RoomTopology {
             route_graph: RouteGraph::default(),
             router,
             next_producer_id: 1,
+            video_allocation_revision: 0,
         }
+    }
+
+    pub(in crate::engine::room) const fn video_allocation_revision(&self) -> u64 {
+        self.video_allocation_revision
+    }
+
+    fn invalidate_video_allocation(&mut self) {
+        self.video_allocation_revision = self.video_allocation_revision.wrapping_add(1);
     }
 
     pub(in crate::engine::room) fn router(&self) -> &Router {
@@ -349,6 +360,9 @@ impl RoomTopology {
             .route_graph
             .detach_declined_consumers(session, declined);
         let detached = !routes.is_empty();
+        if detached {
+            self.invalidate_video_allocation();
+        }
         let relays = self.resolve_relay_effects(relays);
         for consumer in consumers {
             if let Some(error) = self.router.remove_consumer(consumer).err() {
@@ -391,7 +405,11 @@ impl RoomTopology {
         key: SubscriptionKey,
         intent: SourceSubscriptionIntent,
     ) {
+        if intent.is_empty() {
+            return;
+        }
         self.route_graph.merge_intent(key, intent);
+        self.invalidate_video_allocation();
     }
 
     /// Returns merged receiver intent or the default for a missing subscription.
@@ -516,8 +534,13 @@ impl RoomTopology {
         route: &TransportConsumerRoute,
         update: impl FnOnce(&mut ConsumerSourceSelection),
     ) -> bool {
-        self.route_graph
-            .update_selection(key, source_id, route, update)
+        let updated = self
+            .route_graph
+            .update_selection(key, source_id, route, update);
+        if updated {
+            self.invalidate_video_allocation();
+        }
+        updated
     }
 
     fn detach_user_sources(
@@ -542,6 +565,7 @@ impl RoomTopology {
     ) -> Option<(PublishedSource, RemovedRoutes)> {
         let source = self.sources.remove(source_id)?;
         let routes = self.route_graph.detach_source(source_id);
+        self.invalidate_video_allocation();
         Some((source, routes))
     }
 
@@ -687,7 +711,9 @@ impl RoomTopology {
         }
         source.active = active;
         source.activity_revision = source.activity_revision.next();
-        Some(source.activity_revision)
+        let revision = source.activity_revision;
+        self.invalidate_video_allocation();
+        Some(revision)
     }
 
     pub(super) fn source_activity_effects(
@@ -772,6 +798,9 @@ impl RoomTopology {
                 RoomTransportPlan::from_relays_and_teardown(relay_effects, teardown)
             },
         );
+        if previous_session_key.is_some() {
+            self.invalidate_video_allocation();
+        }
         Ok(SessionPlacementCommit {
             receipt,
             replacement_transport_plan,
@@ -786,6 +815,7 @@ impl RoomTopology {
     pub fn remove_session(&mut self, user_id: &UserId) -> RoomTransportPlan {
         let (sources, mut removed) = self.detach_user_sources(user_id);
         removed.extend(self.route_graph.remove_receiver(user_id));
+        self.invalidate_video_allocation();
         let teardown = Self::media_teardowns(sources, removed.routes);
         // Resolve relay keys before router removal makes source placement unavailable.
         let relay_effects = self.resolve_relay_effects(removed.relays);
@@ -847,6 +877,7 @@ impl RoomTopology {
         if let Err(relays) = result {
             return Err((route, self.resolve_relay_effects(relays)));
         }
+        self.invalidate_video_allocation();
         Ok(CommittedConsumerSetup {
             target,
             route,
@@ -929,6 +960,7 @@ impl RoomTopology {
             active,
             policy_pause_reason,
         )?;
+        self.invalidate_video_allocation();
         let relay_effects = self.resolve_relay_effects(relay_effects);
         let update = self
             .committed_consumer_route_for_key(&key)
