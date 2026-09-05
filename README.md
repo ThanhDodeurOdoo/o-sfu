@@ -4,8 +4,8 @@
 
 <div align="center">
 
-[![Rustdoc](https://img.shields.io/badge/rustdoc-deployed-0CB9FF)](https://odoo.github.io/o-sfu/o_sfu/)
-[![Release](https://img.shields.io/github/v/release/odoo/o-sfu)](https://github.com/odoo/o-sfu/releases/latest)
+[![Rustdoc](https://img.shields.io/badge/rustdoc-deployed-0CB9FF?style=for-the-badge)](https://odoo.github.io/o-sfu/o_sfu/)
+[![Release](https://img.shields.io/github/v/release/odoo/o-sfu?style=for-the-badge)](https://github.com/odoo/o-sfu/releases/latest)
 
 </div>
 
@@ -26,3 +26,11 @@
 It's a SFU.
 
 uses [Str0m](https://github.com/algesten/str0m) as the WebRTC engine
+
+---
+
+<div align="center">
+
+**[CONTRIBUTING](.github/CONTRIBUTING.md)** • **[GUIDELINES](.github/coding_guidelines.md)** • **[DEPLOYMENT](DEPLOYMENT.md)** • **[SECURITY & PRIVACY](SECURITY.md)**
+
+</div>
