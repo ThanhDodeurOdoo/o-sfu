@@ -1,9 +1,10 @@
 # o-sfu deployment
 
-this document is the operator contract for running `o-sfu` as the Odoo Discuss SFU
-For Odoo development, refer to [Odoo SFU Dev Deployment Guide](/.github/odoo_setup.md).
+This document is the operator contract for running `o-sfu` as the Odoo Discuss SFU.
 
-## traffic model
+(for Odoo development, refer to [Odoo SFU Dev Deployment Guide](/.github/odoo_setup.md))
+
+## typical traffic model
 
 ```text
 HTTPS and WSS -> public reverse proxy -> o-sfu HTTP listener
@@ -106,7 +107,11 @@ verification steps under [image](#image) and [release assets](#release-assets)
 pull a CI-built image on the VM:
 
 ```text
-ghcr.io/<owner>/o-sfu:<tag>
+ghcr.io/<owner>/o-sfu:<tag> // pattern
+ghcr.io/odoo/o-sfu:v0.11.4 // a specific version
+ghcr.io/odoo/o-sfu:latest // the latest release
+ghcr.io/odoo/o-sfu:master // the last commit on master
+ghcr.io/odoo/o-sfu:sha-dcd449bd27e15ddae3e786250c717a498c02a54e // a specifc commit
 ```
 
 prefer release tags such as `v0.3.1` for production
@@ -155,7 +160,7 @@ only release-tag image builds carry Docker provenance, SBOM and GitHub image
 attestations. `master`, commit-addressable `sha-<commit>` images and pull
 request smoke-test images are intentionally not attested.
 
-verify a release image before production promotion:
+you can verify a release image before updating production:
 
 ```bash
 docker login ghcr.io
